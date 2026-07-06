@@ -8,6 +8,7 @@ import type { AgentMessage, RunAgentResult } from "./types";
 export type RunAgentInput = {
   systemPrompt: string;
   userPrompt: string;
+  initialMessages?: AgentMessage[];
   maxSteps: number;
   model: ModelClient;
   tools: ToolRegistry;
@@ -19,10 +20,13 @@ export type RunAgentInput = {
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   const contextBuilder = input.contextBuilder ?? new ContextBuilder();
-  const messages: AgentMessage[] = [
-    { role: "system", content: input.systemPrompt },
-    { role: "user", content: input.userPrompt },
-  ];
+  const messages: AgentMessage[] =
+    input.initialMessages === undefined
+      ? [
+          { role: "system", content: input.systemPrompt },
+          { role: "user", content: input.userPrompt },
+        ]
+      : [...input.initialMessages, { role: "user", content: input.userPrompt }];
 
   for (let step = 1; step <= input.maxSteps; step += 1) {
     await input.eventSink.append({

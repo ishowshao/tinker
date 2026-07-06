@@ -60,4 +60,25 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("done");
     cleanup();
   });
+
+  test("renders final output without ok status prefix", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "final-1",
+            label: "assistant",
+            text: "Completed the change.",
+            status: "text",
+          },
+        ]}
+      />,
+    );
+
+    expect(lastFrame()).toContain("- assistant");
+    expect(lastFrame()).toContain("Completed the change.");
+    expect(lastFrame()).not.toContain("final:");
+    expect(lastFrame()).not.toContain("ok Completed");
+    cleanup();
+  });
 });

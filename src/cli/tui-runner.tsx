@@ -1,5 +1,6 @@
 import { render } from "ink";
 import { runAgent } from "../agent/loop";
+import type { AgentMessage } from "../agent/types";
 import { CompositeEventSink } from "../events/composite-event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { TuiEventStream } from "../events/tui-event-stream";
@@ -16,6 +17,10 @@ import {
 export async function runTui(): Promise<void> {
   const config = readRunnerConfig();
   const eventStream = new TuiEventStream();
+  const tooling = createDefaultTooling({
+    workspaceRoot: config.workspaceRoot,
+  });
+  let sessionMessages: AgentMessage[] | undefined;
 
   const run = async (userPrompt: string) => {
     const eventSink = new CompositeEventSink([
@@ -36,12 +41,10 @@ export async function runTui(): Promise<void> {
     });
 
     try {
-      const tooling = createDefaultTooling({
-        workspaceRoot: config.workspaceRoot,
-      });
       const result = await runAgent({
         systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
         userPrompt,
+        initialMessages: sessionMessages,
         maxSteps: config.maxSteps,
         model: createModelClientFromEnv(config.modelName),
         tools: tooling.registry,
@@ -62,6 +65,7 @@ export async function runTui(): Promise<void> {
         });
       }
 
+      sessionMessages = result.messages;
       return result;
     } catch (error) {
       await eventSink.append({

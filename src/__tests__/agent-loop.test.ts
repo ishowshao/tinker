@@ -49,6 +49,25 @@ class ScriptedModel implements ModelClient {
   }
 }
 
+class CapturingModel implements ModelClient {
+  readonly inputs: ModelStepInput[] = [];
+
+  async step(input: ModelStepInput): Promise<ModelStepOutput> {
+    this.inputs.push({
+      ...input,
+      messages: [...input.messages],
+      tools: [...input.tools],
+    });
+
+    return {
+      message: {
+        role: "assistant",
+        content: "Second prompt answered.",
+      },
+    };
+  }
+}
+
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];
 
@@ -84,5 +103,39 @@ describe("runAgent", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  test("continues from initial messages when provided", async () => {
+    const tooling = createDefaultTooling({ workspaceRoot: process.cwd() });
+    const events = new ArrayEventSink();
+    const model = new CapturingModel();
+    const initialMessages: AgentMessage[] = [
+      { role: "system", content: "system" },
+      { role: "user", content: "First prompt" },
+      { role: "assistant", content: "First prompt answered." },
+    ];
+
+    const result = await runAgent({
+      systemPrompt: "new system should not be inserted",
+      userPrompt: "Second prompt",
+      initialMessages,
+      maxSteps: 4,
+      model,
+      tools: tooling.registry,
+      toolRuntime: tooling.runtime,
+      observationBuilder: new ObservationBuilder(),
+      eventSink: events,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(model.inputs[0]?.messages).toEqual([
+      ...initialMessages,
+      { role: "user", content: "Second prompt" },
+    ]);
+    expect(result.messages).toEqual([
+      ...initialMessages,
+      { role: "user", content: "Second prompt" },
+      { role: "assistant", content: "Second prompt answered." },
+    ]);
   });
 });

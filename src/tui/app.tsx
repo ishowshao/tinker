@@ -1,4 +1,4 @@
-import { Box, Text, useApp } from "ink";
+import { Box, useApp } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiEventStream } from "../events/tui-event-stream";
@@ -28,7 +28,8 @@ export function App(props: AppProps) {
     [props.runId, props.modelName, props.workspaceRoot],
   );
   const [state, setState] = useState(initialState);
-  const [submitted, setSubmitted] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [inputVersion, setInputVersion] = useState(0);
 
   useEffect(() => {
     return props.eventStream.subscribe((event) => {
@@ -36,26 +37,26 @@ export function App(props: AppProps) {
     });
   }, [props.eventStream]);
 
-  useEffect(() => {
-    if (!submitted || (state.status !== "done" && state.status !== "failed")) {
-      return;
-    }
-
-    const timeout = setTimeout(() => {
-      exit();
-    }, 200);
-
-    return () => clearTimeout(timeout);
-  }, [exit, state.status, submitted]);
-
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
-    if (trimmed === "" || state.status === "running") {
+
+    if (trimmed === "/quit") {
+      exit();
       return;
     }
 
-    setSubmitted(true);
-    void props.run(trimmed).catch(() => undefined);
+    if (trimmed === "" || isRunning) {
+      return;
+    }
+
+    setIsRunning(true);
+    setInputVersion((current) => current + 1);
+    void props
+      .run(trimmed)
+      .catch(() => undefined)
+      .finally(() => {
+        setIsRunning(false);
+      });
   };
 
   return (
@@ -65,29 +66,19 @@ export function App(props: AppProps) {
         workspaceRoot={props.workspaceRoot}
         runId={props.runId}
       />
-      <Box marginTop={1}>
-        <PromptInput
-          isDisabled={submitted}
-          onSubmit={onSubmit}
-          placeholder="Enter a coding request"
-        />
-      </Box>
       <Box marginTop={1} flexDirection="column">
         <Timeline events={props.eventStream.events} items={state.timeline} />
       </Box>
-      {state.finalText !== undefined && (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>Final</Text>
-          <Text>{state.finalText}</Text>
-        </Box>
-      )}
-      {state.error !== undefined && (
-        <Box marginTop={1}>
-          <Text color="red">{state.error}</Text>
-        </Box>
-      )}
       <Box marginTop={1}>
         <Footer status={state.status} />
+      </Box>
+      <Box marginTop={1}>
+        <PromptInput
+          key={inputVersion}
+          isDisabled={isRunning}
+          onSubmit={onSubmit}
+          placeholder='Enter a coding request or "/quit"'
+        />
       </Box>
     </Box>
   );

@@ -1,4 +1,5 @@
 import { Box, Text } from "ink";
+import { Fragment } from "react";
 import type { AgentEvent } from "../../events/types";
 import type { TimelineItem } from "../event-store";
 
@@ -16,11 +17,7 @@ export function Timeline(props: TimelineProps) {
       {items.length === 0 ? (
         <Text color="gray">idle</Text>
       ) : (
-        items.map((item) => (
-          <Text key={item.id} color={colorForStatus(item.status)}>
-            {symbolForStatus(item.status)} {item.text}
-          </Text>
-        ))
+        items.map((item) => renderTimelineItem(item))
       )}
     </Box>
   );
@@ -69,11 +66,13 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
     }
 
     if (event.type === "run.finished") {
+      const text = finalText(event.result);
       return [
         {
           id: `${index}-run-finished`,
-          text: "run finished",
-          status: "ok",
+          text: text === undefined || text.trim() === "" ? "run finished" : text,
+          label: text === undefined || text.trim() === "" ? undefined : "assistant",
+          status: text === undefined || text.trim() === "" ? "ok" : "text",
         },
       ];
     }
@@ -82,6 +81,7 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
       return [
         {
           id: `${index}-run-failed`,
+          label: "error",
           text: event.error,
           status: "failed",
         },
@@ -90,6 +90,21 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
 
     return [];
   });
+}
+
+function finalText(result: unknown): string | undefined {
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "ok" in result &&
+    result.ok === true &&
+    "finalText" in result &&
+    typeof result.finalText === "string"
+  ) {
+    return result.finalText;
+  }
+
+  return undefined;
 }
 
 function toolPath(args: unknown): string | undefined {
@@ -106,7 +121,36 @@ function toolPath(args: unknown): string | undefined {
   return undefined;
 }
 
+function renderTimelineItem(item: TimelineItem) {
+  if (item.label !== undefined) {
+    return (
+      <Fragment key={item.id}>
+        <Text color="gray">- {item.label}</Text>
+        <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+      </Fragment>
+    );
+  }
+
+  return (
+    <Text key={item.id} color={colorForStatus(item.status)}>
+      {formatTimelineItem(item)}
+    </Text>
+  );
+}
+
+function formatTimelineItem(item: TimelineItem): string {
+  if (item.status === "text") {
+    return item.text;
+  }
+
+  return `${symbolForStatus(item.status)} ${item.text}`;
+}
+
 function colorForStatus(status: TimelineItem["status"]): string {
+  if (status === "text") {
+    return "white";
+  }
+
   if (status === "ok") {
     return "green";
   }
