@@ -81,4 +81,26 @@ describe("tui components", () => {
     expect(lastFrame()).not.toContain("ok Completed");
     cleanup();
   });
+
+  test("renders assistant markdown output", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "assistant-1",
+            label: "assistant",
+            text: "**Done**\n\n- one\n- two",
+            status: "text",
+          },
+        ]}
+      />,
+    );
+
+    expect(lastFrame()).toContain("- assistant");
+    expect(lastFrame()).toContain("Done");
+    expect(lastFrame()).toContain("one");
+    expect(lastFrame()).toContain("two");
+    expect(lastFrame()).not.toContain("**Done**");
+    cleanup();
+  });
 });

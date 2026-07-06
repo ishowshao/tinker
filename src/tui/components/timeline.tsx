@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import { Fragment } from "react";
 import type { AgentEvent } from "../../events/types";
 import type { TimelineItem } from "../event-store";
+import { AssistantMarkdown } from "./assistant-markdown";
 
 export type TimelineProps = {
   events?: AgentEvent[];
@@ -123,6 +124,15 @@ function toolPath(args: unknown): string | undefined {
 
 function renderTimelineItem(item: TimelineItem) {
   if (item.label !== undefined) {
+    if (item.label === "assistant") {
+      return (
+        <Fragment key={item.id}>
+          <Text color="gray">- {item.label}</Text>
+          <AssistantMarkdown text={item.text} />
+        </Fragment>
+      );
+    }
+
     return (
       <Fragment key={item.id}>
         <Text color="gray">- {item.label}</Text>
