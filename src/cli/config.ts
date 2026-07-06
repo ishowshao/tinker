@@ -1,0 +1,71 @@
+import path from "node:path";
+import type { ModelClient } from "../model/model-client";
+import { FakeModelClient } from "../model/fake-model-client";
+import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { createUuidV7 } from "../ids/uuid-v7";
+
+export const DEFAULT_BASE_URL = "https://api.deepseek.com";
+export const DEFAULT_MODEL = "deepseek-v4-flash";
+export const DEFAULT_MAX_STEPS = 12;
+
+export const SYSTEM_PROMPT = `You are a coding agent running in a local workspace.
+
+You can use tools to read and write files.
+Use Read before Write when modifying an existing file.
+Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
+
+Do not claim to run commands, tests, formatters, linters, or git operations.
+You only have Read and Write.
+
+When you are done, respond with a concise summary of what you did.`;
+
+export type RunnerConfig = {
+  runId: string;
+  workspaceRoot: string;
+  modelName: string;
+  maxSteps: number;
+};
+
+export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerConfig {
+  return {
+    runId: overrides.runId ?? createUuidV7(),
+    workspaceRoot: path.resolve(
+      overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
+    ),
+    modelName: overrides.modelName ?? process.env.TINKER_MODEL ?? DEFAULT_MODEL,
+    maxSteps:
+      overrides.maxSteps ??
+      parsePositiveInteger(process.env.TINKER_MAX_STEPS, DEFAULT_MAX_STEPS),
+  };
+}
+
+export function createModelClientFromEnv(modelName: string): ModelClient {
+  const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
+  if (fakeMode !== undefined && fakeMode !== "") {
+    return new FakeModelClient(fakeMode);
+  }
+
+  const apiKey = process.env.API_KEY;
+  if (apiKey === undefined || apiKey.trim() === "") {
+    throw new Error("API_KEY is required. Put it in .env or the process environment.");
+  }
+
+  return new OpenAIChatModelClient({
+    apiKey,
+    baseURL: process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL,
+    model: modelName,
+  });
+}
+
+export function eventLogPath(workspaceRoot: string, runId: string): string {
+  return path.join(workspaceRoot, ".tinker", "runs", `${runId}.jsonl`);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}

@@ -1,0 +1,86 @@
+import { render } from "ink";
+import { runAgent } from "../agent/loop";
+import { CompositeEventSink } from "../events/composite-event-sink";
+import { JsonlEventLog } from "../events/jsonl-event-log";
+import { TuiEventStream } from "../events/tui-event-stream";
+import { ObservationBuilder } from "../observation/observation-builder";
+import { createDefaultTooling } from "../tools/registry";
+import { App } from "../tui/app";
+import {
+  createModelClientFromEnv,
+  eventLogPath,
+  readRunnerConfig,
+  SYSTEM_PROMPT,
+} from "./config";
+
+export async function runTui(): Promise<void> {
+  const config = readRunnerConfig();
+  const eventStream = new TuiEventStream();
+
+  const run = async (userPrompt: string) => {
+    const eventSink = new CompositeEventSink([
+      new JsonlEventLog(eventLogPath(config.workspaceRoot, config.runId)),
+      eventStream,
+    ]);
+
+    await eventSink.append({
+      type: "run.started",
+      runId: config.runId,
+      createdAt: new Date().toISOString(),
+      input: {
+        userPrompt,
+        workspaceRoot: config.workspaceRoot,
+        model: config.modelName,
+        maxSteps: config.maxSteps,
+      },
+    });
+
+    try {
+      const tooling = createDefaultTooling({
+        workspaceRoot: config.workspaceRoot,
+      });
+      const result = await runAgent({
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt,
+        maxSteps: config.maxSteps,
+        model: createModelClientFromEnv(config.modelName),
+        tools: tooling.registry,
+        toolRuntime: tooling.runtime,
+        observationBuilder: new ObservationBuilder(),
+        eventSink,
+      });
+
+      if (result.ok) {
+        await eventSink.append({
+          type: "run.finished",
+          result,
+        });
+      } else {
+        await eventSink.append({
+          type: "run.failed",
+          error: result.error,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      await eventSink.append({
+        type: "run.failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  };
+
+  const instance = render(
+    <App
+      modelName={config.modelName}
+      workspaceRoot={config.workspaceRoot}
+      runId={config.runId}
+      eventStream={eventStream}
+      run={run}
+    />,
+  );
+
+  await instance.waitUntilExit();
+}

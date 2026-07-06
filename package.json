@@ -1,0 +1,33 @@
+{
+  "name": "tinker",
+  "type": "module",
+  "scripts": {
+    "tinker": "bun src/cli/index.ts",
+    "check": "bun run typecheck && bun run format:check && bun run lint && bun test",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=0",
+    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@inkjs/ui": "^2.0.0",
+    "ink": "^7.1.0",
+    "openai": "^6.45.0",
+    "react": "^19.2.7",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.2",
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.3.14",
+    "@types/react": "^19.2.17",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.62.1"
+  }
+}
