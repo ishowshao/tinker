@@ -1,3 +1,4 @@
+import { createGlobToolExecutor } from "./glob";
 import { createReadToolExecutor } from "./read";
 import { createWriteToolExecutor } from "./write";
 import type {
@@ -71,6 +72,11 @@ export function createDefaultTooling(options: {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
 
+  registry.register(
+    createGlobToolExecutor({
+      workspaceRoot: options.workspaceRoot,
+    }),
+  );
   registry.register(
     createReadToolExecutor({
       workspaceRoot: options.workspaceRoot,

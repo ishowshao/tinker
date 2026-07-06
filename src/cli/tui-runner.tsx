@@ -40,7 +40,7 @@ export async function runTui(): Promise<void> {
         workspaceRoot: config.workspaceRoot,
       });
       const result = await runAgent({
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
         userPrompt,
         maxSteps: config.maxSteps,
         model: createModelClientFromEnv(config.modelName),

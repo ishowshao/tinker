@@ -1,6 +1,7 @@
 import type { ToolCall } from "../agent/types";
 import type {
   GenericToolRawResult,
+  GlobRawResult,
   ReadFileRawResult,
   ToolRawResult,
   WriteFileRawResult,
@@ -12,6 +13,10 @@ export type ToolObservation = {
 
 export class ObservationBuilder {
   build(input: { call: ToolCall; raw: ToolRawResult }): ToolObservation {
+    if (input.call.name === "Glob") {
+      return { content: renderGlobObservation(input.raw as GlobRawResult) };
+    }
+
     if (input.call.name === "Read") {
       return { content: renderReadObservation(input.raw as ReadFileRawResult) };
     }
@@ -22,6 +27,23 @@ export class ObservationBuilder {
 
     return { content: renderGenericObservation(input.raw as GenericToolRawResult) };
   }
+}
+
+function renderGlobObservation(raw: GlobRawResult): string {
+  if (!raw.ok) {
+    return `Glob failed for pattern=${JSON.stringify(raw.pattern)}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  const matches = raw.matches ?? [];
+
+  return [
+    `Glob succeeded for pattern=${JSON.stringify(raw.pattern)}.`,
+    `searchPath=${raw.searchPath}`,
+    `matchCount=${raw.matchCount ?? matches.length}`,
+    `ignored=${(raw.ignored ?? []).join(",")}`,
+    "matches:",
+    matches.length === 0 ? "(no matches)" : matches.join("\n"),
+  ].join("\n");
 }
 
 function renderReadObservation(raw: ReadFileRawResult): string {

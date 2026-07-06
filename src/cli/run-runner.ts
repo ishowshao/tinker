@@ -59,7 +59,7 @@ export async function runOneShot(
       workspaceRoot: config.workspaceRoot,
     });
     const result = await runAgent({
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       userPrompt,
       maxSteps: config.maxSteps,
       model: options.modelClient ?? createModelClientFromEnv(config.modelName),

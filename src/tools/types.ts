@@ -36,6 +36,17 @@ export type WriteFileRawResult = {
   error?: string;
 };
 
+export type GlobRawResult = {
+  ok: boolean;
+  pattern: string;
+  searchPath: string;
+  absoluteSearchPath?: string;
+  matches?: string[];
+  matchCount?: number;
+  ignored?: string[];
+  error?: string;
+};
+
 export type GenericToolRawResult = {
   ok: false;
   toolName: string;
@@ -45,6 +56,7 @@ export type GenericToolRawResult = {
 export type ToolRawResult =
   | ReadFileRawResult
   | WriteFileRawResult
+  | GlobRawResult
   | GenericToolRawResult;
 
 export type ToolExecutor = {

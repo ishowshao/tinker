@@ -6,16 +6,24 @@ import { createUuidV7 } from "../ids/uuid-v7";
 
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_MODEL = "deepseek-v4-flash";
-export const DEFAULT_MAX_STEPS = 12;
+export const DEFAULT_MAX_STEPS = 100;
 
-export const SYSTEM_PROMPT = `You are a coding agent running in a local workspace.
+export const SYSTEM_PROMPT = (
+  workspaceRoot: string,
+): string => `You are a coding agent running in a local workspace.
 
-You can use tools to read and write files.
+Current workspace:
+${workspaceRoot}
+
+Use this path as the root for relative file paths. You may use workspace-local absolute paths when useful.
+
+You can use tools to find, read, and write files.
+Use Glob to find files by pattern.
 Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
 
 Do not claim to run commands, tests, formatters, linters, or git operations.
-You only have Read and Write.
+You only have Glob, Read, and Write.
 
 When you are done, respond with a concise summary of what you did.`;
 
