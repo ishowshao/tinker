@@ -1,6 +1,7 @@
 import { CompositeEventSink } from "../events/composite-event-sink";
 import type { EventSink } from "../events/event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
+import { ObservationTextLog } from "../events/observation-text-log";
 import { StdoutEventPrinter, type WritableLike } from "../events/stdout-event-printer";
 import type { ModelClient } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
@@ -9,6 +10,7 @@ import { runAgent } from "../agent/loop";
 import {
   createModelClientFromEnv,
   eventLogPath,
+  observationLogPath,
   readRunnerConfig,
   SYSTEM_PROMPT,
   type RunnerConfig,
@@ -35,6 +37,9 @@ export async function runOneShot(
       new JsonlEventLog(
         options.eventLogPath ?? eventLogPath(config.workspaceRoot, config.runId),
       ),
+    );
+    sinks.push(
+      new ObservationTextLog(observationLogPath(config.workspaceRoot, config.runId)),
     );
   }
 

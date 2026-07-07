@@ -3,6 +3,7 @@ import { runAgent } from "../agent/loop";
 import type { AgentMessage } from "../agent/types";
 import { CompositeEventSink } from "../events/composite-event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
+import { ObservationTextLog } from "../events/observation-text-log";
 import { TuiEventStream } from "../events/tui-event-stream";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
@@ -10,6 +11,7 @@ import { App } from "../tui/app";
 import {
   createModelClientFromEnv,
   eventLogPath,
+  observationLogPath,
   readRunnerConfig,
   SYSTEM_PROMPT,
 } from "./config";
@@ -26,6 +28,7 @@ export async function runTui(): Promise<void> {
   const run = async (userPrompt: string) => {
     const eventSink = new CompositeEventSink([
       new JsonlEventLog(eventLogPath(config.workspaceRoot, config.runId)),
+      new ObservationTextLog(observationLogPath(config.workspaceRoot, config.runId)),
       eventStream,
     ]);
 

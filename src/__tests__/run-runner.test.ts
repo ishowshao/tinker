@@ -46,6 +46,18 @@ describe("runOneShot", () => {
       expect(jsonl).toContain('"type":"run.started"');
       expect(jsonl).toContain('"type":"tool.observation"');
       expect(jsonl).toContain('"type":"run.finished"');
+
+      const observations = await readFile(
+        path.join(workspace, ".tinker", "runs", "test-run.observations.md"),
+        "utf8",
+      );
+      expect(observations).toContain("# Tinker Run test-run");
+      expect(observations).toContain("## Prompt");
+      expect(observations).toContain("Create notes.txt with one line: hello.");
+      expect(observations).toContain("## Step 1 - Write");
+      expect(observations).toContain("Write succeeded for notes.txt.");
+      expect(observations).toContain("## Final");
+      expect(observations).toContain("Created notes.txt");
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
