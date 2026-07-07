@@ -14,6 +14,7 @@ export type AppProps = {
   runId: string;
   eventStream: TuiEventStream;
   run: (prompt: string) => Promise<RunAgentResult>;
+  onQuit?: () => void;
 };
 
 export function App(props: AppProps) {
@@ -41,7 +42,11 @@ export function App(props: AppProps) {
     const trimmed = prompt.trim();
 
     if (trimmed === "/quit") {
-      exit();
+      if (props.onQuit === undefined) {
+        exit();
+      } else {
+        props.onQuit();
+      }
       return;
     }
 

@@ -77,6 +77,13 @@ export async function runTui(): Promise<void> {
     }
   };
 
+  let quitRequested = false;
+  const onQuit = () => {
+    quitRequested = true;
+    instance.unmount();
+    restoreStdin();
+  };
+
   const instance = render(
     <App
       modelName={config.modelName}
@@ -84,8 +91,22 @@ export async function runTui(): Promise<void> {
       runId={config.runId}
       eventStream={eventStream}
       run={run}
+      onQuit={onQuit}
     />,
   );
 
   await instance.waitUntilExit();
+  restoreStdin();
+
+  if (quitRequested) {
+    process.exit(0);
+  }
+}
+
+function restoreStdin(): void {
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(false);
+  }
+
+  process.stdin.pause();
 }

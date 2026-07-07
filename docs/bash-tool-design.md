@@ -71,7 +71,7 @@
 参数语义：
 
 - `command`: 必填。完整 shell 命令字符串。
-- `timeout`: 可选。控制前台等待时间，默认建议 `120_000` ms。
+- `timeout`: 可选。控制前台等待时间，默认建议 `5_000` ms。
 - `description`: 可选。用于 TUI、日志和后台任务列表展示；缺省使用 `command`。
 - `run_in_background`: 可选。为 `true` 时命令启动后立即转后台，模型通过输出文件或任务查询观察后续结果。
 
@@ -185,7 +185,7 @@ Use Read on outputFilePath to inspect output.
 
 默认值：
 
-- `TINKER_BASH_DEFAULT_TIMEOUT_MS`，默认 `120_000`。
+- `TINKER_BASH_DEFAULT_TIMEOUT_MS`，默认 `5_000`。
 - `TINKER_BASH_MAX_TIMEOUT_MS`，默认 `600_000`。
 
 schema 层建议真正校验最大值，不只是写在 description 里。

@@ -3,6 +3,8 @@ import { render } from "ink-testing-library";
 import { Header } from "../tui/components/header";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
+import { App } from "../tui/app";
+import { TuiEventStream } from "../events/tui-event-stream";
 
 describe("tui components", () => {
   test("renders header metadata", () => {
@@ -101,6 +103,33 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("one");
     expect(lastFrame()).toContain("two");
     expect(lastFrame()).not.toContain("**Done**");
+    cleanup();
+  });
+
+  test("submits /quit to the app quit handler", async () => {
+    let quitCount = 0;
+    let runCount = 0;
+    const { stdin, cleanup } = render(
+      <App
+        modelName="model"
+        workspaceRoot="/tmp/tinker"
+        runId="run-1"
+        eventStream={new TuiEventStream()}
+        run={async () => {
+          runCount += 1;
+          return { ok: true, finalText: "", messages: [] };
+        }}
+        onQuit={() => {
+          quitCount += 1;
+        }}
+      />,
+    );
+
+    stdin.write("/quit\n");
+    await Bun.sleep(25);
+
+    expect(quitCount).toBe(1);
+    expect(runCount).toBe(0);
     cleanup();
   });
 });

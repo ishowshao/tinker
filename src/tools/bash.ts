@@ -21,7 +21,7 @@ export type BashToolOptions = {
   maxTimeoutMs?: number;
 };
 
-const defaultForegroundTimeoutMs = 120_000;
+const defaultForegroundTimeoutMs = 5_000;
 const defaultMaxForegroundTimeoutMs = 600_000;
 
 export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
