@@ -19,6 +19,7 @@ export async function runTui(): Promise<void> {
   const eventStream = new TuiEventStream();
   const tooling = createDefaultTooling({
     workspaceRoot: config.workspaceRoot,
+    runId: config.runId,
   });
   let sessionMessages: AgentMessage[] | undefined;
 

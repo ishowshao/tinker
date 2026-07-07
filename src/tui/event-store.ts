@@ -200,6 +200,10 @@ function runPrompt(input: unknown): string {
 }
 
 function toolCallSummary(input: { name: string; args: unknown }): string {
+  if (input.name === "Bash") {
+    return `Bash ${bashDescription(input.args) ?? ""}`.trim();
+  }
+
   if (input.name === "Glob") {
     return `Glob ${toolPattern(input.args) ?? ""}`.trim();
   }
@@ -241,7 +245,30 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     }
   }
 
+  if (name === "Bash") {
+    const status = stringProperty(rawRecord, "status");
+    const outputFilePath = stringProperty(rawRecord, "outputFilePath");
+    const exitCode = numberProperty(rawRecord, "exitCode");
+
+    if (status === "running") {
+      return outputFilePath === undefined
+        ? `${base} -> running`
+        : `${base} -> running ${outputFilePath}`;
+    }
+
+    if (exitCode !== undefined) {
+      return `${base} -> exit ${exitCode}`;
+    }
+  }
+
   return base;
+}
+
+function bashDescription(args: unknown): string | undefined {
+  const argsRecord = asRecord(args);
+  return (
+    stringProperty(argsRecord, "description") ?? stringProperty(argsRecord, "command")
+  );
 }
 
 function toolPattern(args: unknown): string | undefined {

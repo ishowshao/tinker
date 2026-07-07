@@ -57,6 +57,7 @@ export async function runOneShot(
   try {
     const tooling = createDefaultTooling({
       workspaceRoot: config.workspaceRoot,
+      runId: config.runId,
     });
     const result = await runAgent({
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),

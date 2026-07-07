@@ -44,8 +44,31 @@ export class StdoutEventPrinter implements EventSink {
 }
 
 function formatToolLine(prefix: string, call: ToolCall): string {
+  if (call.name === "Bash") {
+    const description = bashDescription(call);
+    return `${prefix} name=${call.name}${description === undefined ? "" : ` desc=${description}`}\n`;
+  }
+
   const filePath = toolFilePath(call);
   return `${prefix} name=${call.name}${filePath === undefined ? "" : ` path=${filePath}`}\n`;
+}
+
+function bashDescription(call: ToolCall): string | undefined {
+  if (
+    typeof call.args === "object" &&
+    call.args !== null &&
+    !Array.isArray(call.args)
+  ) {
+    if ("description" in call.args && typeof call.args.description === "string") {
+      return call.args.description;
+    }
+
+    if ("command" in call.args && typeof call.args.command === "string") {
+      return call.args.command;
+    }
+  }
+
+  return undefined;
 }
 
 function toolFilePath(call: ToolCall): string | undefined {

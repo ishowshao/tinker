@@ -1,7 +1,11 @@
+import { createBashToolExecutor } from "./bash";
+import { ShellTaskManager } from "./bash-task";
+import { createCwdState } from "./cwd-state";
 import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createReadToolExecutor } from "./read";
 import { createWriteToolExecutor } from "./write";
+import { createUuidV7 } from "../ids/uuid-v7";
 import type {
   ReadSnapshotStore,
   ToolDefinition,
@@ -64,14 +68,30 @@ export type DefaultTooling = {
   registry: ToolRegistry;
   runtime: ToolRuntime;
   snapshots: ReadSnapshotStore;
+  bashState: BashToolingState;
+};
+
+export type BashToolingState = {
+  cwd: string;
+  tasks: ShellTaskManager["tasks"];
+  runId: string;
+  workspaceRoot: string;
 };
 
 export function createDefaultTooling(options: {
   workspaceRoot: string;
+  runId?: string;
   maxDisplayedBytes?: number;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
+  const runId = options.runId ?? createUuidV7();
+  const cwdState = createCwdState(options.workspaceRoot);
+  const taskManager = new ShellTaskManager({
+    workspaceRoot: options.workspaceRoot,
+    runId,
+    cwdState,
+  });
 
   registry.register(
     createGlobToolExecutor({
@@ -97,10 +117,29 @@ export function createDefaultTooling(options: {
       snapshots,
     }),
   );
+  registry.register(
+    createBashToolExecutor({
+      workspaceRoot: options.workspaceRoot,
+      runId,
+      cwdState,
+      taskManager,
+    }),
+  );
 
   return {
     registry,
     runtime: new ToolRuntime(registry),
     snapshots,
+    bashState: {
+      get cwd() {
+        return cwdState.cwd;
+      },
+      set cwd(value: string) {
+        cwdState.cwd = value;
+      },
+      tasks: taskManager.tasks,
+      runId,
+      workspaceRoot: options.workspaceRoot,
+    },
   };
 }

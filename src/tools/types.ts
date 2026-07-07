@@ -63,6 +63,29 @@ export type GlobRawResult = {
   error?: string;
 };
 
+export type BashRawResult = {
+  ok: boolean;
+  command: string;
+  taskId: string;
+  runId: string;
+  status: "completed" | "failed" | "running" | "killed";
+  exitCode?: number;
+  signal?: string;
+  cwd: string;
+  outputFilePath: string;
+  outputBytes: number;
+  outputLines: number;
+  preview: string;
+  truncated: boolean;
+  omittedLines?: number;
+  timedOut?: boolean;
+  timeoutMs?: number;
+  backgrounded?: boolean;
+  backgroundedDueToTimeout?: boolean;
+  returnCodeInterpretation?: string;
+  error?: string;
+};
+
 export type GenericToolRawResult = {
   ok: false;
   toolName: string;
@@ -74,6 +97,7 @@ export type ToolRawResult =
   | WriteFileRawResult
   | EditFileRawResult
   | GlobRawResult
+  | BashRawResult
   | GenericToolRawResult;
 
 export type ToolExecutor = {

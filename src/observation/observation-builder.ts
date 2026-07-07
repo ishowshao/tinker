@@ -1,5 +1,6 @@
 import type { ToolCall } from "../agent/types";
 import type {
+  BashRawResult,
   EditFileRawResult,
   GenericToolRawResult,
   GlobRawResult,
@@ -28,6 +29,10 @@ export class ObservationBuilder {
 
     if (input.call.name === "Edit") {
       return { content: renderEditObservation(input.raw as EditFileRawResult) };
+    }
+
+    if (input.call.name === "Bash") {
+      return { content: renderBashObservation(input.raw as BashRawResult) };
     }
 
     return { content: renderGenericObservation(input.raw as GenericToolRawResult) };
@@ -108,6 +113,56 @@ function renderEditObservation(raw: EditFileRawResult): string {
     `oldSha256=${raw.oldSha256 ?? "null"}`,
     `newSha256=${raw.newSha256}`,
   ].join("\n");
+}
+
+function renderBashObservation(raw: BashRawResult): string {
+  if (raw.taskId === "" && !raw.ok) {
+    return `Bash failed: ${raw.error ?? "Unknown error."}`;
+  }
+
+  if (raw.status === "running" && raw.backgroundedDueToTimeout) {
+    return [
+      "Bash command exceeded foreground timeout and is still running.",
+      `taskId=${raw.taskId}`,
+      `timeoutMs=${raw.timeoutMs ?? 0}`,
+      `command=${raw.command}`,
+      `cwd=${raw.cwd}`,
+      `outputFilePath=${raw.outputFilePath}`,
+      "Use Read on outputFilePath to inspect current output.",
+    ].join("\n");
+  }
+
+  if (raw.status === "running") {
+    return [
+      "Bash command is running in background.",
+      `taskId=${raw.taskId}`,
+      `command=${raw.command}`,
+      `cwd=${raw.cwd}`,
+      `outputFilePath=${raw.outputFilePath}`,
+      "Use Read on outputFilePath to inspect current output.",
+    ].join("\n");
+  }
+
+  return [
+    `Bash ${raw.status}.`,
+    `command=${raw.command}`,
+    `exitCode=${raw.exitCode ?? "null"}`,
+    `status=${raw.status}`,
+    `cwd=${raw.cwd}`,
+    `outputFilePath=${raw.outputFilePath}`,
+    `outputBytes=${raw.outputBytes}`,
+    `outputLines=${raw.outputLines}`,
+    `truncated=${raw.truncated}`,
+    raw.omittedLines === undefined ? undefined : `omittedLines=${raw.omittedLines}`,
+    raw.returnCodeInterpretation === undefined
+      ? undefined
+      : `returnCodeInterpretation=${raw.returnCodeInterpretation}`,
+    raw.error === undefined ? undefined : `error=${raw.error}`,
+    "preview:",
+    raw.preview,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 function renderGenericObservation(raw: GenericToolRawResult): string {
