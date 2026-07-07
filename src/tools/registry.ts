@@ -1,3 +1,4 @@
+import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createReadToolExecutor } from "./read";
 import { createWriteToolExecutor } from "./write";
@@ -86,6 +87,12 @@ export function createDefaultTooling(options: {
   );
   registry.register(
     createWriteToolExecutor({
+      workspaceRoot: options.workspaceRoot,
+      snapshots,
+    }),
+  );
+  registry.register(
+    createEditToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
     }),

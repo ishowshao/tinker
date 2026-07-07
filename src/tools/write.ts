@@ -86,9 +86,9 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
 
       if (target.exists) {
         const currentSha256 = target.sha256;
-        const lastReadSha256 = options.snapshots.get(absolutePath);
+        const lastSnapshot = options.snapshots.get(absolutePath);
 
-        if (lastReadSha256 === undefined) {
+        if (lastSnapshot === undefined) {
           return {
             ok: false,
             filePath: input.file_path,
@@ -99,13 +99,13 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
           };
         }
 
-        if (lastReadSha256 !== currentSha256) {
+        if (lastSnapshot.sha256 !== currentSha256) {
           return {
             ok: false,
             filePath: input.file_path,
             absolutePath,
             currentSha256,
-            lastReadSha256,
+            lastReadSha256: lastSnapshot.sha256,
             error:
               "File changed after the last successful Read. Read it again before Write.",
           };
@@ -116,7 +116,13 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
 
       await writeFile(absolutePath, input.content, "utf8");
       const newSha256 = sha256Text(input.content);
-      options.snapshots.set(absolutePath, newSha256);
+      const writtenInfo = await stat(absolutePath);
+      options.snapshots.set(absolutePath, {
+        sha256: newSha256,
+        mtimeMs: writtenInfo.mtimeMs,
+        fullFile: true,
+        source: "write",
+      });
 
       return {
         ok: true,

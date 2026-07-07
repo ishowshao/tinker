@@ -36,6 +36,22 @@ export type WriteFileRawResult = {
   error?: string;
 };
 
+export type EditFileRawResult = {
+  ok: boolean;
+  filePath: string;
+  absolutePath?: string;
+  bytesWritten?: number;
+  oldSha256?: string | null;
+  newSha256?: string;
+  replacementCount?: number;
+  replaceAll?: boolean;
+  created?: boolean;
+  requiredReadBeforeEdit?: boolean;
+  currentMtimeMs?: number;
+  lastReadMtimeMs?: number;
+  error?: string;
+};
+
 export type GlobRawResult = {
   ok: boolean;
   pattern: string;
@@ -56,6 +72,7 @@ export type GenericToolRawResult = {
 export type ToolRawResult =
   | ReadFileRawResult
   | WriteFileRawResult
+  | EditFileRawResult
   | GlobRawResult
   | GenericToolRawResult;
 
@@ -64,4 +81,11 @@ export type ToolExecutor = {
   execute(args: unknown, call: ToolCall): Promise<ToolRawResult>;
 };
 
-export type ReadSnapshotStore = Map<string, string>;
+export type FileSnapshot = {
+  sha256: string;
+  mtimeMs: number;
+  fullFile: boolean;
+  source: "read" | "write" | "edit";
+};
+
+export type ReadSnapshotStore = Map<string, FileSnapshot>;

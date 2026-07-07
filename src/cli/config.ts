@@ -17,13 +17,15 @@ ${workspaceRoot}
 
 Use this path as the root for relative file paths. You may use workspace-local absolute paths when useful.
 
-You can use tools to find, read, and write files.
+You can use tools to find, read, edit, and write files.
 Use Glob to find files by pattern.
+Use Edit to replace exact strings in files.
 Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
+Use Read on the full file before Edit. Edit may fail if the file was not fully read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
 
 Do not claim to run commands, tests, formatters, linters, or git operations.
-You only have Glob, Read, and Write.
+You only have Glob, Read, Write, and Edit.
 
 When you are done, respond with a concise summary of what you did.`;
 

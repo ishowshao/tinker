@@ -97,7 +97,15 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         const selectedText = selectedLines.join("\n");
         const displayed = truncateUtf8(selectedText, maxDisplayedBytes);
 
-        options.snapshots.set(absolutePath, sha256);
+        options.snapshots.set(absolutePath, {
+          sha256,
+          mtimeMs: info.mtimeMs,
+          fullFile:
+            input.offset === undefined &&
+            input.limit === undefined &&
+            !displayed.truncated,
+          source: "read",
+        });
 
         return {
           ok: true,

@@ -1,5 +1,6 @@
 import type { ToolCall } from "../agent/types";
 import type {
+  EditFileRawResult,
   GenericToolRawResult,
   GlobRawResult,
   ReadFileRawResult,
@@ -23,6 +24,10 @@ export class ObservationBuilder {
 
     if (input.call.name === "Write") {
       return { content: renderWriteObservation(input.raw as WriteFileRawResult) };
+    }
+
+    if (input.call.name === "Edit") {
+      return { content: renderEditObservation(input.raw as EditFileRawResult) };
     }
 
     return { content: renderGenericObservation(input.raw as GenericToolRawResult) };
@@ -81,6 +86,25 @@ function renderWriteObservation(raw: WriteFileRawResult): string {
   return [
     `Write succeeded for ${raw.filePath}.`,
     `bytesWritten=${raw.bytesWritten ?? 0}`,
+    `oldSha256=${raw.oldSha256 ?? "null"}`,
+    `newSha256=${raw.newSha256}`,
+  ].join("\n");
+}
+
+function renderEditObservation(raw: EditFileRawResult): string {
+  if (!raw.ok) {
+    const guidance = raw.requiredReadBeforeEdit
+      ? " Call Read on the full file before trying Edit again."
+      : "";
+    return `Edit failed for ${raw.filePath || "(unknown path)"}: ${raw.error ?? "Unknown error."}${guidance}`;
+  }
+
+  return [
+    `Edit succeeded for ${raw.filePath}.`,
+    `bytesWritten=${raw.bytesWritten ?? 0}`,
+    `replacementCount=${raw.replacementCount ?? 0}`,
+    `replaceAll=${raw.replaceAll ?? false}`,
+    `created=${raw.created ?? false}`,
     `oldSha256=${raw.oldSha256 ?? "null"}`,
     `newSha256=${raw.newSha256}`,
   ].join("\n");
