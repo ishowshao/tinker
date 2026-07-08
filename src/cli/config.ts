@@ -7,6 +7,7 @@ import { createUuidV7 } from "../ids/uuid-v7";
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_MODEL = "deepseek-v4-flash";
 export const DEFAULT_MAX_STEPS = 100;
+export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
 
 export const SYSTEM_PROMPT = (
   workspaceRoot: string,
@@ -37,6 +38,7 @@ export type RunnerConfig = {
   workspaceRoot: string;
   modelName: string;
   maxSteps: number;
+  includeReasoningContent: boolean;
 };
 
 export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerConfig {
@@ -49,10 +51,20 @@ export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerC
     maxSteps:
       overrides.maxSteps ??
       parsePositiveInteger(process.env.TINKER_MAX_STEPS, DEFAULT_MAX_STEPS),
+    includeReasoningContent:
+      overrides.includeReasoningContent ??
+      parseBoolean(
+        process.env.TINKER_INCLUDE_REASONING_CONTENT,
+        DEFAULT_INCLUDE_REASONING_CONTENT,
+        "TINKER_INCLUDE_REASONING_CONTENT",
+      ),
   };
 }
 
-export function createModelClientFromEnv(modelName: string): ModelClient {
+export function createModelClientFromEnv(
+  modelName: string,
+  options: { includeReasoningContent?: boolean } = {},
+): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
     return new FakeModelClient(fakeMode);
@@ -66,6 +78,8 @@ export function createModelClientFromEnv(modelName: string): ModelClient {
   return new OpenAIChatModelClient({
     apiKey,
     baseURL: process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL,
+    includeReasoningContent:
+      options.includeReasoningContent ?? DEFAULT_INCLUDE_REASONING_CONTENT,
     model: modelName,
   });
 }
@@ -85,4 +99,26 @@ function parsePositiveInteger(value: string | undefined, fallback: number): numb
 
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseBoolean(
+  value: string | undefined,
+  fallback: boolean,
+  name: string,
+): boolean {
+  if (value === undefined || value.trim() === "") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+
+  throw new Error(
+    `${name} must be one of true/false, 1/0, yes/no, or on/off; received ${value}`,
+  );
 }

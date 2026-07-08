@@ -3,21 +3,40 @@ import type { ModelStepOutput } from "./model-client";
 import type { ToolDefinition } from "../tools/types";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type {
+  ChatCompletionAssistantMessageParam,
   ChatCompletionMessageFunctionToolCall,
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
 
+type DeepSeekAssistantMessageParam = ChatCompletionAssistantMessageParam & {
+  reasoning_content?: string | null;
+};
+
+export type OpenAIChatMessageMappingOptions = {
+  includeReasoningContent?: boolean;
+};
+
 export function toOpenAIChatMessages(
   messages: AgentMessage[],
+  options: OpenAIChatMessageMappingOptions = {},
 ): ChatCompletionMessageParam[] {
   return messages.map((message): ChatCompletionMessageParam => {
     if (message.role === "assistant") {
-      return {
+      const assistantMessage: DeepSeekAssistantMessageParam = {
         role: "assistant",
         content: message.content ?? null,
         tool_calls: message.toolCalls?.map(toOpenAIToolCall),
       };
+
+      if (
+        options.includeReasoningContent === true &&
+        message.reasoningContent !== undefined
+      ) {
+        assistantMessage.reasoning_content = message.reasoningContent;
+      }
+
+      return assistantMessage;
     }
 
     if (message.role === "tool") {
@@ -55,6 +74,7 @@ export function fromOpenAIChatCompletion(response: unknown): ModelStepOutput {
     message: {
       role: "assistant",
       content: normalizeContent(message.content),
+      reasoningContent: normalizeContent(message.reasoning_content),
       toolCalls: toolCalls.length === 0 ? undefined : toolCalls,
     },
     finishReason:

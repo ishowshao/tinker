@@ -41,6 +41,7 @@ export async function runTui(): Promise<void> {
         workspaceRoot: config.workspaceRoot,
         model: config.modelName,
         maxSteps: config.maxSteps,
+        includeReasoningContent: config.includeReasoningContent,
       },
     });
 
@@ -50,7 +51,9 @@ export async function runTui(): Promise<void> {
         userPrompt,
         initialMessages: sessionMessages,
         maxSteps: config.maxSteps,
-        model: createModelClientFromEnv(config.modelName),
+        model: createModelClientFromEnv(config.modelName, {
+          includeReasoningContent: config.includeReasoningContent,
+        }),
         tools: tooling.registry,
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),

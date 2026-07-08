@@ -13,6 +13,7 @@ export class OpenAIChatModelClient implements ModelClient {
     private readonly options: {
       apiKey: string;
       baseURL?: string;
+      includeReasoningContent?: boolean;
       model: string;
       timeoutMs?: number;
     },
@@ -27,7 +28,9 @@ export class OpenAIChatModelClient implements ModelClient {
   async step(input: ModelStepInput): Promise<ModelStepOutput> {
     const response = await this.client.chat.completions.create({
       model: this.options.model,
-      messages: toOpenAIChatMessages(input.messages),
+      messages: toOpenAIChatMessages(input.messages, {
+        includeReasoningContent: this.options.includeReasoningContent,
+      }),
       tools: toOpenAIChatTools(input.tools),
       tool_choice: input.tools.length > 0 ? "auto" : "none",
     });

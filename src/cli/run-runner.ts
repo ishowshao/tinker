@@ -56,6 +56,7 @@ export async function runOneShot(
       workspaceRoot: config.workspaceRoot,
       model: config.modelName,
       maxSteps: config.maxSteps,
+      includeReasoningContent: config.includeReasoningContent,
     },
   });
 
@@ -68,7 +69,11 @@ export async function runOneShot(
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       userPrompt,
       maxSteps: config.maxSteps,
-      model: options.modelClient ?? createModelClientFromEnv(config.modelName),
+      model:
+        options.modelClient ??
+        createModelClientFromEnv(config.modelName, {
+          includeReasoningContent: config.includeReasoningContent,
+        }),
       tools: tooling.registry,
       toolRuntime: tooling.runtime,
       observationBuilder: new ObservationBuilder(),

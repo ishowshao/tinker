@@ -12,6 +12,7 @@ export type AgentMessage =
   | {
       role: "assistant";
       content?: string | null;
+      reasoningContent?: string | null;
       toolCalls?: ToolCall[];
     }
   | {
