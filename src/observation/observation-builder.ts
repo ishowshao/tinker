@@ -4,6 +4,7 @@ import type {
   EditFileRawResult,
   GenericToolRawResult,
   GlobRawResult,
+  GrepRawResult,
   ReadFileRawResult,
   ToolRawResult,
   WriteFileRawResult,
@@ -17,6 +18,10 @@ export class ObservationBuilder {
   build(input: { call: ToolCall; raw: ToolRawResult }): ToolObservation {
     if (input.call.name === "Glob") {
       return { content: renderGlobObservation(input.raw as GlobRawResult) };
+    }
+
+    if (input.call.name === "Grep") {
+      return { content: renderGrepObservation(input.raw as GrepRawResult) };
     }
 
     if (input.call.name === "Read") {
@@ -54,6 +59,67 @@ function renderGlobObservation(raw: GlobRawResult): string {
     "matches:",
     matches.length === 0 ? "(no matches)" : matches.join("\n"),
   ].join("\n");
+}
+
+function renderGrepObservation(raw: GrepRawResult): string {
+  if (!raw.ok) {
+    return `Grep failed for pattern=${JSON.stringify(raw.pattern)}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  const sections: string[] = [];
+
+  if (raw.mode === "files_with_matches") {
+    sections.push(
+      raw.numFiles === 0
+        ? "No files found"
+        : [
+            `Found ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`,
+            ...raw.filenames,
+          ].join("\n"),
+    );
+  } else if (raw.mode === "count") {
+    if (raw.numFiles === 0) {
+      sections.push("No matches found");
+    } else {
+      sections.push(raw.content ?? "");
+      sections.push(
+        `Found ${raw.numMatches ?? 0} total occurrence${(raw.numMatches ?? 0) === 1 ? "" : "s"} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}.`,
+      );
+    }
+  } else {
+    sections.push(
+      raw.content === undefined || raw.content === ""
+        ? "No matches found"
+        : raw.content,
+    );
+  }
+
+  const pagination = renderGrepPagination(raw);
+  if (pagination !== undefined) {
+    sections.push(pagination);
+  }
+
+  if (raw.truncated === true && raw.error !== undefined) {
+    sections.push(`Warning: results are incomplete. ${raw.error}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+function renderGrepPagination(raw: GrepRawResult): string | undefined {
+  const parts: string[] = [];
+
+  if (raw.appliedLimit !== undefined) {
+    parts.push(`limit: ${raw.appliedLimit}`);
+  }
+
+  if (raw.appliedOffset !== undefined) {
+    parts.push(`offset: ${raw.appliedOffset}`);
+  }
+
+  return parts.length === 0
+    ? undefined
+    : `[Showing results with pagination = ${parts.join(", ")}]`;
 }
 
 function renderReadObservation(raw: ReadFileRawResult): string {

@@ -152,4 +152,72 @@ describe("tui event store", () => {
     expect(state.timeline[2]?.text).toBe("Glob **/*.test.ts -> 5 matches");
     expect(state.timeline[2]?.status).toBe("ok");
   });
+
+  test("summarizes Grep tool calls per output mode", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      step: 1,
+      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("Grep foo");
+    expect(state.timeline.at(-1)?.status).toBe("running");
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      raw: {
+        ok: true,
+        pattern: "foo",
+        mode: "files_with_matches",
+        filenames: ["a.ts", "b.ts"],
+        numFiles: 2,
+      },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 2 files");
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      raw: {
+        ok: true,
+        pattern: "foo",
+        mode: "content",
+        filenames: ["a.ts"],
+        numFiles: 1,
+        numLines: 7,
+      },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 7 lines");
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      raw: {
+        ok: true,
+        pattern: "foo",
+        mode: "count",
+        filenames: ["a.ts", "b.ts"],
+        numFiles: 2,
+        numMatches: 9,
+      },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 9 matches across 2 files");
+
+    state = applyAgentEvent(state, {
+      type: "tool.finished",
+      step: 1,
+      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      ok: true,
+    });
+    expect(state.timeline.at(-1)?.status).toBe("ok");
+  });
 });

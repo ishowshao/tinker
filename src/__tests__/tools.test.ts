@@ -458,3 +458,442 @@ describe("Glob tool", () => {
     }
   });
 });
+
+describe("Grep tool", () => {
+  async function withGrepWorkspace(
+    callback: (workspace: string) => Promise<void>,
+  ): Promise<void> {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-grep-"));
+
+    try {
+      await callback(workspace);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  }
+
+  test("registry exposes the Grep schema", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const definition = tooling.registry
+        .definitions()
+        .find((tool) => tool.name === "Grep");
+
+      expect(definition).toBeDefined();
+      expect(definition?.parameters.additionalProperties).toBe(false);
+      expect(definition?.parameters.required).toEqual(["pattern"]);
+    });
+  });
+
+  test("defaults to files_with_matches with workspace-relative paths", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await mkdir(path.join(workspace, "src"), { recursive: true });
+      await writeFile(path.join(workspace, "src", "a.ts"), "foo()\n", "utf8");
+      await writeFile(path.join(workspace, "src", "b.ts"), "foo()\n", "utf8");
+      await writeFile(path.join(workspace, "src", "c.ts"), "bar()\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("mode" in raw ? raw.mode : "").toBe("files_with_matches");
+      expect("filenames" in raw ? raw.filenames : []).toEqual(["src/a.ts", "src/b.ts"]);
+      expect("numFiles" in raw ? raw.numFiles : 0).toBe(2);
+    });
+  });
+
+  test("content mode returns matching lines with line numbers", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await mkdir(path.join(workspace, "src"), { recursive: true });
+      await writeFile(path.join(workspace, "src", "a.ts"), "alpha\nfoo()\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", output_mode: "content" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("content" in raw ? raw.content : "").toBe("src/a.ts:2:foo()");
+      expect("numLines" in raw ? raw.numLines : 0).toBe(1);
+    });
+  });
+
+  test("content mode supports context lines", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.txt"), "alpha\nfoo\ngamma\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", output_mode: "content", "-C": 1 },
+      });
+
+      expect(raw.ok).toBe(true);
+      const content = "content" in raw ? (raw.content ?? "") : "";
+      expect(content).toContain("a.txt-1-alpha");
+      expect(content).toContain("a.txt:2:foo");
+      expect(content).toContain("a.txt-3-gamma");
+    });
+  });
+
+  test("count mode returns per-file counts and total matches", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\nfoo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\nfoo\nfoo\nbar\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", output_mode: "count" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("content" in raw ? raw.content : "").toBe("a.ts:2\nb.ts:3");
+      expect("numMatches" in raw ? raw.numMatches : 0).toBe(5);
+      expect("numFiles" in raw ? raw.numFiles : 0).toBe(2);
+    });
+  });
+
+  test("applies head_limit and offset pagination", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "c.ts"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const firstPage = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", head_limit: 2 },
+      });
+
+      expect(firstPage.ok).toBe(true);
+      expect("filenames" in firstPage ? firstPage.filenames : []).toEqual([
+        "a.ts",
+        "b.ts",
+      ]);
+      expect("appliedLimit" in firstPage ? firstPage.appliedLimit : undefined).toBe(2);
+      expect("truncated" in firstPage ? firstPage.truncated : undefined).toBe(true);
+
+      const secondPage = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Grep",
+        args: { pattern: "foo", head_limit: 2, offset: 2 },
+      });
+
+      expect(secondPage.ok).toBe(true);
+      expect("filenames" in secondPage ? secondPage.filenames : []).toEqual(["c.ts"]);
+      expect(
+        "appliedLimit" in secondPage ? secondPage.appliedLimit : undefined,
+      ).toBeUndefined();
+      expect("appliedOffset" in secondPage ? secondPage.appliedOffset : undefined).toBe(
+        2,
+      );
+    });
+  });
+
+  test("filters by glob and type", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.js"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "c.md"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const globFiltered = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", glob: "*.ts" },
+      });
+      expect("filenames" in globFiltered ? globFiltered.filenames : []).toEqual([
+        "a.ts",
+      ]);
+
+      const typeFiltered = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Grep",
+        args: { pattern: "foo", type: "js" },
+      });
+      expect("filenames" in typeFiltered ? typeFiltered.filenames : []).toEqual([
+        "b.js",
+      ]);
+    });
+  });
+
+  test("supports case-insensitive and multiline search", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "FOO\nbar\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const caseSensitive = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo" },
+      });
+      expect("numFiles" in caseSensitive ? caseSensitive.numFiles : -1).toBe(0);
+
+      const caseInsensitive = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Grep",
+        args: { pattern: "foo", "-i": true },
+      });
+      expect("filenames" in caseInsensitive ? caseInsensitive.filenames : []).toEqual([
+        "a.ts",
+      ]);
+
+      const withoutMultiline = await tooling.runtime.execute({
+        id: "call_3",
+        name: "Grep",
+        args: { pattern: "FOO.bar" },
+      });
+      expect("numFiles" in withoutMultiline ? withoutMultiline.numFiles : -1).toBe(0);
+
+      const multiline = await tooling.runtime.execute({
+        id: "call_4",
+        name: "Grep",
+        args: { pattern: "FOO.bar", multiline: true },
+      });
+      expect("filenames" in multiline ? multiline.filenames : []).toEqual(["a.ts"]);
+    });
+  });
+
+  test("searches patterns that start with a dash", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.sh"), "run --verbose\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "--verbose" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("filenames" in raw ? raw.filenames : []).toEqual(["a.sh"]);
+    });
+  });
+
+  test("returns ok with empty results when nothing matches", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "alpha\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "missing" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("filenames" in raw ? raw.filenames : ["x"]).toEqual([]);
+      expect("numFiles" in raw ? raw.numFiles : -1).toBe(0);
+    });
+  });
+
+  test("supports searching a single file path", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", path: "a.ts", output_mode: "content" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("content" in raw ? raw.content : "").toBe("a.ts:1:foo");
+    });
+  });
+
+  test("rejects path escape and missing paths", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      const escape = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", path: "../outside" },
+      });
+      expect(escape.ok).toBe(false);
+      expect("error" in escape ? escape.error : "").toContain("escapes workspace");
+
+      const missing = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Grep",
+        args: { pattern: "foo", path: "does-not-exist" },
+      });
+      expect(missing.ok).toBe(false);
+      expect("error" in missing ? missing.error : "").toContain("does not exist");
+    });
+  });
+
+  test("ignores node_modules, .git, and .tinker by default", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await mkdir(path.join(workspace, "node_modules", "pkg"), { recursive: true });
+      await mkdir(path.join(workspace, ".git"), { recursive: true });
+      await mkdir(path.join(workspace, ".tinker"), { recursive: true });
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(
+        path.join(workspace, "node_modules", "pkg", "b.ts"),
+        "foo\n",
+        "utf8",
+      );
+      await writeFile(path.join(workspace, ".git", "config"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, ".tinker", "log.md"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("filenames" in raw ? raw.filenames : []).toEqual(["a.ts"]);
+    });
+  });
+
+  test("fails with a clear error when ripgrep is missing", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      const previous = process.env.TINKER_RIPGREP_PATH;
+      process.env.TINKER_RIPGREP_PATH = path.join(workspace, "missing-rg");
+
+      try {
+        const tooling = createDefaultTooling({ workspaceRoot: workspace });
+        const raw = await tooling.runtime.execute({
+          id: "call_1",
+          name: "Grep",
+          args: { pattern: "foo" },
+        });
+
+        expect(raw.ok).toBe(false);
+        expect("error" in raw ? raw.error : "").toBe(
+          "ripgrep is required. Install rg and ensure it is available on PATH.",
+        );
+      } finally {
+        if (previous === undefined) {
+          delete process.env.TINKER_RIPGREP_PATH;
+        } else {
+          process.env.TINKER_RIPGREP_PATH = previous;
+        }
+      }
+    });
+  });
+
+  test("renders files_with_matches observations", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const call = { id: "call_1", name: "Grep", args: { pattern: "foo" } };
+      const raw = await tooling.runtime.execute(call);
+      const observation = new ObservationBuilder().build({ call, raw });
+
+      expect(observation.content).toBe("Found 2 files\na.ts\nb.ts");
+
+      const emptyCall = { id: "call_2", name: "Grep", args: { pattern: "missing" } };
+      const emptyRaw = await tooling.runtime.execute(emptyCall);
+      const emptyObservation = new ObservationBuilder().build({
+        call: emptyCall,
+        raw: emptyRaw,
+      });
+
+      expect(emptyObservation.content).toBe("No files found");
+    });
+  });
+
+  test("renders content and count observations", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\nfoo\nfoo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const contentCall = {
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", path: "a.ts", output_mode: "content" },
+      };
+      const contentRaw = await tooling.runtime.execute(contentCall);
+      const contentObservation = new ObservationBuilder().build({
+        call: contentCall,
+        raw: contentRaw,
+      });
+      expect(contentObservation.content).toBe("a.ts:1:foo");
+
+      const noMatchCall = {
+        id: "call_2",
+        name: "Grep",
+        args: { pattern: "missing", output_mode: "content" },
+      };
+      const noMatchRaw = await tooling.runtime.execute(noMatchCall);
+      const noMatchObservation = new ObservationBuilder().build({
+        call: noMatchCall,
+        raw: noMatchRaw,
+      });
+      expect(noMatchObservation.content).toBe("No matches found");
+
+      const countCall = {
+        id: "call_3",
+        name: "Grep",
+        args: { pattern: "foo", output_mode: "count" },
+      };
+      const countRaw = await tooling.runtime.execute(countCall);
+      const countObservation = new ObservationBuilder().build({
+        call: countCall,
+        raw: countRaw,
+      });
+      expect(countObservation.content).toBe(
+        "a.ts:1\nb.ts:3\n\nFound 4 total occurrences across 2 files.",
+      );
+    });
+  });
+
+  test("renders pagination info in observations", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "c.ts"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const call = {
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", head_limit: 1, offset: 1 },
+      };
+      const raw = await tooling.runtime.execute(call);
+      const observation = new ObservationBuilder().build({ call, raw });
+
+      expect(observation.content).toContain("Found 1 file\nb.ts");
+      expect(observation.content).toContain(
+        "[Showing results with pagination = limit: 1, offset: 1]",
+      );
+    });
+  });
+
+  test("renders failure observations with the pattern", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const call = {
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", path: "../outside" },
+      };
+      const raw = await tooling.runtime.execute(call);
+      const observation = new ObservationBuilder().build({ call, raw });
+
+      expect(observation.content).toBe(
+        'Grep failed for pattern="foo": Path escapes workspace.',
+      );
+    });
+  });
+});

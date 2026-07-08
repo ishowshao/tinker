@@ -52,6 +52,11 @@ function formatToolLine(prefix: string, call: ToolCall): string {
     return `${prefix} name=${call.name}${description === undefined ? "" : ` desc=${description}`}\n`;
   }
 
+  if (call.name === "Grep" || call.name === "Glob") {
+    const pattern = toolPattern(call);
+    return `${prefix} name=${call.name}${pattern === undefined ? "" : ` pattern=${pattern}`}\n`;
+  }
+
   const filePath = toolFilePath(call);
   return `${prefix} name=${call.name}${filePath === undefined ? "" : ` path=${filePath}`}\n`;
 }
@@ -69,6 +74,20 @@ function bashDescription(call: ToolCall): string | undefined {
     if ("command" in call.args && typeof call.args.command === "string") {
       return call.args.command;
     }
+  }
+
+  return undefined;
+}
+
+function toolPattern(call: ToolCall): string | undefined {
+  if (
+    typeof call.args === "object" &&
+    call.args !== null &&
+    !Array.isArray(call.args) &&
+    "pattern" in call.args &&
+    typeof call.args.pattern === "string"
+  ) {
+    return call.args.pattern;
   }
 
   return undefined;

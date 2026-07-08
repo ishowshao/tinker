@@ -3,6 +3,7 @@ import { ShellTaskManager } from "./bash-task";
 import { createCwdState } from "./cwd-state";
 import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
+import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
 import { createWriteToolExecutor } from "./write";
 import { createUuidV7 } from "../ids/uuid-v7";
@@ -96,6 +97,12 @@ export function createDefaultTooling(options: {
   registry.register(
     createGlobToolExecutor({
       workspaceRoot: options.workspaceRoot,
+    }),
+  );
+  registry.register(
+    createGrepToolExecutor({
+      workspaceRoot: options.workspaceRoot,
+      cwdState,
     }),
   );
   registry.register(

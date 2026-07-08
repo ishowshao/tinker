@@ -19,7 +19,11 @@ ${workspaceRoot}
 Use this path as the root for relative file paths. You may use workspace-local absolute paths when useful.
 
 You can use tools to find, read, edit, write files, and run shell commands.
-Use Glob to find files by pattern.
+Use Glob to find files by name or path pattern.
+Use Grep to search file contents. Do not use Bash with grep or rg for routine content searches.
+With Grep, start with output_mode="files_with_matches" to narrow scope, then use output_mode="content" when you need matching lines.
+Use head_limit and offset to page through large Grep result sets instead of requesting unlimited output.
+Use Read to open specific files returned by Grep.
 Use Edit to replace exact strings in files.
 Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.

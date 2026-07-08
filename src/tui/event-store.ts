@@ -221,6 +221,10 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
     return `Glob ${toolPattern(input.args) ?? ""}`.trim();
   }
 
+  if (input.name === "Grep") {
+    return `Grep ${toolPattern(input.args) ?? ""}`.trim();
+  }
+
   const filePath = toolPath(input.args);
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
 }
@@ -238,6 +242,28 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     const matchCount = numberProperty(rawRecord, "matchCount");
     if (matchCount !== undefined) {
       return `${base} -> ${matchCount} match${matchCount === 1 ? "" : "es"}`;
+    }
+  }
+
+  if (name === "Grep") {
+    const mode = stringProperty(rawRecord, "mode");
+
+    if (mode === "content") {
+      const numLines = numberProperty(rawRecord, "numLines");
+      if (numLines !== undefined) {
+        return `${base} -> ${numLines} line${numLines === 1 ? "" : "s"}`;
+      }
+    } else if (mode === "count") {
+      const numMatches = numberProperty(rawRecord, "numMatches");
+      const numFiles = numberProperty(rawRecord, "numFiles");
+      if (numMatches !== undefined && numFiles !== undefined) {
+        return `${base} -> ${numMatches} match${numMatches === 1 ? "" : "es"} across ${numFiles} file${numFiles === 1 ? "" : "s"}`;
+      }
+    } else {
+      const numFiles = numberProperty(rawRecord, "numFiles");
+      if (numFiles !== undefined) {
+        return `${base} -> ${numFiles} file${numFiles === 1 ? "" : "s"}`;
+      }
     }
   }
 

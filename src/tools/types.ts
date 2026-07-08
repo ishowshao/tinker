@@ -63,6 +63,26 @@ export type GlobRawResult = {
   error?: string;
 };
 
+export type GrepOutputMode = "content" | "files_with_matches" | "count";
+
+export type GrepRawResult = {
+  ok: boolean;
+  pattern: string;
+  searchPath: string;
+  absoluteSearchPath?: string;
+  mode: GrepOutputMode;
+  filenames: string[];
+  numFiles: number;
+  content?: string;
+  numLines?: number;
+  numMatches?: number;
+  appliedLimit?: number;
+  appliedOffset?: number;
+  ignored?: string[];
+  truncated?: boolean;
+  error?: string;
+};
+
 export type BashRawResult = {
   ok: boolean;
   command: string;
@@ -97,6 +117,7 @@ export type ToolRawResult =
   | WriteFileRawResult
   | EditFileRawResult
   | GlobRawResult
+  | GrepRawResult
   | BashRawResult
   | GenericToolRawResult;
 
