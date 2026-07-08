@@ -52,7 +52,7 @@ describe("tui components", () => {
 
     expect(lastFrame()).toContain("Read");
     expect(lastFrame()).toContain("README.md");
-    expect(lastFrame()).toContain("ok");
+    expect(lastFrame()).toContain("✔");
     cleanup();
   });
 

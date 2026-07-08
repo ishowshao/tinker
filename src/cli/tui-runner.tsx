@@ -10,10 +10,12 @@ import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
 import { App } from "../tui/app";
+import { PromptHistory } from "../tui/prompt-history";
 import {
   createModelClientFromEnv,
   eventLogPath,
   observationLogPath,
+  promptHistoryPath,
   readRunnerConfig,
   SYSTEM_PROMPT,
 } from "./config";
@@ -34,6 +36,10 @@ export async function runTui(): Promise<void> {
       tooling.registry.register(executor);
     }
   }
+
+  const promptHistory = await PromptHistory.load(
+    promptHistoryPath(config.workspaceRoot),
+  );
 
   let sessionMessages: AgentMessage[] | undefined;
 
@@ -109,6 +115,7 @@ export async function runTui(): Promise<void> {
       runId={config.runId}
       eventStream={eventStream}
       run={run}
+      history={promptHistory}
       onQuit={onQuit}
     />,
   );

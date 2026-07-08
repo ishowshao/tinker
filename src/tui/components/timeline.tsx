@@ -178,15 +178,15 @@ function colorForStatus(status: TimelineItem["status"]): string {
 
 function symbolForStatus(status: TimelineItem["status"]): string {
   if (status === "ok") {
-    return "ok";
+    return "✔";
   }
 
   if (status === "failed") {
-    return "fail";
+    return "✘";
   }
 
   if (status === "running") {
-    return "...";
+    return "…";
   }
 
   return "-";

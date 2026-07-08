@@ -96,6 +96,10 @@ export function observationLogPath(workspaceRoot: string, runId: string): string
   return path.join(workspaceRoot, ".tinker", "runs", `${runId}.observations.md`);
 }
 
+export function promptHistoryPath(workspaceRoot: string): string {
+  return path.join(workspaceRoot, ".tinker", "prompt-history.jsonl");
+}
+
 function parsePositiveInteger(value: string | undefined, fallback: number): number {
   if (value === undefined) {
     return fallback;
