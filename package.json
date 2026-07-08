@@ -15,6 +15,7 @@
     "@assistant-ui/react-ink": "^0.0.31",
     "@assistant-ui/react-ink-markdown": "^0.0.30",
     "@inkjs/ui": "^2.0.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "glob": "^13.0.6",
     "ink": "^7.1.0",
     "openai": "^6.45.0",

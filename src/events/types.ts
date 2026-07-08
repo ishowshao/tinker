@@ -9,5 +9,7 @@ export type AgentEvent =
   | { type: "tool.raw_result"; step: number; call: ToolCall; raw: unknown }
   | { type: "tool.finished"; step: number; call: ToolCall; ok: boolean }
   | { type: "tool.observation"; step: number; call: ToolCall; observation: unknown }
+  | { type: "mcp.server.connected"; serverName: string; toolCount: number }
+  | { type: "mcp.server.failed"; serverName: string; error: string }
   | { type: "run.finished"; result: unknown }
   | { type: "run.failed"; error: string };

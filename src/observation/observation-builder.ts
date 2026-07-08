@@ -1,10 +1,12 @@
 import type { ToolCall } from "../agent/types";
+import { isMcpToolName } from "../mcp/mcp-tool-executor";
 import type {
   BashRawResult,
   EditFileRawResult,
   GenericToolRawResult,
   GlobRawResult,
   GrepRawResult,
+  McpToolRawResult,
   ReadFileRawResult,
   ToolRawResult,
   WriteFileRawResult,
@@ -38,6 +40,10 @@ export class ObservationBuilder {
 
     if (input.call.name === "Bash") {
       return { content: renderBashObservation(input.raw as BashRawResult) };
+    }
+
+    if (isMcpToolName(input.call.name)) {
+      return { content: renderMcpObservation(input.raw as McpToolRawResult) };
     }
 
     return { content: renderGenericObservation(input.raw as GenericToolRawResult) };
@@ -229,6 +235,31 @@ function renderBashObservation(raw: BashRawResult): string {
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function renderMcpObservation(raw: McpToolRawResult): string {
+  if (!raw.ok && raw.isError !== true) {
+    return `${raw.toolName} failed: ${raw.error ?? "Unknown error."}`;
+  }
+
+  const text = raw.text ?? "";
+  const sections: string[] = [];
+
+  if (raw.isError === true) {
+    sections.push(`${raw.toolName} failed (server reported error):`);
+  }
+
+  sections.push(
+    text.trim() === ""
+      ? `(no text content, ${raw.contentBlockCount ?? 0} content block${(raw.contentBlockCount ?? 0) === 1 ? "" : "s"})`
+      : text,
+  );
+
+  if (raw.truncated === true) {
+    sections.push(`[Output truncated to ${text.length} characters.]`);
+  }
+
+  return sections.join("\n");
 }
 
 function renderGenericObservation(raw: GenericToolRawResult): string {

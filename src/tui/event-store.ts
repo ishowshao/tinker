@@ -114,6 +114,32 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
           status: event.ok ? "ok" : "failed",
         })),
       };
+    case "mcp.server.connected":
+      return {
+        ...state,
+        timeline: [
+          ...state.timeline,
+          {
+            id: timelineId(state, `mcp-${event.serverName}-connected`),
+            label: "mcp",
+            text: `mcp ${event.serverName} connected -> ${event.toolCount} tool${event.toolCount === 1 ? "" : "s"}`,
+            status: "info",
+          },
+        ],
+      };
+    case "mcp.server.failed":
+      return {
+        ...state,
+        timeline: [
+          ...state.timeline,
+          {
+            id: timelineId(state, `mcp-${event.serverName}-failed`),
+            label: "mcp",
+            text: `mcp ${event.serverName} failed -> ${event.error}`,
+            status: "failed",
+          },
+        ],
+      };
     case "run.finished":
       return {
         ...state,

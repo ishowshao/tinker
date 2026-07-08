@@ -34,6 +34,16 @@ export class StdoutEventPrinter implements EventSink {
           `${formatToolLine("tool.finished", event.call).trimEnd()} ok=${event.ok}\n`,
         );
         break;
+      case "mcp.server.connected":
+        this.stdout.write(
+          `mcp.server.connected name=${event.serverName} tools=${event.toolCount}\n`,
+        );
+        break;
+      case "mcp.server.failed":
+        this.stderr.write(
+          `mcp.server.failed name=${event.serverName} error=${event.error}\n`,
+        );
+        break;
       case "run.finished":
         this.stdout.write(`run.finished ok=${resultOk(event.result)}\n`);
         break;

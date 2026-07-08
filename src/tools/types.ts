@@ -112,6 +112,18 @@ export type GenericToolRawResult = {
   error: string;
 };
 
+export type McpToolRawResult = {
+  ok: boolean;
+  toolName: string;
+  serverName: string;
+  serverToolName: string;
+  isError?: boolean;
+  text?: string;
+  truncated?: boolean;
+  contentBlockCount?: number;
+  error?: string;
+};
+
 export type ToolRawResult =
   | ReadFileRawResult
   | WriteFileRawResult
@@ -119,6 +131,7 @@ export type ToolRawResult =
   | GlobRawResult
   | GrepRawResult
   | BashRawResult
+  | McpToolRawResult
   | GenericToolRawResult;
 
 export type ToolExecutor = {

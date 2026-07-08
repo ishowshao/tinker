@@ -5,6 +5,8 @@ import { CompositeEventSink } from "../events/composite-event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { ObservationTextLog } from "../events/observation-text-log";
 import { TuiEventStream } from "../events/tui-event-stream";
+import { loadMcpConfig } from "../mcp/mcp-config";
+import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
 import { App } from "../tui/app";
@@ -23,6 +25,16 @@ export async function runTui(): Promise<void> {
     workspaceRoot: config.workspaceRoot,
     runId: config.runId,
   });
+
+  let mcpManager: McpManager | undefined;
+  const mcpConfig = await loadMcpConfig(config.workspaceRoot);
+  if (mcpConfig !== undefined) {
+    mcpManager = await createMcpManager({ config: mcpConfig, eventSink: eventStream });
+    for (const executor of mcpManager.executors) {
+      tooling.registry.register(executor);
+    }
+  }
+
   let sessionMessages: AgentMessage[] | undefined;
 
   const run = async (userPrompt: string) => {
@@ -103,6 +115,7 @@ export async function runTui(): Promise<void> {
 
   await instance.waitUntilExit();
   restoreStdin();
+  await mcpManager?.dispose();
 
   if (quitRequested) {
     process.exit(0);

@@ -3,6 +3,8 @@ import type { EventSink } from "../events/event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { ObservationTextLog } from "../events/observation-text-log";
 import { StdoutEventPrinter, type WritableLike } from "../events/stdout-event-printer";
+import { loadMcpConfig } from "../mcp/mcp-config";
+import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
@@ -60,11 +62,22 @@ export async function runOneShot(
     },
   });
 
+  let mcpManager: McpManager | undefined;
+
   try {
     const tooling = createDefaultTooling({
       workspaceRoot: config.workspaceRoot,
       runId: config.runId,
     });
+
+    const mcpConfig = await loadMcpConfig(config.workspaceRoot);
+    if (mcpConfig !== undefined) {
+      mcpManager = await createMcpManager({ config: mcpConfig, eventSink });
+      for (const executor of mcpManager.executors) {
+        tooling.registry.register(executor);
+      }
+    }
+
     const result = await runAgent({
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       userPrompt,
@@ -100,5 +113,7 @@ export async function runOneShot(
       error: error instanceof Error ? error.message : String(error),
     });
     return 1;
+  } finally {
+    await mcpManager?.dispose();
   }
 }
