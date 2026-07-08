@@ -75,6 +75,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       };
     }
 
+    const progressContent =
+      modelOutput.message.role === "assistant"
+        ? modelOutput.message.content?.trim()
+        : undefined;
+
+    if (progressContent !== undefined && progressContent !== "") {
+      await input.eventSink.append({
+        type: "assistant.progress",
+        step,
+        content: progressContent,
+      });
+    }
+
     for (const call of toolCalls) {
       await input.eventSink.append({
         type: "tool.started",

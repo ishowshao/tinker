@@ -23,6 +23,9 @@ export class StdoutEventPrinter implements EventSink {
       case "model.step.finished":
         this.stdout.write(`model.step.finished step=${event.step}\n`);
         break;
+      case "assistant.progress":
+        this.stdout.write(`assistant.progress step=${event.step}\n${event.content}\n`);
+        break;
       case "tool.started":
         this.stdout.write(formatToolLine("tool.started", event.call));
         break;

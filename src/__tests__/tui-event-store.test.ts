@@ -119,6 +119,18 @@ describe("tui event store", () => {
     expect(state.timeline[0]?.status).toBe("ok");
 
     state = applyAgentEvent(state, {
+      type: "assistant.progress",
+      step: 1,
+      content: "I will inspect the matching tests.",
+    });
+    expect(state.timeline).toHaveLength(2);
+    expect(state.timeline[1]).toMatchObject({
+      label: "assistant",
+      text: "I will inspect the matching tests.",
+      status: "text",
+    });
+
+    state = applyAgentEvent(state, {
       type: "tool.started",
       step: 1,
       call: { id: "call_1", name: "Glob", args: { pattern: "**/*.test.ts" } },
@@ -136,8 +148,8 @@ describe("tui event store", () => {
       ok: true,
     });
 
-    expect(state.timeline).toHaveLength(2);
-    expect(state.timeline[1]?.text).toBe("Glob **/*.test.ts -> 5 matches");
-    expect(state.timeline[1]?.status).toBe("ok");
+    expect(state.timeline).toHaveLength(3);
+    expect(state.timeline[2]?.text).toBe("Glob **/*.test.ts -> 5 matches");
+    expect(state.timeline[2]?.status).toBe("ok");
   });
 });

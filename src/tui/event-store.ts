@@ -72,6 +72,19 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
           status: "ok",
         })),
       };
+    case "assistant.progress":
+      return {
+        ...state,
+        timeline: [
+          ...state.timeline,
+          {
+            id: timelineId(state, `assistant-${event.step}-progress`),
+            label: "assistant",
+            text: event.content,
+            status: "text",
+          },
+        ],
+      };
     case "tool.started":
       return {
         ...state,

@@ -24,7 +24,7 @@ class ScriptedModel implements ModelClient {
       return {
         message: {
           role: "assistant",
-          content: null,
+          content: "I will read README first.",
           toolCalls: [
             {
               id: "call_1",
@@ -98,6 +98,14 @@ describe("runAgent", () => {
 
       expect(result.ok).toBe(true);
       expect(result.ok ? result.finalText : "").toBe("README was read.");
+      const progressEvent = events.events.find(
+        (event) => event.type === "assistant.progress",
+      );
+      expect(progressEvent).toEqual({
+        type: "assistant.progress",
+        step: 1,
+        content: "I will read README first.",
+      });
       expect(events.events.map((event) => event.type)).toContain("tool.observation");
       expect(events.events.map((event) => event.type)).toContain("model.step.finished");
     } finally {

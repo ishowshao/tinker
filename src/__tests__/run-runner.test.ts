@@ -32,6 +32,8 @@ describe("runOneShot", () => {
       expect(code).toBe(0);
       expect(stderr.output).toBe("");
       expect(stdout.output).toContain("run.started runId=test-run");
+      expect(stdout.output).toContain("assistant.progress step=1");
+      expect(stdout.output).toContain("I will create notes.txt.");
       expect(stdout.output).toContain("tool.started name=Write path=notes.txt");
       expect(stdout.output).toContain("run.finished ok=true");
       expect(stdout.output).toContain("Created notes.txt");
@@ -54,6 +56,8 @@ describe("runOneShot", () => {
       expect(observations).toContain("# Tinker Run test-run");
       expect(observations).toContain("## Prompt");
       expect(observations).toContain("Create notes.txt with one line: hello.");
+      expect(observations).toContain("## Step 1 - Assistant");
+      expect(observations).toContain("I will create notes.txt.");
       expect(observations).toContain("## Step 1 - Write");
       expect(observations).toContain("Write succeeded for notes.txt.");
       expect(observations).toContain("## Final");

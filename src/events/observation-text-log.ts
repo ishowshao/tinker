@@ -22,6 +22,8 @@ function renderObservationLogBlock(event: AgentEvent): string | undefined {
   switch (event.type) {
     case "run.started":
       return renderRunStarted(event);
+    case "assistant.progress":
+      return renderAssistantProgress(event);
     case "tool.observation":
       return renderToolObservation(event);
     case "run.finished":
@@ -57,6 +59,19 @@ function renderRunStarted(event: Extract<AgentEvent, { type: "run.started" }>): 
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function renderAssistantProgress(
+  event: Extract<AgentEvent, { type: "assistant.progress" }>,
+): string {
+  return [
+    "## Step " + event.step + " - Assistant",
+    "",
+    event.content,
+    "",
+    "---",
+    "",
+  ].join("\n");
 }
 
 function renderToolObservation(

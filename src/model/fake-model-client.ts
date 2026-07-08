@@ -30,7 +30,7 @@ export class FakeModelClient implements ModelClient {
       return {
         message: {
           role: "assistant",
-          content: null,
+          content: "I will create notes.txt.",
           toolCalls: [
             {
               id: createUuidV7(),
