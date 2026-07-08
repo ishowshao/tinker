@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+Tinker is a personal coding agent: an interactive TUI (and one-shot CLI) that
+drives an LLM in an agent loop with file, search, shell, and MCP tools to read
+and modify a local workspace.
+
 ## Project Structure & Module Organization
 
 This is a Bun-powered TypeScript ESM CLI project. Source lives under `src/`.
