@@ -1,4 +1,4 @@
-import { Box, useApp } from "ink";
+import { Box, Text, useApp } from "ink";
 import { useEffect, useMemo, useState } from "react";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiEventStream } from "../events/tui-event-stream";
@@ -8,6 +8,7 @@ import { Footer } from "./components/footer";
 import { Header } from "./components/header";
 import { PromptInput } from "./components/prompt-input";
 import { Timeline } from "./components/timeline";
+import { findSlashCommand } from "./slash-commands";
 
 export type AppProps = {
   modelName: string;
@@ -32,6 +33,7 @@ export function App(props: AppProps) {
   );
   const [state, setState] = useState(initialState);
   const [isRunning, setIsRunning] = useState(false);
+  const [notice, setNotice] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     return props.eventStream.subscribe((event) => {
@@ -42,11 +44,22 @@ export function App(props: AppProps) {
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
 
-    if (trimmed === "/quit") {
-      if (props.onQuit === undefined) {
-        exit();
-      } else {
-        props.onQuit();
+    if (trimmed.startsWith("/")) {
+      const command = findSlashCommand(trimmed);
+
+      if (command === undefined) {
+        setNotice(`Unknown command: ${trimmed}`);
+        return;
+      }
+
+      setNotice(undefined);
+
+      if (command.name === "quit") {
+        if (props.onQuit === undefined) {
+          exit();
+        } else {
+          props.onQuit();
+        }
       }
       return;
     }
@@ -55,6 +68,7 @@ export function App(props: AppProps) {
       return;
     }
 
+    setNotice(undefined);
     setIsRunning(true);
     void props.history?.append(trimmed).catch(() => undefined);
     void props
@@ -78,13 +92,14 @@ export function App(props: AppProps) {
       <Box marginTop={1}>
         <Footer status={state.status} />
       </Box>
-      <Box marginTop={1}>
+      <Box marginTop={1} flexDirection="column">
         <PromptInput
           isDisabled={isRunning}
           history={props.history}
           onSubmit={onSubmit}
-          placeholder='Enter a coding request or "/quit"'
+          placeholder='Enter a coding request, or "/" for commands'
         />
+        {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
       </Box>
     </Box>
   );

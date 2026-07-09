@@ -12,11 +12,13 @@ import {
   moveToStart,
   splitAtCursor,
 } from "../line-editor";
+import { matchSlashCommands, type SlashCommand } from "../slash-commands";
 
 export type PromptInputProps = {
   isDisabled?: boolean;
   placeholder?: string;
   history?: { entries: readonly string[] };
+  commands?: readonly SlashCommand[];
   onSubmit: (value: string) => void;
 };
 
@@ -28,20 +30,44 @@ type HistoryNavigation = {
 type PromptInputState = {
   editor: LineEditorState;
   navigation?: HistoryNavigation;
+  suggestionIndex: number;
+  suggestionsDismissed: boolean;
 };
 
+function createPromptInputState(value = ""): PromptInputState {
+  return {
+    editor: createLineEditorState(value),
+    suggestionIndex: 0,
+    suggestionsDismissed: false,
+  };
+}
+
 export function PromptInput(props: PromptInputProps) {
-  const [state, setState] = useState<PromptInputState>({
-    editor: createLineEditorState(),
-  });
+  const [state, setState] = useState<PromptInputState>(createPromptInputState);
+
+  const suggestions = state.suggestionsDismissed
+    ? []
+    : matchSlashCommands(state.editor.value, props.commands);
+  const selectedIndex =
+    suggestions.length === 0
+      ? 0
+      : Math.min(state.suggestionIndex, suggestions.length - 1);
 
   const submit = (value: string) => {
     props.onSubmit(value);
-    setState({ editor: createLineEditorState() });
+    setState(createPromptInputState());
   };
 
   const updateEditor = (update: (editor: LineEditorState) => LineEditorState) => {
-    setState((current) => ({ ...current, editor: update(current.editor) }));
+    setState((current) => {
+      const editor = update(current.editor);
+
+      if (editor.value === current.editor.value) {
+        return { ...current, editor };
+      }
+
+      return { ...current, editor, suggestionIndex: 0, suggestionsDismissed: false };
+    });
   };
 
   const navigateUp = () => {
@@ -57,6 +83,8 @@ export function PromptInput(props: PromptInputProps) {
         return {
           editor: createLineEditorState(entries[index] ?? ""),
           navigation: { index, draft: current.editor.value },
+          suggestionIndex: 0,
+          suggestionsDismissed: true,
         };
       }
 
@@ -68,6 +96,8 @@ export function PromptInput(props: PromptInputProps) {
       return {
         editor: createLineEditorState(entries[index] ?? ""),
         navigation: { ...current.navigation, index },
+        suggestionIndex: 0,
+        suggestionsDismissed: true,
       };
     });
   };
@@ -81,30 +111,70 @@ export function PromptInput(props: PromptInputProps) {
       const entries = props.history?.entries ?? [];
 
       if (current.navigation.index >= entries.length - 1) {
-        return { editor: createLineEditorState(current.navigation.draft) };
+        return createPromptInputState(current.navigation.draft);
       }
 
       const index = current.navigation.index + 1;
       return {
         editor: createLineEditorState(entries[index] ?? ""),
         navigation: { ...current.navigation, index },
+        suggestionIndex: 0,
+        suggestionsDismissed: true,
       };
     });
   };
 
   useInput(
     (input, key) => {
+      const selected = suggestions[selectedIndex];
+
       if (key.return) {
+        if (selected !== undefined) {
+          submit(`/${selected.name}`);
+          return;
+        }
+
         submit(state.editor.value);
         return;
       }
 
+      if (key.tab) {
+        if (selected !== undefined) {
+          setState(createPromptInputState(`/${selected.name} `));
+        }
+        return;
+      }
+
+      if (key.escape) {
+        if (suggestions.length > 0) {
+          setState((current) => ({ ...current, suggestionsDismissed: true }));
+        }
+        return;
+      }
+
       if (key.upArrow) {
+        if (suggestions.length > 0) {
+          setState((current) => ({
+            ...current,
+            suggestionIndex:
+              (selectedIndex + suggestions.length - 1) % suggestions.length,
+          }));
+          return;
+        }
+
         navigateUp();
         return;
       }
 
       if (key.downArrow) {
+        if (suggestions.length > 0) {
+          setState((current) => ({
+            ...current,
+            suggestionIndex: (selectedIndex + 1) % suggestions.length,
+          }));
+          return;
+        }
+
         navigateDown();
         return;
       }
@@ -135,7 +205,7 @@ export function PromptInput(props: PromptInputProps) {
         return;
       }
 
-      if (key.escape || key.tab || key.meta || key.pageUp || key.pageDown) {
+      if (key.meta || key.pageUp || key.pageDown) {
         return;
       }
 
@@ -152,10 +222,24 @@ export function PromptInput(props: PromptInputProps) {
     { isActive: props.isDisabled !== true },
   );
 
+  const showSuggestions = suggestions.length > 0 && props.isDisabled !== true;
+
   return (
-    <Box>
-      <Text>Input: </Text>
-      {renderEditor(state.editor, props)}
+    <Box flexDirection="column">
+      <Box>
+        <Text>Input: </Text>
+        {renderEditor(state.editor, props)}
+      </Box>
+      {showSuggestions ? (
+        <Box flexDirection="column">
+          {suggestions.map((command, index) => (
+            <Text key={command.name}>
+              {index === selectedIndex ? "❯ " : "  "}/{command.name}
+              <Text dimColor> {command.description}</Text>
+            </Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   );
 }
