@@ -3,6 +3,7 @@ import { Fragment } from "react";
 import type { AgentEvent } from "../../events/types";
 import type { TimelineItem } from "../event-store";
 import { AssistantMarkdown } from "./assistant-markdown";
+import { BashResultView } from "./bash-result-view";
 import { DiffView } from "./diff-view";
 
 export type TimelineProps = {
@@ -138,6 +139,7 @@ function renderTimelineItem(item: TimelineItem) {
       <Fragment key={item.id}>
         <Text color="gray">- {item.label}</Text>
         <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+        {renderItemBash(item)}
         {renderItemDiff(item)}
       </Fragment>
     );
@@ -146,6 +148,7 @@ function renderTimelineItem(item: TimelineItem) {
   return (
     <Fragment key={item.id}>
       <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+      {renderItemBash(item)}
       {renderItemDiff(item)}
     </Fragment>
   );
@@ -157,6 +160,14 @@ function renderItemDiff(item: TimelineItem) {
   }
 
   return <DiffView hunks={item.diff} truncated={item.diffTruncated} />;
+}
+
+function renderItemBash(item: TimelineItem) {
+  if (item.bash === undefined) {
+    return null;
+  }
+
+  return <BashResultView detail={item.bash} />;
 }
 
 function formatTimelineItem(item: TimelineItem): string {

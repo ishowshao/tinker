@@ -222,6 +222,176 @@ describe("tui event store", () => {
   });
 });
 
+describe("bash detail in timeline", () => {
+  test("attaches the command on tool.started and the output preview on raw result", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      id: "call_1",
+      name: "Bash",
+      args: { command: "git status", description: "Show working tree status" },
+    };
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    expect(state.timeline.at(-1)?.text).toBe("Bash Show working tree status");
+    expect(state.timeline.at(-1)?.bash).toEqual({ command: "git status" });
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: true,
+        command: "git status",
+        status: "completed",
+        exitCode: 0,
+        preview: "On branch main\nnothing to commit, working tree clean",
+        outputLines: 2,
+        outputBytes: 52,
+        truncated: false,
+        outputFilePath: "/tmp/task-1.log",
+      },
+    });
+
+    expect(state.timeline.at(-1)?.text).toBe("Bash Show working tree status -> exit 0");
+    expect(state.timeline.at(-1)?.bash).toEqual({
+      command: "git status",
+      outputPreview: ["On branch main", "nothing to commit, working tree clean"],
+      omittedOutputLines: 0,
+      outputFilePath: "/tmp/task-1.log",
+    });
+  });
+
+  test("caps successful output at 5 tail lines and reports omitted lines", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = { id: "call_1", name: "Bash", args: { command: "bun test" } };
+    const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: true,
+        command: "bun test",
+        status: "completed",
+        exitCode: 0,
+        preview: lines.join("\n"),
+        outputLines: 12,
+        outputBytes: 100,
+        truncated: false,
+        outputFilePath: "/tmp/task-2.log",
+      },
+    });
+
+    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual([
+      "line 8",
+      "line 9",
+      "line 10",
+      "line 11",
+      "line 12",
+    ]);
+    expect(state.timeline.at(-1)?.bash?.omittedOutputLines).toBe(7);
+  });
+
+  test("widens the output preview to 15 tail lines on failure", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = { id: "call_1", name: "Bash", args: { command: "bun test" } };
+    const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: false,
+        command: "bun test",
+        status: "failed",
+        exitCode: 1,
+        preview: lines.join("\n"),
+        outputLines: 20,
+        outputBytes: 160,
+        truncated: false,
+        outputFilePath: "/tmp/task-3.log",
+      },
+    });
+
+    expect(state.timeline.at(-1)?.bash?.outputPreview).toHaveLength(15);
+    expect(state.timeline.at(-1)?.bash?.outputPreview?.at(0)).toBe("line 6");
+    expect(state.timeline.at(-1)?.bash?.omittedOutputLines).toBe(5);
+  });
+
+  test("strips ANSI escapes and control characters from the output preview", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = { id: "call_1", name: "Bash", args: { command: "ls" } };
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: true,
+        command: "ls",
+        status: "completed",
+        exitCode: 0,
+        preview: "\u001b[32mgreen\u001b[0m\ttext\u0007",
+        outputLines: 1,
+        outputBytes: 20,
+        truncated: false,
+        outputFilePath: "/tmp/task-4.log",
+      },
+    });
+
+    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual(["green  text"]);
+  });
+
+  test("keeps the started command when the raw result carries no bash detail", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = { id: "call_1", name: "Bash", args: { command: "false" } };
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: false,
+        command: "",
+        error: "Bash.command must be a non-empty string.",
+      },
+    });
+
+    expect(state.timeline.at(-1)?.bash).toEqual({ command: "false" });
+  });
+});
+
 describe("edit diff in timeline", () => {
   test("attaches diff hunks and change counts from Edit raw results", () => {
     let state = createInitialTuiState({

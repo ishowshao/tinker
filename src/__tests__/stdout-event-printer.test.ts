@@ -68,6 +68,48 @@ describe("stdout event printer", () => {
     ]);
   });
 
+  test("prints the command and output preview for Bash raw results", async () => {
+    const stdout: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: () => undefined },
+    );
+
+    const lines = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`);
+    await printer.append({
+      type: "tool.raw_result",
+      step: 1,
+      call: {
+        id: "call_1",
+        name: "Bash",
+        args: { command: "bun test", description: "Run the test suite" },
+      },
+      raw: {
+        ok: true,
+        command: "bun test",
+        status: "completed",
+        exitCode: 0,
+        preview: lines.join("\n"),
+        outputLines: 8,
+        outputBytes: 60,
+        truncated: false,
+        outputFilePath: "/tmp/task-1.log",
+      },
+    });
+
+    expect(stdout).toEqual([
+      [
+        "$ bun test",
+        "line 4",
+        "line 5",
+        "line 6",
+        "line 7",
+        "line 8",
+        "… +3 lines (full output: /tmp/task-1.log)",
+      ].join("\n") + "\n",
+    ]);
+  });
+
   test("ignores raw results without a patch", async () => {
     const stdout: string[] = [];
     const printer = new StdoutEventPrinter(

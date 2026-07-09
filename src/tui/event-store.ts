@@ -1,3 +1,8 @@
+import {
+  bashCommandFromArgs,
+  bashResultDetail,
+  type BashDisplayDetail,
+} from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
 import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
 import type { DiffHunk } from "../tools/types";
@@ -10,6 +15,7 @@ export type TimelineItem = {
   status: "running" | "ok" | "failed" | "info" | "text";
   diff?: DiffHunk[];
   diffTruncated?: boolean;
+  bash?: BashDisplayDetail;
 };
 
 export type TuiState = {
@@ -99,6 +105,7 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
             ref: toolCallRef(event.call.id),
             text: toolCallSummary(event.call),
             status: "running",
+            ...toolStartedBashDetail(event.call),
           },
         ],
       };
@@ -109,6 +116,7 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
           ...item,
           text: toolRawResultSummary(event.call.name, event.call.args, event.raw),
           ...toolRawResultDiff(event.raw),
+          ...toolRawResultBashDetail(event.call.name, event.raw),
         })),
       };
     case "tool.finished":
@@ -274,7 +282,13 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
 
   if (rawRecord.ok !== true) {
     const error = stringProperty(rawRecord, "error");
-    return error === undefined ? base : `${base} -> ${error}`;
+    if (error !== undefined) {
+      return `${base} -> ${error}`;
+    }
+
+    const exitCode =
+      name === "Bash" ? numberProperty(rawRecord, "exitCode") : undefined;
+    return exitCode === undefined ? base : `${base} -> exit ${exitCode}`;
   }
 
   if (name === "Glob") {
@@ -365,6 +379,30 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
   }
 
   return base;
+}
+
+function toolStartedBashDetail(call: {
+  name: string;
+  args: unknown;
+}): Pick<TimelineItem, "bash"> {
+  if (call.name !== "Bash") {
+    return {};
+  }
+
+  const command = bashCommandFromArgs(call.args);
+  return command === undefined ? {} : { bash: { command } };
+}
+
+function toolRawResultBashDetail(
+  name: string,
+  raw: unknown,
+): Pick<TimelineItem, "bash"> {
+  if (name !== "Bash") {
+    return {};
+  }
+
+  const detail = bashResultDetail(raw);
+  return detail === undefined ? {} : { bash: detail };
 }
 
 function toolRawResultDiff(raw: unknown): Pick<TimelineItem, "diff" | "diffTruncated"> {

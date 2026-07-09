@@ -1,5 +1,6 @@
 import type { ToolCall } from "../agent/types";
 import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
+import { bashResultDetail } from "./bash-result-detail";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
 
@@ -34,6 +35,11 @@ export class StdoutEventPrinter implements EventSink {
         const diff = formatDiff(event.call, event.raw);
         if (diff !== undefined) {
           this.stdout.write(diff);
+        }
+
+        const bash = formatBashResult(event.call, event.raw);
+        if (bash !== undefined) {
+          this.stdout.write(bash);
         }
         break;
       }
@@ -98,6 +104,33 @@ function formatDiff(call: ToolCall, raw: unknown): string | undefined {
 
   if (rawRecord.patchTruncated === true) {
     lines.push("(diff truncated)");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatBashResult(call: ToolCall, raw: unknown): string | undefined {
+  if (call.name !== "Bash") {
+    return undefined;
+  }
+
+  const detail = bashResultDetail(raw);
+  if (detail === undefined) {
+    return undefined;
+  }
+
+  const lines = detail.command
+    .split("\n")
+    .map((line, index) => (index === 0 ? `$ ${line}` : `  ${line}`));
+  lines.push(...(detail.outputPreview ?? []));
+
+  const omitted = detail.omittedOutputLines ?? 0;
+  if (omitted > 0) {
+    const location =
+      detail.outputFilePath === undefined
+        ? ""
+        : ` (full output: ${detail.outputFilePath})`;
+    lines.push(`… +${omitted} line${omitted === 1 ? "" : "s"}${location}`);
   }
 
   return `${lines.join("\n")}\n`;

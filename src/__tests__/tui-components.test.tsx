@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { Header } from "../tui/components/header";
+import { BashResultView } from "../tui/components/bash-result-view";
 import { DiffView } from "../tui/components/diff-view";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
@@ -286,6 +287,73 @@ describe("prompt input slash commands", () => {
     await Bun.sleep(25);
 
     expect(lastFrame()).toContain("fix the bug");
+    cleanup();
+  });
+});
+
+describe("bash result view", () => {
+  test("renders the command and the output preview", () => {
+    const { lastFrame, cleanup } = render(
+      <BashResultView
+        detail={{
+          command: "git status",
+          outputPreview: ["On branch main", "nothing to commit"],
+          omittedOutputLines: 0,
+        }}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("$ git status");
+    expect(frame).toContain("On branch main");
+    expect(frame).toContain("nothing to commit");
+    cleanup();
+  });
+
+  test("truncates multi-line commands and reports omitted output", () => {
+    const { lastFrame, cleanup } = render(
+      <BashResultView
+        detail={{
+          command: "line one\nline two\nline three\nline four",
+          outputPreview: ["tail line"],
+          omittedOutputLines: 12,
+          outputFilePath: "/tmp/task-1.log",
+        }}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("$ line one");
+    expect(frame).toContain("line two");
+    expect(frame).not.toContain("line three");
+    expect(frame).toContain("… +2 more lines");
+    expect(frame).toContain("tail line");
+    expect(frame).toContain("… +12 lines (full output: /tmp/task-1.log)");
+    cleanup();
+  });
+
+  test("renders the bash detail attached to a timeline item", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "1",
+            text: "Bash Stage all changes -> exit 0",
+            status: "ok",
+            bash: {
+              command: "git add -A",
+              outputPreview: ["2 files changed"],
+              omittedOutputLines: 0,
+            },
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Bash Stage all changes -> exit 0");
+    expect(frame).toContain("$ git add -A");
+    expect(frame).toContain("2 files changed");
     cleanup();
   });
 });
