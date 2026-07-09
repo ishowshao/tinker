@@ -3,6 +3,7 @@ import { Fragment } from "react";
 import type { AgentEvent } from "../../events/types";
 import type { TimelineItem } from "../event-store";
 import { AssistantMarkdown } from "./assistant-markdown";
+import { DiffView } from "./diff-view";
 
 export type TimelineProps = {
   events?: AgentEvent[];
@@ -137,15 +138,25 @@ function renderTimelineItem(item: TimelineItem) {
       <Fragment key={item.id}>
         <Text color="gray">- {item.label}</Text>
         <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+        {renderItemDiff(item)}
       </Fragment>
     );
   }
 
   return (
-    <Text key={item.id} color={colorForStatus(item.status)}>
-      {formatTimelineItem(item)}
-    </Text>
+    <Fragment key={item.id}>
+      <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+      {renderItemDiff(item)}
+    </Fragment>
   );
+}
+
+function renderItemDiff(item: TimelineItem) {
+  if (item.diff === undefined || item.diff.length === 0) {
+    return null;
+  }
+
+  return <DiffView hunks={item.diff} truncated={item.diffTruncated} />;
 }
 
 function formatTimelineItem(item: TimelineItem): string {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import { readFile, stat, writeFile } from "node:fs/promises";
+import { computeFilePatch } from "./file-diff";
 import { sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import type { EditFileRawResult, ReadSnapshotStore, ToolExecutor } from "./types";
@@ -162,6 +163,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         filePath: input.file_path,
         absolutePath,
         oldSha256: target.sha256,
+        oldContent: target.content,
         newContent: nextContent,
         replacementCount: input.replace_all ? replacementCount : 1,
         replaceAll: input.replace_all,
@@ -226,6 +228,7 @@ async function writeEmptyTarget(input: {
     filePath: input.filePath,
     absolutePath: input.absolutePath,
     oldSha256: input.target.exists ? input.target.sha256 : null,
+    oldContent: "",
     newContent: input.newContent,
     replacementCount: 0,
     replaceAll: false,
@@ -238,6 +241,7 @@ async function writeEditedContent(input: {
   filePath: string;
   absolutePath: string;
   oldSha256: string | null;
+  oldContent: string;
   newContent: string;
   replacementCount: number;
   replaceAll: boolean;
@@ -254,6 +258,12 @@ async function writeEditedContent(input: {
     source: "edit",
   });
 
+  const patch = computeFilePatch({
+    filePath: input.filePath,
+    oldContent: input.oldContent,
+    newContent: input.newContent,
+  });
+
   return {
     ok: true,
     filePath: input.filePath,
@@ -264,6 +274,8 @@ async function writeEditedContent(input: {
     replacementCount: input.replacementCount,
     replaceAll: input.replaceAll,
     created: input.created,
+    patch: patch.hunks,
+    patchTruncated: patch.truncated,
   };
 }
 

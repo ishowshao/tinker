@@ -1,6 +1,7 @@
 import path from "node:path";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { computeFilePatch } from "./file-diff";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import type { ReadSnapshotStore, ToolExecutor, WriteFileRawResult } from "./types";
@@ -83,6 +84,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
       }
 
       let oldSha256: string | null = null;
+      let oldContent = "";
 
       if (target.exists) {
         const currentSha256 = target.sha256;
@@ -112,6 +114,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         }
 
         oldSha256 = currentSha256;
+        oldContent = target.content;
       }
 
       await writeFile(absolutePath, input.content, "utf8");
@@ -124,6 +127,12 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         source: "write",
       });
 
+      const patch = computeFilePatch({
+        filePath: input.file_path,
+        oldContent,
+        newContent: input.content,
+      });
+
       return {
         ok: true,
         filePath: input.file_path,
@@ -131,6 +140,9 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         bytesWritten: Buffer.byteLength(input.content, "utf8"),
         oldSha256,
         newSha256,
+        created: !target.exists,
+        patch: patch.hunks,
+        patchTruncated: patch.truncated,
       };
     },
   };
@@ -177,7 +189,7 @@ async function targetFileState(
   absolutePath: string,
 ): Promise<
   | { ok: true; exists: false }
-  | { ok: true; exists: true; sha256: string }
+  | { ok: true; exists: true; sha256: string; content: string }
   | { ok: false; error: string }
 > {
   try {
@@ -191,6 +203,7 @@ async function targetFileState(
       ok: true,
       exists: true,
       sha256: sha256Bytes(bytes),
+      content: bytes.toString("utf8"),
     };
   } catch (error) {
     if (isNotFound(error)) {

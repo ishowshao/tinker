@@ -8,6 +8,14 @@ export type ToolDefinition = {
   parameters: JsonSchema;
 };
 
+export type DiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+};
+
 export type ReadFileRawResult = {
   ok: boolean;
   filePath: string;
@@ -30,6 +38,9 @@ export type WriteFileRawResult = {
   bytesWritten?: number;
   oldSha256?: string | null;
   newSha256?: string;
+  created?: boolean;
+  patch?: DiffHunk[];
+  patchTruncated?: boolean;
   requiredReadBeforeWrite?: boolean;
   currentSha256?: string;
   lastReadSha256?: string;
@@ -46,6 +57,8 @@ export type EditFileRawResult = {
   replacementCount?: number;
   replaceAll?: boolean;
   created?: boolean;
+  patch?: DiffHunk[];
+  patchTruncated?: boolean;
   requiredReadBeforeEdit?: boolean;
   currentMtimeMs?: number;
   lastReadMtimeMs?: number;

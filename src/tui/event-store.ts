@@ -1,4 +1,6 @@
 import type { AgentEvent } from "../events/types";
+import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
+import type { DiffHunk } from "../tools/types";
 
 export type TimelineItem = {
   id: string;
@@ -6,6 +8,8 @@ export type TimelineItem = {
   text: string;
   label?: string;
   status: "running" | "ok" | "failed" | "info" | "text";
+  diff?: DiffHunk[];
+  diffTruncated?: boolean;
 };
 
 export type TuiState = {
@@ -104,6 +108,7 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         timeline: updateLastTimelineItem(state, toolCallRef(event.call.id), (item) => ({
           ...item,
           text: toolRawResultSummary(event.call.name, event.call.args, event.raw),
+          ...toolRawResultDiff(event.raw),
         })),
       };
     case "tool.finished":
@@ -311,7 +316,14 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     }
   }
 
-  if (name === "Write") {
+  if (name === "Write" || name === "Edit") {
+    const patch = diffHunksProperty(rawRecord);
+    if (patch !== undefined) {
+      const changes = countPatchChanges(patch);
+      const created = rawRecord.created === true ? " (new file)" : "";
+      return `${base} -> +${changes.additions} -${changes.deletions}${created}`;
+    }
+
     const bytesWritten = numberProperty(rawRecord, "bytesWritten");
     if (bytesWritten !== undefined) {
       return `${base} -> ${bytesWritten} bytes`;
@@ -353,6 +365,24 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
   }
 
   return base;
+}
+
+function toolRawResultDiff(raw: unknown): Pick<TimelineItem, "diff" | "diffTruncated"> {
+  const rawRecord = asRecord(raw);
+  const hunks = diffHunksProperty(rawRecord);
+
+  if (hunks === undefined || hunks.length === 0) {
+    return {};
+  }
+
+  return {
+    diff: hunks,
+    diffTruncated: rawRecord.patchTruncated === true,
+  };
+}
+
+function diffHunksProperty(record: Record<string, unknown>): DiffHunk[] | undefined {
+  return parseDiffHunks(record.patch);
 }
 
 function bashDescription(args: unknown): string | undefined {

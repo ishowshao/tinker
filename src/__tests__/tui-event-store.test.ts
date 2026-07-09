@@ -221,3 +221,73 @@ describe("tui event store", () => {
     expect(state.timeline.at(-1)?.status).toBe("ok");
   });
 });
+
+describe("edit diff in timeline", () => {
+  test("attaches diff hunks and change counts from Edit raw results", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      id: "call_1",
+      name: "Edit",
+      args: { file_path: "notes.txt" },
+    };
+    const patch = [
+      {
+        oldStart: 1,
+        oldLines: 3,
+        newStart: 1,
+        newLines: 3,
+        lines: [" alpha", "-beta", "+delta", " gamma"],
+      },
+    ];
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: { ok: true, filePath: "notes.txt", patch, patchTruncated: false },
+    });
+
+    expect(state.timeline.at(-1)?.text).toBe("Edit notes.txt -> +1 -1");
+    expect(state.timeline.at(-1)?.diff).toEqual(patch);
+    expect(state.timeline.at(-1)?.diffTruncated).toBe(false);
+  });
+
+  test("marks new files in Write summaries", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      id: "call_1",
+      name: "Write",
+      args: { file_path: "fresh.txt" },
+    };
+
+    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: true,
+        filePath: "fresh.txt",
+        created: true,
+        patch: [
+          { oldStart: 1, oldLines: 0, newStart: 1, newLines: 1, lines: ["+hello"] },
+        ],
+        patchTruncated: false,
+      },
+    });
+
+    expect(state.timeline.at(-1)?.text).toBe("Write fresh.txt -> +1 -0 (new file)");
+    expect(state.timeline.at(-1)?.diff).toHaveLength(1);
+  });
+});

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { Header } from "../tui/components/header";
+import { DiffView } from "../tui/components/diff-view";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
 import { App } from "../tui/app";
@@ -285,6 +286,76 @@ describe("prompt input slash commands", () => {
     await Bun.sleep(25);
 
     expect(lastFrame()).toContain("fix the bug");
+    cleanup();
+  });
+});
+
+describe("diff view", () => {
+  test("renders added, removed and context lines with line numbers", () => {
+    const { lastFrame, cleanup } = render(
+      <DiffView
+        hunks={[
+          {
+            oldStart: 10,
+            oldLines: 3,
+            newStart: 10,
+            newLines: 3,
+            lines: [" alpha", "-beta", "+delta", " gamma"],
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("10   alpha");
+    expect(frame).toContain("11 - beta");
+    expect(frame).toContain("11 + delta");
+    expect(frame).toContain("12   gamma");
+    cleanup();
+  });
+
+  test("caps displayed lines and reports the hidden count", () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `+line ${index}`);
+    const { lastFrame, cleanup } = render(
+      <DiffView
+        hunks={[{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 30, lines }]}
+        maxLines={5}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("line 4");
+    expect(frame).not.toContain("line 5");
+    expect(frame).toContain("+25 more lines");
+    cleanup();
+  });
+
+  test("renders the diff attached to a timeline item", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "1",
+            text: "Edit notes.txt -> +1 -1",
+            status: "ok",
+            diff: [
+              {
+                oldStart: 1,
+                oldLines: 1,
+                newStart: 1,
+                newLines: 1,
+                lines: ["-beta", "+delta"],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Edit notes.txt -> +1 -1");
+    expect(frame).toContain("- beta");
+    expect(frame).toContain("+ delta");
     cleanup();
   });
 });

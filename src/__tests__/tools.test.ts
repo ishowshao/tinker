@@ -58,6 +58,36 @@ describe("Read and Write tools", () => {
 
       expect(raw.ok).toBe(true);
       expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe("hello\n");
+      expect("created" in raw ? raw.created : false).toBe(true);
+      const patch = "patch" in raw ? raw.patch : undefined;
+      expect(patch?.[0]?.lines).toEqual(["+hello"]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("returns a structured patch when overwriting after Read", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
+
+    try {
+      await writeFile(path.join(workspace, "notes.txt"), "old\nsame\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      await tooling.runtime.execute({
+        id: "call_1",
+        name: "Read",
+        args: { file_path: "notes.txt" },
+      });
+      const raw = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Write",
+        args: { file_path: "notes.txt", content: "new\nsame\n" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("created" in raw ? raw.created : true).toBe(false);
+      const patch = "patch" in raw ? raw.patch : undefined;
+      expect(patch?.[0]?.lines).toEqual(["-old", "+new", " same"]);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -153,6 +183,63 @@ describe("Edit tool", () => {
 
       expect(secondRaw.ok).toBe(true);
       expect(await readFile(filePath, "utf8")).toBe("alpha\ndelta\nomega\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("returns a structured patch describing the edit", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const filePath = path.join(workspace, "notes.txt");
+      await writeFile(filePath, "alpha\nbeta\ngamma\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      await tooling.runtime.execute({
+        id: "call_1",
+        name: "Read",
+        args: { file_path: "notes.txt" },
+      });
+      const raw = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Edit",
+        args: {
+          file_path: "notes.txt",
+          old_string: "beta",
+          new_string: "delta",
+        },
+      });
+
+      expect(raw.ok).toBe(true);
+      const patch = "patch" in raw ? raw.patch : undefined;
+      expect(patch).toHaveLength(1);
+      expect(patch?.[0]?.lines).toEqual([" alpha", "-beta", "+delta", " gamma"]);
+      expect("patchTruncated" in raw ? raw.patchTruncated : undefined).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("returns an all-additions patch when creating a file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Edit",
+        args: {
+          file_path: "fresh.txt",
+          old_string: "",
+          new_string: "a\nb\n",
+        },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("created" in raw ? raw.created : false).toBe(true);
+      const patch = "patch" in raw ? raw.patch : undefined;
+      expect(patch?.[0]?.lines).toEqual(["+a", "+b"]);
     } finally {
       await rm(workspace, { recursive: true });
     }

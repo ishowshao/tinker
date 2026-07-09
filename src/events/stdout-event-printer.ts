@@ -1,4 +1,5 @@
 import type { ToolCall } from "../agent/types";
+import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
 
@@ -29,6 +30,13 @@ export class StdoutEventPrinter implements EventSink {
       case "tool.started":
         this.stdout.write(formatToolLine("tool.started", event.call));
         break;
+      case "tool.raw_result": {
+        const diff = formatDiff(event.call, event.raw);
+        if (diff !== undefined) {
+          this.stdout.write(diff);
+        }
+        break;
+      }
       case "tool.finished":
         this.stdout.write(
           `${formatToolLine("tool.finished", event.call).trimEnd()} ok=${event.ok}\n`,
@@ -54,6 +62,45 @@ export class StdoutEventPrinter implements EventSink {
         break;
     }
   }
+}
+
+function formatDiff(call: ToolCall, raw: unknown): string | undefined {
+  if (call.name !== "Edit" && call.name !== "Write") {
+    return undefined;
+  }
+
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+
+  const rawRecord = raw as Record<string, unknown>;
+  if (rawRecord.ok !== true) {
+    return undefined;
+  }
+
+  const hunks = parseDiffHunks(rawRecord.patch);
+  if (hunks === undefined || hunks.length === 0) {
+    return undefined;
+  }
+
+  const changes = countPatchChanges(hunks);
+  const filePath = toolFilePath(call);
+  const lines: string[] = [
+    `tool.diff name=${call.name}${filePath === undefined ? "" : ` path=${filePath}`} +${changes.additions} -${changes.deletions}`,
+  ];
+
+  for (const hunk of hunks) {
+    lines.push(
+      `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
+    );
+    lines.push(...hunk.lines);
+  }
+
+  if (rawRecord.patchTruncated === true) {
+    lines.push("(diff truncated)");
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 function formatToolLine(prefix: string, call: ToolCall): string {
