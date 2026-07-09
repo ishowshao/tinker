@@ -28,6 +28,7 @@ Use Edit to replace exact strings in files.
 Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
 Use Read on the full file before Edit. Edit may fail if the file was not fully read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
+Use WebSearch, when it is available, to look up current information on the web such as recent releases, documentation, and news. Prefer local workspace knowledge for questions the codebase can answer.
 Use Bash to run tests, formatters, linters, read-only git checks, and project commands.
 Prefer Read for reading files instead of using cat on large files.
 Prefer Write or Edit for changing files instead of shell redirection.

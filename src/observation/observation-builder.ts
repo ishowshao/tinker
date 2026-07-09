@@ -9,6 +9,7 @@ import type {
   McpToolRawResult,
   ReadFileRawResult,
   ToolRawResult,
+  WebSearchRawResult,
   WriteFileRawResult,
 } from "../tools/types";
 
@@ -40,6 +41,12 @@ export class ObservationBuilder {
 
     if (input.call.name === "Bash") {
       return { content: renderBashObservation(input.raw as BashRawResult) };
+    }
+
+    if (input.call.name === "WebSearch") {
+      return {
+        content: renderWebSearchObservation(input.raw as WebSearchRawResult),
+      };
     }
 
     if (isMcpToolName(input.call.name)) {
@@ -235,6 +242,42 @@ function renderBashObservation(raw: BashRawResult): string {
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function renderWebSearchObservation(raw: WebSearchRawResult): string {
+  if (!raw.ok) {
+    return `WebSearch failed for query=${JSON.stringify(raw.query)}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  const results = raw.results ?? [];
+  const header = `Web search results for query ${JSON.stringify(raw.query)} (${results.length} result${results.length === 1 ? "" : "s"}):`;
+
+  if (results.length === 0) {
+    return `${header}\n\n(no results)`;
+  }
+
+  const blocks = results.map((result, index) => {
+    const lines = [
+      `${index + 1}. ${result.title === "" ? result.url : result.title}`,
+      `   URL: ${result.url}`,
+    ];
+
+    if (result.publishedDate !== undefined) {
+      lines.push(`   Published: ${result.publishedDate}`);
+    }
+
+    for (const highlight of result.highlights ?? []) {
+      lines.push(`   - ${collapseWhitespace(highlight)}`);
+    }
+
+    return lines.join("\n");
+  });
+
+  return [header, ...blocks].join("\n\n");
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function renderMcpObservation(raw: McpToolRawResult): string {

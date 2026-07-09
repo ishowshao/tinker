@@ -106,6 +106,28 @@ export type BashRawResult = {
   error?: string;
 };
 
+export type WebSearchResultItem = {
+  title: string;
+  url: string;
+  publishedDate?: string;
+  author?: string;
+  highlights?: string[];
+};
+
+export type WebSearchRawResult = {
+  ok: boolean;
+  query: string;
+  searchType?: string;
+  requestId?: string;
+  results?: WebSearchResultItem[];
+  resultCount?: number;
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  costDollars?: number;
+  durationMs?: number;
+  error?: string;
+};
+
 export type GenericToolRawResult = {
   ok: false;
   toolName: string;
@@ -131,6 +153,7 @@ export type ToolRawResult =
   | GlobRawResult
   | GrepRawResult
   | BashRawResult
+  | WebSearchRawResult
   | McpToolRawResult
   | GenericToolRawResult;
 

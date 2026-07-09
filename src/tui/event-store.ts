@@ -251,6 +251,10 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
     return `Grep ${toolPattern(input.args) ?? ""}`.trim();
   }
 
+  if (input.name === "WebSearch") {
+    return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
+  }
+
   const filePath = toolPath(input.args);
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
 }
@@ -310,6 +314,13 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     }
   }
 
+  if (name === "WebSearch") {
+    const resultCount = numberProperty(rawRecord, "resultCount");
+    if (resultCount !== undefined) {
+      return `${base} -> ${resultCount} result${resultCount === 1 ? "" : "s"}`;
+    }
+  }
+
   if (name === "Bash") {
     const status = stringProperty(rawRecord, "status");
     const outputFilePath = stringProperty(rawRecord, "outputFilePath");
@@ -339,6 +350,11 @@ function bashDescription(args: unknown): string | undefined {
 function toolPattern(args: unknown): string | undefined {
   const argsRecord = asRecord(args);
   return stringProperty(argsRecord, "pattern");
+}
+
+function toolQuery(args: unknown): string | undefined {
+  const argsRecord = asRecord(args);
+  return stringProperty(argsRecord, "query");
 }
 
 function toolPath(args: unknown): string | undefined {

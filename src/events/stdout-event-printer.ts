@@ -67,6 +67,11 @@ function formatToolLine(prefix: string, call: ToolCall): string {
     return `${prefix} name=${call.name}${pattern === undefined ? "" : ` pattern=${pattern}`}\n`;
   }
 
+  if (call.name === "WebSearch") {
+    const query = toolQuery(call);
+    return `${prefix} name=${call.name}${query === undefined ? "" : ` query=${query}`}\n`;
+  }
+
   const filePath = toolFilePath(call);
   return `${prefix} name=${call.name}${filePath === undefined ? "" : ` path=${filePath}`}\n`;
 }
@@ -98,6 +103,20 @@ function toolPattern(call: ToolCall): string | undefined {
     typeof call.args.pattern === "string"
   ) {
     return call.args.pattern;
+  }
+
+  return undefined;
+}
+
+function toolQuery(call: ToolCall): string | undefined {
+  if (
+    typeof call.args === "object" &&
+    call.args !== null &&
+    !Array.isArray(call.args) &&
+    "query" in call.args &&
+    typeof call.args.query === "string"
+  ) {
+    return call.args.query;
   }
 
   return undefined;

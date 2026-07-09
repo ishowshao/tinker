@@ -5,6 +5,7 @@ import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
+import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type {
@@ -83,6 +84,7 @@ export function createDefaultTooling(options: {
   workspaceRoot: string;
   runId?: string;
   maxDisplayedBytes?: number;
+  webSearchApiKey?: string;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -132,6 +134,11 @@ export function createDefaultTooling(options: {
       taskManager,
     }),
   );
+
+  const webSearchApiKey = options.webSearchApiKey ?? process.env.EXA_API_KEY;
+  if (webSearchApiKey !== undefined && webSearchApiKey.trim() !== "") {
+    registry.register(createWebSearchToolExecutor({ apiKey: webSearchApiKey }));
+  }
 
   return {
     registry,
