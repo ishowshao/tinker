@@ -1,0 +1,150 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - heading "国际跳棋" [level=1] [ref=e5]
+    - paragraph [ref=e6]: International Draughts · 人机对战
+  - main [ref=e7]:
+    - grid "Draughts board" [ref=e8]:
+      - gridcell "10" [ref=e9]:
+        - generic: "10"
+      - gridcell [ref=e10]
+      - gridcell [ref=e12]
+      - gridcell [ref=e13]
+      - gridcell [ref=e15]
+      - gridcell [ref=e16]
+      - gridcell [ref=e18]
+      - gridcell [ref=e19]
+      - gridcell [ref=e21]
+      - gridcell [ref=e22]
+      - gridcell "9" [ref=e24]:
+        - generic: "9"
+      - gridcell [ref=e26]
+      - gridcell [ref=e27]
+      - gridcell [ref=e29]
+      - gridcell [ref=e30]
+      - gridcell [ref=e32]
+      - gridcell [ref=e33]
+      - gridcell [ref=e35]
+      - gridcell [ref=e36]
+      - gridcell [ref=e38]
+      - gridcell "8" [ref=e39]:
+        - generic: "8"
+      - gridcell [ref=e40]
+      - gridcell [ref=e42]
+      - gridcell [ref=e43]
+      - gridcell [ref=e45]
+      - gridcell [ref=e46]
+      - gridcell [ref=e48]
+      - gridcell [ref=e49]
+      - gridcell [ref=e51]
+      - gridcell [ref=e52]
+      - gridcell "7" [ref=e54]:
+        - generic: "7"
+      - gridcell [ref=e56]
+      - gridcell [ref=e57]
+      - gridcell [ref=e59]
+      - gridcell [ref=e60]
+      - gridcell [ref=e62]
+      - gridcell [ref=e63]
+      - gridcell [ref=e65]
+      - gridcell [ref=e66]
+      - gridcell [ref=e68]
+      - gridcell "6" [ref=e69]:
+        - generic: "6"
+      - gridcell [ref=e70]
+      - gridcell [ref=e71]
+      - gridcell [ref=e72]
+      - gridcell [ref=e73]
+      - gridcell [ref=e74]
+      - gridcell [ref=e75]
+      - gridcell [ref=e76]
+      - gridcell [ref=e77]
+      - gridcell [ref=e78]
+      - gridcell "5" [ref=e79]:
+        - generic: "5"
+      - gridcell [ref=e80]
+      - gridcell [ref=e81]
+      - gridcell [ref=e82]
+      - gridcell [ref=e83]
+      - gridcell [ref=e84]
+      - gridcell [ref=e85]
+      - gridcell [ref=e86]
+      - gridcell [ref=e87]
+      - gridcell [ref=e88]
+      - gridcell "4" [ref=e89]:
+        - generic: "4"
+      - gridcell [ref=e90] [cursor=pointer]
+      - gridcell [ref=e92]
+      - gridcell [ref=e93] [cursor=pointer]
+      - gridcell [ref=e95]
+      - gridcell [ref=e96] [cursor=pointer]
+      - gridcell [ref=e98]
+      - gridcell [ref=e99] [cursor=pointer]
+      - gridcell [ref=e101]
+      - gridcell [ref=e102] [cursor=pointer]
+      - gridcell "3" [ref=e104]:
+        - generic: "3"
+      - gridcell [ref=e106]
+      - gridcell [ref=e107]
+      - gridcell [ref=e109]
+      - gridcell [ref=e110]
+      - gridcell [ref=e112]
+      - gridcell [ref=e113]
+      - gridcell [ref=e115]
+      - gridcell [ref=e116]
+      - gridcell [ref=e118]
+      - gridcell "2" [ref=e119]:
+        - generic: "2"
+      - gridcell [ref=e120]
+      - gridcell [ref=e122]
+      - gridcell [ref=e123]
+      - gridcell [ref=e125]
+      - gridcell [ref=e126]
+      - gridcell [ref=e128]
+      - gridcell [ref=e129]
+      - gridcell [ref=e131]
+      - gridcell [ref=e132]
+      - gridcell "1 A" [ref=e134]:
+        - generic: "1"
+        - generic: A
+      - gridcell "B" [ref=e136]:
+        - generic: B
+      - gridcell "C" [ref=e137]:
+        - generic: C
+      - gridcell "D" [ref=e139]:
+        - generic: D
+      - gridcell "E" [ref=e140]:
+        - generic: E
+      - gridcell "F" [ref=e142]:
+        - generic: F
+      - gridcell "G" [ref=e143]:
+        - generic: G
+      - gridcell "H" [ref=e145]:
+        - generic: H
+      - gridcell "I" [ref=e146]:
+        - generic: I
+      - gridcell "J" [ref=e148]:
+        - generic: J
+    - complementary [ref=e149]:
+      - generic [ref=e150]: 你的回合（白方）
+      - generic [ref=e151]:
+        - generic [ref=e152]:
+          - generic [ref=e154]: 你（白）
+          - generic [ref=e155]: "20"
+        - generic [ref=e156]:
+          - generic [ref=e158]: 电脑（黑）
+          - generic [ref=e159]: "20"
+      - generic [ref=e160]:
+        - generic [ref=e161]: 难度
+        - generic [ref=e162]:
+          - button "简单" [ref=e163] [cursor=pointer]
+          - button "中等" [ref=e164] [cursor=pointer]
+          - button "困难" [ref=e165] [cursor=pointer]
+      - button "新游戏" [ref=e166] [cursor=pointer]
+      - generic [ref=e167]:
+        - heading "规则" [level=2] [ref=e168]
+        - list [ref=e169]:
+          - listitem [ref=e170]: 10×10 棋盘，每方 20 子，只走深色格。
+          - listitem [ref=e171]: 普通子斜向前进一格；可向任意斜向跳吃。
+          - listitem [ref=e172]: 跳吃为强制，且必须选择吃子最多的走法。
+          - listitem [ref=e173]: 普通子到达底线升变为「王」，可远距离滑行与跳吃。
+          - listitem [ref=e174]: 无棋可走的一方判负。

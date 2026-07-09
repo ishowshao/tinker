@@ -128,6 +128,26 @@ export type WebSearchRawResult = {
   error?: string;
 };
 
+export type WebFetchRawResult = {
+  ok: boolean;
+  url: string;
+  route?: "local" | "exa" | "local-browser";
+  finalUrl?: string;
+  redirectUrl?: string;
+  title?: string;
+  publishedDate?: string;
+  refined?: boolean;
+  content?: string;
+  highlights?: string[];
+  source?: "cached" | "crawled";
+  cacheHit?: boolean;
+  errorTag?: string;
+  httpStatusCode?: number;
+  costDollars?: number;
+  durationMs?: number;
+  error?: string;
+};
+
 export type GenericToolRawResult = {
   ok: false;
   toolName: string;
@@ -154,6 +174,7 @@ export type ToolRawResult =
   | GrepRawResult
   | BashRawResult
   | WebSearchRawResult
+  | WebFetchRawResult
   | McpToolRawResult
   | GenericToolRawResult;
 

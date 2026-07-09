@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ModelClient } from "../model/model-client";
 import { FakeModelClient } from "../model/fake-model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import { createUuidV7 } from "../ids/uuid-v7";
 
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
@@ -29,6 +30,7 @@ Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
 Use Read on the full file before Edit. Edit may fail if the file was not fully read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
 Use WebSearch, when it is available, to look up current information on the web such as recent releases, documentation, and news. Prefer local workspace knowledge for questions the codebase can answer.
+Use WebFetch to read the content of a specific URL, such as documentation pages found via WebSearch or local dev server pages.
 Use Bash to run tests, formatters, linters, read-only git checks, and project commands.
 Prefer Read for reading files instead of using cat on large files.
 Prefer Write or Edit for changing files instead of shell redirection.
@@ -86,6 +88,19 @@ export function createModelClientFromEnv(
     includeReasoningContent:
       options.includeReasoningContent ?? DEFAULT_INCLUDE_REASONING_CONTENT,
     model: modelName,
+  });
+}
+
+export function createWebFetchRefinerFromEnv(mainModelName: string): Refiner {
+  return createModelRefiner({
+    createModelClient: () => {
+      const refineModelName = process.env.TINKER_WEBFETCH_REFINE_MODEL;
+      return createModelClientFromEnv(
+        refineModelName === undefined || refineModelName.trim() === ""
+          ? mainModelName
+          : refineModelName,
+      );
+    },
   });
 }
 

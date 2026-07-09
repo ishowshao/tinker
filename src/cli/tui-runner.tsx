@@ -13,6 +13,7 @@ import { App } from "../tui/app";
 import { PromptHistory } from "../tui/prompt-history";
 import {
   createModelClientFromEnv,
+  createWebFetchRefinerFromEnv,
   eventLogPath,
   observationLogPath,
   promptHistoryPath,
@@ -26,6 +27,7 @@ export async function runTui(): Promise<void> {
   const tooling = createDefaultTooling({
     workspaceRoot: config.workspaceRoot,
     runId: config.runId,
+    webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
   });
 
   let mcpManager: McpManager | undefined;

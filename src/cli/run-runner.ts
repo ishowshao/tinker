@@ -11,6 +11,7 @@ import { createDefaultTooling } from "../tools/registry";
 import { runAgent } from "../agent/loop";
 import {
   createModelClientFromEnv,
+  createWebFetchRefinerFromEnv,
   eventLogPath,
   observationLogPath,
   readRunnerConfig,
@@ -68,6 +69,7 @@ export async function runOneShot(
     const tooling = createDefaultTooling({
       workspaceRoot: config.workspaceRoot,
       runId: config.runId,
+      webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
     });
 
     const mcpConfig = await loadMcpConfig(config.workspaceRoot);

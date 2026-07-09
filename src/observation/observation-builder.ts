@@ -9,6 +9,7 @@ import type {
   McpToolRawResult,
   ReadFileRawResult,
   ToolRawResult,
+  WebFetchRawResult,
   WebSearchRawResult,
   WriteFileRawResult,
 } from "../tools/types";
@@ -46,6 +47,12 @@ export class ObservationBuilder {
     if (input.call.name === "WebSearch") {
       return {
         content: renderWebSearchObservation(input.raw as WebSearchRawResult),
+      };
+    }
+
+    if (input.call.name === "WebFetch") {
+      return {
+        content: renderWebFetchObservation(input.raw as WebFetchRawResult),
       };
     }
 
@@ -278,6 +285,42 @@ function renderWebSearchObservation(raw: WebSearchRawResult): string {
 
 function collapseWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function renderWebFetchObservation(raw: WebFetchRawResult): string {
+  if (!raw.ok) {
+    return `WebFetch failed for ${raw.url || "(unknown url)"}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  if (raw.redirectUrl !== undefined) {
+    return [
+      `WebFetch was redirected to ${raw.redirectUrl}.`,
+      "The redirect crosses hosts, so it was not followed automatically.",
+      "Call WebFetch again with this URL if the redirect target is expected.",
+    ].join("\n");
+  }
+
+  const sections = [
+    `Web fetch result for ${raw.url} (route=${raw.route ?? "unknown"}, refined=${raw.refined ?? false}):`,
+  ];
+
+  if (raw.title !== undefined && raw.title !== "") {
+    sections.push(`Title: ${raw.title}`);
+  }
+
+  sections.push(raw.content ?? "");
+
+  const highlights = raw.highlights ?? [];
+  if (highlights.length > 0) {
+    sections.push(
+      [
+        "Highlights:",
+        ...highlights.map((entry) => `- ${collapseWhitespace(entry)}`),
+      ].join("\n"),
+    );
+  }
+
+  return sections.join("\n\n");
 }
 
 function renderMcpObservation(raw: McpToolRawResult): string {

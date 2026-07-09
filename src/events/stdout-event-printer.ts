@@ -72,6 +72,11 @@ function formatToolLine(prefix: string, call: ToolCall): string {
     return `${prefix} name=${call.name}${query === undefined ? "" : ` query=${query}`}\n`;
   }
 
+  if (call.name === "WebFetch") {
+    const url = toolUrl(call);
+    return `${prefix} name=${call.name}${url === undefined ? "" : ` url=${url}`}\n`;
+  }
+
   const filePath = toolFilePath(call);
   return `${prefix} name=${call.name}${filePath === undefined ? "" : ` path=${filePath}`}\n`;
 }
@@ -117,6 +122,20 @@ function toolQuery(call: ToolCall): string | undefined {
     typeof call.args.query === "string"
   ) {
     return call.args.query;
+  }
+
+  return undefined;
+}
+
+function toolUrl(call: ToolCall): string | undefined {
+  if (
+    typeof call.args === "object" &&
+    call.args !== null &&
+    !Array.isArray(call.args) &&
+    "url" in call.args &&
+    typeof call.args.url === "string"
+  ) {
+    return call.args.url;
   }
 
   return undefined;

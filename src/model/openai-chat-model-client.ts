@@ -31,8 +31,8 @@ export class OpenAIChatModelClient implements ModelClient {
       messages: toOpenAIChatMessages(input.messages, {
         includeReasoningContent: this.options.includeReasoningContent,
       }),
-      tools: toOpenAIChatTools(input.tools),
-      tool_choice: input.tools.length > 0 ? "auto" : "none",
+      tools: input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined,
+      tool_choice: input.tools.length > 0 ? "auto" : undefined,
     });
 
     return fromOpenAIChatCompletion(response);

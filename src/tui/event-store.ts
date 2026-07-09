@@ -255,6 +255,10 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
     return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
   }
 
+  if (input.name === "WebFetch") {
+    return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
+  }
+
   const filePath = toolPath(input.args);
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
 }
@@ -321,6 +325,17 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     }
   }
 
+  if (name === "WebFetch") {
+    if (stringProperty(rawRecord, "redirectUrl") !== undefined) {
+      return `${base} -> redirected`;
+    }
+
+    const route = stringProperty(rawRecord, "route");
+    if (route !== undefined) {
+      return `${base} -> ok (${route}${rawRecord.refined === true ? ", refined" : ""})`;
+    }
+  }
+
   if (name === "Bash") {
     const status = stringProperty(rawRecord, "status");
     const outputFilePath = stringProperty(rawRecord, "outputFilePath");
@@ -355,6 +370,11 @@ function toolPattern(args: unknown): string | undefined {
 function toolQuery(args: unknown): string | undefined {
   const argsRecord = asRecord(args);
   return stringProperty(argsRecord, "query");
+}
+
+function toolUrl(args: unknown): string | undefined {
+  const argsRecord = asRecord(args);
+  return stringProperty(argsRecord, "url");
 }
 
 function toolPath(args: unknown): string | undefined {

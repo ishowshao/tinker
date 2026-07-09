@@ -216,11 +216,11 @@ describe("WebSearch tool", () => {
     try {
       const withKey = createDefaultTooling({
         workspaceRoot: workspace,
-        webSearchApiKey: "exa-key",
+        exaApiKey: "exa-key",
       });
       const withoutKey = createDefaultTooling({
         workspaceRoot: workspace,
-        webSearchApiKey: "",
+        exaApiKey: "",
       });
 
       const toolNames = (tooling: typeof withKey) =>

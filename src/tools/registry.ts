@@ -5,6 +5,8 @@ import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
+import { createWebFetchToolExecutor } from "./web-fetch";
+import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
 import { createUuidV7 } from "../ids/uuid-v7";
@@ -84,7 +86,8 @@ export function createDefaultTooling(options: {
   workspaceRoot: string;
   runId?: string;
   maxDisplayedBytes?: number;
-  webSearchApiKey?: string;
+  exaApiKey?: string;
+  webFetchRefiner?: Refiner;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -135,10 +138,19 @@ export function createDefaultTooling(options: {
     }),
   );
 
-  const webSearchApiKey = options.webSearchApiKey ?? process.env.EXA_API_KEY;
-  if (webSearchApiKey !== undefined && webSearchApiKey.trim() !== "") {
-    registry.register(createWebSearchToolExecutor({ apiKey: webSearchApiKey }));
+  const exaApiKey = options.exaApiKey ?? process.env.EXA_API_KEY;
+  const hasExaKey = exaApiKey !== undefined && exaApiKey.trim() !== "";
+
+  if (hasExaKey) {
+    registry.register(createWebSearchToolExecutor({ apiKey: exaApiKey }));
   }
+
+  registry.register(
+    createWebFetchToolExecutor({
+      exaApiKey: hasExaKey ? exaApiKey : undefined,
+      refiner: options.webFetchRefiner,
+    }),
+  );
 
   return {
     registry,
