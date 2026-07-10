@@ -27,6 +27,8 @@ TUI，可以完成日常编码任务。下一阶段不继续扩张工具数量�
 
 ## 阶段一：后台进程管理
 
+详细设计见 [`background-task-management-design.md`](background-task-management-design.md)。
+
 当前 `Bash` 可以启动后台任务，并将任务保存在 `ShellTaskManager` 中，但模型和用户
 缺少稳定的后续管理入口。
 
