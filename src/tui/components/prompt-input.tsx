@@ -6,6 +6,7 @@ import {
   backspace,
   createLineEditorState,
   deleteForward,
+  deleteToLineStart,
   insert,
   type LineEditorState,
   moveLeft,
@@ -206,6 +207,8 @@ export function PromptInput(props: PromptInputProps) {
           updateEditor(moveToLineEnd);
         } else if (input === "d") {
           updateEditor(deleteForward);
+        } else if (input === "u") {
+          updateEditor(deleteToLineStart);
         }
         return;
       }

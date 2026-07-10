@@ -38,6 +38,23 @@ export function deleteForward(state: LineEditorState): LineEditorState {
   return { value: chars.join(""), cursor: state.cursor };
 }
 
+export function deleteToLineStart(state: LineEditorState): LineEditorState {
+  const chars = [...state.value];
+  const lineStart = currentLineStart(chars, state.cursor);
+
+  if (state.cursor > lineStart) {
+    chars.splice(lineStart, state.cursor - lineStart);
+    return { value: chars.join(""), cursor: lineStart };
+  }
+
+  if (lineStart === 0) {
+    return state;
+  }
+
+  chars.splice(lineStart - 1, 1);
+  return { value: chars.join(""), cursor: lineStart - 1 };
+}
+
 export function moveLeft(state: LineEditorState): LineEditorState {
   return state.cursor === 0 ? state : { ...state, cursor: state.cursor - 1 };
 }
@@ -50,8 +67,7 @@ export function moveRight(state: LineEditorState): LineEditorState {
 
 export function moveToLineStart(state: LineEditorState): LineEditorState {
   const chars = [...state.value];
-  const lineStart =
-    state.cursor === 0 ? 0 : chars.lastIndexOf("\n", state.cursor - 1) + 1;
+  const lineStart = currentLineStart(chars, state.cursor);
 
   if (state.cursor !== lineStart || lineStart === 0) {
     return { ...state, cursor: lineStart };
@@ -90,6 +106,10 @@ export function splitAtCursor(state: LineEditorState): {
     at: chars[state.cursor] ?? " ",
     after: chars.slice(state.cursor + 1).join(""),
   };
+}
+
+function currentLineStart(chars: string[], cursor: number): number {
+  return cursor === 0 ? 0 : chars.lastIndexOf("\n", cursor - 1) + 1;
 }
 
 function codePointLength(value: string): number {

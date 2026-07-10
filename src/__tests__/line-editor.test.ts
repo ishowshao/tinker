@@ -3,6 +3,7 @@ import {
   backspace,
   createLineEditorState,
   deleteForward,
+  deleteToLineStart,
   insert,
   moveLeft,
   moveRight,
@@ -64,6 +65,28 @@ describe("line editor", () => {
   test("deleteForward at the end is a no-op", () => {
     const state = createLineEditorState("abc");
     expect(deleteForward(state)).toBe(state);
+  });
+
+  test("deletes to the line start while preserving text after the cursor", () => {
+    expect(deleteToLineStart({ value: "first\nsecond\nthird", cursor: 9 })).toEqual({
+      value: "first\nond\nthird",
+      cursor: 6,
+    });
+    expect(deleteToLineStart({ value: "first\n你😀好", cursor: 8 })).toEqual({
+      value: "first\n好",
+      cursor: 6,
+    });
+  });
+
+  test("joins the current line to the previous line when already at line start", () => {
+    const joined = deleteToLineStart({ value: "first\nond\nthird", cursor: 6 });
+    expect(joined).toEqual({ value: "firstond\nthird", cursor: 5 });
+    expect(deleteToLineStart(joined)).toEqual({ value: "ond\nthird", cursor: 0 });
+  });
+
+  test("is a no-op at the first line start", () => {
+    const state = { value: "first\nsecond", cursor: 0 };
+    expect(deleteToLineStart(state)).toBe(state);
   });
 
   test("moves the cursor within bounds", () => {

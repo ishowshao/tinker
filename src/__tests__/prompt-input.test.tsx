@@ -10,6 +10,7 @@ const ARROW_LEFT = "[D";
 const BACKSPACE = "";
 const CTRL_A = "\u0001";
 const CTRL_E = "\u0005";
+const CTRL_U = "\u0015";
 const PASTE_START = "[200~";
 const PASTE_END = "[201~";
 
@@ -174,6 +175,24 @@ describe("prompt input", () => {
     await press(stdin, CTRL_A, CTRL_A, ">", CTRL_E, CTRL_E, "<", "\r");
 
     expect(submitted).toEqual(["first\n>second\nthird<"]);
+    cleanup();
+  });
+
+  test("deletes left and then joins lines with repeated Ctrl+U", async () => {
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, `${PASTE_START}first\nsecond${PASTE_END}`);
+    await press(stdin, ARROW_LEFT, ARROW_LEFT, ARROW_LEFT);
+    await press(stdin, CTRL_U, CTRL_U, "-", "\r");
+
+    expect(submitted).toEqual(["first-ond"]);
     cleanup();
   });
 
