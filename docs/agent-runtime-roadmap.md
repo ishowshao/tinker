@@ -48,6 +48,8 @@ TUI，可以完成日常编码任务。下一阶段不继续扩张工具数量�
 
 ## 阶段二：Esc 中断当前执行
 
+详细设计见 [`turn-cancellation-design.md`](turn-cancellation-design.md)。
+
 `Esc` 的语义固定为“取消当前 turn”，不是退出 TUI，也不是撤销已经完成的文件改动。
 
 取消信号需要贯穿以下链路：
