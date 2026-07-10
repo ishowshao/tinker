@@ -391,13 +391,13 @@ function applyHeadLimit<T>(
 
 ## 路径策略
 
-`Grep` 必须沿用 workspace 路径安全策略：
+`Grep` 沿用通用文件路径策略：
 
 - 相对 `path` 以 workspace root 为基准解析。
-- workspace 内绝对路径允许使用。
-- workspace 外绝对路径或 `..` 逃逸应拒绝。
+- 相对路径通过 `..` 逃逸应拒绝。
+- 绝对路径允许指向 workspace 内或 workspace 外的文件和目录。
 - 未提供 `path` 时使用当前 Bash cwd；如果当前 cwd 不在 workspace 内，fast-fail。
-- 输出路径统一转成 workspace-relative。
+- workspace 内的输出路径转成 workspace-relative，workspace 外保留绝对路径。
 
 `path` 可以是文件或目录：
 

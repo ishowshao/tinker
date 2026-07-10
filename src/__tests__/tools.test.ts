@@ -45,6 +45,36 @@ describe("Read and Write tools", () => {
     }
   });
 
+  test("reads and writes an absolute file path outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
+    const workspace = path.join(root, "workspace");
+    const filePath = path.join(root, "outside.txt");
+
+    try {
+      await mkdir(workspace);
+      await writeFile(filePath, "before\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      const read = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Read",
+        args: { file_path: filePath },
+      });
+      expect(read.ok).toBe(true);
+      expect("content" in read ? read.content : "").toBe("before");
+
+      const write = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Write",
+        args: { file_path: filePath, content: "after\n" },
+      });
+      expect(write.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+    } finally {
+      await rm(root, { recursive: true });
+    }
+  });
+
   test("writes a new file", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
 
@@ -185,6 +215,38 @@ describe("Edit tool", () => {
       expect(await readFile(filePath, "utf8")).toBe("alpha\ndelta\nomega\n");
     } finally {
       await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("edits an absolute file path outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+    const workspace = path.join(root, "workspace");
+    const filePath = path.join(root, "outside.txt");
+
+    try {
+      await mkdir(workspace);
+      await writeFile(filePath, "old value\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      await tooling.runtime.execute({
+        id: "call_1",
+        name: "Read",
+        args: { file_path: filePath },
+      });
+      const raw = await tooling.runtime.execute({
+        id: "call_2",
+        name: "Edit",
+        args: {
+          file_path: filePath,
+          old_string: "old value",
+          new_string: "new value",
+        },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("new value\n");
+    } finally {
+      await rm(root, { recursive: true });
     }
   });
 
@@ -502,6 +564,31 @@ describe("Glob tool", () => {
     }
   });
 
+  test("searches an absolute directory outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-glob-"));
+    const workspace = path.join(root, "workspace");
+    const outside = path.join(root, "outside");
+    const filePath = path.join(outside, "app.ts");
+
+    try {
+      await mkdir(workspace);
+      await mkdir(outside);
+      await writeFile(filePath, "", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Glob",
+        args: { pattern: "*.ts", path: outside },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("searchPath" in raw ? raw.searchPath : "").toBe(outside);
+      expect("matches" in raw ? raw.matches : []).toEqual([filePath]);
+    } finally {
+      await rm(root, { recursive: true });
+    }
+  });
+
   test("rejects Glob path escape", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-glob-"));
 
@@ -799,6 +886,30 @@ describe("Grep tool", () => {
       expect(raw.ok).toBe(true);
       expect("content" in raw ? raw.content : "").toBe("a.ts:1:foo");
     });
+  });
+
+  test("searches an absolute file path outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-grep-"));
+    const workspace = path.join(root, "workspace");
+    const filePath = path.join(root, "outside.ts");
+
+    try {
+      await mkdir(workspace);
+      await writeFile(filePath, "foo\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        id: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", path: filePath, output_mode: "content" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("searchPath" in raw ? raw.searchPath : "").toBe(filePath);
+      expect("content" in raw ? raw.content : "").toBe(`${filePath}:1:foo`);
+      expect("filenames" in raw ? raw.filenames : []).toEqual([filePath]);
+    } finally {
+      await rm(root, { recursive: true });
+    }
   });
 
   test("rejects path escape and missing paths", async () => {

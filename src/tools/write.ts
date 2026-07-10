@@ -28,7 +28,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         properties: {
           file_path: {
             type: "string",
-            description: "Workspace-relative path or workspace-local absolute path.",
+            description: "Workspace-relative path or absolute path.",
           },
           content: {
             type: "string",

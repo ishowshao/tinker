@@ -17,7 +17,7 @@ export const SYSTEM_PROMPT = (
 Current workspace:
 ${workspaceRoot}
 
-Use this path as the root for relative file paths. You may use workspace-local absolute paths when useful.
+Use this path as the root for relative file paths. Absolute file paths may point outside this workspace.
 
 You can use tools to find, read, edit, write files, and run shell commands.
 Use Glob to find files by name or path pattern.

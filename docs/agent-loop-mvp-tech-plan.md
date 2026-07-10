@@ -694,14 +694,20 @@ PTY smoke 只检查基础可用性：
 
 ## 路径安全
 
-所有文件工具共用 `resolveWorkspacePath`。模型可以传相对路径，也可以传 workspace 内的绝对路径；runtime 会统一解析并拒绝 workspace 外路径。
+所有文件工具共用 `resolveWorkspacePath`：
+
+- 相对路径以 workspace root 为基准解析，并拒绝通过 `..` 越出 workspace。
+- 绝对路径按原路径解析，可以指向 workspace 外的文件或目录。
+- 搜索结果位于 workspace 内时显示相对路径，位于 workspace 外时显示绝对路径。
 
 ```ts
 export function resolveWorkspacePath(workspaceRoot: string, inputPath: string): string {
+  if (path.isAbsolute(inputPath)) {
+    return path.resolve(inputPath);
+  }
+
   const root = path.resolve(workspaceRoot);
-  const resolved = path.isAbsolute(inputPath)
-    ? path.resolve(inputPath)
-    : path.resolve(root, inputPath);
+  const resolved = path.resolve(root, inputPath);
 
   if (resolved !== root && !resolved.startsWith(root + path.sep)) {
     throw new Error("Path escapes workspace.");
@@ -711,7 +717,7 @@ export function resolveWorkspacePath(workspaceRoot: string, inputPath: string): 
 }
 ```
 
-第一版不处理 symlink escape。是否需要 `realpath` 检查留作评审点。
+相对路径暂不额外处理 symlink escape。
 
 ## System Prompt MVP
 

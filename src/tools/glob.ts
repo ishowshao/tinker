@@ -1,7 +1,7 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { glob } from "glob";
-import { resolveWorkspacePath, toWorkspaceRelativePath } from "./path-safety";
+import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import type { GlobRawResult, ToolExecutor } from "./types";
 
 type GlobArgs = {
@@ -19,8 +19,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
   return {
     definition: {
       name: "Glob",
-      description:
-        "Find files in the local workspace by glob pattern. node_modules and .git are ignored.",
+      description: "Find files by glob pattern. node_modules and .git are ignored.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -32,7 +31,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative search directory. Defaults to the workspace root.",
+              "Optional workspace-relative or absolute search directory. Defaults to the workspace root.",
           },
         },
         required: ["pattern"],
@@ -69,10 +68,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
         };
       }
 
-      const searchPath = toWorkspaceRelativePath(
-        options.workspaceRoot,
-        absoluteSearchPath,
-      );
+      const searchPath = toDisplayPath(options.workspaceRoot, absoluteSearchPath);
 
       const directoryCheck = await ensureDirectory(absoluteSearchPath);
       if (!directoryCheck.ok) {
@@ -94,7 +90,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           follow: false,
           ignore: ["**/node_modules/**", "**/.git/**"],
         });
-        const workspaceMatches = toWorkspaceMatches({
+        const displayMatches = toDisplayMatches({
           workspaceRoot: options.workspaceRoot,
           absoluteSearchPath,
           matches,
@@ -105,8 +101,8 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           pattern: input.pattern,
           searchPath,
           absoluteSearchPath,
-          matches: workspaceMatches,
-          matchCount: workspaceMatches.length,
+          matches: displayMatches,
+          matchCount: displayMatches.length,
           ignored: ignoredDirectories,
         };
       } catch (error) {
@@ -172,7 +168,7 @@ async function ensureDirectory(
   }
 }
 
-function toWorkspaceMatches(input: {
+function toDisplayMatches(input: {
   workspaceRoot: string;
   absoluteSearchPath: string;
   matches: string[];
@@ -182,7 +178,7 @@ function toWorkspaceMatches(input: {
       input.workspaceRoot,
       path.resolve(input.absoluteSearchPath, match),
     );
-    return toWorkspaceRelativePath(input.workspaceRoot, absolutePath);
+    return toDisplayPath(input.workspaceRoot, absolutePath);
   });
 
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));

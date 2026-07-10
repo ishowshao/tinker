@@ -1,7 +1,7 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
-import { resolveWorkspacePath, toWorkspaceRelativePath } from "./path-safety";
+import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { ripGrep } from "./ripgrep";
 import type { GrepOutputMode, GrepRawResult, ToolExecutor } from "./types";
 
@@ -44,7 +44,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
   return {
     definition: {
       name: "Grep",
-      description: "Search file contents in the local workspace with ripgrep.",
+      description: "Search file contents with ripgrep.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -57,7 +57,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative file or directory to search in. Defaults to the current workspace-local cwd.",
+              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd.",
           },
           glob: {
             type: "string",
@@ -151,10 +151,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         });
       }
 
-      const searchPath = toWorkspaceRelativePath(
-        options.workspaceRoot,
-        absoluteSearchPath,
-      );
+      const searchPath = toDisplayPath(options.workspaceRoot, absoluteSearchPath);
 
       const pathCheck = await ensureFileOrDirectory(absoluteSearchPath);
       if (!pathCheck.ok) {
@@ -195,7 +192,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         const sorted = await sortFilesForOutput([...new Set(rg.lines)]);
         const page = applyHeadLimit(sorted, input.head_limit, input.offset ?? 0);
         const filenames = page.items.map((file) =>
-          toWorkspaceRelativePath(options.workspaceRoot, file),
+          toDisplayPath(options.workspaceRoot, file),
         );
 
         return {
@@ -482,7 +479,7 @@ function parseCountLine(
   const count = separator === -1 ? 0 : Number(line.slice(separator + 1));
 
   return {
-    filePath: toWorkspaceRelativePath(workspaceRoot, absolutePath),
+    filePath: toDisplayPath(workspaceRoot, absolutePath),
     count: Number.isFinite(count) ? count : 0,
   };
 }

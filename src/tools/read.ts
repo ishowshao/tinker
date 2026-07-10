@@ -32,7 +32,7 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         properties: {
           file_path: {
             type: "string",
-            description: "Workspace-relative path or workspace-local absolute path.",
+            description: "Workspace-relative path or absolute path.",
           },
           offset: {
             type: "integer",
