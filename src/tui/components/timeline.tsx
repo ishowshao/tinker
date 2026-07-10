@@ -80,6 +80,16 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
       ];
     }
 
+    if (event.type === "run.cancelled") {
+      return [
+        {
+          id: `${index}-run-cancelled`,
+          text: "turn cancelled",
+          status: "cancelled",
+        },
+      ];
+    }
+
     if (event.type === "run.failed") {
       return [
         {
@@ -99,8 +109,8 @@ function finalText(result: unknown): string | undefined {
   if (
     typeof result === "object" &&
     result !== null &&
-    "ok" in result &&
-    result.ok === true &&
+    "status" in result &&
+    result.status === "completed" &&
     "finalText" in result &&
     typeof result.finalText === "string"
   ) {
@@ -195,6 +205,10 @@ function colorForStatus(status: TimelineItem["status"]): string {
     return "yellow";
   }
 
+  if (status === "cancelled") {
+    return "gray";
+  }
+
   return "gray";
 }
 
@@ -209,6 +223,10 @@ function symbolForStatus(status: TimelineItem["status"]): string {
 
   if (status === "running") {
     return "…";
+  }
+
+  if (status === "cancelled") {
+    return "⊘";
   }
 
   return "-";

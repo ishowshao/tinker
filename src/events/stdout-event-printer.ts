@@ -81,7 +81,16 @@ export class StdoutEventPrinter implements EventSink {
         );
         break;
       case "run.finished":
-        this.stdout.write(`run.finished ok=${resultOk(event.result)}\n`);
+        this.stdout.write(`run.finished status=${resultStatus(event.result)}\n`);
+        break;
+      case "run.cancelled":
+        this.stdout.write(
+          `run.cancelled phase=${event.cancellation.phase} step=${event.cancellation.step}${
+            event.cancellation.toolName === undefined
+              ? ""
+              : ` tool=${event.cancellation.toolName}`
+          }\n`,
+        );
         break;
       case "run.failed":
         this.stderr.write(`run.failed error=${event.error}\n`);
@@ -316,11 +325,7 @@ function numberProperty(
   return typeof record[property] === "number" ? record[property] : undefined;
 }
 
-function resultOk(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    "ok" in result &&
-    result.ok === true
-  );
+function resultStatus(result: unknown): string {
+  const record = asRecord(result);
+  return typeof record.status === "string" ? record.status : "unknown";
 }

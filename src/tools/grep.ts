@@ -1,9 +1,15 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { ripGrep } from "./ripgrep";
-import type { GrepOutputMode, GrepRawResult, ToolExecutor } from "./types";
+import type {
+  GrepOutputMode,
+  GrepRawResult,
+  ToolExecutionContext,
+  ToolExecutor,
+} from "./types";
 
 type GrepArgs = {
   pattern: string;
@@ -124,7 +130,8 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         required: ["pattern"],
       },
     },
-    async execute(args): Promise<GrepRawResult> {
+    async execute(args, _call, context: ToolExecutionContext): Promise<GrepRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseGrepArgs(args);
 
       if (!parsed.ok) {
@@ -154,6 +161,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
       const searchPath = toDisplayPath(options.workspaceRoot, absoluteSearchPath);
 
       const pathCheck = await ensureFileOrDirectory(absoluteSearchPath);
+      throwIfTurnCancelled(context.signal);
       if (!pathCheck.ok) {
         return grepFailure({
           pattern: input.pattern,
@@ -165,7 +173,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
       }
 
       const rgArgs = buildRipgrepArgs(input, mode, absoluteSearchPath);
-      const rg = await ripGrep(rgArgs);
+      const rg = await ripGrep(rgArgs, { signal: context.signal });
 
       if (!rg.ok) {
         return grepFailure({

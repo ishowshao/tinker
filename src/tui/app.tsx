@@ -1,5 +1,6 @@
-import { Box, Text, useApp } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { Box, Text, useApp, useInput } from "ink";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiEventStream } from "../events/tui-event-stream";
 import { applyAgentEvent, createInitialTuiState } from "./event-store";
@@ -16,7 +17,7 @@ export type AppProps = {
   workspaceRoot: string;
   runId: string;
   eventStream: TuiEventStream;
-  run: (prompt: string) => Promise<RunAgentResult>;
+  run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>;
   history?: PromptHistory;
   onQuit?: () => void;
 };
@@ -34,13 +35,33 @@ export function App(props: AppProps) {
   );
   const [state, setState] = useState(initialState);
   const [isRunning, setIsRunning] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  const activeController = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
     return props.eventStream.subscribe((event) => {
       setState((current) => applyAgentEvent(current, event));
     });
   }, [props.eventStream]);
+
+  useInput(
+    (_input, key) => {
+      if (!key.escape) {
+        return;
+      }
+
+      const controller = activeController.current;
+      if (controller === undefined || controller.signal.aborted) {
+        return;
+      }
+
+      controller.abort(new TurnCancelledError());
+      setIsCancelling(true);
+      setNotice("Cancelling current turn...");
+    },
+    { isActive: isRunning },
+  );
 
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
@@ -68,12 +89,20 @@ export function App(props: AppProps) {
 
     setNotice(undefined);
     setIsRunning(true);
+    setIsCancelling(false);
+    const controller = new AbortController();
+    activeController.current = controller;
     void props.history?.append(trimmed).catch(() => undefined);
     void props
-      .run(trimmed)
+      .run(trimmed, controller.signal)
       .catch(() => undefined)
       .finally(() => {
-        setIsRunning(false);
+        if (activeController.current === controller) {
+          activeController.current = undefined;
+          setIsRunning(false);
+          setIsCancelling(false);
+          setNotice(undefined);
+        }
       });
   };
 
@@ -93,7 +122,7 @@ export function App(props: AppProps) {
         </Box>
       )}
       <Box marginTop={1}>
-        <Footer status={state.status} />
+        <Footer status={isCancelling ? "cancelling" : state.status} />
       </Box>
       <Box marginTop={1} flexDirection="column">
         <PromptInput

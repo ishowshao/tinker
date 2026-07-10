@@ -4,8 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling, ToolRegistry, ToolRuntime } from "../tools/registry";
-import { createWebSearchToolExecutor } from "../tools/web-search";
-import type { WebSearchRawResult } from "../tools/types";
+import { createWebSearchToolExecutor as createWebSearchToolExecutorBase } from "../tools/web-search";
+import type { ToolExecutionContext, WebSearchRawResult } from "../tools/types";
+import type { ToolCall } from "../agent/types";
+import { TurnCancelledError } from "../agent/turn-cancellation";
+
+const testToolContext: ToolExecutionContext = {
+  signal: new AbortController().signal,
+};
+
+function createWebSearchToolExecutor(
+  options: Parameters<typeof createWebSearchToolExecutorBase>[0],
+) {
+  const tool = createWebSearchToolExecutorBase(options);
+  return {
+    ...tool,
+    execute: (
+      args: unknown,
+      call: ToolCall,
+      context: ToolExecutionContext = testToolContext,
+    ) => tool.execute(args, call, context),
+  };
+}
 
 type CapturedRequest = {
   url: string;
@@ -60,6 +80,31 @@ const samplePayload = {
 };
 
 describe("WebSearch tool", () => {
+  test("propagates turn cancellation instead of returning a network failure", async () => {
+    const controller = new AbortController();
+    const fetchImpl = ((_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("request aborted")),
+          { once: true },
+        );
+      })) as typeof fetch;
+    const tool = createWebSearchToolExecutor({
+      apiKey: "exa-key",
+      fetchImpl,
+    });
+
+    const pending = tool.execute(
+      { query: "latest bun release" },
+      { id: "call_1", name: "WebSearch", args: {} },
+      { signal: controller.signal },
+    );
+    controller.abort(new TurnCancelledError());
+
+    expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
+  });
+
   test("sends a Claude Code-aligned request mapped to the Exa /search API", async () => {
     const { fetchImpl, requests } = createFetchStub({ payload: samplePayload });
     const tool = createWebSearchToolExecutor({ apiKey: "exa-key", fetchImpl });
@@ -199,11 +244,14 @@ describe("WebSearch tool", () => {
     registry.register(createWebSearchToolExecutor({ apiKey: "exa-key", fetchImpl }));
     const runtime = new ToolRuntime(registry);
 
-    const raw = await runtime.execute({
-      id: "call_1",
-      name: "WebSearch",
-      args: { query: "bun release" },
-    });
+    const raw = await runtime.execute(
+      {
+        id: "call_1",
+        name: "WebSearch",
+        args: { query: "bun release" },
+      },
+      testToolContext,
+    );
 
     expect(raw.ok).toBe(true);
     expect(registry.definitions().map((definition) => definition.name)).toContain(

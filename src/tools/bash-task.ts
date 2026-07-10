@@ -244,6 +244,21 @@ export class ShellTaskManager {
     return this.beginStop(task, reason);
   }
 
+  async cancelForegroundTask(taskId: string): Promise<ShellTaskSnapshot> {
+    const task = this.requireTask(taskId);
+    this.synchronizeTerminalState(task);
+
+    if (task.backgroundedAt !== undefined) {
+      throw new Error(`Cannot cancel background task as foreground: ${taskId}`);
+    }
+
+    if (isTerminalStatus(task.status) || task.status === "stopping") {
+      return task.completion;
+    }
+
+    return (await this.beginStop(task, "turn_cancelled")).task;
+  }
+
   shutdown(reason: "tui_exit" | "oneshot_complete"): Promise<ShutdownResult> {
     if (this.shutdownPromise !== undefined) {
       return this.shutdownPromise;

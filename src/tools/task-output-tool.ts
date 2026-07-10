@@ -1,6 +1,7 @@
 import type { ShellTaskManager } from "./bash-task";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { parseTaskIdArgs } from "./task-tool-args";
-import type { TaskOutputRawResult, ToolExecutor } from "./types";
+import type { TaskOutputRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 export function createTaskOutputToolExecutor(options: {
   taskManager: ShellTaskManager;
@@ -21,13 +22,19 @@ export function createTaskOutputToolExecutor(options: {
         required: ["task_id"],
       },
     },
-    async execute(args): Promise<TaskOutputRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<TaskOutputRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseTaskIdArgs(args, "TaskOutput");
       if (!parsed.ok) {
         return { ok: false, taskId: "", error: parsed.error };
       }
 
       const inspection = options.taskManager.inspectTask(parsed.taskId);
+      throwIfTurnCancelled(context.signal);
       if (inspection === undefined) {
         return {
           ok: false,

@@ -22,14 +22,27 @@ export type AgentMessage =
       content: string;
     };
 
+export type TurnCancellation = {
+  source: "user";
+  phase: "model_request" | "tool_execution" | "agent_boundary";
+  step: number;
+  toolCallId?: string;
+  toolName?: string;
+};
+
 export type RunAgentResult =
   | {
-      ok: true;
+      status: "completed";
       finalText: string;
       messages: AgentMessage[];
     }
   | {
-      ok: false;
+      status: "failed";
       error: string;
+      messages: AgentMessage[];
+    }
+  | {
+      status: "cancelled";
+      cancellation: TurnCancellation;
       messages: AgentMessage[];
     };

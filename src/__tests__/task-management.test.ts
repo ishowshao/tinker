@@ -2,17 +2,36 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ToolCall } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import { ObservationBuilder } from "../observation/observation-builder";
-import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
+import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type {
   BashRawResult,
   TaskListRawResult,
   TaskOutputRawResult,
   TaskStopRawResult,
   ToolRawResult,
+  ToolExecutionContext,
 } from "../tools/types";
+
+const testToolContext: ToolExecutionContext = {
+  signal: new AbortController().signal,
+};
+
+function createDefaultTooling(options: Parameters<typeof createDefaultToolingBase>[0]) {
+  const tooling = createDefaultToolingBase(options);
+  return {
+    ...tooling,
+    runtime: {
+      execute: (call: ToolCall, context: ToolExecutionContext = testToolContext) =>
+        tooling.runtime.execute(call, context),
+    },
+  };
+}
+
+type TestTooling = ReturnType<typeof createDefaultTooling>;
 
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];
@@ -316,7 +335,7 @@ describe("background task management", () => {
 });
 
 async function startBackgroundSleep(
-  tooling: DefaultTooling,
+  tooling: TestTooling,
   callId: string,
 ): Promise<BashRawResult> {
   return asBash(
@@ -328,7 +347,7 @@ async function startBackgroundSleep(
   );
 }
 
-async function listTasks(tooling: DefaultTooling): Promise<TaskListRawResult> {
+async function listTasks(tooling: TestTooling): Promise<TaskListRawResult> {
   return asTaskList(
     await tooling.runtime.execute({
       id: crypto.randomUUID(),
@@ -339,7 +358,7 @@ async function listTasks(tooling: DefaultTooling): Promise<TaskListRawResult> {
 }
 
 async function stopTask(
-  tooling: DefaultTooling,
+  tooling: TestTooling,
   taskId: string,
 ): Promise<TaskStopRawResult> {
   return asTaskStop(
@@ -352,7 +371,7 @@ async function stopTask(
 }
 
 async function waitForOutput(
-  tooling: DefaultTooling,
+  tooling: TestTooling,
   taskId: string,
   expected: string,
 ): Promise<TaskOutputRawResult> {
@@ -379,7 +398,7 @@ async function waitForOutput(
 }
 
 async function waitForStatus(
-  tooling: DefaultTooling,
+  tooling: TestTooling,
   taskId: string,
   expected: "completed" | "failed" | "killed",
 ) {

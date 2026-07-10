@@ -51,7 +51,7 @@ export async function runTui(): Promise<void> {
 
   let sessionMessages: AgentMessage[] | undefined;
 
-  const run = async (userPrompt: string) => {
+  const run = async (userPrompt: string, signal: AbortSignal) => {
     await eventSink.append({
       type: "run.started",
       runId: config.runId,
@@ -78,12 +78,19 @@ export async function runTui(): Promise<void> {
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
         eventSink,
+        signal,
       });
 
-      if (result.ok) {
+      if (result.status === "completed") {
         await eventSink.append({
           type: "run.finished",
           result,
+        });
+      } else if (result.status === "cancelled") {
+        await eventSink.append({
+          type: "run.cancelled",
+          cancelledAt: new Date().toISOString(),
+          cancellation: result.cancellation,
         });
       } else {
         await eventSink.append({

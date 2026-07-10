@@ -94,10 +94,13 @@ describe("runAgent", () => {
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
         eventSink: events,
+        signal: new AbortController().signal,
       });
 
-      expect(result.ok).toBe(true);
-      expect(result.ok ? result.finalText : "").toBe("README was read.");
+      expect(result.status).toBe("completed");
+      expect(result.status === "completed" ? result.finalText : "").toBe(
+        "README was read.",
+      );
       const progressEvent = events.events.find(
         (event) => event.type === "assistant.progress",
       );
@@ -133,9 +136,10 @@ describe("runAgent", () => {
       toolRuntime: tooling.runtime,
       observationBuilder: new ObservationBuilder(),
       eventSink: events,
+      signal: new AbortController().signal,
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.status).toBe("completed");
     expect(model.inputs[0]?.messages).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },

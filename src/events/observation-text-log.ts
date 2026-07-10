@@ -28,6 +28,8 @@ function renderObservationLogBlock(event: AgentEvent): string | undefined {
       return renderToolObservation(event);
     case "run.finished":
       return renderRunFinished(event.result);
+    case "run.cancelled":
+      return renderRunCancelled(event);
     case "run.failed":
       return renderRunFailed(event.error);
     default:
@@ -104,6 +106,27 @@ function renderRunFailed(error: string): string {
   return ["## Failed", "", error, ""].join("\n");
 }
 
+function renderRunCancelled(
+  event: Extract<AgentEvent, { type: "run.cancelled" }>,
+): string {
+  return [
+    "## Cancelled",
+    "",
+    `Cancelled: ${event.cancelledAt}`,
+    `Phase: ${event.cancellation.phase}`,
+    `Step: ${event.cancellation.step}`,
+    event.cancellation.toolName === undefined
+      ? undefined
+      : `Tool: ${event.cancellation.toolName}`,
+    event.cancellation.toolCallId === undefined
+      ? undefined
+      : `Call ID: ${event.cancellation.toolCallId}`,
+    "",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
 function toolCallSummary(call: ToolCall): string {
   const args = asRecord(call.args);
 
@@ -152,7 +175,9 @@ function observationContent(observation: unknown): string {
 
 function finalText(result: unknown): string | undefined {
   const record = asRecord(result);
-  return record.ok === true ? stringProperty(record, "finalText") : undefined;
+  return record.status === "completed"
+    ? stringProperty(record, "finalText")
+    : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

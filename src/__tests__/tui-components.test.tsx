@@ -68,6 +68,79 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("uses local cancelling feedback until run.cancelled arrives", async () => {
+    const eventStream = new TuiEventStream();
+    let abortCount = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        modelName="model"
+        workspaceRoot="/tmp/tinker"
+        runId="run-1"
+        eventStream={eventStream}
+        run={async (prompt, signal) => {
+          await eventStream.append({
+            type: "run.started",
+            runId: "run-1",
+            createdAt: "2026-07-10T00:00:00.000Z",
+            input: { userPrompt: prompt },
+          });
+
+          return await new Promise((resolve) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                abortCount += 1;
+                setTimeout(() => {
+                  void eventStream
+                    .append({
+                      type: "run.cancelled",
+                      cancelledAt: "2026-07-10T00:00:01.000Z",
+                      cancellation: {
+                        source: "user",
+                        phase: "model_request",
+                        step: 1,
+                      },
+                    })
+                    .then(() =>
+                      resolve({
+                        status: "cancelled" as const,
+                        cancellation: {
+                          source: "user" as const,
+                          phase: "model_request" as const,
+                          step: 1,
+                        },
+                        messages: [],
+                      }),
+                    );
+                }, 40);
+              },
+              { once: true },
+            );
+          });
+        }}
+      />,
+    );
+
+    stdin.write("wait\n");
+    await Bun.sleep(20);
+    stdin.write("\u001b");
+    await Bun.sleep(25);
+    stdin.write("\u001b");
+    await Bun.sleep(25);
+
+    expect(lastFrame()).toContain("cancelling");
+    expect(abortCount).toBe(1);
+
+    await Bun.sleep(60);
+    expect(lastFrame()).toContain("cancelled");
+    expect(lastFrame()).not.toContain("Cancelling current turn...");
+
+    stdin.write("/nope\n");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain("Unknown command: /nope");
+    cleanup();
+  });
+
   test("renders background task identity, status, and exit result", () => {
     const { lastFrame, cleanup } = render(
       <BackgroundTasks
@@ -187,7 +260,7 @@ describe("tui components", () => {
         eventStream={new TuiEventStream()}
         run={async () => {
           runCount += 1;
-          return { ok: true, finalText: "", messages: [] };
+          return { status: "completed", finalText: "", messages: [] };
         }}
         onQuit={() => {
           quitCount += 1;
@@ -215,7 +288,7 @@ describe("tui components", () => {
         eventStream={new TuiEventStream()}
         run={async () => {
           runCount += 1;
-          return { ok: true, finalText: "", messages: [] };
+          return { status: "completed", finalText: "", messages: [] };
         }}
         onQuit={() => undefined}
       />,

@@ -1,4 +1,10 @@
-import type { ToolExecutor, WebSearchRawResult, WebSearchResultItem } from "./types";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
+import type {
+  ToolExecutionContext,
+  ToolExecutor,
+  WebSearchRawResult,
+  WebSearchResultItem,
+} from "./types";
 
 type WebSearchArgs = {
   query: string;
@@ -62,7 +68,12 @@ export function createWebSearchToolExecutor(
         required: ["query"],
       },
     },
-    async execute(args): Promise<WebSearchRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<WebSearchRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseWebSearchArgs(args);
 
       if (!parsed.ok) {
@@ -87,6 +98,10 @@ export function createWebSearchToolExecutor(
 
       const startedAt = Date.now();
       let response: Response;
+      const requestSignal = AbortSignal.any([
+        context.signal,
+        AbortSignal.timeout(timeoutMs),
+      ]);
 
       try {
         response = await fetchImpl(`${baseUrl}/search`, {
@@ -96,9 +111,13 @@ export function createWebSearchToolExecutor(
             "x-api-key": options.apiKey,
           },
           body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: requestSignal,
         });
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           query: input.query,
@@ -106,7 +125,22 @@ export function createWebSearchToolExecutor(
         };
       }
 
-      const responseText = await response.text();
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
+        return {
+          ok: false,
+          query: input.query,
+          error: requestErrorMessage(error, timeoutMs),
+        };
+      }
+
+      throwIfTurnCancelled(context.signal);
 
       if (!response.ok) {
         return {

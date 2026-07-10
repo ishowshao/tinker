@@ -1,4 +1,5 @@
-import type { ToolExecutor, WebFetchRawResult } from "../types";
+import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
+import type { ToolExecutionContext, ToolExecutor, WebFetchRawResult } from "../types";
 import type { WebFetchBackend, WebFetchBackendResult, WebFetchRoute } from "./backend";
 import {
   createBrowserWebFetchBackend,
@@ -85,7 +86,12 @@ export function createWebFetchToolExecutor(
         required: ["url", "prompt"],
       },
     },
-    async execute(args): Promise<WebFetchRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<WebFetchRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseWebFetchArgs(args);
 
       if (!parsed.ok) {
@@ -102,6 +108,8 @@ export function createWebFetchToolExecutor(
         return { ...cached.result, cacheHit: true };
       }
 
+      throwIfTurnCancelled(context.signal);
+
       let route = decideRoute(url, {
         hasExaBackend: exaBackend !== undefined,
         hasBrowserBackend: browserBackend !== undefined,
@@ -115,20 +123,29 @@ export function createWebFetchToolExecutor(
       const startedAt = Date.now();
       let backendResult: WebFetchBackendResult = await (
         backends[route] ?? localBackend
-      ).fetch({
-        url: url.toString(),
-        prompt: input.prompt,
-      });
+      ).fetch(
+        {
+          url: url.toString(),
+          prompt: input.prompt,
+        },
+        context,
+      );
+
+      throwIfTurnCancelled(context.signal);
 
       if (
         route === "local" &&
         browserBackend !== undefined &&
         shouldEscalateToBrowser(backendResult)
       ) {
-        const browserResult = await browserBackend.fetch({
-          url: url.toString(),
-          prompt: input.prompt,
-        });
+        const browserResult = await browserBackend.fetch(
+          {
+            url: url.toString(),
+            prompt: input.prompt,
+          },
+          context,
+        );
+        throwIfTurnCancelled(context.signal);
         if (browserResult.ok && (browserResult.markdown ?? "").trim() !== "") {
           backendResult = browserResult;
           route = "local-browser";
@@ -183,13 +200,20 @@ export function createWebFetchToolExecutor(
         };
       } else {
         try {
-          const refined = await options.refiner.refine({
-            url: url.toString(),
-            prompt: input.prompt,
-            content: markdown,
-          });
+          const refined = await options.refiner.refine(
+            {
+              url: url.toString(),
+              prompt: input.prompt,
+              content: markdown,
+            },
+            context,
+          );
           result = { ...base, ok: true, refined: true, content: refined };
         } catch (error) {
+          if (context.signal.aborted) {
+            throw cancellationError(context.signal, error);
+          }
+
           return {
             ...base,
             error: `Failed to refine the page content: ${error instanceof Error ? error.message : String(error)}`,
@@ -197,6 +221,7 @@ export function createWebFetchToolExecutor(
         }
       }
 
+      throwIfTurnCancelled(context.signal);
       result.durationMs = Date.now() - startedAt;
       cache.set(cacheKey, { expiresAt: Date.now() + cacheTtlMs, result });
       return result;

@@ -1,8 +1,9 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { glob } from "glob";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
-import type { GlobRawResult, ToolExecutor } from "./types";
+import type { GlobRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 type GlobArgs = {
   pattern: string;
@@ -37,7 +38,8 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
         required: ["pattern"],
       },
     },
-    async execute(args): Promise<GlobRawResult> {
+    async execute(args, _call, context: ToolExecutionContext): Promise<GlobRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseGlobArgs(args);
 
       if (!parsed.ok) {
@@ -71,6 +73,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
       const searchPath = toDisplayPath(options.workspaceRoot, absoluteSearchPath);
 
       const directoryCheck = await ensureDirectory(absoluteSearchPath);
+      throwIfTurnCancelled(context.signal);
       if (!directoryCheck.ok) {
         return {
           ok: false,
@@ -88,6 +91,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           nodir: true,
           dot: true,
           follow: false,
+          signal: context.signal,
           ignore: ["**/node_modules/**", "**/.git/**"],
         });
         const displayMatches = toDisplayMatches({
@@ -106,6 +110,10 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           ignored: ignoredDirectories,
         };
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           pattern: input.pattern,

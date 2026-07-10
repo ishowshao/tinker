@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import {
   ShellTaskManager,
   type ShellTaskHandle,
@@ -8,7 +9,7 @@ import {
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { buildOutputSnapshotFromText } from "./task-output-snapshot";
 import type { TaskOutputSnapshot } from "./task-output";
-import type { BashRawResult, ToolExecutor } from "./types";
+import type { BashRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 type BashArgs = {
   command: string;
@@ -76,7 +77,8 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         required: ["command"],
       },
     },
-    async execute(args): Promise<BashRawResult> {
+    async execute(args, _call, context: ToolExecutionContext): Promise<BashRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseBashArgs(args, maxTimeoutMs);
 
       if (!parsed.ok) {
@@ -98,12 +100,15 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
 
       const input = parsed.value;
       const foregroundTimeoutMs = input.timeout ?? defaultTimeoutMs;
+      throwIfTurnCancelled(context.signal);
       const task = await options.taskManager.start({
         command: input.command,
         description: input.description ?? input.command,
       });
 
       if (input.run_in_background === true) {
+        // Starting and publishing an explicit background task is one commit
+        // boundary. Cancellation is observed after its result is recorded.
         await options.taskManager.markBackgrounded(task.taskId, "requested");
         const inspection = requireTaskInspection(options.taskManager, task.taskId);
         if (inspection.task.status !== "running") {
@@ -116,8 +121,15 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         });
       }
 
-      const completed = await waitForTask(task, foregroundTimeoutMs);
-      if (completed === undefined) {
+      const waitResult = await waitForTask(task, foregroundTimeoutMs, context.signal);
+      if (waitResult.type === "cancelled") {
+        await options.taskManager.cancelForegroundTask(task.taskId);
+        throw cancellationError(context.signal);
+      }
+
+      if (waitResult.type === "timeout") {
+        // Timeout wins ownership. Marking the task backgrounded and returning
+        // its task ID is an uninterrupted commit boundary.
         await options.taskManager.markBackgrounded(task.taskId, "foreground_timeout");
         const inspection = requireTaskInspection(options.taskManager, task.taskId);
         if (inspection.task.status !== "running") {
@@ -134,10 +146,10 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       }
 
       const inspection = requireTaskInspection(options.taskManager, task.taskId);
-      const raw = await buildCompletedResult(completed, inspection.output);
+      const raw = await buildCompletedResult(waitResult.task, inspection.output);
       updateCwdStateAfterForegroundCommand({
         raw,
-        task: completed,
+        task: waitResult.task,
         cwdState: options.cwdState,
         workspaceRoot: options.workspaceRoot,
       });
@@ -219,22 +231,46 @@ export function interpretCommandResult(input: {
   return { ok: false, status: "failed" };
 }
 
+type ForegroundWaitResult =
+  | { type: "completed"; task: ShellTaskSnapshot }
+  | { type: "timeout" }
+  | { type: "cancelled" };
+
 async function waitForTask(
   task: ShellTaskHandle,
   timeoutMs: number,
-): Promise<ShellTaskSnapshot | undefined> {
+  signal: AbortSignal,
+): Promise<ForegroundWaitResult> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
 
   try {
     return await Promise.race([
-      task.completion,
-      new Promise<undefined>((resolve) => {
-        timeout = setTimeout(() => resolve(undefined), timeoutMs);
+      task.completion.then(
+        (snapshot): ForegroundWaitResult => ({
+          type: "completed",
+          task: snapshot,
+        }),
+      ),
+      new Promise<ForegroundWaitResult>((resolve) => {
+        timeout = setTimeout(() => resolve({ type: "timeout" }), timeoutMs);
+      }),
+      new Promise<ForegroundWaitResult>((resolve) => {
+        onAbort = () => resolve({ type: "cancelled" });
+        if (signal.aborted) {
+          onAbort();
+          return;
+        }
+
+        signal.addEventListener("abort", onAbort, { once: true });
       }),
     ]);
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
+    }
+    if (onAbort !== undefined) {
+      signal.removeEventListener("abort", onAbort);
     }
   }
 }

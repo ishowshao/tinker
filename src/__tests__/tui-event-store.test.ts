@@ -130,7 +130,7 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "run.finished",
-      result: { ok: true, finalText: "done", messages: [] },
+      result: { status: "completed", finalText: "done", messages: [] },
     });
     expect(state.status).toBe("done");
     expect(state.finalText).toBe("done");
@@ -163,7 +163,7 @@ describe("tui event store", () => {
     });
     state = applyAgentEvent(state, {
       type: "run.finished",
-      result: { ok: true, finalText: "first done", messages: [] },
+      result: { status: "completed", finalText: "first done", messages: [] },
     });
     state = applyAgentEvent(state, {
       type: "run.started",
@@ -184,6 +184,53 @@ describe("tui event store", () => {
       "prompt",
     ]);
     expect(new Set(state.timeline.map((item) => item.id)).size).toBe(3);
+  });
+
+  test("records only the terminal cancelled state from events", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "model.step.started",
+      step: 1,
+    });
+    expect(state.status).toBe("running");
+
+    state = applyAgentEvent(state, {
+      type: "run.cancelled",
+      cancelledAt: "2026-07-10T00:00:00.000Z",
+      cancellation: {
+        source: "user",
+        phase: "model_request",
+        step: 1,
+      },
+    });
+
+    expect(state.status).toBe("cancelled");
+    expect(state.timeline.at(-1)?.status).toBe("cancelled");
+    expect(state.timeline.at(-1)?.text).toContain("cancelled");
+
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      step: 2,
+      call: { id: "call_1", name: "Bash", args: { command: "sleep 30" } },
+    });
+    state = applyAgentEvent(state, {
+      type: "run.cancelled",
+      cancelledAt: "2026-07-10T00:00:01.000Z",
+      cancellation: {
+        source: "user",
+        phase: "tool_execution",
+        step: 2,
+        toolCallId: "call_1",
+        toolName: "Bash",
+      },
+    });
+    expect(state.timeline.at(-1)?.status).toBe("cancelled");
+    expect(state.timeline.at(-1)?.text).toContain("Bash");
   });
 
   test("updates model and tool timeline items with useful summaries", () => {

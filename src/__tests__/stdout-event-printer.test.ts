@@ -2,6 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { StdoutEventPrinter } from "../events/stdout-event-printer";
 
 describe("stdout event printer", () => {
+  test("prints run cancellation separately from failures", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => output.push(chunk) },
+      { write: (chunk: string) => errors.push(chunk) },
+    );
+
+    await printer.append({
+      type: "run.cancelled",
+      cancelledAt: "2026-07-10T00:00:00.000Z",
+      cancellation: {
+        source: "user",
+        phase: "tool_execution",
+        step: 2,
+        toolCallId: "call_1",
+        toolName: "Bash",
+      },
+    });
+
+    expect(output.join("")).toBe(
+      "run.cancelled phase=tool_execution step=2 tool=Bash\n",
+    );
+    expect(errors).toEqual([]);
+  });
+
   test("shows the pattern for Grep tool events", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

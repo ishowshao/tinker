@@ -1,5 +1,6 @@
 import { extractMarkdownFromHtml } from "./local-backend";
 import type { WebFetchBackend, WebFetchBackendResult } from "./backend";
+import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
 
 export type BrowserBackendOptions = {
   timeoutMs?: number;
@@ -26,7 +27,8 @@ export function createBrowserWebFetchBackend(
 
   return {
     route: "local-browser",
-    async fetch(input): Promise<WebFetchBackendResult> {
+    async fetch(input, context): Promise<WebFetchBackendResult> {
+      throwIfTurnCancelled(context.signal);
       if (!isBrowserBackendAvailable()) {
         return {
           ok: false,
@@ -41,13 +43,20 @@ export function createBrowserWebFetchBackend(
           view.navigate(input.url),
           timeoutMs,
           `Browser navigation timed out after ${timeoutMs}ms.`,
+          context.signal,
         );
-        await Bun.sleep(settleDelayMs);
+        await withTimeout(
+          Bun.sleep(settleDelayMs),
+          timeoutMs,
+          `Browser settle delay timed out after ${timeoutMs}ms.`,
+          context.signal,
+        );
 
         const html = await withTimeout(
           view.evaluate<string>("document.documentElement.outerHTML"),
           timeoutMs,
           `Reading the rendered page timed out after ${timeoutMs}ms.`,
+          context.signal,
         );
 
         if (typeof html !== "string" || html.trim() === "") {
@@ -70,6 +79,10 @@ export function createBrowserWebFetchBackend(
           markdown: extracted.markdown,
         };
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           error: `Browser rendering failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -85,15 +98,29 @@ async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   message: string,
+  signal: AbortSignal,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(message)), timeoutMs);
   });
+  const cancellation = new Promise<never>((_, reject) => {
+    onAbort = () => reject(cancellationError(signal));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 
   try {
-    return await Promise.race([promise, timeout]);
+    return await Promise.race([promise, timeout, cancellation]);
   } finally {
     clearTimeout(timer);
+    if (onAbort !== undefined) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 }

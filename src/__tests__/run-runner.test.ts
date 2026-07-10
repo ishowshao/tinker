@@ -64,7 +64,7 @@ describe("runOneShot", () => {
       expect(stdout.output).toContain("assistant.progress step=1");
       expect(stdout.output).toContain("I will create notes.txt.");
       expect(stdout.output).toContain("tool.started name=Write path=notes.txt");
-      expect(stdout.output).toContain("run.finished ok=true");
+      expect(stdout.output).toContain("run.finished status=completed");
       expect(stdout.output).toContain("Created notes.txt");
       expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe(
         "hello.\n",

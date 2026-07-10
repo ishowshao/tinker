@@ -12,10 +12,12 @@ import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type {
   ReadSnapshotStore,
   ToolDefinition,
+  ToolExecutionContext,
   ToolExecutor,
   ToolRawResult,
 } from "./types";
@@ -41,7 +43,9 @@ export class ToolRegistry {
 export class ToolRuntime {
   constructor(private readonly registry: ToolRegistry) {}
 
-  async execute(call: ToolCall): Promise<ToolRawResult> {
+  async execute(call: ToolCall, context: ToolExecutionContext): Promise<ToolRawResult> {
+    throwIfTurnCancelled(context.signal);
+
     if (call.argsParseError !== undefined) {
       return {
         ok: false,
@@ -61,8 +65,12 @@ export class ToolRuntime {
     }
 
     try {
-      return await tool.execute(call.args, call);
+      return await tool.execute(call.args, call, context);
     } catch (error) {
+      if (context.signal.aborted) {
+        throw cancellationError(context.signal, error);
+      }
+
       return {
         ok: false,
         toolName: call.name,

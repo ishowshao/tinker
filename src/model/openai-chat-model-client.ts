@@ -1,5 +1,10 @@
 import OpenAI from "openai";
-import type { ModelClient, ModelStepInput, ModelStepOutput } from "./model-client";
+import type {
+  ModelClient,
+  ModelStepInput,
+  ModelStepOptions,
+  ModelStepOutput,
+} from "./model-client";
 import {
   fromOpenAIChatCompletion,
   toOpenAIChatMessages,
@@ -16,24 +21,32 @@ export class OpenAIChatModelClient implements ModelClient {
       includeReasoningContent?: boolean;
       model: string;
       timeoutMs?: number;
+      fetch?: typeof fetch;
     },
   ) {
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
       timeout: options.timeoutMs,
+      fetch: options.fetch,
     });
   }
 
-  async step(input: ModelStepInput): Promise<ModelStepOutput> {
-    const response = await this.client.chat.completions.create({
-      model: this.options.model,
-      messages: toOpenAIChatMessages(input.messages, {
-        includeReasoningContent: this.options.includeReasoningContent,
-      }),
-      tools: input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined,
-      tool_choice: input.tools.length > 0 ? "auto" : undefined,
-    });
+  async step(
+    input: ModelStepInput,
+    options: ModelStepOptions,
+  ): Promise<ModelStepOutput> {
+    const response = await this.client.chat.completions.create(
+      {
+        model: this.options.model,
+        messages: toOpenAIChatMessages(input.messages, {
+          includeReasoningContent: this.options.includeReasoningContent,
+        }),
+        tools: input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined,
+        tool_choice: input.tools.length > 0 ? "auto" : undefined,
+      },
+      { signal: options.signal },
+    );
 
     return fromOpenAIChatCompletion(response);
   }

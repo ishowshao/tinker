@@ -13,12 +13,14 @@ import type { AgentEvent } from "../events/types";
 import { StdoutEventPrinter } from "../events/stdout-event-printer";
 import { createMcpManager } from "../mcp/mcp-manager";
 import {
-  createMcpToolExecutor,
+  createMcpToolExecutor as createMcpToolExecutorBase,
   mcpToolName,
   sanitizeInputSchema,
 } from "../mcp/mcp-tool-executor";
 import { ObservationBuilder } from "../observation/observation-builder";
-import type { McpToolRawResult } from "../tools/types";
+import type { ToolCall } from "../agent/types";
+import { TurnCancelledError } from "../agent/turn-cancellation";
+import type { McpToolRawResult, ToolExecutionContext } from "../tools/types";
 import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
 
 const ECHO_TOOL: Tool = {
@@ -31,12 +33,30 @@ const ECHO_TOOL: Tool = {
   },
 };
 
+const testToolContext: ToolExecutionContext = {
+  signal: new AbortController().signal,
+};
+
+function createMcpToolExecutor(
+  options: Parameters<typeof createMcpToolExecutorBase>[0],
+) {
+  const tool = createMcpToolExecutorBase(options);
+  return {
+    ...tool,
+    execute: (
+      args: unknown,
+      call: ToolCall,
+      context: ToolExecutionContext = testToolContext,
+    ) => tool.execute(args, call, context),
+  };
+}
+
 async function connectTestClient(options: {
   tools: Tool[];
   onCallTool: (
     name: string,
     args: Record<string, unknown> | undefined,
-  ) => CallToolResult;
+  ) => CallToolResult | Promise<CallToolResult>;
 }): Promise<Client> {
   const server = new Server(
     { name: "test-server", version: "1.0.0" },
@@ -96,6 +116,29 @@ describe("mcp tool naming and schema", () => {
 });
 
 describe("mcp tool executor", () => {
+  test("propagates cancellation without closing the MCP client", async () => {
+    const client = await connectTestClient({
+      tools: [ECHO_TOOL],
+      onCallTool: () => new Promise<CallToolResult>(() => undefined),
+    });
+    const executor = createMcpToolExecutor({
+      client,
+      serverName: "srv",
+      tool: ECHO_TOOL,
+    });
+    const controller = new AbortController();
+
+    const pending = executor.execute(
+      { message: "wait" },
+      { id: "call_1", name: "mcp__srv__echo", args: { message: "wait" } },
+      { signal: controller.signal },
+    );
+    controller.abort(new TurnCancelledError());
+
+    expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
+    await client.close();
+  });
+
   test("exposes a prefixed definition with the tool input schema", async () => {
     const client = await connectTestClient({
       tools: [ECHO_TOOL],
@@ -336,6 +379,7 @@ describe("mcp manager", () => {
         const raw = (await executor?.execute(
           { message: "hi" },
           { id: "call_1", name: "mcp__fixture__echo", args: { message: "hi" } },
+          testToolContext,
         )) as McpToolRawResult;
         expect(raw.ok).toBe(true);
         expect(raw.text).toBe("echo: hi");

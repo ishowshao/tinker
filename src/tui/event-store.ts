@@ -13,14 +13,14 @@ export type TimelineItem = {
   ref?: string;
   text: string;
   label?: string;
-  status: "running" | "ok" | "failed" | "info" | "text";
+  status: "running" | "ok" | "failed" | "cancelled" | "info" | "text";
   diff?: DiffHunk[];
   diffTruncated?: boolean;
   bash?: BashDisplayDetail;
 };
 
 export type TuiState = {
-  status: "idle" | "running" | "done" | "failed";
+  status: "idle" | "running" | "done" | "failed" | "cancelled";
   runId?: string;
   modelName?: string;
   workspaceRoot?: string;
@@ -170,6 +170,12 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         finalText: finalText(event.result),
         timeline: appendFinalTimelineItem(state, event.result),
       };
+    case "run.cancelled":
+      return {
+        ...state,
+        status: "cancelled",
+        timeline: applyRunCancellation(state, event),
+      };
     case "run.failed":
       return {
         ...state,
@@ -188,6 +194,47 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
     default:
       return state;
   }
+}
+
+function applyRunCancellation(
+  state: TuiState,
+  event: Extract<AgentEvent, { type: "run.cancelled" }>,
+): TimelineItem[] {
+  if (event.cancellation.phase === "model_request") {
+    return updateLastTimelineItem(
+      state,
+      modelStepRef(event.cancellation.step),
+      (item) => ({
+        ...item,
+        text: `${item.text} -> cancelled`,
+        status: "cancelled",
+      }),
+    );
+  }
+
+  if (
+    event.cancellation.phase === "tool_execution" &&
+    event.cancellation.toolCallId !== undefined
+  ) {
+    return updateLastTimelineItem(
+      state,
+      toolCallRef(event.cancellation.toolCallId),
+      (item) => ({
+        ...item,
+        text: `${item.text} -> cancelled`,
+        status: "cancelled",
+      }),
+    );
+  }
+
+  return [
+    ...state.timeline,
+    {
+      id: timelineId(state, "run-cancelled"),
+      text: "turn cancelled",
+      status: "cancelled",
+    },
+  ];
 }
 
 function updateLastTimelineItem(
@@ -532,8 +579,8 @@ function finalText(result: unknown): string | undefined {
   if (
     typeof result === "object" &&
     result !== null &&
-    "ok" in result &&
-    result.ok === true &&
+    "status" in result &&
+    result.status === "completed" &&
     "finalText" in result &&
     typeof result.finalText === "string"
   ) {

@@ -95,15 +95,25 @@ export async function runOneShot(
       toolRuntime: tooling.runtime,
       observationBuilder: new ObservationBuilder(),
       eventSink,
+      signal: new AbortController().signal,
     });
 
-    if (result.ok) {
+    if (result.status === "completed") {
       await eventSink.append({
         type: "run.finished",
         result,
       });
       stdout.write(`\n${result.finalText}\n`);
       return 0;
+    }
+
+    if (result.status === "cancelled") {
+      await eventSink.append({
+        type: "run.cancelled",
+        cancelledAt: new Date().toISOString(),
+        cancellation: result.cancellation,
+      });
+      return 1;
     }
 
     await eventSink.append({

@@ -1,3 +1,5 @@
+import type { ToolExecutionContext } from "../types";
+
 export type WebFetchRoute = "local" | "exa" | "local-browser";
 
 export type WebFetchBackendResult = {
@@ -18,5 +20,8 @@ export type WebFetchBackendResult = {
 
 export type WebFetchBackend = {
   route: WebFetchRoute;
-  fetch(input: { url: string; prompt: string }): Promise<WebFetchBackendResult>;
+  fetch(
+    input: { url: string; prompt: string },
+    context: ToolExecutionContext,
+  ): Promise<WebFetchBackendResult>;
 };

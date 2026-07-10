@@ -1,8 +1,14 @@
 import { readFile, stat } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { sha256Bytes } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
-import type { ReadFileRawResult, ReadSnapshotStore, ToolExecutor } from "./types";
+import type {
+  ReadFileRawResult,
+  ReadSnapshotStore,
+  ToolExecutionContext,
+  ToolExecutor,
+} from "./types";
 
 type ReadArgs = {
   file_path: string;
@@ -48,7 +54,12 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         required: ["file_path"],
       },
     },
-    async execute(args): Promise<ReadFileRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<ReadFileRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseReadArgs(args);
 
       if (!parsed.ok) {
@@ -65,6 +76,10 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
       try {
         absolutePath = resolveWorkspacePath(options.workspaceRoot, input.file_path);
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           filePath: input.file_path,
@@ -74,6 +89,7 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
 
       try {
         const info = await stat(absolutePath);
+        throwIfTurnCancelled(context.signal);
 
         if (!info.isFile()) {
           return {
@@ -85,6 +101,7 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         }
 
         const bytes = await readFile(absolutePath);
+        throwIfTurnCancelled(context.signal);
         const sha256 = sha256Bytes(bytes);
         const text = bytes.toString("utf8");
         const lines = splitLines(text);
@@ -122,6 +139,10 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
           displayedBytes: displayed.displayedBytes,
         };
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           filePath: input.file_path,

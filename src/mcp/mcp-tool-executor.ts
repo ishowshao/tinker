@@ -1,6 +1,12 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { JsonSchema, McpToolRawResult, ToolExecutor } from "../tools/types";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
+import type {
+  JsonSchema,
+  McpToolRawResult,
+  ToolExecutionContext,
+  ToolExecutor,
+} from "../tools/types";
 
 export const MCP_TOOL_NAME_PREFIX = "mcp__";
 export const DEFAULT_MCP_TIMEOUT_MS = 60_000;
@@ -59,7 +65,12 @@ export function createMcpToolExecutor(
         `MCP tool ${options.tool.name} from server ${options.serverName}`,
       parameters: sanitizeInputSchema(options.tool.inputSchema),
     },
-    async execute(args: unknown): Promise<McpToolRawResult> {
+    async execute(
+      args: unknown,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<McpToolRawResult> {
+      throwIfTurnCancelled(context.signal);
       if (args !== undefined && !isRecord(args)) {
         return {
           ok: false,
@@ -77,9 +88,13 @@ export function createMcpToolExecutor(
             arguments: args ?? {},
           },
           undefined,
-          { timeout: timeoutMs },
+          { timeout: timeoutMs, signal: context.signal },
         );
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           ...base,

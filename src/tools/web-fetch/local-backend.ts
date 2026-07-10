@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import TurndownService from "turndown";
+import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
 import type { WebFetchBackend, WebFetchBackendResult } from "./backend";
 
 export type LocalBackendOptions = {
@@ -30,15 +31,20 @@ export function createLocalWebFetchBackend(
 
   return {
     route: "local",
-    async fetch(input): Promise<WebFetchBackendResult> {
+    async fetch(input, context): Promise<WebFetchBackendResult> {
+      throwIfTurnCancelled(context.signal);
       let currentUrl = new URL(input.url);
       let response: Response;
 
       for (let redirects = 0; ; redirects += 1) {
         try {
+          const requestSignal = AbortSignal.any([
+            context.signal,
+            AbortSignal.timeout(timeoutMs),
+          ]);
           response = await fetchImpl(currentUrl.toString(), {
             redirect: "manual",
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: requestSignal,
             headers: {
               accept: "text/html, text/markdown;q=0.9, */*;q=0.8",
               "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -46,8 +52,14 @@ export function createLocalWebFetchBackend(
             },
           });
         } catch (error) {
+          if (context.signal.aborted) {
+            throw cancellationError(context.signal, error);
+          }
+
           return { ok: false, error: requestErrorMessage(error, timeoutMs) };
         }
+
+        throwIfTurnCancelled(context.signal);
 
         if (!isRedirectStatus(response.status)) {
           break;
@@ -97,11 +109,17 @@ export function createLocalWebFetchBackend(
       try {
         bodyBytes = await response.arrayBuffer();
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return {
           ok: false,
           error: `Failed to read response body: ${errorMessage(error)}`,
         };
       }
+
+      throwIfTurnCancelled(context.signal);
 
       if (bodyBytes.byteLength > maxBodyBytes) {
         return {

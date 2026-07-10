@@ -2,9 +2,29 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ToolCall } from "../agent/types";
 import { ObservationBuilder } from "../observation/observation-builder";
-import { createDefaultTooling } from "../tools/registry";
-import type { BashRawResult, ToolRawResult } from "../tools/types";
+import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
+import type {
+  BashRawResult,
+  ToolExecutionContext,
+  ToolRawResult,
+} from "../tools/types";
+
+const testToolContext: ToolExecutionContext = {
+  signal: new AbortController().signal,
+};
+
+function createDefaultTooling(options: Parameters<typeof createDefaultToolingBase>[0]) {
+  const tooling = createDefaultToolingBase(options);
+  return {
+    ...tooling,
+    runtime: {
+      execute: (call: ToolCall, context: ToolExecutionContext = testToolContext) =>
+        tooling.runtime.execute(call, context),
+    },
+  };
+}
 
 describe("Bash tool", () => {
   test("publishes the expected tool schema and rejects invalid arguments", async () => {

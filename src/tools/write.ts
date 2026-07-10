@@ -1,10 +1,16 @@
 import path from "node:path";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
-import type { ReadSnapshotStore, ToolExecutor, WriteFileRawResult } from "./types";
+import type {
+  ReadSnapshotStore,
+  ToolExecutionContext,
+  ToolExecutor,
+  WriteFileRawResult,
+} from "./types";
 
 type WriteArgs = {
   file_path: string;
@@ -38,7 +44,12 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         required: ["file_path", "content"],
       },
     },
-    async execute(args): Promise<WriteFileRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<WriteFileRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseWriteArgs(args);
 
       if (!parsed.ok) {
@@ -117,6 +128,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         oldContent = target.content;
       }
 
+      throwIfTurnCancelled(context.signal);
       await writeFile(absolutePath, input.content, "utf8");
       const newSha256 = sha256Text(input.content);
       const writtenInfo = await stat(absolutePath);

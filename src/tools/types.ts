@@ -229,7 +229,15 @@ export type ToolRawResult =
 
 export type ToolExecutor = {
   definition: ToolDefinition;
-  execute(args: unknown, call: ToolCall): Promise<ToolRawResult>;
+  execute(
+    args: unknown,
+    call: ToolCall,
+    context: ToolExecutionContext,
+  ): Promise<ToolRawResult>;
+};
+
+export type ToolExecutionContext = {
+  signal: AbortSignal;
 };
 
 export type FileSnapshot = {

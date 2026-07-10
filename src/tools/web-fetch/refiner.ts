@@ -1,7 +1,11 @@
 import type { ModelClient } from "../../model/model-client";
+import type { ToolExecutionContext } from "../types";
 
 export type Refiner = {
-  refine(input: { url: string; prompt: string; content: string }): Promise<string>;
+  refine(
+    input: { url: string; prompt: string; content: string },
+    context: ToolExecutionContext,
+  ): Promise<string>;
 };
 
 const REFINE_SYSTEM_PROMPT = [
@@ -21,7 +25,7 @@ export function createModelRefiner(options: {
   let client: ModelClient | undefined;
 
   return {
-    async refine(input) {
+    async refine(input, context) {
       client ??= options.createModelClient();
 
       const truncated = input.content.length > maxContentChars;
@@ -29,27 +33,30 @@ export function createModelRefiner(options: {
         ? input.content.slice(0, maxContentChars)
         : input.content;
 
-      const output = await client.step({
-        messages: [
-          { role: "system", content: REFINE_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content: [
-              `Web page: ${input.url}`,
-              truncated
-                ? `Page content (markdown, truncated to ${maxContentChars} characters):`
-                : "Page content (markdown):",
-              "",
-              content,
-              "",
-              "---",
-              "",
-              `Prompt: ${input.prompt}`,
-            ].join("\n"),
-          },
-        ],
-        tools: [],
-      });
+      const output = await client.step(
+        {
+          messages: [
+            { role: "system", content: REFINE_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: [
+                `Web page: ${input.url}`,
+                truncated
+                  ? `Page content (markdown, truncated to ${maxContentChars} characters):`
+                  : "Page content (markdown):",
+                "",
+                content,
+                "",
+                "---",
+                "",
+                `Prompt: ${input.prompt}`,
+              ].join("\n"),
+            },
+          ],
+          tools: [],
+        },
+        { signal: context.signal },
+      );
 
       const message = output.message;
       if (

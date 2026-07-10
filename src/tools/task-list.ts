@@ -1,5 +1,6 @@
 import type { ShellTaskManager } from "./bash-task";
-import type { TaskListRawResult, ToolExecutor } from "./types";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
+import type { TaskListRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 export function createTaskListToolExecutor(options: {
   taskManager: ShellTaskManager;
@@ -14,7 +15,12 @@ export function createTaskListToolExecutor(options: {
         properties: {},
       },
     },
-    async execute(args): Promise<TaskListRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<TaskListRawResult> {
+      throwIfTurnCancelled(context.signal);
       if (!isRecord(args)) {
         return {
           ok: false,
@@ -35,6 +41,7 @@ export function createTaskListToolExecutor(options: {
       }
 
       const tasks = options.taskManager.listBackgroundTasks();
+      throwIfTurnCancelled(context.signal);
       return {
         ok: true,
         runningCount: tasks.filter(

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
-import { createWebFetchToolExecutor } from "../tools/web-fetch";
+import { createWebFetchToolExecutor as createWebFetchToolExecutorBase } from "../tools/web-fetch";
 import {
   decideRoute,
   isPrivateHost,
@@ -13,7 +13,26 @@ import {
 import type { WebFetchBackend } from "../tools/web-fetch/backend";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ToolCall } from "../agent/types";
-import type { WebFetchRawResult } from "../tools/types";
+import { TurnCancelledError } from "../agent/turn-cancellation";
+import type { ToolExecutionContext, WebFetchRawResult } from "../tools/types";
+
+const testToolContext: ToolExecutionContext = {
+  signal: new AbortController().signal,
+};
+
+function createWebFetchToolExecutor(
+  options?: Parameters<typeof createWebFetchToolExecutorBase>[0],
+) {
+  const tool = createWebFetchToolExecutorBase(options);
+  return {
+    ...tool,
+    execute: (
+      args: unknown,
+      call: ToolCall,
+      context: ToolExecutionContext = testToolContext,
+    ) => tool.execute(args, call, context),
+  };
+}
 
 type CapturedRequest = {
   url: string;
@@ -596,6 +615,50 @@ describe("WebFetch browser escalation", () => {
 });
 
 describe("WebFetch pipeline", () => {
+  test("does not cache a cancelled request", async () => {
+    let fetchCalls = 0;
+    const fetchImpl = ((_url: unknown, init?: RequestInit) => {
+      fetchCalls += 1;
+      if (fetchCalls === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("request aborted")),
+            { once: true },
+          );
+        });
+      }
+
+      return Promise.resolve(
+        new Response(smallHtml, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      );
+    }) as typeof fetch;
+    const tool = createWebFetchToolExecutor({ browserBackend: false, fetchImpl });
+    const call = toolCall({
+      url: "http://localhost:3000/docs",
+      prompt: "install",
+    });
+    const controller = new AbortController();
+
+    const cancelled = tool.execute(call.args, call, {
+      signal: controller.signal,
+    });
+    controller.abort(new TurnCancelledError());
+    expect(cancelled).rejects.toBeInstanceOf(TurnCancelledError);
+
+    const retried = (await tool.execute(
+      call.args,
+      call,
+      testToolContext,
+    )) as WebFetchRawResult;
+    expect(retried.ok).toBe(true);
+    expect(retried.cacheHit).toBeUndefined();
+    expect(fetchCalls).toBe(2);
+  });
+
   test("caches successful results for repeated url+prompt", async () => {
     const { fetchImpl, requests } = createFetchStub(() => ({
       body: smallHtml,

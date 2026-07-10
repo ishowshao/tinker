@@ -1,4 +1,4 @@
-import type { ToolCall } from "../agent/types";
+import type { ToolCall, TurnCancellation } from "../agent/types";
 import type { ShellTaskSnapshot } from "../tools/bash-task";
 
 export type AgentEvent =
@@ -16,4 +16,9 @@ export type AgentEvent =
   | { type: "mcp.server.connected"; serverName: string; toolCount: number }
   | { type: "mcp.server.failed"; serverName: string; error: string }
   | { type: "run.finished"; result: unknown }
+  | {
+      type: "run.cancelled";
+      cancelledAt: string;
+      cancellation: TurnCancellation;
+    }
   | { type: "run.failed"; error: string };

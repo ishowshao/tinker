@@ -1,10 +1,16 @@
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import { readFile, stat, writeFile } from "node:fs/promises";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
-import type { EditFileRawResult, ReadSnapshotStore, ToolExecutor } from "./types";
+import type {
+  EditFileRawResult,
+  ReadSnapshotStore,
+  ToolExecutionContext,
+  ToolExecutor,
+} from "./types";
 
 type EditArgs = {
   file_path: string;
@@ -48,7 +54,12 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         required: ["file_path", "old_string", "new_string"],
       },
     },
-    async execute(args): Promise<EditFileRawResult> {
+    async execute(
+      args,
+      _call,
+      context: ToolExecutionContext,
+    ): Promise<EditFileRawResult> {
+      throwIfTurnCancelled(context.signal);
       const parsed = parseEditArgs(args);
 
       if (!parsed.ok) {
@@ -100,6 +111,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
           target,
           newContent: input.new_string,
           snapshots: options.snapshots,
+          signal: context.signal,
         });
       }
 
@@ -169,6 +181,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         replaceAll: input.replace_all,
         created: false,
         snapshots: options.snapshots,
+        signal: context.signal,
       });
     },
   };
@@ -214,6 +227,7 @@ async function writeEmptyTarget(input: {
   target: TargetFileState;
   newContent: string;
   snapshots: ReadSnapshotStore;
+  signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   if (input.target.exists && input.target.content.length > 0) {
     return {
@@ -234,6 +248,7 @@ async function writeEmptyTarget(input: {
     replaceAll: false,
     created: !input.target.exists,
     snapshots: input.snapshots,
+    signal: input.signal,
   });
 }
 
@@ -247,7 +262,9 @@ async function writeEditedContent(input: {
   replaceAll: boolean;
   created: boolean;
   snapshots: ReadSnapshotStore;
+  signal: AbortSignal;
 }): Promise<EditFileRawResult> {
+  throwIfTurnCancelled(input.signal);
   await writeFile(input.absolutePath, input.newContent, "utf8");
   const newSha256 = sha256Text(input.newContent);
   const writtenInfo = await stat(input.absolutePath);

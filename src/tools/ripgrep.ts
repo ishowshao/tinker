@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 
 export const RIPGREP_MISSING_ERROR =
   "ripgrep is required. Install rg and ensure it is available on PATH.";
@@ -15,6 +16,7 @@ export type RipgrepResult = {
 };
 
 export type RipgrepOptions = {
+  signal: AbortSignal;
   timeoutMs?: number;
   maxBufferBytes?: number;
 };
@@ -25,8 +27,9 @@ export function findRipgrepCommand(): string {
 
 export async function ripGrep(
   args: string[],
-  options: RipgrepOptions = {},
+  options: RipgrepOptions,
 ): Promise<RipgrepResult> {
+  throwIfTurnCancelled(options.signal);
   const timeoutMs =
     options.timeoutMs ??
     parsePositiveInteger(process.env.TINKER_GREP_TIMEOUT_MS, defaultTimeoutMs);
@@ -37,10 +40,11 @@ export async function ripGrep(
       defaultMaxBufferBytes,
     );
 
-  const first = await runRipgrep(args, timeoutMs, maxBufferBytes);
+  const first = await runRipgrep(args, timeoutMs, maxBufferBytes, options.signal);
   if (first.retryWithSingleThread) {
+    throwIfTurnCancelled(options.signal);
     return finalizeResult(
-      await runRipgrep(["-j", "1", ...args], timeoutMs, maxBufferBytes),
+      await runRipgrep(["-j", "1", ...args], timeoutMs, maxBufferBytes, options.signal),
     );
   }
 
@@ -60,13 +64,24 @@ function runRipgrep(
   args: string[],
   timeoutMs: number,
   maxBufferBytes: number,
+  signal: AbortSignal,
 ): Promise<RipgrepAttempt> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(cancellationError(signal));
+      return;
+    }
+
     execFile(
       findRipgrepCommand(),
       args,
-      { timeout: timeoutMs, maxBuffer: maxBufferBytes },
+      { timeout: timeoutMs, maxBuffer: maxBufferBytes, signal },
       (error, stdout, stderr) => {
+        if (signal.aborted) {
+          reject(cancellationError(signal, error));
+          return;
+        }
+
         if (error === null) {
           resolve({ ok: true, stdout, exitCode: 0, truncated: false });
           return;

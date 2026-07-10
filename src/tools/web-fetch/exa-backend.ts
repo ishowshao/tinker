@@ -1,4 +1,5 @@
 import type { WebFetchBackend, WebFetchBackendResult } from "./backend";
+import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
 
 export type ExaBackendOptions = {
   apiKey: string;
@@ -23,10 +24,15 @@ export function createExaWebFetchBackend(options: ExaBackendOptions): WebFetchBa
 
   return {
     route: "exa",
-    async fetch(input): Promise<WebFetchBackendResult> {
+    async fetch(input, context): Promise<WebFetchBackendResult> {
+      throwIfTurnCancelled(context.signal);
       let response: Response;
 
       try {
+        const requestSignal = AbortSignal.any([
+          context.signal,
+          AbortSignal.timeout(timeoutMs),
+        ]);
         response = await fetchImpl(`${baseUrl}/contents`, {
           method: "POST",
           headers: {
@@ -40,13 +46,28 @@ export function createExaWebFetchBackend(options: ExaBackendOptions): WebFetchBa
             highlights: { query: input.prompt },
             livecrawlTimeout: LIVECRAWL_TIMEOUT_MS,
           }),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: requestSignal,
         });
       } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
         return { ok: false, error: requestErrorMessage(error, timeoutMs) };
       }
 
-      const responseText = await response.text();
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch (error) {
+        if (context.signal.aborted) {
+          throw cancellationError(context.signal, error);
+        }
+
+        return { ok: false, error: requestErrorMessage(error, timeoutMs) };
+      }
+
+      throwIfTurnCancelled(context.signal);
 
       if (!response.ok) {
         return {
