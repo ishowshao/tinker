@@ -11,6 +11,12 @@ import { PromptInput } from "../tui/components/prompt-input";
 import { TuiEventStream } from "../events/tui-event-stream";
 import type { SlashCommand } from "../tui/slash-commands";
 
+async function submitInput(stdin: { write: (data: string) => void }, value: string) {
+  stdin.write(value);
+  await Bun.sleep(15);
+  stdin.write("\r");
+}
+
 describe("tui components", () => {
   test("renders header metadata", () => {
     const { lastFrame, cleanup } = render(
@@ -88,7 +94,7 @@ describe("tui components", () => {
     await Bun.sleep(25);
     expect(lastFrame()).toContain("model · /tmp/tinker · main");
 
-    stdin.write("refresh branch\n");
+    await submitInput(stdin, "refresh branch");
     await Bun.sleep(50);
 
     expect(branchReads).toBe(2);
@@ -149,7 +155,7 @@ describe("tui components", () => {
       />,
     );
 
-    stdin.write("wait\n");
+    await submitInput(stdin, "wait");
     await Bun.sleep(20);
     stdin.write("\u001b");
     await Bun.sleep(25);
@@ -163,7 +169,7 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("cancelled");
     expect(lastFrame()).not.toContain("Cancelling current turn...");
 
-    stdin.write("/nope\n");
+    await submitInput(stdin, "/nope");
     await Bun.sleep(25);
     expect(lastFrame()).toContain("Unknown command: /nope");
     cleanup();
@@ -296,9 +302,9 @@ describe("tui components", () => {
       />,
     );
 
-    stdin.write("/quit\n");
+    await submitInput(stdin, "/quit");
     await Bun.sleep(25);
-    stdin.write("should not run\n");
+    await submitInput(stdin, "should not run");
     await Bun.sleep(25);
 
     expect(quitCount).toBe(1);
@@ -322,7 +328,7 @@ describe("tui components", () => {
       />,
     );
 
-    stdin.write("/nope\n");
+    await submitInput(stdin, "/nope");
     await Bun.sleep(25);
 
     expect(runCount).toBe(0);

@@ -48,12 +48,35 @@ export function moveRight(state: LineEditorState): LineEditorState {
     : { ...state, cursor: state.cursor + 1 };
 }
 
-export function moveToStart(state: LineEditorState): LineEditorState {
-  return { ...state, cursor: 0 };
+export function moveToLineStart(state: LineEditorState): LineEditorState {
+  const chars = [...state.value];
+  const lineStart =
+    state.cursor === 0 ? 0 : chars.lastIndexOf("\n", state.cursor - 1) + 1;
+
+  if (state.cursor !== lineStart || lineStart === 0) {
+    return { ...state, cursor: lineStart };
+  }
+
+  return {
+    ...state,
+    cursor: lineStart === 1 ? 0 : chars.lastIndexOf("\n", lineStart - 2) + 1,
+  };
 }
 
-export function moveToEnd(state: LineEditorState): LineEditorState {
-  return { ...state, cursor: codePointLength(state.value) };
+export function moveToLineEnd(state: LineEditorState): LineEditorState {
+  const chars = [...state.value];
+  const lineBreak = chars.indexOf("\n", state.cursor);
+  const lineEnd = lineBreak === -1 ? chars.length : lineBreak;
+
+  if (state.cursor !== lineEnd || lineEnd === chars.length) {
+    return { ...state, cursor: lineEnd };
+  }
+
+  const nextLineBreak = chars.indexOf("\n", lineEnd + 1);
+  return {
+    ...state,
+    cursor: nextLineBreak === -1 ? chars.length : nextLineBreak,
+  };
 }
 
 export function splitAtCursor(state: LineEditorState): {

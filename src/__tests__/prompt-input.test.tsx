@@ -8,6 +8,10 @@ const ARROW_UP = "[A";
 const ARROW_DOWN = "[B";
 const ARROW_LEFT = "[D";
 const BACKSPACE = "";
+const CTRL_A = "\u0001";
+const CTRL_E = "\u0005";
+const PASTE_START = "[200~";
+const PASTE_END = "[201~";
 
 const KEY_DELAY = 15;
 const MODEL_NAME = "deepseek-v4-flash";
@@ -38,7 +42,7 @@ describe("prompt input", () => {
 
     const lines = stripAnsi(lastFrame()).split("\n");
     expect(lines[0]).toBe("─".repeat(stdout.columns));
-    expect(lines[1]).toBe("Input: ready");
+    expect(lines[1]).toBe("ready");
     expect(lines[2]).toBe("─".repeat(stdout.columns));
     cleanup();
   });
@@ -115,6 +119,61 @@ describe("prompt input", () => {
     await press(stdin, "\r");
     expect(submitted).toEqual(["abc"]);
     expect(stripAnsi(lastFrame())).not.toContain("abc");
+    cleanup();
+  });
+
+  test("keeps multiline pasted text until Return submits it", async () => {
+    const submitted: string[] = [];
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, `${PASTE_START}first line\r\nsecond line${PASTE_END}`);
+
+    expect(submitted).toEqual([]);
+    expect(stripAnsi(lastFrame())).toContain("first line\nsecond line");
+
+    await press(stdin, "!", "\r");
+    expect(submitted).toEqual(["first line\nsecond line!"]);
+    cleanup();
+  });
+
+  test("keeps newlines from an unbracketed multiline input chunk", async () => {
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "alpha\nbeta");
+    expect(submitted).toEqual([]);
+
+    await press(stdin, "\r");
+    expect(submitted).toEqual(["alpha\nbeta"]);
+    cleanup();
+  });
+
+  test("repeatedly moves across line boundaries with Ctrl+A and Ctrl+E", async () => {
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, `${PASTE_START}first\nsecond\nthird${PASTE_END}`);
+    await press(stdin, CTRL_A, CTRL_A, ">", CTRL_E, CTRL_E, "<", "\r");
+
+    expect(submitted).toEqual(["first\n>second\nthird<"]);
     cleanup();
   });
 

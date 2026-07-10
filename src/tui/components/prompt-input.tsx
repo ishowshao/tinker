@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { Box, Text, useInput } from "ink";
+import { Box, Text, useInput, usePaste } from "ink";
 import { useState } from "react";
 import {
   backspace,
@@ -10,8 +10,8 @@ import {
   type LineEditorState,
   moveLeft,
   moveRight,
-  moveToEnd,
-  moveToStart,
+  moveToLineEnd,
+  moveToLineStart,
   splitAtCursor,
 } from "../line-editor";
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
@@ -201,9 +201,9 @@ export function PromptInput(props: PromptInputProps) {
 
       if (key.ctrl) {
         if (input === "a") {
-          updateEditor(moveToStart);
+          updateEditor(moveToLineStart);
         } else if (input === "e") {
-          updateEditor(moveToEnd);
+          updateEditor(moveToLineEnd);
         } else if (input === "d") {
           updateEditor(deleteForward);
         }
@@ -214,15 +214,16 @@ export function PromptInput(props: PromptInputProps) {
         return;
       }
 
-      const lineBreakIndex = firstLineBreakIndex(input);
-      if (lineBreakIndex !== undefined) {
-        submit(insert(state.editor, input.slice(0, lineBreakIndex)).value);
-        return;
-      }
-
       if (input !== "") {
-        updateEditor((editor) => insert(editor, input));
+        updateEditor((editor) => insert(editor, normalizeLineBreaks(input)));
       }
+    },
+    { isActive: props.isDisabled !== true },
+  );
+
+  usePaste(
+    (text) => {
+      updateEditor((editor) => insert(editor, normalizeLineBreaks(text)));
     },
     { isActive: props.isDisabled !== true },
   );
@@ -232,7 +233,6 @@ export function PromptInput(props: PromptInputProps) {
   return (
     <Box flexDirection="column">
       <Box width="100%" borderStyle="single" borderLeft={false} borderRight={false}>
-        <Text>Input: </Text>
         {renderEditor(state.editor, props)}
       </Box>
       {showSuggestions ? null : (
@@ -296,6 +296,17 @@ function renderEditor(editor: LineEditorState, props: PromptInputProps) {
   }
 
   const { before, at, after } = splitAtCursor(editor);
+  if (at === "\n") {
+    return (
+      <Text>
+        {before}
+        <Text inverse> </Text>
+        {"\n"}
+        {after}
+      </Text>
+    );
+  }
+
   return (
     <Text>
       {before}
@@ -305,17 +316,6 @@ function renderEditor(editor: LineEditorState, props: PromptInputProps) {
   );
 }
 
-function firstLineBreakIndex(value: string): number | undefined {
-  const carriageReturn = value.indexOf("\r");
-  const lineFeed = value.indexOf("\n");
-
-  if (carriageReturn === -1) {
-    return lineFeed === -1 ? undefined : lineFeed;
-  }
-
-  if (lineFeed === -1) {
-    return carriageReturn;
-  }
-
-  return Math.min(carriageReturn, lineFeed);
+function normalizeLineBreaks(value: string): string {
+  return value.replace(/\r\n?/g, "\n");
 }

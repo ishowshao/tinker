@@ -6,8 +6,8 @@ import {
   insert,
   moveLeft,
   moveRight,
-  moveToEnd,
-  moveToStart,
+  moveToLineEnd,
+  moveToLineStart,
   splitAtCursor,
 } from "../tui/line-editor";
 
@@ -73,8 +73,48 @@ describe("line editor", () => {
     expect(moveLeft(moveLeft(moveLeft(state))).cursor).toBe(0);
     expect(moveRight({ value: "ab", cursor: 0 }).cursor).toBe(1);
     expect(moveRight(state).cursor).toBe(2);
-    expect(moveToStart(state).cursor).toBe(0);
-    expect(moveToEnd({ value: "ab", cursor: 0 }).cursor).toBe(2);
+    expect(moveToLineStart(state).cursor).toBe(0);
+    expect(moveToLineEnd({ value: "ab", cursor: 0 }).cursor).toBe(2);
+  });
+
+  test("moves to the start and end of the current logical line", () => {
+    const value = "first\nsecond\nthird";
+
+    expect(moveToLineStart({ value, cursor: 9 }).cursor).toBe(6);
+    expect(moveToLineEnd({ value, cursor: 9 }).cursor).toBe(12);
+    expect(moveToLineStart({ value, cursor: 12 }).cursor).toBe(6);
+    expect(moveToLineEnd({ value, cursor: 12 }).cursor).toBe(18);
+    expect(moveToLineStart({ value, cursor: 15 }).cursor).toBe(13);
+    expect(moveToLineEnd({ value, cursor: 15 }).cursor).toBe(18);
+    expect(moveToLineStart({ value: "first\n", cursor: 6 }).cursor).toBe(0);
+    expect(moveToLineEnd({ value: "first\n", cursor: 6 }).cursor).toBe(6);
+  });
+
+  test("repeatedly moves across line starts and ends", () => {
+    const value = "first\nsecond\nthird";
+
+    const thirdStart = moveToLineStart({ value, cursor: 15 });
+    const secondStart = moveToLineStart(thirdStart);
+    expect(thirdStart.cursor).toBe(13);
+    expect(secondStart.cursor).toBe(6);
+    expect(moveToLineStart(secondStart).cursor).toBe(0);
+    expect(moveToLineStart({ value, cursor: 0 }).cursor).toBe(0);
+
+    const firstEnd = moveToLineEnd({ value, cursor: 2 });
+    const secondEnd = moveToLineEnd(firstEnd);
+    const thirdEnd = moveToLineEnd(secondEnd);
+    expect(firstEnd.cursor).toBe(5);
+    expect(secondEnd.cursor).toBe(12);
+    expect(thirdEnd.cursor).toBe(18);
+    expect(moveToLineEnd(thirdEnd).cursor).toBe(18);
+    expect(moveToLineStart({ value: "\nsecond", cursor: 1 }).cursor).toBe(0);
+    expect(moveToLineEnd({ value: "\nsecond", cursor: 0 }).cursor).toBe(7);
+  });
+
+  test("moves by code point within lines containing wide characters", () => {
+    const value = "你\n😀x";
+    expect(moveToLineStart({ value, cursor: 3 }).cursor).toBe(2);
+    expect(moveToLineEnd({ value, cursor: 3 }).cursor).toBe(4);
   });
 
   test("splits the value around the cursor", () => {
