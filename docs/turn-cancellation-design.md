@@ -67,7 +67,7 @@ context 统计或 compaction。
 ### 按键行为
 
 - TUI 空闲时，`Esc` 继续保留现有输入行为，例如关闭 slash command 建议列表。
-- turn 运行时，第一个 `Esc` 发起取消，界面立即显示 `cancelling`。
+- turn 运行时，第一个 `Esc` 发起取消，App 立即用本地瞬态显示 `cancelling`。
 - 取消请求发出后再次按 `Esc` 不执行额外动作。
 - 输入框在取消收尾完成前保持禁用；完成后 footer 显示 `cancelled` 并重新可用。
 - 下一次提交 `run.started` 后，footer 从 `cancelled` 正常回到 `running`。
@@ -93,6 +93,8 @@ context 统计或 compaction。
 - 已完成的 Write、Edit 和 Bash 副作用保留。
 - 正处于文件写入临界区时不强行打断，先完成一次一致的文件和 snapshot 更新，再在
   下一个安全边界结束 turn。
+- 显式后台 Bash 已经进入启动提交临界区时，先完成 task 启动、后台标记和结果提交，
+  再在下一个安全边界结束 turn。
 - 已经标记为 `requested` 或 `foreground_timeout` 的后台 Bash 保持运行。
 - 尚未开始的 tool calls 不执行。
 
@@ -124,6 +126,8 @@ Ink App useInput(Esc)
 - event sink 不跟随 signal 中断。已经开始提交的事件必须完整写入。
 - 工具 raw result、observation 和 tool message 作为一个提交边界；提交后才检查是否停止
   下一项工作。
+- `cancelling` 只是 App 对已发出取消请求的本地展示覆盖；持久的 TUI run 状态仍全部
+  来自 event store。
 - `ShellTaskManager` 仍是 Bash 进程状态和终止动作的唯一事实来源。
 
 ## 统一取消契约
@@ -390,13 +394,34 @@ task 维持 fast-fail，不为兼容取消竞态而放宽模型工具语义。
 
 ### 后台所有权边界
 
-`run_in_background: true` 的 Bash 一旦完成 `markBackgrounded(taskId, "requested")`，
-task 就由 session 级 manager 管理，当前 turn 的 signal 不再终止它。工具可以随后因
-turn 取消而不进入下一步，但后台任务仍出现在 TaskList 和 TUI 面板中。
+对于 `run_in_background: true`，参数解析与执行前 signal 检查完成后，以下步骤视为
+一个不可中断的后台启动提交临界区：
 
-foreground timeout 同理：timeout 分支先成功标记后台后，即使用户紧接着按下 `Esc`，
-也只取消 agent 后续步骤，不停止该任务。这样“后台任务不随 turn 取消”的规则有一个
-明确、可测试的所有权切换点。
+```text
+taskManager.start()
+  -> markBackgrounded(taskId, "requested")
+  -> inspect task and build Bash raw result
+  -> agent loop commits raw result, observation and tool message
+```
+
+临界区内不再次检查 turn signal，也不把 signal 传给 `start()` 或
+`markBackgrounded()`。如果用户在 `start()` 返回后、后台标记完成前按下 `Esc`，仍先
+完成后台标记并返回包含 task ID 的一致结果；agent loop 提交该工具结果后，再在统一
+安全边界结束 turn。
+
+这样不会产生“进程已经启动，但既不属于前台等待、也没有后台身份”的悬空状态，也
+不会丢失后续管理任务所需的 task ID。`markBackgrounded()` 完成后，task 由 session
+级 manager 管理，当前 turn 的 signal 不再终止它；任务继续出现在 TaskList 和 TUI
+面板中。
+
+foreground timeout 同理。一旦三态等待选择 `timeout` 分支，从 timeout 胜出到
+`markBackgrounded(taskId, "foreground_timeout")`、构建并提交 Bash result 也属于
+不可中断的所有权提交。即使用户紧接着按下 `Esc`，也只取消 agent 后续步骤，不停止
+该任务。
+
+只有三态等待明确选择 `cancelled` 分支时才调用 `cancelForegroundTask()`。因此
+`markBackgrounded()` 是后台所有权切换点，而“标记加结果提交”是对外可见的一致性
+边界。
 
 ## 事件与日志
 
@@ -413,6 +438,7 @@ type RunCancelledEvent = {
 事件规则：
 
 - 每个被取消的 turn 只发送一次。
+- 不增加 `run.cancelling`；取消请求到终态之间的展示由 App 本地瞬态负责。
 - 不同时发送 `run.failed` 或 `run.finished`。
 - 模型或 active tool timeline 的取消由该事件携带的 step、toolCallId 和 toolName 定位。
 - 已经完成的 `model.step.finished`、`tool.finished` 和 `tool.observation` 保留原样。
@@ -440,22 +466,38 @@ run(prompt: string, signal: AbortSignal): Promise<RunAgentResult>;
 ```
 
 `App` 为每次非 slash command submit 创建 controller，并用 ref 保存当前 controller。
-在 `isRunning` 时启用 App 层 `useInput`：
+同时维护本地 `isCancelling` 展示态，在 `isRunning` 时启用 App 层 `useInput`：
 
 - 收到 `Esc` 且 signal 未取消：调用 `abort()`，notice 显示
-  `Cancelling current turn...`。
+  `Cancelling current turn...`，并把 `isCancelling` 设为 true。
 - signal 已取消：忽略重复按键。
-- promise settled：只有 ref 仍指向本次 controller 时才清理 ref 和 `isRunning`。
+- promise settled：只有 ref 仍指向本次 controller 时才清理 ref、`isRunning` 和
+  `isCancelling`。runner 必须先提交对应终态事件，再让 promise settle。
 
 `PromptInput` 在运行期间继续禁用，因此 App 层的 Esc handler 不会与建议列表 handler
 竞争。空闲时 App handler 不激活，现有输入 Esc 行为不变。
 
-### TUI state
+### TUI state 与本地展示态
 
-`TuiState.status` 和 timeline item status 增加 `cancelled`，footer 增加两个显示状态：
+`TuiState.status` 和 timeline item status 只增加 `cancelled`，不增加 `cancelling`。
+`TuiState` 继续完全由 `applyAgentEvent()` 驱动：按下 `Esc` 后、`run.cancelled` 到达前，
+event store 中的 run 状态仍是 `running`。
 
-- `cancelling`：controller 已 abort、run promise 尚未收尾。
-- `cancelled`：收到 `run.cancelled`。
+`cancelling` 是 App 本地瞬态，来源只有 `activeController.signal.aborted` 对应的
+`isCancelling`。App 给 Footer 传入一个展示覆盖值：
+
+```ts
+const footerStatus = isCancelling ? "cancelling" : state.status;
+```
+
+Footer 的 props 可以接受 `cancelling`，但 event store、JSONL 和 run lifecycle 都不
+保存这个瞬态。runner 先提交 `run.cancelled`，再 resolve `run()`；event store 因此先
+接收并把真实状态改为 `cancelled`，App 随后在 promise settled 清除
+`isCancelling`，Footer 以 event store 为准显示 cancelled。新 turn 提交时也必须先
+清除旧的本地覆盖。
+
+这不是第二套 run 状态机：App 只表达“用户已经按下 Esc、终态事件尚未到达”的短暂
+UI 反馈，所有可回放、可记录的终态仍以事件为唯一事实来源。
 
 `run.cancelled` 到达时：
 
@@ -504,9 +546,9 @@ cancelled -> run.cancelled
 | `src/events/types.ts` | 新增 `run.cancelled` |
 | `src/events/observation-text-log.ts` | 人类可读的取消段落 |
 | `src/events/stdout-event-printer.ts` | 取消摘要 |
-| `src/tui/app.tsx` | controller、运行中 Esc、cancelling notice |
-| `src/tui/event-store.ts` | cancelled 状态和 active item 收尾 |
-| `src/tui/components/footer.tsx` | cancelling / cancelled 展示 |
+| `src/tui/app.tsx` | controller、运行中 Esc、本地 cancelling 展示覆盖 |
+| `src/tui/event-store.ts` | 只保存事件驱动的 cancelled 状态和 active item 收尾 |
+| `src/tui/components/footer.tsx` | 接受 App 覆盖的 cancelling 或 event store 的终态 |
 | `src/cli/tui-runner.tsx` | 传 signal，按三态提交终止事件和保存消息 |
 | `src/cli/run-runner.ts` | 为共享 `runAgent` 接口提供未取消 signal |
 
@@ -546,7 +588,9 @@ Write、Edit、Read、Glob、TaskList、TaskOutput 和 TaskStop 只需按各自�
 - 自然退出与 cancel 竞争时保留真实 terminal snapshot，不重复发信号。
 - 取消的前台 Bash 不出现在 TaskList，也不产生后台面板 lifecycle event。
 - foreground timeout 先完成所有权切换后再取消，任务继续运行，最后由 TaskStop 清理。
-- `run_in_background: true` 完成后台标记后取消，任务继续运行。
+- 在 `run_in_background: true` 的 start 与 markBackgrounded 之间触发取消，仍会完成
+  后台标记、提交带 task ID 的 Bash result，且不会调用 `cancelForegroundTask()`。
+- foreground timeout 分支胜出后触发取消，同样先完成后台标记和结果提交。
 
 ### 其他工具
 
@@ -562,6 +606,10 @@ Write、Edit、Read、Glob、TaskList、TaskOutput 和 TaskStop 只需按各自�
 - 运行中按 Esc 触发一次 abort，显示 cancelling，完成后输入重新可用。
 - running 状态重复按 Esc 不重复调用 abort。
 - 空闲时 Esc 仍关闭 slash command 建议。
+- 按 Esc 后、`run.cancelled` 前，`TuiState.status` 仍为 running，Footer 通过 App 本地
+  覆盖显示 cancelling。
+- 收到 `run.cancelled` 后清除本地覆盖，Footer 显示 event store 的 cancelled。
+- event stream 和 JSONL 中不产生 `run.cancelling`。
 - `run.cancelled` 将 active model 或 tool timeline item 标为 cancelled。
 - cancelled 使用灰色，不进入 failed 状态。
 - 取消后可以提交下一条 prompt，且只启动一个新 turn。
