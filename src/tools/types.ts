@@ -1,4 +1,5 @@
 import type { ToolCall } from "../agent/types";
+import type { ShellTaskSnapshot, ShellTaskStatus } from "./bash-task";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -119,6 +120,38 @@ export type BashRawResult = {
   error?: string;
 };
 
+export type TaskListRawResult = {
+  ok: boolean;
+  runningCount: number;
+  tasks: ShellTaskSnapshot[];
+  error?: string;
+};
+
+export type TaskOutputRawResult = {
+  ok: boolean;
+  taskId: string;
+  task?: ShellTaskSnapshot;
+  status?: ShellTaskStatus;
+  command?: string;
+  outputBytes?: number;
+  outputLines?: number;
+  preview?: string;
+  truncated?: boolean;
+  omittedLines?: number;
+  outputFilePath?: string;
+  error?: string;
+};
+
+export type TaskStopRawResult = {
+  ok: boolean;
+  taskId: string;
+  task?: ShellTaskSnapshot;
+  status?: ShellTaskStatus;
+  requestedSignal?: "SIGTERM";
+  escalated?: boolean;
+  error?: string;
+};
+
 export type WebSearchResultItem = {
   title: string;
   url: string;
@@ -186,6 +219,9 @@ export type ToolRawResult =
   | GlobRawResult
   | GrepRawResult
   | BashRawResult
+  | TaskListRawResult
+  | TaskOutputRawResult
+  | TaskStopRawResult
   | WebSearchRawResult
   | WebFetchRawResult
   | McpToolRawResult

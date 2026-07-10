@@ -119,6 +119,16 @@ function toolCallSummary(call: ToolCall): string {
       .join("\n");
   }
 
+  if (call.name === "TaskOutput" || call.name === "TaskStop") {
+    const taskId = stringProperty(args, "task_id");
+    return [
+      `Call ID: ${call.id}`,
+      taskId === undefined ? undefined : `Task ID: ${taskId}`,
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
+  }
+
   const filePath = stringProperty(args, "file_path");
   const pattern = stringProperty(args, "pattern");
   return [

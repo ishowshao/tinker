@@ -5,6 +5,7 @@ import type { TuiEventStream } from "../events/tui-event-stream";
 import { applyAgentEvent, createInitialTuiState } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
+import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { PromptInput } from "./components/prompt-input";
 import { Timeline } from "./components/timeline";
@@ -55,11 +56,8 @@ export function App(props: AppProps) {
       setNotice(undefined);
 
       if (command.name === "quit") {
-        if (props.onQuit === undefined) {
-          exit();
-        } else {
-          props.onQuit();
-        }
+        props.onQuit?.();
+        exit();
       }
       return;
     }
@@ -89,6 +87,11 @@ export function App(props: AppProps) {
       <Box marginTop={1} flexDirection="column">
         <Timeline events={props.eventStream.events} items={state.timeline} />
       </Box>
+      {state.backgroundTasks.length === 0 ? null : (
+        <Box marginTop={1}>
+          <BackgroundTasks tasks={state.backgroundTasks} />
+        </Box>
+      )}
       <Box marginTop={1}>
         <Footer status={state.status} />
       </Box>

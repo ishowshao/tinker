@@ -702,8 +702,10 @@ finally
   await mcpManager.dispose()
 ```
 
-`onQuit` 只请求 Ink 退出，不再调用 `process.exit(0)`。CLI 顶层在所有异步清理完成后
-自然退出。
+`App` 收到 `/quit` 后调用 Ink 的 `exit()`，让 `waitUntilExit()` 正常完成。runner
+随后等待 tooling shutdown 和 MCP dispose。由于 Bun 的 TTY stdin 句柄在 Ink 卸载后
+仍可能保持进程存活，`/quit` 路径在全部异步清理完成后调用 `process.exit(0)`；不能在
+清理前提前退出。
 
 ### One-shot runner
 
@@ -758,7 +760,7 @@ registry.register(createTaskStopToolExecutor({ taskManager }));
 | `src/tui/components/timeline.tsx` | TaskList、TaskOutput、TaskStop 展示 |
 | `src/tui/app.tsx` | 渲染后台任务面板 |
 | `src/cli/run-runner.ts` | finally 中清理任务 |
-| `src/cli/tui-runner.tsx` | 共享 sink、异步退出清理、移除直接 process.exit |
+| `src/cli/tui-runner.tsx` | 共享 sink、异步退出清理、清理完成后结束 `/quit` 进程 |
 
 ## 测试计划
 
@@ -874,5 +876,6 @@ schema，因为那会产生“看起来可停止、实际可能留下孙进程�
 - **按 POSIX 进程组终止**：比只 kill 外层 bash 更符合“可靠终止服务器”的验收标准。
 - **TaskOutput 第一版非阻塞**：保持工具语义单一，避免与 Bash 前台等待重复。
 - **常驻任务面板使用 lifecycle event**：无需轮询，也能在 agent 空闲时更新。
-- **正常退出显式 shutdown**：不依赖 `process.exit()` 或父进程消失的副作用。
+- **正常退出显式 shutdown**：`process.exit()` 只能发生在 shutdown 完成后，不能用它
+  代替子进程和输出清理。
 - **不持久化 task registry**：与阶段一的 session 内管理边界一致，恢复能力留给后续阶段。

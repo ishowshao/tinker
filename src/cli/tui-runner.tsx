@@ -24,16 +24,22 @@ import {
 export async function runTui(): Promise<void> {
   const config = readRunnerConfig();
   const eventStream = new TuiEventStream();
+  const eventSink = new CompositeEventSink([
+    new JsonlEventLog(eventLogPath(config.workspaceRoot, config.runId)),
+    new ObservationTextLog(observationLogPath(config.workspaceRoot, config.runId)),
+    eventStream,
+  ]);
   const tooling = createDefaultTooling({
     workspaceRoot: config.workspaceRoot,
     runId: config.runId,
+    eventSink,
     webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
   });
 
   let mcpManager: McpManager | undefined;
   const mcpConfig = await loadMcpConfig(config.workspaceRoot);
   if (mcpConfig !== undefined) {
-    mcpManager = await createMcpManager({ config: mcpConfig, eventSink: eventStream });
+    mcpManager = await createMcpManager({ config: mcpConfig, eventSink });
     for (const executor of mcpManager.executors) {
       tooling.registry.register(executor);
     }
@@ -46,12 +52,6 @@ export async function runTui(): Promise<void> {
   let sessionMessages: AgentMessage[] | undefined;
 
   const run = async (userPrompt: string) => {
-    const eventSink = new CompositeEventSink([
-      new JsonlEventLog(eventLogPath(config.workspaceRoot, config.runId)),
-      new ObservationTextLog(observationLogPath(config.workspaceRoot, config.runId)),
-      eventStream,
-    ]);
-
     await eventSink.append({
       type: "run.started",
       runId: config.runId,
@@ -106,8 +106,6 @@ export async function runTui(): Promise<void> {
   let quitRequested = false;
   const onQuit = () => {
     quitRequested = true;
-    instance.unmount();
-    restoreStdin();
   };
 
   const instance = render(
@@ -122,9 +120,16 @@ export async function runTui(): Promise<void> {
     />,
   );
 
-  await instance.waitUntilExit();
-  restoreStdin();
-  await mcpManager?.dispose();
+  try {
+    await instance.waitUntilExit();
+  } finally {
+    restoreStdin();
+    try {
+      await tooling.dispose("tui_exit");
+    } finally {
+      await mcpManager?.dispose();
+    }
+  }
 
   if (quitRequested) {
     process.exit(0);

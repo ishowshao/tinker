@@ -132,4 +132,52 @@ describe("stdout event printer", () => {
 
     expect(stdout).toEqual([]);
   });
+
+  test("prints task tool results and background lifecycle events", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: (chunk: string) => stderr.push(chunk) },
+    );
+    const task = {
+      taskId: "task-1",
+      runId: "run-1",
+      command: "sleep 30",
+      description: "Run server",
+      status: "running" as const,
+      startedAt: "2026-07-10T10:00:00.000Z",
+      backgroundedAt: "2026-07-10T10:00:00.010Z",
+      backgroundReason: "requested" as const,
+      outputFilePath: "/tmp/task-1.log",
+      outputBytes: 0,
+      outputLines: 0,
+      cwd: "/tmp",
+    };
+
+    await printer.append({ type: "bash.task.backgrounded", task });
+    const call = {
+      id: "call_1",
+      name: "TaskStop",
+      args: { task_id: "task-1" },
+    };
+    await printer.append({ type: "tool.started", step: 1, call });
+    await printer.append({
+      type: "tool.raw_result",
+      step: 1,
+      call,
+      raw: {
+        ok: true,
+        taskId: "task-1",
+        status: "killed",
+        task: { ...task, status: "killed", signal: "SIGTERM" },
+      },
+    });
+
+    const output = stdout.join("");
+    expect(output).toContain("bash.task.backgrounded task=task-1 status=running");
+    expect(output).toContain("tool.started name=TaskStop task=task-1");
+    expect(output).toContain("task.stop task=task-1 status=killed signal=SIGTERM");
+    expect(stderr).toEqual([]);
+  });
 });

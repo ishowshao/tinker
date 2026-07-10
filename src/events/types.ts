@@ -1,4 +1,5 @@
 import type { ToolCall } from "../agent/types";
+import type { ShellTaskSnapshot } from "../tools/bash-task";
 
 export type AgentEvent =
   | { type: "run.started"; runId: string; createdAt: string; input: unknown }
@@ -9,6 +10,9 @@ export type AgentEvent =
   | { type: "tool.raw_result"; step: number; call: ToolCall; raw: unknown }
   | { type: "tool.finished"; step: number; call: ToolCall; ok: boolean }
   | { type: "tool.observation"; step: number; call: ToolCall; observation: unknown }
+  | { type: "bash.task.backgrounded"; task: ShellTaskSnapshot }
+  | { type: "bash.task.stopping"; task: ShellTaskSnapshot }
+  | { type: "bash.task.finished"; task: ShellTaskSnapshot }
   | { type: "mcp.server.connected"; serverName: string; toolCount: number }
   | { type: "mcp.server.failed"; serverName: string; error: string }
   | { type: "run.finished"; result: unknown }

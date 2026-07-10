@@ -41,6 +41,11 @@ export class StdoutEventPrinter implements EventSink {
         if (bash !== undefined) {
           this.stdout.write(bash);
         }
+
+        const task = formatTaskResult(event.call, event.raw);
+        if (task !== undefined) {
+          this.stdout.write(task);
+        }
         break;
       }
       case "tool.finished":
@@ -51,6 +56,23 @@ export class StdoutEventPrinter implements EventSink {
       case "mcp.server.connected":
         this.stdout.write(
           `mcp.server.connected name=${event.serverName} tools=${event.toolCount}\n`,
+        );
+        break;
+      case "bash.task.backgrounded":
+        this.stdout.write(
+          `bash.task.backgrounded task=${event.task.taskId} status=${event.task.status}\n`,
+        );
+        break;
+      case "bash.task.stopping":
+        this.stdout.write(
+          `bash.task.stopping task=${event.task.taskId} status=${event.task.status}\n`,
+        );
+        break;
+      case "bash.task.finished":
+        this.stdout.write(
+          `bash.task.finished task=${event.task.taskId} status=${event.task.status}${
+            event.task.exitCode === undefined ? "" : ` exit=${event.task.exitCode}`
+          }${event.task.signal === undefined ? "" : ` signal=${event.task.signal}`}\n`,
         );
         break;
       case "mcp.server.failed":
@@ -110,7 +132,7 @@ function formatDiff(call: ToolCall, raw: unknown): string | undefined {
 }
 
 function formatBashResult(call: ToolCall, raw: unknown): string | undefined {
-  if (call.name !== "Bash") {
+  if (call.name !== "Bash" && call.name !== "TaskOutput") {
     return undefined;
   }
 
@@ -136,6 +158,31 @@ function formatBashResult(call: ToolCall, raw: unknown): string | undefined {
   return `${lines.join("\n")}\n`;
 }
 
+function formatTaskResult(call: ToolCall, raw: unknown): string | undefined {
+  const record = asRecord(raw);
+  if (record.ok !== true) {
+    return undefined;
+  }
+
+  if (call.name === "TaskList") {
+    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
+    const running = numberProperty(record, "runningCount") ?? 0;
+    return `task.list total=${tasks.length} running=${running}\n`;
+  }
+
+  if (call.name === "TaskStop") {
+    const task = asRecord(record.task);
+    const taskId = stringProperty(record, "taskId");
+    const status = stringProperty(record, "status");
+    const signal = stringProperty(task, "signal");
+    if (taskId !== undefined && status !== undefined) {
+      return `task.stop task=${taskId} status=${status}${signal === undefined ? "" : ` signal=${signal}`}\n`;
+    }
+  }
+
+  return undefined;
+}
+
 function formatToolLine(prefix: string, call: ToolCall): string {
   if (call.name === "Bash") {
     const description = bashDescription(call);
@@ -155,6 +202,15 @@ function formatToolLine(prefix: string, call: ToolCall): string {
   if (call.name === "WebFetch") {
     const url = toolUrl(call);
     return `${prefix} name=${call.name}${url === undefined ? "" : ` url=${url}`}\n`;
+  }
+
+  if (call.name === "TaskList") {
+    return `${prefix} name=${call.name}\n`;
+  }
+
+  if (call.name === "TaskOutput" || call.name === "TaskStop") {
+    const taskId = toolTaskId(call);
+    return `${prefix} name=${call.name}${taskId === undefined ? "" : ` task=${taskId}`}\n`;
   }
 
   const filePath = toolFilePath(call);
@@ -233,6 +289,31 @@ function toolFilePath(call: ToolCall): string | undefined {
   }
 
   return undefined;
+}
+
+function toolTaskId(call: ToolCall): string | undefined {
+  const args = asRecord(call.args);
+  return stringProperty(args, "task_id");
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringProperty(
+  record: Record<string, unknown>,
+  property: string,
+): string | undefined {
+  return typeof record[property] === "string" ? record[property] : undefined;
+}
+
+function numberProperty(
+  record: Record<string, unknown>,
+  property: string,
+): number | undefined {
+  return typeof record[property] === "number" ? record[property] : undefined;
 }
 
 function resultOk(result: unknown): boolean {

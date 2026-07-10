@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { ShellTaskManager, type ShellTask, type ShellTaskStatus } from "./bash-task";
+import {
+  ShellTaskManager,
+  type ShellTaskHandle,
+  type ShellTaskInspection,
+  type ShellTaskSnapshot,
+} from "./bash-task";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { buildOutputSnapshotFromText } from "./task-output-snapshot";
 import type { TaskOutputSnapshot } from "./task-output";
@@ -99,16 +104,28 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       });
 
       if (input.run_in_background === true) {
+        await options.taskManager.markBackgrounded(task.taskId, "requested");
+        const inspection = requireTaskInspection(options.taskManager, task.taskId);
+        if (inspection.task.status !== "running") {
+          return buildCompletedResult(inspection.task, inspection.output);
+        }
+
         return buildRunningResult({
-          task,
+          inspection,
           backgrounded: true,
         });
       }
 
       const completed = await waitForTask(task, foregroundTimeoutMs);
       if (completed === undefined) {
+        await options.taskManager.markBackgrounded(task.taskId, "foreground_timeout");
+        const inspection = requireTaskInspection(options.taskManager, task.taskId);
+        if (inspection.task.status !== "running") {
+          return buildCompletedResult(inspection.task, inspection.output);
+        }
+
         return buildRunningResult({
-          task,
+          inspection,
           timedOut: true,
           backgrounded: true,
           backgroundedDueToTimeout: true,
@@ -116,7 +133,8 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         });
       }
 
-      const raw = await buildCompletedResult(completed);
+      const inspection = requireTaskInspection(options.taskManager, task.taskId);
+      const raw = await buildCompletedResult(completed, inspection.output);
       updateCwdStateAfterForegroundCommand({
         raw,
         task: completed,
@@ -173,8 +191,8 @@ export function parseBashArgs(
 export function interpretCommandResult(input: {
   command: string;
   exitCode?: number;
-  status: ShellTaskStatus;
-}): { ok: boolean; status: ShellTaskStatus; interpretation?: string } {
+  status: BashRawResult["status"];
+}): { ok: boolean; status: BashRawResult["status"]; interpretation?: string } {
   if (input.status === "running") {
     return { ok: true, status: "running" };
   }
@@ -202,9 +220,9 @@ export function interpretCommandResult(input: {
 }
 
 async function waitForTask(
-  task: ShellTask,
+  task: ShellTaskHandle,
   timeoutMs: number,
-): Promise<ShellTask | undefined> {
+): Promise<ShellTaskSnapshot | undefined> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
   try {
@@ -222,27 +240,27 @@ async function waitForTask(
 }
 
 function buildRunningResult(input: {
-  task: ShellTask;
+  inspection: ShellTaskInspection;
   timedOut?: boolean;
   backgrounded?: boolean;
   backgroundedDueToTimeout?: boolean;
   timeoutMs?: number;
 }): BashRawResult {
-  const snapshot = input.task.output.snapshot();
+  const { task, output } = input.inspection;
 
   return {
     ok: true,
-    command: input.task.command,
-    taskId: input.task.id,
-    runId: input.task.runId,
+    command: task.command,
+    taskId: task.taskId,
+    runId: task.runId,
     status: "running",
-    cwd: input.task.cwd,
-    outputFilePath: input.task.outputFilePath,
-    outputBytes: snapshot.outputBytes,
-    outputLines: snapshot.outputLines,
-    preview: snapshot.preview,
-    truncated: snapshot.truncated,
-    omittedLines: snapshot.omittedLines,
+    cwd: task.cwd,
+    outputFilePath: task.outputFilePath,
+    outputBytes: output.outputBytes,
+    outputLines: output.outputLines,
+    preview: output.preview,
+    truncated: output.truncated,
+    omittedLines: output.omittedLines,
     timedOut: input.timedOut,
     timeoutMs: input.timeoutMs,
     backgrounded: input.backgrounded,
@@ -250,8 +268,15 @@ function buildRunningResult(input: {
   };
 }
 
-async function buildCompletedResult(task: ShellTask): Promise<BashRawResult> {
-  const snapshot = await snapshotCompletedOutput(task);
+async function buildCompletedResult(
+  task: ShellTaskSnapshot,
+  fallbackOutput: TaskOutputSnapshot,
+): Promise<BashRawResult> {
+  if (task.status === "running" || task.status === "stopping") {
+    throw new Error(`Bash task ${task.taskId} completed with status=${task.status}.`);
+  }
+
+  const snapshot = await snapshotCompletedOutput(task, fallbackOutput);
   const interpretation = interpretCommandResult({
     command: task.command,
     exitCode: task.exitCode,
@@ -261,7 +286,7 @@ async function buildCompletedResult(task: ShellTask): Promise<BashRawResult> {
   return {
     ok: interpretation.ok,
     command: task.command,
-    taskId: task.id,
+    taskId: task.taskId,
     runId: task.runId,
     status: interpretation.status,
     exitCode: task.exitCode,
@@ -278,18 +303,21 @@ async function buildCompletedResult(task: ShellTask): Promise<BashRawResult> {
   };
 }
 
-async function snapshotCompletedOutput(task: ShellTask): Promise<TaskOutputSnapshot> {
+async function snapshotCompletedOutput(
+  task: ShellTaskSnapshot,
+  fallback: TaskOutputSnapshot,
+): Promise<TaskOutputSnapshot> {
   try {
     const content = await readFile(task.outputFilePath);
     return buildOutputSnapshotFromText(content);
   } catch {
-    return task.output.snapshot();
+    return fallback;
   }
 }
 
 function updateCwdStateAfterForegroundCommand(input: {
   raw: BashRawResult;
-  task: ShellTask;
+  task: ShellTaskSnapshot;
   cwdState: CwdState;
   workspaceRoot: string;
 }): void {
@@ -300,6 +328,18 @@ function updateCwdStateAfterForegroundCommand(input: {
   ) {
     input.cwdState.cwd = input.task.cwd;
   }
+}
+
+function requireTaskInspection(
+  taskManager: ShellTaskManager,
+  taskId: string,
+): ShellTaskInspection {
+  const inspection = taskManager.inspectTask(taskId);
+  if (inspection === undefined) {
+    throw new Error(`Bash task disappeared from task manager: ${taskId}`);
+  }
+
+  return inspection;
 }
 
 function parseOptionalTimeout(

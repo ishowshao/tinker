@@ -14,7 +14,9 @@ export function bashCommandFromArgs(args: unknown): string | undefined {
 
 export function bashResultDetail(raw: unknown): BashDisplayDetail | undefined {
   const rawRecord = asRecord(raw);
-  const command = nonEmptyString(rawRecord.command);
+  const taskRecord = asRecord(rawRecord.task);
+  const command =
+    nonEmptyString(rawRecord.command) ?? nonEmptyString(taskRecord.command);
 
   if (command === undefined) {
     return undefined;
@@ -34,7 +36,9 @@ export function bashResultDetail(raw: unknown): BashDisplayDetail | undefined {
     command,
     outputPreview,
     omittedOutputLines,
-    outputFilePath: nonEmptyString(rawRecord.outputFilePath),
+    outputFilePath:
+      nonEmptyString(rawRecord.outputFilePath) ??
+      nonEmptyString(taskRecord.outputFilePath),
   };
 }
 

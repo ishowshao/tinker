@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { Header } from "../tui/components/header";
 import { BashResultView } from "../tui/components/bash-result-view";
+import { BackgroundTasks } from "../tui/components/background-tasks";
 import { DiffView } from "../tui/components/diff-view";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
@@ -64,6 +65,39 @@ describe("tui components", () => {
     const { lastFrame, cleanup } = render(<Footer status="done" />);
 
     expect(lastFrame()).toContain("done");
+    cleanup();
+  });
+
+  test("renders background task identity, status, and exit result", () => {
+    const { lastFrame, cleanup } = render(
+      <BackgroundTasks
+        tasks={[
+          {
+            taskId: "task-019f",
+            runId: "run-1",
+            command: "bun run dev",
+            description: "Start development server",
+            status: "killed",
+            startedAt: "2026-07-10T10:00:00.000Z",
+            endedAt: "2026-07-10T10:01:00.000Z",
+            backgroundedAt: "2026-07-10T10:00:00.010Z",
+            backgroundReason: "requested",
+            outputFilePath: "/tmp/task.log",
+            outputBytes: 20,
+            outputLines: 2,
+            cwd: "/tmp/workspace",
+            signal: "SIGTERM",
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Background tasks");
+    expect(frame).toContain("task-019f");
+    expect(frame).toContain("Start development server");
+    expect(frame).toContain("killed");
+    expect(frame).toContain("signal=SIGTERM");
     cleanup();
   });
 
@@ -142,7 +176,7 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("submits /quit to the app quit handler", async () => {
+  test("submits /quit to the app quit handler and exits the Ink app", async () => {
     let quitCount = 0;
     let runCount = 0;
     const { stdin, cleanup } = render(
@@ -162,6 +196,8 @@ describe("tui components", () => {
     );
 
     stdin.write("/quit\n");
+    await Bun.sleep(25);
+    stdin.write("should not run\n");
     await Bun.sleep(25);
 
     expect(quitCount).toBe(1);

@@ -7,7 +7,7 @@ import { loadMcpConfig } from "../mcp/mcp-config";
 import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
-import { createDefaultTooling } from "../tools/registry";
+import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import { runAgent } from "../agent/loop";
 import {
   createModelClientFromEnv,
@@ -64,11 +64,13 @@ export async function runOneShot(
   });
 
   let mcpManager: McpManager | undefined;
+  let tooling: DefaultTooling | undefined;
 
   try {
-    const tooling = createDefaultTooling({
+    tooling = createDefaultTooling({
       workspaceRoot: config.workspaceRoot,
       runId: config.runId,
+      eventSink,
       webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
     });
 
@@ -116,6 +118,10 @@ export async function runOneShot(
     });
     return 1;
   } finally {
-    await mcpManager?.dispose();
+    try {
+      await tooling?.dispose("oneshot_complete");
+    } finally {
+      await mcpManager?.dispose();
+    }
   }
 }

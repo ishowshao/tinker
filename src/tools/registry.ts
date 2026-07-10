@@ -5,6 +5,9 @@ import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
+import { createTaskListToolExecutor } from "./task-list";
+import { createTaskOutputToolExecutor } from "./task-output-tool";
+import { createTaskStopToolExecutor } from "./task-stop";
 import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
@@ -17,6 +20,7 @@ import type {
   ToolRawResult,
 } from "./types";
 import type { ToolCall } from "../agent/types";
+import type { EventSink } from "../events/event-sink";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
@@ -73,11 +77,12 @@ export type DefaultTooling = {
   runtime: ToolRuntime;
   snapshots: ReadSnapshotStore;
   bashState: BashToolingState;
+  taskManager: ShellTaskManager;
+  dispose(reason?: "tui_exit" | "oneshot_complete"): Promise<void>;
 };
 
 export type BashToolingState = {
   cwd: string;
-  tasks: ShellTaskManager["tasks"];
   runId: string;
   workspaceRoot: string;
 };
@@ -88,6 +93,8 @@ export function createDefaultTooling(options: {
   maxDisplayedBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
+  eventSink?: EventSink;
+  taskStopGraceMs?: number;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -97,6 +104,8 @@ export function createDefaultTooling(options: {
     workspaceRoot: options.workspaceRoot,
     runId,
     cwdState,
+    eventSink: options.eventSink,
+    stopGraceMs: options.taskStopGraceMs,
   });
 
   registry.register(
@@ -137,6 +146,9 @@ export function createDefaultTooling(options: {
       taskManager,
     }),
   );
+  registry.register(createTaskListToolExecutor({ taskManager }));
+  registry.register(createTaskOutputToolExecutor({ taskManager }));
+  registry.register(createTaskStopToolExecutor({ taskManager }));
 
   const exaApiKey = options.exaApiKey ?? process.env.EXA_API_KEY;
   const hasExaKey = exaApiKey !== undefined && exaApiKey.trim() !== "";
@@ -156,6 +168,7 @@ export function createDefaultTooling(options: {
     registry,
     runtime: new ToolRuntime(registry),
     snapshots,
+    taskManager,
     bashState: {
       get cwd() {
         return cwdState.cwd;
@@ -163,9 +176,11 @@ export function createDefaultTooling(options: {
       set cwd(value: string) {
         cwdState.cwd = value;
       },
-      tasks: taskManager.tasks,
       runId,
       workspaceRoot: options.workspaceRoot,
+    },
+    async dispose(reason = "oneshot_complete") {
+      await taskManager.shutdown(reason);
     },
   };
 }

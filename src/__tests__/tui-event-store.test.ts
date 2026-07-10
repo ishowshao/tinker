@@ -2,6 +2,103 @@ import { describe, expect, test } from "bun:test";
 import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
 
 describe("tui event store", () => {
+  test("tracks background task lifecycle outside the agent timeline", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+    const task = {
+      taskId: "task-1",
+      runId: "run-1",
+      command: "bun run dev",
+      description: "Start development server",
+      status: "running" as const,
+      startedAt: "2026-07-10T10:00:00.000Z",
+      backgroundedAt: "2026-07-10T10:00:00.010Z",
+      backgroundReason: "requested" as const,
+      outputFilePath: "/tmp/task-1.log",
+      outputBytes: 0,
+      outputLines: 0,
+      cwd: "/tmp/workspace",
+    };
+
+    state = applyAgentEvent(state, { type: "bash.task.backgrounded", task });
+    expect(state.backgroundTasks).toEqual([task]);
+    expect(state.timeline).toEqual([]);
+
+    state = applyAgentEvent(state, {
+      type: "bash.task.stopping",
+      task: { ...task, status: "stopping" },
+    });
+    expect(state.backgroundTasks[0]?.status).toBe("stopping");
+
+    state = applyAgentEvent(state, {
+      type: "bash.task.finished",
+      task: {
+        ...task,
+        status: "killed",
+        signal: "SIGTERM",
+        endedAt: "2026-07-10T10:01:00.000Z",
+      },
+    });
+    expect(state.backgroundTasks[0]).toMatchObject({
+      status: "killed",
+      signal: "SIGTERM",
+      endedAt: "2026-07-10T10:01:00.000Z",
+    });
+  });
+
+  test("summarizes task management tool results", () => {
+    let state = createInitialTuiState({
+      runId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const listCall = { id: "call_1", name: "TaskList", args: {} };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      step: 1,
+      call: listCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call: listCall,
+      raw: { ok: true, tasks: [{}, {}], runningCount: 1 },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("TaskList -> 2 tasks, 1 running");
+
+    const outputCall = {
+      id: "call_2",
+      name: "TaskOutput",
+      args: { task_id: "task-1" },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      step: 1,
+      call: outputCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      step: 1,
+      call: outputCall,
+      raw: {
+        ok: true,
+        taskId: "task-1",
+        status: "running",
+        command: "bun run dev",
+        outputLines: 2,
+        outputBytes: 20,
+        preview: "starting\nready",
+        outputFilePath: "/tmp/task-1.log",
+      },
+    });
+    expect(state.timeline.at(-1)?.text).toBe("TaskOutput task-1 -> running, 2 lines");
+    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual(["starting", "ready"]);
+  });
+
   test("tracks run, tool, final and failure state", () => {
     let state = createInitialTuiState({
       runId: "run-1",

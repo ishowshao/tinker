@@ -4,6 +4,7 @@ import {
   type BashDisplayDetail,
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
+import type { ShellTaskSnapshot } from "../tools/bash-task";
 import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
 import type { DiffHunk } from "../tools/types";
 
@@ -24,6 +25,7 @@ export type TuiState = {
   modelName?: string;
   workspaceRoot?: string;
   timeline: TimelineItem[];
+  backgroundTasks: ShellTaskSnapshot[];
   finalText?: string;
   error?: string;
 };
@@ -39,6 +41,7 @@ export function createInitialTuiState(input: {
     modelName: input.modelName,
     workspaceRoot: input.workspaceRoot,
     timeline: [],
+    backgroundTasks: [],
   };
 }
 
@@ -126,6 +129,13 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
           ...item,
           status: event.ok ? "ok" : "failed",
         })),
+      };
+    case "bash.task.backgrounded":
+    case "bash.task.stopping":
+    case "bash.task.finished":
+      return {
+        ...state,
+        backgroundTasks: upsertBackgroundTask(state.backgroundTasks, event.task),
       };
     case "mcp.server.connected":
       return {
@@ -272,6 +282,14 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
   }
 
+  if (input.name === "TaskOutput" || input.name === "TaskStop") {
+    return `${input.name} ${toolTaskId(input.args) ?? ""}`.trim();
+  }
+
+  if (input.name === "TaskList") {
+    return "TaskList";
+  }
+
   const filePath = toolPath(input.args);
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
 }
@@ -362,6 +380,29 @@ function toolRawResultSummary(name: string, args: unknown, raw: unknown): string
     }
   }
 
+  if (name === "TaskList") {
+    const tasks = Array.isArray(rawRecord.tasks) ? rawRecord.tasks : [];
+    const runningCount = numberProperty(rawRecord, "runningCount") ?? 0;
+    return `${base} -> ${tasks.length} task${tasks.length === 1 ? "" : "s"}, ${runningCount} running`;
+  }
+
+  if (name === "TaskOutput") {
+    const status = stringProperty(rawRecord, "status");
+    const outputLines = numberProperty(rawRecord, "outputLines");
+    if (status !== undefined && outputLines !== undefined) {
+      return `${base} -> ${status}, ${outputLines} line${outputLines === 1 ? "" : "s"}`;
+    }
+  }
+
+  if (name === "TaskStop") {
+    const status = stringProperty(rawRecord, "status");
+    const task = asRecord(rawRecord.task);
+    const signal = stringProperty(task, "signal");
+    if (status !== undefined) {
+      return `${base} -> ${status}${signal === undefined ? "" : ` (${signal})`}`;
+    }
+  }
+
   if (name === "Bash") {
     const status = stringProperty(rawRecord, "status");
     const outputFilePath = stringProperty(rawRecord, "outputFilePath");
@@ -397,12 +438,21 @@ function toolRawResultBashDetail(
   name: string,
   raw: unknown,
 ): Pick<TimelineItem, "bash"> {
-  if (name !== "Bash") {
+  if (name !== "Bash" && name !== "TaskOutput") {
     return {};
   }
 
   const detail = bashResultDetail(raw);
   return detail === undefined ? {} : { bash: detail };
+}
+
+function upsertBackgroundTask(
+  tasks: ShellTaskSnapshot[],
+  task: ShellTaskSnapshot,
+): ShellTaskSnapshot[] {
+  const next = tasks.filter((candidate) => candidate.taskId !== task.taskId);
+  next.push(task);
+  return next.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
 function toolRawResultDiff(raw: unknown): Pick<TimelineItem, "diff" | "diffTruncated"> {
@@ -457,6 +507,11 @@ function toolPath(args: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function toolTaskId(args: unknown): string | undefined {
+  const record = asRecord(args);
+  return stringProperty(record, "task_id");
 }
 
 function numberProperty(

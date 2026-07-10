@@ -36,7 +36,11 @@ Prefer Read for reading files instead of using cat on large files.
 Prefer Write or Edit for changing files instead of shell redirection.
 Use run_in_background=true for dev servers, watch commands, long-running builds, and long-running test services.
 Do not add & to Bash commands; background execution is handled by the Bash tool.
-Bash output is written to outputFilePath. Use Read on outputFilePath when you need the complete output.
+Use TaskList to list background shell tasks in the current session.
+Use TaskOutput to inspect a task's current status and latest output.
+Use TaskStop to stop a background task that is no longer needed.
+Do not use ad-hoc kill commands to manage tasks created by Bash.
+Bash and TaskOutput return outputFilePath. Use Read on outputFilePath when you need complete or paginated output.
 
 When you are done, respond with a concise summary of what you did.`;
 

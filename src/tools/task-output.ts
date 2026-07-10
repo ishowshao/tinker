@@ -23,6 +23,7 @@ export class TaskOutput {
   private fullPreviewLines: string[] | undefined = [];
   private readonly firstLines: string[] = [];
   private readonly lastLines: string[] = [];
+  private endPromise?: Promise<TaskOutputSnapshot>;
 
   private constructor(readonly filePath: string) {
     this.stream = createWriteStream(filePath, { flags: "a" });
@@ -40,6 +41,11 @@ export class TaskOutput {
   }
 
   async end(): Promise<TaskOutputSnapshot> {
+    this.endPromise ??= this.finish();
+    return this.endPromise;
+  }
+
+  private async finish(): Promise<TaskOutputSnapshot> {
     this.appendText(this.decoder.end());
     if (this.pendingLine !== "") {
       this.pushLine(this.pendingLine);

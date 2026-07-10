@@ -8,6 +8,9 @@ import type {
   GrepRawResult,
   McpToolRawResult,
   ReadFileRawResult,
+  TaskListRawResult,
+  TaskOutputRawResult,
+  TaskStopRawResult,
   ToolRawResult,
   WebFetchRawResult,
   WebSearchRawResult,
@@ -42,6 +45,20 @@ export class ObservationBuilder {
 
     if (input.call.name === "Bash") {
       return { content: renderBashObservation(input.raw as BashRawResult) };
+    }
+
+    if (input.call.name === "TaskList") {
+      return { content: renderTaskListObservation(input.raw as TaskListRawResult) };
+    }
+
+    if (input.call.name === "TaskOutput") {
+      return {
+        content: renderTaskOutputObservation(input.raw as TaskOutputRawResult),
+      };
+    }
+
+    if (input.call.name === "TaskStop") {
+      return { content: renderTaskStopObservation(input.raw as TaskStopRawResult) };
     }
 
     if (input.call.name === "WebSearch") {
@@ -246,6 +263,76 @@ function renderBashObservation(raw: BashRawResult): string {
     raw.error === undefined ? undefined : `error=${raw.error}`,
     "preview:",
     raw.preview,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function renderTaskListObservation(raw: TaskListRawResult): string {
+  if (!raw.ok) {
+    return `TaskList failed: ${raw.error ?? "Unknown error."}`;
+  }
+
+  const header = `Background tasks: ${raw.tasks.length} total, ${raw.runningCount} running.`;
+  if (raw.tasks.length === 0) {
+    return `${header}\n\n(no background tasks)`;
+  }
+
+  return [header, ...raw.tasks.map(renderTaskSummary)].join("\n\n");
+}
+
+function renderTaskOutputObservation(raw: TaskOutputRawResult): string {
+  if (!raw.ok || raw.task === undefined) {
+    return `TaskOutput failed for ${raw.taskId || "(unknown task ID)"}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  return [
+    "Task output retrieved.",
+    `taskId=${raw.taskId}`,
+    `status=${raw.task.status}`,
+    `command=${raw.task.command}`,
+    `outputFilePath=${raw.outputFilePath}`,
+    `outputBytes=${raw.outputBytes ?? 0}`,
+    `outputLines=${raw.outputLines ?? 0}`,
+    `truncated=${raw.truncated ?? false}`,
+    raw.omittedLines === undefined ? undefined : `omittedLines=${raw.omittedLines}`,
+    "preview:",
+    raw.preview ?? "",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function renderTaskStopObservation(raw: TaskStopRawResult): string {
+  if (!raw.ok || raw.task === undefined) {
+    return `TaskStop failed for ${raw.taskId || "(unknown task ID)"}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  return [
+    "Task stopped.",
+    `taskId=${raw.taskId}`,
+    `status=${raw.task.status}`,
+    raw.task.exitCode === undefined ? undefined : `exitCode=${raw.task.exitCode}`,
+    raw.task.signal === undefined ? undefined : `signal=${raw.task.signal}`,
+    `escalated=${raw.escalated ?? false}`,
+    `endedAt=${raw.task.endedAt}`,
+    `outputFilePath=${raw.task.outputFilePath}`,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function renderTaskSummary(task: TaskListRawResult["tasks"][number]): string {
+  return [
+    `taskId=${task.taskId}`,
+    `description=${task.description}`,
+    `status=${task.status}`,
+    `startedAt=${task.startedAt}`,
+    task.endedAt === undefined ? undefined : `endedAt=${task.endedAt}`,
+    task.exitCode === undefined ? undefined : `exitCode=${task.exitCode}`,
+    task.signal === undefined ? undefined : `signal=${task.signal}`,
+    task.error === undefined ? undefined : `error=${task.error}`,
+    `outputFilePath=${task.outputFilePath}`,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
