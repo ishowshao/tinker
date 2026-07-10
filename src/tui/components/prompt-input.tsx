@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
 import {
@@ -15,6 +17,9 @@ import {
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
 
 export type PromptInputProps = {
+  modelName: string;
+  workspaceRoot: string;
+  gitBranch?: string;
   isDisabled?: boolean;
   placeholder?: string;
   history?: { entries: readonly string[] };
@@ -226,10 +231,16 @@ export function PromptInput(props: PromptInputProps) {
 
   return (
     <Box flexDirection="column">
-      <Box>
+      <Box width="100%" borderStyle="single" borderLeft={false} borderRight={false}>
         <Text>Input: </Text>
         {renderEditor(state.editor, props)}
       </Box>
+      {showSuggestions ? null : (
+        <Text dimColor>
+          {props.modelName} · {formatWorkspacePath(props.workspaceRoot)}
+          {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
+        </Text>
+      )}
       {showSuggestions ? (
         <Box flexDirection="column">
           {suggestions.map((command, index) => (
@@ -242,6 +253,22 @@ export function PromptInput(props: PromptInputProps) {
       ) : null}
     </Box>
   );
+}
+
+function formatWorkspacePath(workspaceRoot: string): string {
+  const home = os.homedir();
+  const relative = path.relative(home, workspaceRoot);
+
+  if (relative === "") {
+    return home;
+  }
+
+  const isInsideHome =
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative);
+
+  return isInsideHome ? `~${path.sep}${relative}` : workspaceRoot;
 }
 
 function renderEditor(editor: LineEditorState, props: PromptInputProps) {

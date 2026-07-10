@@ -101,6 +101,7 @@ export async function runOneShot(
     if (result.status === "completed") {
       await eventSink.append({
         type: "run.finished",
+        finishedAt: new Date().toISOString(),
         result,
       });
       stdout.write(`\n${result.finalText}\n`);

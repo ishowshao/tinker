@@ -24,6 +24,8 @@ export type TuiState = {
   runId?: string;
   modelName?: string;
   workspaceRoot?: string;
+  runStartedAt?: number;
+  workedForMs?: number;
   timeline: TimelineItem[];
   backgroundTasks: ShellTaskSnapshot[];
   finalText?: string;
@@ -52,6 +54,8 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         ...state,
         status: "running",
         runId: event.runId,
+        runStartedAt: parseEventTimestamp(event.createdAt),
+        workedForMs: undefined,
         timeline: [
           ...state.timeline,
           {
@@ -167,6 +171,7 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
       return {
         ...state,
         status: "done",
+        workedForMs: runDurationMs(state.runStartedAt, event.finishedAt),
         finalText: finalText(event.result),
         timeline: appendFinalTimelineItem(state, event.result),
       };
@@ -194,6 +199,24 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
     default:
       return state;
   }
+}
+
+function runDurationMs(startedAt: number | undefined, finishedAt: string): number {
+  if (startedAt === undefined) {
+    throw new Error("run.finished received before run.started");
+  }
+
+  return Math.max(0, parseEventTimestamp(finishedAt) - startedAt);
+}
+
+function parseEventTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid event timestamp: ${value}`);
+  }
+
+  return timestamp;
 }
 
 function applyRunCancellation(

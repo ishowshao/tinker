@@ -18,12 +18,14 @@ export type AppProps = {
   runId: string;
   eventStream: TuiEventStream;
   run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>;
+  readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
   onQuit?: () => void;
 };
 
 export function App(props: AppProps) {
   const { exit } = useApp();
+  const { readGitBranch, workspaceRoot } = props;
   const initialState = useMemo(
     () =>
       createInitialTuiState({
@@ -37,6 +39,9 @@ export function App(props: AppProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
+  const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
+  const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
   const activeController = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
@@ -44,6 +49,31 @@ export function App(props: AppProps) {
       setState((current) => applyAgentEvent(current, event));
     });
   }, [props.eventStream]);
+
+  useEffect(() => {
+    if (readGitBranch === undefined) {
+      return;
+    }
+
+    let isCurrent = true;
+    const read = gitBranchReadQueue.current.then(() => readGitBranch(workspaceRoot));
+    gitBranchReadQueue.current = read.then(
+      (branch) => {
+        if (isCurrent) {
+          setGitBranch(branch);
+        }
+      },
+      () => {
+        if (isCurrent) {
+          setGitBranch(undefined);
+        }
+      },
+    );
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [readGitBranch, workspaceRoot, gitBranchRefresh]);
 
   useInput(
     (_input, key) => {
@@ -102,6 +132,7 @@ export function App(props: AppProps) {
           setIsRunning(false);
           setIsCancelling(false);
           setNotice(undefined);
+          setGitBranchRefresh((current) => current + 1);
         }
       });
   };
@@ -122,10 +153,16 @@ export function App(props: AppProps) {
         </Box>
       )}
       <Box marginTop={1}>
-        <Footer status={isCancelling ? "cancelling" : state.status} />
+        <Footer
+          status={isCancelling ? "cancelling" : state.status}
+          workedForMs={state.workedForMs}
+        />
       </Box>
       <Box marginTop={1} flexDirection="column">
         <PromptInput
+          modelName={props.modelName}
+          workspaceRoot={props.workspaceRoot}
+          gitBranch={gitBranch}
           isDisabled={isRunning}
           history={props.history}
           onSubmit={onSubmit}

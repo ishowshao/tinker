@@ -2,11 +2,20 @@ import { StatusMessage } from "@inkjs/ui";
 
 export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
+  workedForMs?: number;
 };
 
 export function Footer(props: FooterProps) {
   if (props.status === "done") {
-    return <StatusMessage variant="success">done</StatusMessage>;
+    if (props.workedForMs === undefined) {
+      throw new Error("Done footer requires workedForMs");
+    }
+
+    return (
+      <StatusMessage variant="success">
+        Worked for {formatWorkedDuration(props.workedForMs)}
+      </StatusMessage>
+    );
   }
 
   if (props.status === "failed") {
@@ -26,4 +35,25 @@ export function Footer(props: FooterProps) {
   }
 
   return <StatusMessage variant="info">idle</StatusMessage>;
+}
+
+function formatWorkedDuration(durationMs: number): string {
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    throw new Error(`Invalid worked duration: ${durationMs}`);
+  }
+
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+
+  return `${seconds}s`;
 }

@@ -15,7 +15,7 @@ export type AgentEvent =
   | { type: "bash.task.finished"; task: ShellTaskSnapshot }
   | { type: "mcp.server.connected"; serverName: string; toolCount: number }
   | { type: "mcp.server.failed"; serverName: string; error: string }
-  | { type: "run.finished"; result: unknown }
+  | { type: "run.finished"; finishedAt: string; result: unknown }
   | {
       type: "run.cancelled";
       cancelledAt: string;

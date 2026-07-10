@@ -130,9 +130,11 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "run.finished",
+      finishedAt: "2026-07-06T00:03:27.000Z",
       result: { status: "completed", finalText: "done", messages: [] },
     });
     expect(state.status).toBe("done");
+    expect(state.workedForMs).toBe(207_000);
     expect(state.finalText).toBe("done");
     expect(state.timeline.at(-1)?.label).toBe("assistant");
     expect(state.timeline.at(-1)?.text).toBe("done");
@@ -163,6 +165,7 @@ describe("tui event store", () => {
     });
     state = applyAgentEvent(state, {
       type: "run.finished",
+      finishedAt: "2026-07-06T00:00:30.000Z",
       result: { status: "completed", finalText: "first done", messages: [] },
     });
     state = applyAgentEvent(state, {
@@ -173,6 +176,7 @@ describe("tui event store", () => {
     });
 
     expect(state.status).toBe("running");
+    expect(state.workedForMs).toBeUndefined();
     expect(state.timeline.map((item) => item.text)).toEqual([
       "first",
       "first done",

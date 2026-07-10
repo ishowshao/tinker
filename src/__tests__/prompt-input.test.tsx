@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import { PromptInput } from "../tui/components/prompt-input";
@@ -8,6 +10,8 @@ const ARROW_LEFT = "[D";
 const BACKSPACE = "";
 
 const KEY_DELAY = 15;
+const MODEL_NAME = "deepseek-v4-flash";
+const WORKSPACE_ROOT = path.join(os.homedir(), "htdocs", "tinker");
 
 function stripAnsi(value: string | undefined): string {
   // eslint-disable-next-line no-control-regex
@@ -22,10 +26,87 @@ async function press(stdin: { write: (data: string) => void }, ...keys: string[]
 }
 
 describe("prompt input", () => {
+  test("renders full-width horizontal borders without side borders", () => {
+    const { lastFrame, stdout, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        placeholder="ready"
+        onSubmit={() => undefined}
+      />,
+    );
+
+    const lines = stripAnsi(lastFrame()).split("\n");
+    expect(lines[0]).toBe("─".repeat(stdout.columns));
+    expect(lines[1]).toBe("Input: ready");
+    expect(lines[2]).toBe("─".repeat(stdout.columns));
+    cleanup();
+  });
+
+  test("renders model and workspace information below the input", () => {
+    const { lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={() => undefined}
+      />,
+    );
+
+    const lines = stripAnsi(lastFrame()).split("\n");
+    expect(lines[3]).toBe(`${MODEL_NAME} · ~/htdocs/tinker`);
+    cleanup();
+  });
+
+  test("appends the Git branch to the information line", () => {
+    const { lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        gitBranch="feature/tui-info"
+        onSubmit={() => undefined}
+      />,
+    );
+
+    const lines = stripAnsi(lastFrame()).split("\n");
+    expect(lines[3]).toBe(`${MODEL_NAME} · ~/htdocs/tinker · feature/tui-info`);
+    cleanup();
+  });
+
+  test("keeps absolute workspace paths for Home itself and external directories", () => {
+    const home = os.homedir();
+    const homeRender = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={home}
+        onSubmit={() => undefined}
+      />,
+    );
+    const externalRender = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot="/tmp/external-workspace"
+        onSubmit={() => undefined}
+      />,
+    );
+
+    expect(stripAnsi(homeRender.lastFrame()).split("\n")[3]).toBe(
+      `${MODEL_NAME} · ${home}`,
+    );
+    expect(stripAnsi(externalRender.lastFrame()).split("\n")[3]).toBe(
+      `${MODEL_NAME} · /tmp/external-workspace`,
+    );
+    homeRender.cleanup();
+    externalRender.cleanup();
+  });
+
   test("renders typed characters and submits on enter", async () => {
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     await press(stdin, "abc");
@@ -41,7 +122,12 @@ describe("prompt input", () => {
     const history = { entries: ["first prompt", "second prompt"] };
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput history={history} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     await press(stdin, ARROW_UP);
@@ -62,7 +148,12 @@ describe("prompt input", () => {
     const history = { entries: ["old prompt"] };
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput history={history} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     await press(stdin, "draft");
@@ -81,7 +172,12 @@ describe("prompt input", () => {
     const history = { entries: ["run test"] };
     const submitted: string[] = [];
     const { stdin, cleanup } = render(
-      <PromptInput history={history} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     await press(stdin, ARROW_UP, BACKSPACE, "t again", "\r");
@@ -92,7 +188,11 @@ describe("prompt input", () => {
   test("inserts characters at the cursor position", async () => {
     const submitted: string[] = [];
     const { stdin, cleanup } = render(
-      <PromptInput onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     await press(stdin, "ac", ARROW_LEFT, "b", "\r");
@@ -102,7 +202,12 @@ describe("prompt input", () => {
 
   test("up arrow without history keeps the placeholder", async () => {
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput placeholder="type here" onSubmit={() => undefined} />,
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        placeholder="type here"
+        onSubmit={() => undefined}
+      />,
     );
 
     await press(stdin, ARROW_UP);
@@ -114,6 +219,8 @@ describe("prompt input", () => {
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
       <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
         isDisabled
         placeholder="waiting"
         onSubmit={(value) => submitted.push(value)}

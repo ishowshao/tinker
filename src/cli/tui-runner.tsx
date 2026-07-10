@@ -10,6 +10,7 @@ import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
 import { App } from "../tui/app";
+import { readCurrentGitBranch } from "../tui/git-branch";
 import { PromptHistory } from "../tui/prompt-history";
 import {
   createModelClientFromEnv,
@@ -84,6 +85,7 @@ export async function runTui(): Promise<void> {
       if (result.status === "completed") {
         await eventSink.append({
           type: "run.finished",
+          finishedAt: new Date().toISOString(),
           result,
         });
       } else if (result.status === "cancelled") {
@@ -122,6 +124,7 @@ export async function runTui(): Promise<void> {
       runId={config.runId}
       eventStream={eventStream}
       run={run}
+      readGitBranch={readCurrentGitBranch}
       history={promptHistory}
       onQuit={onQuit}
     />,

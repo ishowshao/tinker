@@ -62,9 +62,37 @@ describe("tui components", () => {
   });
 
   test("renders footer status", () => {
-    const { lastFrame, cleanup } = render(<Footer status="done" />);
+    const { lastFrame, cleanup } = render(
+      <Footer status="done" workedForMs={207_000} />,
+    );
 
-    expect(lastFrame()).toContain("done");
+    expect(lastFrame()).toContain("✔ Worked for 3m 27s");
+    expect(lastFrame()).not.toContain("done");
+    cleanup();
+  });
+
+  test("refreshes the Git branch after each completed turn", async () => {
+    const branches = ["main", "feature/refreshed-branch"];
+    let branchReads = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        modelName="model"
+        workspaceRoot="/tmp/tinker"
+        runId="run-1"
+        eventStream={new TuiEventStream()}
+        run={async () => ({ status: "completed", finalText: "", messages: [] })}
+        readGitBranch={async () => branches[branchReads++]}
+      />,
+    );
+
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain("model · /tmp/tinker · main");
+
+    stdin.write("refresh branch\n");
+    await Bun.sleep(50);
+
+    expect(branchReads).toBe(2);
+    expect(lastFrame()).toContain("model · /tmp/tinker · feature/refreshed-branch");
     cleanup();
   });
 
@@ -304,6 +332,8 @@ describe("tui components", () => {
 });
 
 describe("prompt input slash commands", () => {
+  const modelName = "model";
+  const workspaceRoot = "/tmp/tinker";
   const commands: readonly SlashCommand[] = [
     { name: "quit", description: "Exit the TUI" },
     { name: "quiet", description: "Toggle quiet mode" },
@@ -311,7 +341,12 @@ describe("prompt input slash commands", () => {
 
   test("shows suggestions while typing a slash command", async () => {
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={() => undefined} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={() => undefined}
+      />,
     );
 
     stdin.write("/qui");
@@ -320,13 +355,19 @@ describe("prompt input slash commands", () => {
     expect(lastFrame()).toContain("❯ /quit");
     expect(lastFrame()).toContain("Exit the TUI");
     expect(lastFrame()).toContain("/quiet");
+    expect(lastFrame()).not.toContain(modelName);
     cleanup();
   });
 
   test("completes the selected command with tab", async () => {
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     stdin.write("/q");
@@ -347,7 +388,12 @@ describe("prompt input slash commands", () => {
   test("accepts the selected suggestion on enter", async () => {
     const submitted: string[] = [];
     const { stdin, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     stdin.write("/q");
@@ -362,7 +408,12 @@ describe("prompt input slash commands", () => {
   test("navigates suggestions with arrow keys", async () => {
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     stdin.write("/q");
@@ -382,7 +433,12 @@ describe("prompt input slash commands", () => {
   test("dismisses suggestions with escape and submits raw input", async () => {
     const submitted: string[] = [];
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={(value) => submitted.push(value)} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={(value) => submitted.push(value)}
+      />,
     );
 
     stdin.write("/q");
@@ -391,6 +447,7 @@ describe("prompt input slash commands", () => {
     await Bun.sleep(25);
 
     expect(lastFrame()).not.toContain("Exit the TUI");
+    expect(lastFrame()).toContain(modelName);
 
     stdin.write("\r");
     await Bun.sleep(25);
@@ -401,7 +458,12 @@ describe("prompt input slash commands", () => {
 
   test("reopens suggestions after escape when input changes", async () => {
     const { stdin, lastFrame, cleanup } = render(
-      <PromptInput commands={commands} onSubmit={() => undefined} />,
+      <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
+        commands={commands}
+        onSubmit={() => undefined}
+      />,
     );
 
     stdin.write("/q");
@@ -418,6 +480,8 @@ describe("prompt input slash commands", () => {
   test("keeps history navigation when no suggestions are shown", async () => {
     const { stdin, lastFrame, cleanup } = render(
       <PromptInput
+        modelName={modelName}
+        workspaceRoot={workspaceRoot}
         commands={commands}
         history={{ entries: ["fix the bug"] }}
         onSubmit={() => undefined}
