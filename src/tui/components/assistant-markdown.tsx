@@ -1,4 +1,8 @@
-import { MarkdownText, useShikiHighlighter } from "@assistant-ui/react-ink-markdown";
+import {
+  MarkdownText,
+  type RenderOptions,
+  useShikiHighlighter,
+} from "@assistant-ui/react-ink-markdown";
 
 export type AssistantMarkdownProps = {
   text: string;
@@ -20,6 +24,10 @@ const highlightedLanguages = [
   "diff",
 ];
 
+const tableOptions = {
+  tableTruncate: false,
+} satisfies Pick<RenderOptions, "tableTruncate">;
+
 export function AssistantMarkdown(props: AssistantMarkdownProps) {
   const highlighter = useShikiHighlighter({
     theme: "github-dark",
@@ -28,6 +36,7 @@ export function AssistantMarkdown(props: AssistantMarkdownProps) {
 
   return (
     <MarkdownText
+      {...tableOptions}
       text={props.text}
       highlighter={highlighter}
       codeBox

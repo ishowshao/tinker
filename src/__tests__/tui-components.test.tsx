@@ -110,6 +110,38 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("hard-wraps long markdown table cells without breaking borders", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "assistant-table-1",
+            label: "assistant",
+            text: [
+              "| 文件 | 变更类型 | 具体改动 | 目的 |",
+              "| --- | --- | --- | --- |",
+              "| src/tui/components/assistant-markdown.tsx | 新增常量 | tableOptions = { tableTruncate: false } | 明确禁止表格单元格内容截断 |",
+            ].join("\n"),
+            status: "text",
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    const lines = frame.split("\n");
+    const tableLines = lines.filter((line) => /^[┌├└│]/.test(line));
+    const bodyLines = tableLines.filter((line) => line.startsWith("│")).slice(1);
+    const cellText = (column: number) =>
+      bodyLines.map((line) => line.split("│")[column]?.trim() ?? "").join("");
+
+    expect(cellText(1)).toBe("src/tui/components/assistant-markdown.tsx");
+    expect(cellText(4)).toBe("明确禁止表格单元格内容截断");
+    expect(frame).not.toContain("…");
+    expect(new Set(tableLines.map((line) => Bun.stringWidth(line))).size).toBe(1);
+    cleanup();
+  });
+
   test("submits /quit to the app quit handler", async () => {
     let quitCount = 0;
     let runCount = 0;

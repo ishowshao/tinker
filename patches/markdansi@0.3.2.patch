@@ -1,0 +1,37 @@
+diff --git a/dist/render.js b/dist/render.js
+index 5de3a5d5c1e0c8bfe8dec992ca3d57987f2ba6ee..53237b86315dc56fdb2e6295aea698ee033350ce 100644
+--- a/dist/render.js
++++ b/dist/render.js
+@@ -572,7 +572,7 @@ function renderTable(node, ctx) {
+             const content = ctx.options.tableTruncate
+                 ? truncateCell(cell, target, ctx.options.tableEllipsis)
+                 : cell;
+-            const wrapped = wrapText(content, ctx.options.wrap ? target : Number.MAX_SAFE_INTEGER, ctx.options.wrap);
++            const wrapped = wrapText(content, ctx.options.wrap ? target : Number.MAX_SAFE_INTEGER, ctx.options.wrap).flatMap((line) => hardWrapTableCellLine(line, target, ctx.options.wrap));
+             return wrapped.map((l) => {
+                 const aligned = padCell(l, target, aligns[idx] ?? "left");
+                 const padded = `${padStr}${aligned}${padStr}`;
+@@ -627,6 +627,23 @@ function sliceCellContent(text, width) {
+     }
+     return sliced;
+ }
++function hardWrapTableCellLine(text, width, wrap) {
++    if (!wrap || width <= 0 || visibleWidth(text) <= width)
++        return [text];
++    const parts = [];
++    let remaining = text;
++    while (visibleWidth(remaining) > width) {
++        const part = sliceCellContent(remaining, width);
++        const consumedWidth = visibleWidth(part);
++        if (consumedWidth <= 0)
++            break;
++        parts.push(part);
++        remaining = sliceAnsi(remaining, consumedWidth);
++    }
++    if (remaining !== "")
++        parts.push(remaining);
++    return parts.length ? parts : [text];
++}
+ function wrapCodeLine(text, width) {
+     // Hard-wrap code even without spaces while keeping ANSI-safe width accounting.
+     if (width <= 0)
