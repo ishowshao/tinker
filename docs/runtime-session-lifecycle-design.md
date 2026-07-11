@@ -68,7 +68,8 @@ TUI 还在 closure 中维护 `sessionMessages`。这使得 `RuntimeSession` 虽�
 
 - factory 在返回完整 manager 前抛错时，runner 无法释放 factory 内部已经创建的资源。
 - 当前释放顺序是 tooling 后 MCP，不是创建顺序的严格逆序。
-- MCP dispose 如果抛错，后续 `session.finished` 不会发送。
+- 当前 MCP dispose 会静默吞掉 connection close 错误；如果改为按本设计上报错误，runner
+  现有的顺序 `finally` 又会在 MCP dispose 抛错时跳过 `session.finished`。
 - `RuntimeSession` 自身没有 idempotent dispose，也没有阻止 dispose 后继续创建 turn。
 - TUI 和 one-shot 对 model client 的创建时机不同。
 
@@ -152,9 +153,12 @@ type RuntimeSessionFactoryDependencies = {
 生产调用省略第二个参数并使用模块内默认实现。这个对象只列出 factory 真正需要替换的
 构造边界，不提供按名称查找服务的通用 container。
 
-### RuntimeSession 提供唯一 turn 入口
+`RuntimeSessionFactoryDependencies` 中需要 session 能力的 factory 只接收
+`RuntimeSessionContext`，不能拿到 runner 的 `executeTurn()` 或 `dispose()`。
 
-公开执行 API 为：
+### Runner 和 runtime internal 使用不同 API 视图
+
+factory 返回给 runner 的 `RuntimeSession` 是窄接口：
 
 ```ts
 type ExecuteTurnInput = {
@@ -166,8 +170,14 @@ type RuntimeSession = {
   readonly sessionId: SessionId;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   dispose(reason: SessionDisposeReason): Promise<void>;
+};
+```
 
-  // agent loop、model adapter 和 session 资源使用的 identity/event API
+agent loop、model adapter、tooling 和 MCP 使用另一个内部视图：
+
+```ts
+type RuntimeSessionContext = {
+  readonly sessionId: SessionId;
   createIteration(turn: TurnIdentity, iterationNumber: number): IterationIdentity;
   createToolCall(
     iteration: IterationIdentity,
@@ -177,8 +187,14 @@ type RuntimeSession = {
 };
 ```
 
-`createTurn()` 不再是 runner 可调用的公共入口。turn identity 只能由
-`executeTurn()` 在接受有效 prompt 后创建。
+`createRuntimeSession()` 只返回 `RuntimeSession`，不把 `RuntimeSessionContext` 暴露给
+runner。`runAgent()`、`ModelRequestOptions`、`createDefaultTooling()` 和
+`createMcpManager()` 的参数都改为窄化后的 context 类型。这样 runner 无法在类型层调用
+`append()` 伪造 turn event，也无法分配 iteration 或 tool call。
+
+`createTurn()` 仅是实现类的 private method，不属于任一公开视图。turn identity 只能由
+`executeTurn()` 在接受有效 prompt 后创建。“runner 不再发送 turn event”由编译器约束，
+不只依赖代码约定。
 
 `executeTurn()` 的 Promise 语义保持和 `runAgent()` 一致：
 
@@ -254,6 +270,36 @@ dispose(reason: SessionDisposeReason): Promise<void> {
 
 第一次调用的 reason 生效。后续调用只返回原 promise，不改变 reason，也不重复发送
 `session.finished`。
+
+### 两阶段构造的封装
+
+RuntimeSession 和 tooling 存在有意的构造环：session 拥有 tooling，而 tooling 中的
+`ShellTaskManager` 需要 session context 发送事件。实现采用模块内两阶段构造，但不能把
+“挂资源”暴露成公共 API：
+
+```ts
+class DefaultRuntimeSession implements RuntimeSession {
+  private constructor(/* identity、event core 和纯值依赖 */) {}
+
+  static async create(/* input、dependencies */): Promise<RuntimeSession> {
+    const session = new DefaultRuntimeSession(/* ... */);
+    // 只在本方法内把 session.context 交给 tooling/MCP factory，逐步挂载资源。
+    // 全部成功并切到 ready 后，才以 RuntimeSession 窄接口返回。
+    return session;
+  }
+
+  private readonly context: RuntimeSessionContext = {
+    // 委托到 private identity/event methods
+  };
+}
+```
+
+`DefaultRuntimeSession` 不导出，constructor 为 private，资源字段和 attach 操作也保持
+private。模块只导出接口与 `createRuntimeSession()`。因此生产代码无法直接 `new`、无法拿到
+`initializing` 对象，也无法绕过 factory 构造一个缺少 tooling 或 MCP 状态的 session。
+
+测试不增加 public `createBareRuntimeSession()`；通过 factory dependencies 注入 no-op 或
+fake 资源，继续走相同的状态转换。
 
 ## 创建流程
 
@@ -349,6 +395,18 @@ sink 失败时，`session.finished` 可能无法落盘；factory 仍然必须尝
 `completed`、`failed` 和 `cancelled` 都提交 messages。取消时 agent loop 已补齐当前
 assistant tool calls 对应的 tool messages；保留它们可以维持 provider 协议上下文完整。
 
+model request 在产生 assistant message 前失败时，提交后的 messages 会以本 turn 的 user
+message 结尾。下一个 turn 再追加 user prompt 后，可能出现连续两条 user message。本阶段
+明确接受该结构，不插入虚假的 assistant message，也不丢弃失败 turn 的用户输入：
+
+```text
+system -> ... -> user(failed turn) -> user(next turn)
+```
+
+`AgentMessage` 和当前 OpenAI-compatible 出站映射都允许相邻的同 role message。若未来某个
+provider 明确拒绝该结构，应在对应 provider adapter 设计可见的规范化规则，不在
+RuntimeSession 中静默改写对话历史。
+
 只有 terminal event 写入成功后才提交 messages。如果 event infrastructure 失败，session
 进入 `faulted`，不允许下一个 turn 在“内存已前进、持久化事件未前进”的状态上继续。
 
@@ -387,10 +445,58 @@ dispose 在 active turn 期间发生时：
 
 ```ts
 type TurnCancellationSource = "user" | "session_dispose";
+
+class TurnCancelledError extends Error {
+  readonly source: TurnCancellationSource;
+
+  constructor(
+    source: TurnCancellationSource,
+    message = source === "user"
+      ? "Turn cancelled by the user."
+      : "Turn cancelled because the session is disposing.",
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "TurnCancelledError";
+    this.source = source;
+  }
+}
 ```
 
 用户 Esc 仍为 `user`；session 退出导致的取消使用 `session_dispose`。两者都不回滚已经发生
 的工具副作用。
+
+取消来源通过内部 `AbortSignal.reason` 传递，不增加第二条并行状态通道：
+
+```text
+external signal abort
+  -> internalController.abort(new TurnCancelledError("user", ...))
+
+session dispose
+  -> internalController.abort(new TurnCancelledError("session_dispose", ...))
+
+runAgent cancellation boundary
+  -> require signal.reason instanceof TurnCancelledError
+  -> cancellation.source = signal.reason.source
+```
+
+`executeTurn()` 必须把任意外部 abort reason 规范化为 source=`user` 的
+`TurnCancelledError`。agent loop 只接收内部 signal，因此在发现 aborted signal 却没有
+typed reason 时 fast-fail；不再像当前 `cancellation()` 一样硬编码 `"user"`，也不通过错误
+message 猜测来源。
+
+外部 signal 联动遵守以下细节：
+
+- 传入时已经 aborted：立即把 reason 转发给内部 controller；turn 仍按正常入口获得 identity
+  和 `turn.started`，随后在第一个 cancellation boundary 返回 `turn.cancelled`。
+- 传入时未 aborted：注册 `{ once: true }` listener。
+- turn 无论 completed、failed、cancelled 还是 reject，都在 `finally` 中显式移除 listener；
+  不能依赖 listener 只有触发后才自动移除。
+- 外部取消和 dispose 竞态时以内部 controller 第一次成功 abort 的 reason 为准，后到的
+  reason 不覆盖 source。
+
+UI 创建 user cancellation 时也改为 `new TurnCancelledError("user")`。dispose 不伪造用户
+Esc，而是直接以 `session_dispose` abort 同一个内部 controller。
 
 dispose 不设置一个独立的短超时。现有模型、网络、MCP 和前台 Bash 已经接受
 `AbortSignal`；如果以后发现某个资源不响应取消，应在该资源边界修复，而不是让 session
@@ -448,6 +554,29 @@ MCP 在 tooling 之后创建，因此先释放 MCP。`session.finished` 必须�
 `McpManager.dispose()` 自身也改为 idempotent，并返回缓存的 close promise。连接关闭错误
 不再逐个静默吞掉；manager 完成全部 close 尝试后把错误交给 RuntimeSession 汇总。
 
+### Faulted session 的终止
+
+`RuntimeSession.append()` 第一次遇到 event infrastructure failure 时，把对应的
+`RuntimeEventAppendError` 保存为不可覆盖的 `faultCause`。后续 event failure 不能替换这个
+最初原因。
+
+从 `faulted` 进入 dispose 时仍执行完整清理，并仍然尝试一次 `session.finished`。已知 sink
+损坏不是跳过 terminal event 的理由：某些瞬时错误可能已经恢复，而且 presentation sink
+仍可能收到事件。为了允许这次 best-effort 终止，内部 cleanup append 可以在 `faulted` 或
+`disposing` 状态运行；对外仍禁止新 turn。
+
+错误汇总规则为：
+
+1. `faultCause` 始终是最终错误列表第一项。
+2. 随后按实际发生顺序追加 MCP、tooling、`session.finished` 和 event close 错误。
+3. 只有 `faultCause` 时，dispose 以该原错误 reject。
+4. 还有任一清理错误时，dispose 以 `AggregateError` reject，且第一项仍是
+   `faultCause`。
+
+因此 `session.finished` 再次 append 失败会被保留为后续 cleanup error，但不得掩盖、替换
+或重新包装掉最初导致 session faulted 的错误。runner 汇总 execute 和 dispose 错误时同样
+保留最初 runtime error 为第一原因，不能让 finally 中的错误覆盖 try/catch 中的主错误。
+
 ## Runner 收敛
 
 ### One-shot
@@ -458,15 +587,18 @@ MCP 在 tooling 之后创建，因此先释放 MCP。`session.finished` 必须�
 read config
 create stdout/stderr presentation sink
 create RuntimeSession
+disposeReason = oneshot_complete
 try
   result = await session.executeTurn(...)
   completed 时打印 finalText
   根据 result 决定 exit code
-catch
+catch error
+  primaryError = error
+  disposeReason = runner_failed(error)
   向 stderr 输出 runtime/initialization error
   exit code = 1
 finally
-  await session?.dispose(oneshot_complete)
+  await session?.dispose(disposeReason)
   dispose 失败时 exit code = 1
 return exit code
 ```
@@ -474,8 +606,9 @@ return exit code
 runner 不再 import `runAgent`、`ObservationBuilder`、`createDefaultTooling`、MCP config 或
 MCP manager。
 
-不要在 `try` 中直接 `return` 后依赖 finally 覆盖错误。先保存 exit code，再执行 dispose；
-这样 cleanup failure 可以稳定地把结果改为失败并输出到 stderr。
+不要在 `try` 中直接 `return` 后依赖 finally 覆盖错误。先保存 exit code、dispose reason 和
+primary error，再执行 dispose；这样 cleanup failure 可以稳定地把结果改为失败，且错误
+汇总仍以 primary error 为第一项。
 
 ### TUI
 
@@ -518,7 +651,7 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 | Model/tool 预期失败 | 是 | turn 继续完成 terminal event | 返回 `RunAgentResult.failed` |
 | 用户取消 | 是 | 当前 turn；session 资源保留 | `turn.cancelled`，session 回到 ready |
 | Active turn 时 session 退出 | 是 | active turn、MCP、tooling | abort、等待、完整 dispose |
-| Event append 失败 | 可能 | 完整 RuntimeSession | session faulted，只允许 dispose |
+| Event append 失败 | 可能 | 完整 RuntimeSession | 保存首个 fault；dispose 仍尝试 finished，最终错误以原 fault 为首项 |
 | MCP dispose 失败 | 不适用 | 仍继续 tooling 和 session event | dispose reject AggregateError |
 | Tooling dispose 失败 | 不适用 | 仍尝试 session event | dispose reject AggregateError |
 
@@ -529,7 +662,10 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 - 保留已经落地的 identity、父子校验和 event sequence 逻辑。
 - 增加状态机、session messages、共享 model/tooling/observation 依赖。
 - 增加 `executeTurn()` 和 idempotent `dispose()`。
-- 隐藏 runner 可直接调用的 `createTurn()`。
+- 导出 runner-facing `RuntimeSession` 和 internal `RuntimeSessionContext` 两个窄接口。
+- 使用不导出的 `DefaultRuntimeSession`、private constructor 和同模块 factory 封装两阶段
+  构造。
+- 将 `createTurn()` 和资源 attach 保持为 private。
 - 增加 `RuntimeEventAppendError` 和 event failure 后的 faulted 状态。
 - 导出唯一的异步 `createRuntimeSession()` 生产入口。
 
@@ -538,12 +674,23 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 - 保持只负责单个 turn 的 iteration/tool loop。
 - 继续接收明确的 turn identity 和 initial messages。
 - 不发送 turn/session terminal event，不持有 session messages。
-- 支持 `session_dispose` cancellation source。
+- 从 typed `signal.reason` 读取 cancellation source。
 
 ### `src/agent/types.ts`
 
 - 将 `TurnCancellation.source` 扩展为 `user | session_dispose`。
 - 其他 identity 和 `RunAgentResult` 结构保持不变。
+
+### `src/agent/turn-cancellation.ts`
+
+- 让 `TurnCancelledError` 强制携带 `TurnCancellationSource`。
+- 增加 typed reason 的读取与校验 helper，不再把未知 abort reason 默认解释为 user。
+- 外部 signal 的未知 reason 只在 `executeTurn()` 边界规范化一次。
+
+### `src/model/model-client.ts` 与 model adapters
+
+- `ModelRequestOptions.identity.runtimeSession` 改为 `RuntimeSessionContext`。
+- 保持相邻同 role message 的现有出站映射，不在 adapter 外静默插入消息。
 
 ### `src/events/types.ts`
 
@@ -553,6 +700,7 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 ### `src/tools/registry.ts` 与 `src/tools/bash-task.ts`
 
 - `createDefaultTooling()` 的 `runtimeSession` 改为必填。
+- 参数类型改为 `RuntimeSessionContext`，工具层拿不到 `executeTurn()` 或 `dispose()`。
 - 删除隐式创建 RuntimeSession 的测试 fallback。
 - tooling/shutdown reason 接受完整 `SessionDisposeReason["type"]`。
 - 保留 `ShellTaskManager.shutdown()` 当前缓存 promise 的 idempotent 行为。
@@ -560,6 +708,7 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 ### `src/mcp/mcp-manager.ts`
 
 - manager 创建过程增加局部 rollback。
+- 接收 `RuntimeSessionContext` 而不是 runner-facing session。
 - `dispose()` 缓存 promise，并在尝试关闭全部连接后报告错误。
 - 保留单 server 连接失败的现有降级策略。
 
@@ -577,12 +726,13 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 
 建议作为一次连续变更完成，避免一条 runner 使用新生命周期、另一条仍使用旧生命周期：
 
-1. 增加 lifecycle state、dispose reason 和 `RuntimeEventAppendError`。
-2. 让 `createDefaultTooling()` 强制接收 RuntimeSession。
+1. 增加两个 API 视图、lifecycle state、dispose reason 和
+   `RuntimeEventAppendError`。
+2. 让 `createDefaultTooling()` 强制接收 `RuntimeSessionContext`。
 3. 让 MCP factory 具备局部 rollback 和 idempotent dispose。
 4. 增加 `createRuntimeSession()`，完成资源 acquisition/rollback。
 5. 把 turn terminal event 和 session messages 移入 `executeTurn()`。
-6. 接入 active turn dispose cancellation。
+6. 以 typed `AbortSignal.reason` 接入 user/dispose cancellation，并清理 signal listener。
 7. 将 one-shot runner 改成薄入口。
 8. 将 TUI runner 改成薄入口。
 9. 更新测试 helper、fixtures 和事件断言。
@@ -600,17 +750,32 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 - `session.started` 成功后的初始化失败会尝试
   `session.finished(initialization_failed)`；started 自身失败时不发送 finished。
 - 多个 rollback 步骤失败时全部步骤都执行，错误顺序确定。
+- 生产实现类不能直接构造，factory 返回前不会泄露 `initializing` session。
 
 ### Turn 执行
 
 - 连续两个 `executeTurn()` 共用 session，turn number 递增，iteration number 各自从 1
   开始。
 - 第二个 turn 收到第一个 turn 提交的 messages。
+- model request 在 assistant message 前失败后，下一个 turn 明确收到相邻的两条 user
+  message，顺序保持不变。
 - completed、failed、cancelled 分别只发送一个正确 terminal event。
 - failed 和 cancelled 结果同样提交协议完整的 messages。
 - 空 prompt 在创建 turn 和发送事件前 fast-fail。
 - 并发调用第二个 `executeTurn()` 立即失败，不分配 turn identity。
 - terminal event append 失败时不补发另一个 terminal event，session 进入 faulted。
+- runner-facing `RuntimeSession` 不能通过类型检查调用 `append()`、`createIteration()` 或
+  `createToolCall()`。
+
+### Cancellation reason
+
+- 外部 signal abort 产生 source=`user` 的 `turn.cancelled`。
+- active turn dispose 产生 source=`session_dispose` 的 `turn.cancelled`。
+- 传入时已经 aborted 的外部 signal 会立即转发，并在第一个 agent boundary 取消。
+- 外部取消和 dispose 竞态时，第一次 abort 的 source 保持不变。
+- completed、failed、cancelled 和 reject 路径都会移除外部 signal listener；大量连续 turn
+  不累积 listener。
+- agent loop 收到 aborted 但没有 typed `TurnCancelledError` 的内部 signal 时 fast-fail。
 
 ### Dispose
 
@@ -620,6 +785,8 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 - prompt history 或 render 失败后完整 session 被 dispose。
 - MCP dispose 失败时仍执行 tooling dispose 和 `session.finished`。
 - tooling dispose 失败时仍发送 `session.finished`。
+- faulted session 仍尝试一次 `session.finished`；再次写入失败时 AggregateError 第一项保持
+  原始 `faultCause`。
 - 两次 dispose 返回同一个 promise，只关闭资源和发送 terminal event 一次。
 - dispose 完成或 event fault 后不能执行新 turn。
 
@@ -634,13 +801,18 @@ PromptHistory 保持在 session 创建后加载。这样可以通过集成测试
 ## 验收标准
 
 - `runOneShot()` 和 `runTui()` 使用同一个 RuntimeSession factory 和 `executeTurn()`。
+- factory 只向 runner 返回窄接口；identity/event context 不暴露给 runner。
 - runtime 资源只有一个明确 owner，创建与释放顺序可以从代码直接读出。
-- factory 不会返回半初始化 session，任一步失败都会逆序清理已创建资源。
+- 实现类不可直接构造；factory 不会返回半初始化 session，任一步失败都会逆序清理已创建
+  资源。
 - Session messages 不再由 TUI runner 持有。
 - 每个 turn 有且只有一个 terminal event；event infrastructure failure 不伪装成 agent
   failure。
 - active turn 期间 dispose 会先取消并等待 turn，再关闭 session 资源。
+- user 和 session dispose cancellation 通过 typed `AbortSignal.reason` 准确进入事件，且
+  turn 结束后不遗留外部 signal listener。
 - `dispose()` 幂等，所有清理步骤都会尝试，单点失败不会跳过后续资源。
+- faulted dispose 不跳过 `session.finished`，最终错误也不会掩盖最初 fault。
 - `session.finished` 是 session 的最后一个生命周期事件，所有后台任务 terminal event 都在
   它之前。
 - 代码中 runner 不再出现重复的 default tooling、MCP、ObservationBuilder 或
