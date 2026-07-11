@@ -13,7 +13,7 @@ import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
-import { createUuidV7 } from "../ids/uuid-v7";
+import { RuntimeSession } from "../agent/runtime-session";
 import type {
   ReadSnapshotStore,
   ToolDefinition,
@@ -22,12 +22,14 @@ import type {
   ToolRawResult,
 } from "./types";
 import type { ToolCall } from "../agent/types";
-import type { EventSink } from "../events/event-sink";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
 
   register(tool: ToolExecutor): void {
+    if (this.tools.has(tool.definition.name)) {
+      throw new Error(`Tool already registered: ${tool.definition.name}.`);
+    }
     this.tools.set(tool.definition.name, tool);
   }
 
@@ -91,28 +93,30 @@ export type DefaultTooling = {
 
 export type BashToolingState = {
   cwd: string;
-  runId: string;
+  sessionId: string;
   workspaceRoot: string;
 };
 
 export function createDefaultTooling(options: {
   workspaceRoot: string;
-  runId?: string;
+  runtimeSession?: RuntimeSession;
   maxDisplayedBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
-  eventSink?: EventSink;
   taskStopGraceMs?: number;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
-  const runId = options.runId ?? createUuidV7();
+  const runtimeSession =
+    options.runtimeSession ??
+    new RuntimeSession({
+      async append() {},
+    });
   const cwdState = createCwdState(options.workspaceRoot);
   const taskManager = new ShellTaskManager({
     workspaceRoot: options.workspaceRoot,
-    runId,
     cwdState,
-    eventSink: options.eventSink,
+    runtimeSession,
     stopGraceMs: options.taskStopGraceMs,
   });
 
@@ -149,7 +153,6 @@ export function createDefaultTooling(options: {
   registry.register(
     createBashToolExecutor({
       workspaceRoot: options.workspaceRoot,
-      runId,
       cwdState,
       taskManager,
     }),
@@ -184,7 +187,7 @@ export function createDefaultTooling(options: {
       set cwd(value: string) {
         cwdState.cwd = value;
       },
-      runId,
+      sessionId: runtimeSession.sessionId,
       workspaceRoot: options.workspaceRoot,
     },
     async dispose(reason = "oneshot_complete") {

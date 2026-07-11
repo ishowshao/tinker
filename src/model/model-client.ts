@@ -1,21 +1,29 @@
-import type { AgentMessage } from "../agent/types";
+import type { AgentMessage, AssistantMessage, IterationIdentity } from "../agent/types";
+import type { RuntimeSession } from "../agent/runtime-session";
 import type { ToolDefinition } from "../tools/types";
 
 export interface ModelClient {
-  step(input: ModelStepInput, options: ModelStepOptions): Promise<ModelStepOutput>;
+  request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput>;
 }
 
-export type ModelStepOptions = {
+export type ModelRequestOptions = {
   signal: AbortSignal;
+  identity?: {
+    iteration: IterationIdentity;
+    runtimeSession: RuntimeSession;
+  };
 };
 
-export type ModelStepInput = {
+export type ModelRequestInput = {
   messages: AgentMessage[];
   tools: ToolDefinition[];
 };
 
-export type ModelStepOutput = {
-  message: AgentMessage;
+export type ModelRequestOutput = {
+  message: AssistantMessage;
   finishReason?: string;
   usage?: unknown;
   rawResponse?: unknown;

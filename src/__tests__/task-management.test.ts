@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
+import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import { ObservationBuilder } from "../observation/observation-builder";
@@ -20,14 +21,30 @@ const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
 };
 
-function createDefaultTooling(options: Parameters<typeof createDefaultToolingBase>[0]) {
-  const tooling = createDefaultToolingBase(options);
+function createDefaultTooling(
+  options: Omit<Parameters<typeof createDefaultToolingBase>[0], "runtimeSession"> & {
+    eventSink?: EventSink;
+  },
+) {
+  const { eventSink, ...toolingOptions } = options;
+  const testRuntime = createTestRuntime(eventSink);
+  const tooling = createDefaultToolingBase({
+    ...toolingOptions,
+    runtimeSession: testRuntime.runtimeSession,
+  });
   return {
     ...tooling,
     runtime: {
-      execute: (call: ToolCall, context: ToolExecutionContext = testToolContext) =>
-        tooling.runtime.execute(call, context),
+      execute: (
+        call: TestToolCallInput | ToolCall,
+        context: ToolExecutionContext = testToolContext,
+      ) =>
+        tooling.runtime.execute(
+          "sessionId" in call ? call : testRuntime.toolCall(call),
+          context,
+        ),
     },
+    testRuntime,
   };
 }
 
@@ -58,7 +75,7 @@ describe("background task management", () => {
 
       const invalidList = asTaskList(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "TaskList",
           args: { unexpected: true },
         }),
@@ -68,7 +85,7 @@ describe("background task management", () => {
 
       const invalidOutput = asTaskOutput(
         await tooling.runtime.execute({
-          id: "call_2",
+          providerToolCallId: "call_2",
           name: "TaskOutput",
           args: {},
         }),
@@ -78,7 +95,7 @@ describe("background task management", () => {
 
       const unknownStop = asTaskStop(
         await tooling.runtime.execute({
-          id: "call_3",
+          providerToolCallId: "call_3",
           name: "TaskStop",
           args: { task_id: "missing-task" },
         }),
@@ -102,7 +119,7 @@ describe("background task management", () => {
 
     try {
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Bash",
         args: { command: "echo foreground" },
       });
@@ -110,7 +127,7 @@ describe("background task management", () => {
 
       const background = asBash(
         await tooling.runtime.execute({
-          id: "call_2",
+          providerToolCallId: "call_2",
           name: "Bash",
           args: {
             command: "echo ready; sleep 0.05; echo done",
@@ -127,6 +144,11 @@ describe("background task management", () => {
         status: "running",
         backgroundReason: "requested",
         description: "Run short background task",
+        origin: {
+          sessionId: tooling.testRuntime.runtimeSession.sessionId,
+          providerToolCallId: "call_2",
+          name: "Bash",
+        },
       });
 
       const currentOutput = await waitForOutput(tooling, background.taskId, "ready");
@@ -139,7 +161,7 @@ describe("background task management", () => {
 
       const finalOutput = asTaskOutput(
         await tooling.runtime.execute({
-          id: "call_3",
+          providerToolCallId: "call_3",
           name: "TaskOutput",
           args: { task_id: background.taskId },
         }),
@@ -167,7 +189,7 @@ describe("background task management", () => {
     try {
       const background = asBash(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "sleep 30", timeout: 1 },
         }),
@@ -202,7 +224,7 @@ describe("background task management", () => {
     try {
       const background = asBash(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: {
             command: 'sleep 30 & child=$!; echo "parent=$$ child=$child"; wait',
@@ -247,7 +269,7 @@ describe("background task management", () => {
     try {
       const background = asBash(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: {
             command: "trap '' TERM; echo ready; while true; do sleep 1; done",
@@ -288,7 +310,7 @@ describe("background task management", () => {
       );
 
       const rejected = await tooling.runtime.execute({
-        id: "call_3",
+        providerToolCallId: "call_3",
         name: "Bash",
         args: { command: "echo too-late" },
       });
@@ -312,17 +334,21 @@ describe("background task management", () => {
 
     try {
       const background = await startBackgroundSleep(tooling, "call_1");
-      const listCall = { id: "call_2", name: "TaskList", args: {} };
+      const listCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_2",
+        name: "TaskList",
+        args: {},
+      });
       const list = await tooling.runtime.execute(listCall);
       expect(observations.build({ call: listCall, raw: list }).content).toContain(
         `taskId=${background.taskId}`,
       );
 
-      const stopCall = {
-        id: "call_3",
+      const stopCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_3",
         name: "TaskStop",
         args: { task_id: background.taskId },
-      };
+      });
       const stopped = await tooling.runtime.execute(stopCall);
       const stopObservation = observations.build({ call: stopCall, raw: stopped });
       expect(stopObservation.content).toContain("Task stopped.");
@@ -340,7 +366,7 @@ async function startBackgroundSleep(
 ): Promise<BashRawResult> {
   return asBash(
     await tooling.runtime.execute({
-      id: callId,
+      providerToolCallId: callId,
       name: "Bash",
       args: { command: "sleep 30", run_in_background: true },
     }),
@@ -350,7 +376,7 @@ async function startBackgroundSleep(
 async function listTasks(tooling: TestTooling): Promise<TaskListRawResult> {
   return asTaskList(
     await tooling.runtime.execute({
-      id: crypto.randomUUID(),
+      providerToolCallId: crypto.randomUUID(),
       name: "TaskList",
       args: {},
     }),
@@ -363,7 +389,7 @@ async function stopTask(
 ): Promise<TaskStopRawResult> {
   return asTaskStop(
     await tooling.runtime.execute({
-      id: crypto.randomUUID(),
+      providerToolCallId: crypto.randomUUID(),
       name: "TaskStop",
       args: { task_id: taskId },
     }),
@@ -381,7 +407,7 @@ async function waitForOutput(
   while (Date.now() < deadline) {
     last = asTaskOutput(
       await tooling.runtime.execute({
-        id: crypto.randomUUID(),
+        providerToolCallId: crypto.randomUUID(),
         name: "TaskOutput",
         args: { task_id: taskId },
       }),

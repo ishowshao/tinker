@@ -21,10 +21,10 @@ export type TimelineItem = {
 
 export type TuiState = {
   status: "idle" | "running" | "done" | "failed" | "cancelled";
-  runId?: string;
+  sessionId?: string;
   modelName?: string;
   workspaceRoot?: string;
-  runStartedAt?: number;
+  turnStartedAt?: number;
   workedForMs?: number;
   timeline: TimelineItem[];
   backgroundTasks: ShellTaskSnapshot[];
@@ -33,13 +33,13 @@ export type TuiState = {
 };
 
 export function createInitialTuiState(input: {
-  runId: string;
+  sessionId: string;
   modelName: string;
   workspaceRoot: string;
 }): TuiState {
   return {
     status: "idle",
-    runId: input.runId,
+    sessionId: input.sessionId,
     modelName: input.modelName,
     workspaceRoot: input.workspaceRoot,
     timeline: [],
@@ -49,45 +49,53 @@ export function createInitialTuiState(input: {
 
 export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
   switch (event.type) {
-    case "run.started":
+    case "session.started":
+      return {
+        ...state,
+        sessionId: event.sessionId,
+      };
+    case "turn.started":
       return {
         ...state,
         status: "running",
-        runId: event.runId,
-        runStartedAt: parseEventTimestamp(event.createdAt),
+        turnStartedAt: parseEventTimestamp(event.timestamp),
         workedForMs: undefined,
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, "run-started"),
+            id: timelineId(state, `${event.turnId}-started`),
             label: "prompt",
-            text: runPrompt(event.input),
+            text: event.data.userPrompt,
             status: "text",
           },
         ],
       };
-    case "model.step.started":
+    case "model.request.started":
       return {
         ...state,
         status: "running",
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, `model-${event.step}-started`),
-            ref: modelStepRef(event.step),
-            text: `model step ${event.step}`,
+            id: timelineId(state, `model-${event.iterationId}-started`),
+            ref: modelRequestRef(event.iterationId),
+            text: `model iteration ${event.iterationNumber}`,
             status: "running",
           },
         ],
       };
-    case "model.step.finished":
+    case "model.request.finished":
       return {
         ...state,
-        timeline: updateLastTimelineItem(state, modelStepRef(event.step), (item) => ({
-          ...item,
-          text: `model step ${event.step}${modelStepSummary(event.output)}`,
-          status: "ok",
-        })),
+        timeline: updateLastTimelineItem(
+          state,
+          modelRequestRef(event.iterationId),
+          (item) => ({
+            ...item,
+            text: `model iteration ${event.iterationNumber}${modelRequestSummary(event.data.output)}`,
+            status: "ok",
+          }),
+        ),
       };
     case "assistant.progress":
       return {
@@ -95,9 +103,9 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, `assistant-${event.step}-progress`),
+            id: timelineId(state, `assistant-${event.iterationId}-progress`),
             label: "assistant",
-            text: event.content,
+            text: event.data.content,
             status: "text",
           },
         ],
@@ -108,38 +116,50 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, `${event.call.id}-started`),
-            ref: toolCallRef(event.call.id),
-            text: toolCallSummary(event.call),
+            id: timelineId(state, `${event.toolCallId}-started`),
+            ref: toolCallRef(event.data.call.toolCallId),
+            text: toolCallSummary(event.data.call),
             status: "running",
-            ...toolStartedBashDetail(event.call),
+            ...toolStartedBashDetail(event.data.call),
           },
         ],
       };
     case "tool.raw_result":
       return {
         ...state,
-        timeline: updateLastTimelineItem(state, toolCallRef(event.call.id), (item) => ({
-          ...item,
-          text: toolRawResultSummary(event.call.name, event.call.args, event.raw),
-          ...toolRawResultDiff(event.raw),
-          ...toolRawResultBashDetail(event.call.name, event.raw),
-        })),
+        timeline: updateLastTimelineItem(
+          state,
+          toolCallRef(event.data.call.toolCallId),
+          (item) => ({
+            ...item,
+            text: toolRawResultSummary(
+              event.data.call.name,
+              event.data.call.args,
+              event.data.raw,
+            ),
+            ...toolRawResultDiff(event.data.raw),
+            ...toolRawResultBashDetail(event.data.call.name, event.data.raw),
+          }),
+        ),
       };
     case "tool.finished":
       return {
         ...state,
-        timeline: updateLastTimelineItem(state, toolCallRef(event.call.id), (item) => ({
-          ...item,
-          status: event.ok ? "ok" : "failed",
-        })),
+        timeline: updateLastTimelineItem(
+          state,
+          toolCallRef(event.data.call.toolCallId),
+          (item) => ({
+            ...item,
+            status: event.data.ok ? "ok" : "failed",
+          }),
+        ),
       };
     case "bash.task.backgrounded":
     case "bash.task.stopping":
     case "bash.task.finished":
       return {
         ...state,
-        backgroundTasks: upsertBackgroundTask(state.backgroundTasks, event.task),
+        backgroundTasks: upsertBackgroundTask(state.backgroundTasks, event.data.task),
       };
     case "mcp.server.connected":
       return {
@@ -147,9 +167,9 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, `mcp-${event.serverName}-connected`),
+            id: timelineId(state, `mcp-${event.data.serverName}-connected`),
             label: "mcp",
-            text: `mcp ${event.serverName} connected -> ${event.toolCount} tool${event.toolCount === 1 ? "" : "s"}`,
+            text: `mcp ${event.data.serverName} connected -> ${event.data.toolCount} tool${event.data.toolCount === 1 ? "" : "s"}`,
             status: "info",
           },
         ],
@@ -160,38 +180,38 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, `mcp-${event.serverName}-failed`),
+            id: timelineId(state, `mcp-${event.data.serverName}-failed`),
             label: "mcp",
-            text: `mcp ${event.serverName} failed -> ${event.error}`,
+            text: `mcp ${event.data.serverName} failed -> ${event.data.error}`,
             status: "failed",
           },
         ],
       };
-    case "run.finished":
+    case "turn.finished":
       return {
         ...state,
         status: "done",
-        workedForMs: runDurationMs(state.runStartedAt, event.finishedAt),
-        finalText: finalText(event.result),
-        timeline: appendFinalTimelineItem(state, event.result),
+        workedForMs: turnDurationMs(state.turnStartedAt, event.timestamp),
+        finalText: finalText(event.data.result),
+        timeline: appendFinalTimelineItem(state, event.data.result),
       };
-    case "run.cancelled":
+    case "turn.cancelled":
       return {
         ...state,
         status: "cancelled",
-        timeline: applyRunCancellation(state, event),
+        timeline: applyTurnCancellation(state, event),
       };
-    case "run.failed":
+    case "turn.failed":
       return {
         ...state,
         status: "failed",
-        error: event.error,
+        error: event.data.error,
         timeline: [
           ...state.timeline,
           {
-            id: timelineId(state, "run-failed"),
+            id: timelineId(state, `${event.turnId}-failed`),
             label: "error",
-            text: event.error,
+            text: event.data.error,
             status: "failed",
           },
         ],
@@ -201,9 +221,9 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
   }
 }
 
-function runDurationMs(startedAt: number | undefined, finishedAt: string): number {
+function turnDurationMs(startedAt: number | undefined, finishedAt: string): number {
   if (startedAt === undefined) {
-    throw new Error("run.finished received before run.started");
+    throw new Error("turn.finished received before turn.started");
   }
 
   return Math.max(0, parseEventTimestamp(finishedAt) - startedAt);
@@ -219,14 +239,14 @@ function parseEventTimestamp(value: string): number {
   return timestamp;
 }
 
-function applyRunCancellation(
+function applyTurnCancellation(
   state: TuiState,
-  event: Extract<AgentEvent, { type: "run.cancelled" }>,
+  event: Extract<AgentEvent, { type: "turn.cancelled" }>,
 ): TimelineItem[] {
-  if (event.cancellation.phase === "model_request") {
+  if (event.data.cancellation.phase === "model_request") {
     return updateLastTimelineItem(
       state,
-      modelStepRef(event.cancellation.step),
+      modelRequestRef(event.data.cancellation.iterationId),
       (item) => ({
         ...item,
         text: `${item.text} -> cancelled`,
@@ -236,12 +256,12 @@ function applyRunCancellation(
   }
 
   if (
-    event.cancellation.phase === "tool_execution" &&
-    event.cancellation.toolCallId !== undefined
+    event.data.cancellation.phase === "tool_execution" &&
+    event.data.cancellation.toolCallId !== undefined
   ) {
     return updateLastTimelineItem(
       state,
-      toolCallRef(event.cancellation.toolCallId),
+      toolCallRef(event.data.cancellation.toolCallId),
       (item) => ({
         ...item,
         text: `${item.text} -> cancelled`,
@@ -253,7 +273,7 @@ function applyRunCancellation(
   return [
     ...state.timeline,
     {
-      id: timelineId(state, "run-cancelled"),
+      id: timelineId(state, `${event.turnId}-cancelled`),
       text: "turn cancelled",
       status: "cancelled",
     },
@@ -298,15 +318,15 @@ function timelineId(state: TuiState, suffix: string): string {
   return `${state.timeline.length}-${suffix}`;
 }
 
-function modelStepRef(step: number): string {
-  return `model-step-${step}`;
+function modelRequestRef(iterationId: string | undefined): string {
+  return `model-request-${iterationId}`;
 }
 
 function toolCallRef(callId: string): string {
   return `tool-call-${callId}`;
 }
 
-function modelStepSummary(output: unknown): string {
+function modelRequestSummary(output: unknown): string {
   const outputRecord = asRecord(output);
   const message = asRecord(outputRecord.message);
   const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
@@ -316,19 +336,6 @@ function modelStepSummary(output: unknown): string {
   }
 
   return " -> assistant response";
-}
-
-function runPrompt(input: unknown): string {
-  if (
-    typeof input === "object" &&
-    input !== null &&
-    "userPrompt" in input &&
-    typeof input.userPrompt === "string"
-  ) {
-    return input.userPrompt;
-  }
-
-  return "run started";
 }
 
 function toolCallSummary(input: { name: string; args: unknown }): string {

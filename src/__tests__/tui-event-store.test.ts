@@ -1,16 +1,210 @@
 import { describe, expect, test } from "bun:test";
-import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
+import {
+  applyAgentEvent as applyAgentEventCore,
+  createInitialTuiState,
+  type TuiState,
+} from "../tui/event-store";
+import type { AgentEvent } from "../events/types";
+import type { ToolCall } from "../agent/types";
+import { createTestRuntime } from "./test-runtime";
+
+const testRuntime = createTestRuntime();
+const toolCalls = new Map<string, ReturnType<typeof testRuntime.toolCall>>();
+let eventSequence = 0;
+
+type TestEventInput = Record<string, unknown> & { type: string };
+
+function applyAgentEvent(state: TuiState, input: TestEventInput): TuiState {
+  return applyAgentEventCore(state, testEvent(input));
+}
+
+function testEvent(input: TestEventInput): AgentEvent {
+  eventSequence += 1;
+  const base = {
+    sessionId: testRuntime.runtimeSession.sessionId,
+    eventSequence,
+    timestamp:
+      stringValue(input.createdAt) ??
+      stringValue(input.finishedAt) ??
+      stringValue(input.cancelledAt) ??
+      "2026-07-11T00:00:00.000Z",
+  };
+
+  if (input.type === "session.started") {
+    return {
+      ...base,
+      type: "session.started",
+      data: {
+        workspaceRoot: "/tmp/workspace",
+        model: "model",
+        maxIterations: 100,
+        includeReasoningContent: false,
+      },
+    };
+  }
+  if (input.type === "turn.started") {
+    const promptInput = recordValue(input.input);
+    return {
+      ...base,
+      ...testRuntime.turn,
+      type: "turn.started",
+      data: { userPrompt: stringValue(promptInput.userPrompt) ?? "prompt" },
+    };
+  }
+  if (input.type === "model.request.started") {
+    return {
+      ...base,
+      ...testRuntime.iteration,
+      type: "model.request.started",
+      data: {},
+    };
+  }
+  if (input.type === "model.request.finished") {
+    return {
+      ...base,
+      ...testRuntime.iteration,
+      type: "model.request.finished",
+      data: { output: input.output },
+    } as unknown as AgentEvent;
+  }
+  if (input.type === "assistant.progress") {
+    return {
+      ...base,
+      ...testRuntime.iteration,
+      type: "assistant.progress",
+      data: { content: stringValue(input.content) ?? "" },
+    };
+  }
+  if (
+    input.type === "tool.started" ||
+    input.type === "tool.raw_result" ||
+    input.type === "tool.finished" ||
+    input.type === "tool.observation"
+  ) {
+    const call = testToolCall(input.call);
+    return {
+      ...base,
+      ...call,
+      type: input.type,
+      data: {
+        call,
+        raw: input.raw,
+        ok: input.ok,
+        observation: input.observation,
+      },
+    } as unknown as AgentEvent;
+  }
+  if (input.type.startsWith("bash.task.")) {
+    const task = recordValue(input.task);
+    const call =
+      "origin" in task
+        ? testToolCall(task.origin)
+        : testToolCall({
+            providerToolCallId: "background-origin",
+            name: "Bash",
+            args: {},
+          });
+    return {
+      ...base,
+      ...call,
+      type: input.type,
+      data: { task: { ...task, origin: call } },
+    } as unknown as AgentEvent;
+  }
+  if (input.type === "turn.finished") {
+    return {
+      ...base,
+      ...testRuntime.turn,
+      type: "turn.finished",
+      data: { result: input.result },
+    } as AgentEvent;
+  }
+  if (input.type === "turn.cancelled") {
+    const cancellation = recordValue(input.cancellation);
+    const providerToolCallId = stringValue(cancellation.toolCallId);
+    const toolName = stringValue(cancellation.toolName);
+    const cancelledCall =
+      providerToolCallId === undefined
+        ? undefined
+        : [...toolCalls.values()].find(
+            (call) =>
+              call.providerToolCallId === providerToolCallId &&
+              (toolName === undefined || call.name === toolName),
+          );
+    return {
+      ...base,
+      ...testRuntime.iteration,
+      type: "turn.cancelled",
+      data: {
+        cancellation: {
+          ...cancellation,
+          iterationId: testRuntime.iteration.iterationId,
+          iterationNumber: numberValue(cancellation.iterationNumber) ?? 1,
+          toolCallId: cancelledCall?.toolCallId,
+        },
+      },
+    } as AgentEvent;
+  }
+  if (input.type === "turn.failed") {
+    return {
+      ...base,
+      ...testRuntime.turn,
+      type: "turn.failed",
+      data: { error: stringValue(input.error) ?? "failed" },
+    };
+  }
+  throw new Error(`Unsupported test event: ${input.type}`);
+}
+
+function testToolCall(value: unknown): ToolCall {
+  const input = recordValue(value);
+  if (typeof input.toolCallId === "string") {
+    return input as ToolCall;
+  }
+  const providerToolCallId = stringValue(input.providerToolCallId) ?? "provider-call";
+  const name = stringValue(input.name) ?? "TestTool";
+  const key = `${providerToolCallId}:${name}:${JSON.stringify(input.args)}`;
+  const existing = toolCalls.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const call = testRuntime.toolCall({
+    providerToolCallId,
+    name,
+    args: input.args,
+  });
+  toolCalls.set(key, call);
+  return call;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
 
 describe("tui event store", () => {
   test("tracks background task lifecycle outside the agent timeline", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
     const task = {
       taskId: "task-1",
-      runId: "run-1",
+      origin: testRuntime.toolCall({
+        providerToolCallId: "task-origin",
+        name: "Bash",
+        args: {},
+      }),
       command: "bun run dev",
       description: "Start development server",
       status: "running" as const,
@@ -51,38 +245,38 @@ describe("tui event store", () => {
 
   test("summarizes task management tool results", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
-    const listCall = { id: "call_1", name: "TaskList", args: {} };
+    const listCall = { providerToolCallId: "call_1", name: "TaskList", args: {} };
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 1,
+      iterationNumber: 1,
       call: listCall,
     });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call: listCall,
       raw: { ok: true, tasks: [{}, {}], runningCount: 1 },
     });
     expect(state.timeline.at(-1)?.text).toBe("TaskList -> 2 tasks, 1 running");
 
     const outputCall = {
-      id: "call_2",
+      providerToolCallId: "call_2",
       name: "TaskOutput",
       args: { task_id: "task-1" },
     };
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 1,
+      iterationNumber: 1,
       call: outputCall,
     });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call: outputCall,
       raw: {
         ok: true,
@@ -101,14 +295,14 @@ describe("tui event store", () => {
 
   test("tracks run, tool, final and failure state", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
-      type: "run.started",
-      runId: "run-1",
+      type: "turn.started",
+      sessionId: "run-1",
       createdAt: "2026-07-06T00:00:00.000Z",
       input: {},
     });
@@ -116,20 +310,28 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 1,
-      call: { id: "call_1", name: "Read", args: { file_path: "README.md" } },
+      iterationNumber: 1,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Read",
+        args: { file_path: "README.md" },
+      },
     });
     state = applyAgentEvent(state, {
       type: "tool.finished",
-      step: 1,
-      call: { id: "call_1", name: "Read", args: { file_path: "README.md" } },
+      iterationNumber: 1,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Read",
+        args: { file_path: "README.md" },
+      },
       ok: true,
     });
     expect(state.timeline.at(-1)?.text).toContain("README.md");
     expect(state.timeline.at(-1)?.status).toBe("ok");
 
     state = applyAgentEvent(state, {
-      type: "run.finished",
+      type: "turn.finished",
       finishedAt: "2026-07-06T00:03:27.000Z",
       result: { status: "completed", finalText: "done", messages: [] },
     });
@@ -141,7 +343,7 @@ describe("tui event store", () => {
     expect(state.timeline.at(-1)?.status).toBe("text");
 
     state = applyAgentEvent(state, {
-      type: "run.failed",
+      type: "turn.failed",
       error: "failed",
     });
     expect(state.status).toBe("failed");
@@ -152,25 +354,25 @@ describe("tui event store", () => {
 
   test("starts a new prompt while preserving previous final answers", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
-      type: "run.started",
-      runId: "run-1",
+      type: "turn.started",
+      sessionId: "run-1",
       createdAt: "2026-07-06T00:00:00.000Z",
       input: { userPrompt: "first" },
     });
     state = applyAgentEvent(state, {
-      type: "run.finished",
+      type: "turn.finished",
       finishedAt: "2026-07-06T00:00:30.000Z",
       result: { status: "completed", finalText: "first done", messages: [] },
     });
     state = applyAgentEvent(state, {
-      type: "run.started",
-      runId: "run-1",
+      type: "turn.started",
+      sessionId: "run-1",
       createdAt: "2026-07-06T00:01:00.000Z",
       input: { userPrompt: "second" },
     });
@@ -192,24 +394,24 @@ describe("tui event store", () => {
 
   test("records only the terminal cancelled state from events", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
-      type: "model.step.started",
-      step: 1,
+      type: "model.request.started",
+      iterationNumber: 1,
     });
     expect(state.status).toBe("running");
 
     state = applyAgentEvent(state, {
-      type: "run.cancelled",
+      type: "turn.cancelled",
       cancelledAt: "2026-07-10T00:00:00.000Z",
       cancellation: {
         source: "user",
         phase: "model_request",
-        step: 1,
+        iterationNumber: 1,
       },
     });
 
@@ -219,16 +421,20 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 2,
-      call: { id: "call_1", name: "Bash", args: { command: "sleep 30" } },
+      iterationNumber: 2,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Bash",
+        args: { command: "sleep 30" },
+      },
     });
     state = applyAgentEvent(state, {
-      type: "run.cancelled",
+      type: "turn.cancelled",
       cancelledAt: "2026-07-10T00:00:01.000Z",
       cancellation: {
         source: "user",
         phase: "tool_execution",
-        step: 2,
+        iterationNumber: 2,
         toolCallId: "call_1",
         toolName: "Bash",
       },
@@ -239,36 +445,44 @@ describe("tui event store", () => {
 
   test("updates model and tool timeline items with useful summaries", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
-      type: "model.step.started",
-      step: 1,
+      type: "model.request.started",
+      iterationNumber: 1,
     });
     state = applyAgentEvent(state, {
-      type: "model.step.finished",
-      step: 1,
+      type: "model.request.finished",
+      iterationNumber: 1,
       output: {
         message: {
           role: "assistant",
           toolCalls: [
-            { id: "call_1", name: "Glob", args: { pattern: "**/*.test.ts" } },
-            { id: "call_2", name: "Glob", args: { pattern: "**/*.test.tsx" } },
+            {
+              providerToolCallId: "call_1",
+              name: "Glob",
+              args: { pattern: "**/*.test.ts" },
+            },
+            {
+              providerToolCallId: "call_2",
+              name: "Glob",
+              args: { pattern: "**/*.test.tsx" },
+            },
           ],
         },
       },
     });
 
     expect(state.timeline).toHaveLength(1);
-    expect(state.timeline[0]?.text).toBe("model step 1 -> 2 tool calls");
+    expect(state.timeline[0]?.text).toBe("model iteration 1 -> 2 tool calls");
     expect(state.timeline[0]?.status).toBe("ok");
 
     state = applyAgentEvent(state, {
       type: "assistant.progress",
-      step: 1,
+      iterationNumber: 1,
       content: "I will inspect the matching tests.",
     });
     expect(state.timeline).toHaveLength(2);
@@ -280,19 +494,31 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 1,
-      call: { id: "call_1", name: "Glob", args: { pattern: "**/*.test.ts" } },
+      iterationNumber: 1,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Glob",
+        args: { pattern: "**/*.test.ts" },
+      },
     });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Glob", args: { pattern: "**/*.test.ts" } },
+      iterationNumber: 1,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Glob",
+        args: { pattern: "**/*.test.ts" },
+      },
       raw: { ok: true, pattern: "**/*.test.ts", matchCount: 5, matches: [] },
     });
     state = applyAgentEvent(state, {
       type: "tool.finished",
-      step: 1,
-      call: { id: "call_1", name: "Glob", args: { pattern: "**/*.test.ts" } },
+      iterationNumber: 1,
+      call: {
+        providerToolCallId: "call_1",
+        name: "Glob",
+        args: { pattern: "**/*.test.ts" },
+      },
       ok: true,
     });
 
@@ -303,23 +529,23 @@ describe("tui event store", () => {
 
   test("summarizes Grep tool calls per output mode", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
       type: "tool.started",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
     });
     expect(state.timeline.at(-1)?.text).toBe("Grep foo");
     expect(state.timeline.at(-1)?.status).toBe("running");
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
         ok: true,
         pattern: "foo",
@@ -332,8 +558,8 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
         ok: true,
         pattern: "foo",
@@ -347,8 +573,8 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
         ok: true,
         pattern: "foo",
@@ -362,8 +588,8 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, {
       type: "tool.finished",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       ok: true,
     });
     expect(state.timeline.at(-1)?.status).toBe("ok");
@@ -373,24 +599,24 @@ describe("tui event store", () => {
 describe("bash detail in timeline", () => {
   test("attaches the command on tool.started and the output preview on raw result", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     const call = {
-      id: "call_1",
+      providerToolCallId: "call_1",
       name: "Bash",
       args: { command: "git status", description: "Show working tree status" },
     };
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     expect(state.timeline.at(-1)?.text).toBe("Bash Show working tree status");
     expect(state.timeline.at(-1)?.bash).toEqual({ command: "git status" });
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: true,
@@ -416,18 +642,22 @@ describe("bash detail in timeline", () => {
 
   test("caps successful output at 5 tail lines and reports omitted lines", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
-    const call = { id: "call_1", name: "Bash", args: { command: "bun test" } };
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Bash",
+      args: { command: "bun test" },
+    };
     const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: true,
@@ -454,18 +684,22 @@ describe("bash detail in timeline", () => {
 
   test("widens the output preview to 15 tail lines on failure", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
-    const call = { id: "call_1", name: "Bash", args: { command: "bun test" } };
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Bash",
+      args: { command: "bun test" },
+    };
     const lines = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`);
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: false,
@@ -487,17 +721,21 @@ describe("bash detail in timeline", () => {
 
   test("strips ANSI escapes and control characters from the output preview", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
-    const call = { id: "call_1", name: "Bash", args: { command: "ls" } };
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Bash",
+      args: { command: "ls" },
+    };
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: true,
@@ -517,17 +755,21 @@ describe("bash detail in timeline", () => {
 
   test("keeps the started command when the raw result carries no bash detail", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
-    const call = { id: "call_1", name: "Bash", args: { command: "false" } };
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Bash",
+      args: { command: "false" },
+    };
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: false,
@@ -543,13 +785,13 @@ describe("bash detail in timeline", () => {
 describe("edit diff in timeline", () => {
   test("attaches diff hunks and change counts from Edit raw results", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     const call = {
-      id: "call_1",
+      providerToolCallId: "call_1",
       name: "Edit",
       args: { file_path: "notes.txt" },
     };
@@ -563,10 +805,10 @@ describe("edit diff in timeline", () => {
       },
     ];
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: { ok: true, filePath: "notes.txt", patch, patchTruncated: false },
     });
@@ -578,21 +820,21 @@ describe("edit diff in timeline", () => {
 
   test("marks new files in Write summaries", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "run-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     const call = {
-      id: "call_1",
+      providerToolCallId: "call_1",
       name: "Write",
       args: { file_path: "fresh.txt" },
     };
 
-    state = applyAgentEvent(state, { type: "tool.started", step: 1, call });
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
-      step: 1,
+      iterationNumber: 1,
       call,
       raw: {
         ok: true,

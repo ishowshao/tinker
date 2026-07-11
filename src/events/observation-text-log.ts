@@ -20,56 +20,61 @@ export class ObservationTextLog implements EventSink {
 
 function renderObservationLogBlock(event: AgentEvent): string | undefined {
   switch (event.type) {
-    case "run.started":
-      return renderRunStarted(event);
+    case "session.started":
+      return renderSessionStarted(event);
+    case "turn.started":
+      return renderTurnStarted(event);
     case "assistant.progress":
       return renderAssistantProgress(event);
     case "tool.observation":
       return renderToolObservation(event);
-    case "run.finished":
-      return renderRunFinished(event.result);
-    case "run.cancelled":
-      return renderRunCancelled(event);
-    case "run.failed":
-      return renderRunFailed(event.error);
+    case "turn.finished":
+      return renderTurnFinished(event.data.result);
+    case "turn.cancelled":
+      return renderTurnCancelled(event);
+    case "turn.failed":
+      return renderTurnFailed(event.data.error);
     default:
       return undefined;
   }
 }
 
-function renderRunStarted(event: Extract<AgentEvent, { type: "run.started" }>): string {
-  const input = asRecord(event.input);
-  const prompt = stringProperty(input, "userPrompt");
-  const workspaceRoot = stringProperty(input, "workspaceRoot");
-  const model = stringProperty(input, "model");
-  const maxSteps = numberProperty(input, "maxSteps");
-
+function renderSessionStarted(
+  event: Extract<AgentEvent, { type: "session.started" }>,
+): string {
   return [
-    `# Tinker Run ${event.runId}`,
+    `# Tinker Session ${event.sessionId}`,
     "",
-    `Started: ${event.createdAt}`,
-    workspaceRoot === undefined ? undefined : `Workspace: ${workspaceRoot}`,
-    model === undefined ? undefined : `Model: ${model}`,
-    maxSteps === undefined ? undefined : `Max steps: ${maxSteps}`,
-    "",
-    "## Prompt",
-    "",
-    prompt ?? "(prompt unavailable)",
+    `Started: ${event.timestamp}`,
+    `Workspace: ${event.data.workspaceRoot}`,
+    `Model: ${event.data.model}`,
+    `Max iterations: ${event.data.maxIterations}`,
     "",
     "---",
     "",
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
+  ].join("\n");
+}
+
+function renderTurnStarted(
+  event: Extract<AgentEvent, { type: "turn.started" }>,
+): string {
+  return [
+    `## Turn ${event.turnNumber ?? ""} - Prompt`,
+    "",
+    event.data.userPrompt,
+    "",
+    "---",
+    "",
+  ].join("\n");
 }
 
 function renderAssistantProgress(
   event: Extract<AgentEvent, { type: "assistant.progress" }>,
 ): string {
   return [
-    "## Step " + event.step + " - Assistant",
+    `## Iteration ${event.iterationId} - Assistant`,
     "",
-    event.content,
+    event.data.content,
     "",
     "---",
     "",
@@ -80,18 +85,18 @@ function renderToolObservation(
   event: Extract<AgentEvent, { type: "tool.observation" }>,
 ): string {
   return [
-    `## Step ${event.step} - ${event.call.name}`,
+    `## Iteration ${event.iterationId} - ${event.data.call.name}`,
     "",
-    toolCallSummary(event.call),
+    toolCallSummary(event.data.call),
     "",
-    observationContent(event.observation),
+    observationContent(event.data.observation),
     "",
     "---",
     "",
   ].join("\n");
 }
 
-function renderRunFinished(result: unknown): string {
+function renderTurnFinished(result: unknown): string {
   const final = finalText(result);
 
   return [
@@ -102,25 +107,25 @@ function renderRunFinished(result: unknown): string {
   ].join("\n");
 }
 
-function renderRunFailed(error: string): string {
+function renderTurnFailed(error: string): string {
   return ["## Failed", "", error, ""].join("\n");
 }
 
-function renderRunCancelled(
-  event: Extract<AgentEvent, { type: "run.cancelled" }>,
+function renderTurnCancelled(
+  event: Extract<AgentEvent, { type: "turn.cancelled" }>,
 ): string {
   return [
     "## Cancelled",
     "",
-    `Cancelled: ${event.cancelledAt}`,
-    `Phase: ${event.cancellation.phase}`,
-    `Step: ${event.cancellation.step}`,
-    event.cancellation.toolName === undefined
+    `Cancelled: ${event.timestamp}`,
+    `Phase: ${event.data.cancellation.phase}`,
+    `Iteration: ${event.data.cancellation.iterationNumber}`,
+    event.data.cancellation.toolName === undefined
       ? undefined
-      : `Tool: ${event.cancellation.toolName}`,
-    event.cancellation.toolCallId === undefined
+      : `Tool: ${event.data.cancellation.toolName}`,
+    event.data.cancellation.toolCallId === undefined
       ? undefined
-      : `Call ID: ${event.cancellation.toolCallId}`,
+      : `Call ID: ${event.data.cancellation.toolCallId}`,
     "",
   ]
     .filter((line): line is string => line !== undefined)
@@ -134,7 +139,7 @@ function toolCallSummary(call: ToolCall): string {
     const description = stringProperty(args, "description");
     const command = stringProperty(args, "command");
     return [
-      `Call ID: ${call.id}`,
+      `Call ID: ${call.toolCallId}`,
       description === undefined ? undefined : `Description: ${description}`,
       command === undefined ? undefined : `Command: ${command}`,
     ]
@@ -145,7 +150,7 @@ function toolCallSummary(call: ToolCall): string {
   if (call.name === "TaskOutput" || call.name === "TaskStop") {
     const taskId = stringProperty(args, "task_id");
     return [
-      `Call ID: ${call.id}`,
+      `Call ID: ${call.toolCallId}`,
       taskId === undefined ? undefined : `Task ID: ${taskId}`,
     ]
       .filter((line): line is string => line !== undefined)
@@ -155,7 +160,7 @@ function toolCallSummary(call: ToolCall): string {
   const filePath = stringProperty(args, "file_path");
   const pattern = stringProperty(args, "pattern");
   return [
-    `Call ID: ${call.id}`,
+    `Call ID: ${call.toolCallId}`,
     filePath === undefined ? undefined : `Path: ${filePath}`,
     pattern === undefined ? undefined : `Pattern: ${pattern}`,
   ]
@@ -191,11 +196,4 @@ function stringProperty(
   property: string,
 ): string | undefined {
   return typeof record[property] === "string" ? record[property] : undefined;
-}
-
-function numberProperty(
-  record: Record<string, unknown>,
-  property: string,
-): number | undefined {
-  return typeof record[property] === "number" ? record[property] : undefined;
 }

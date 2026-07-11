@@ -16,33 +16,47 @@ export class StdoutEventPrinter implements EventSink {
 
   async append(event: AgentEvent): Promise<void> {
     switch (event.type) {
-      case "run.started":
-        this.stdout.write(`run.started runId=${event.runId}\n`);
+      case "session.started":
+        this.stdout.write(`session.started sessionId=${event.sessionId}\n`);
         break;
-      case "model.step.started":
-        this.stdout.write(`model.step.started step=${event.step}\n`);
+      case "turn.started":
+        this.stdout.write(
+          `turn.started turn=${event.turnNumber} turnId=${event.turnId}\n`,
+        );
         break;
-      case "model.step.finished":
-        this.stdout.write(`model.step.finished step=${event.step}\n`);
+      case "agent.iteration.started":
+        this.stdout.write(
+          `agent.iteration.started iteration=${event.iterationNumber} iterationId=${event.iterationId}\n`,
+        );
+        break;
+      case "model.request.started":
+        this.stdout.write(`model.request.started iteration=${event.iterationNumber}\n`);
+        break;
+      case "model.request.finished":
+        this.stdout.write(
+          `model.request.finished iteration=${event.iterationNumber}\n`,
+        );
         break;
       case "assistant.progress":
-        this.stdout.write(`assistant.progress step=${event.step}\n${event.content}\n`);
+        this.stdout.write(
+          `assistant.progress iteration=${event.iterationNumber}\n${event.data.content}\n`,
+        );
         break;
       case "tool.started":
-        this.stdout.write(formatToolLine("tool.started", event.call));
+        this.stdout.write(formatToolLine("tool.started", event.data.call));
         break;
       case "tool.raw_result": {
-        const diff = formatDiff(event.call, event.raw);
+        const diff = formatDiff(event.data.call, event.data.raw);
         if (diff !== undefined) {
           this.stdout.write(diff);
         }
 
-        const bash = formatBashResult(event.call, event.raw);
+        const bash = formatBashResult(event.data.call, event.data.raw);
         if (bash !== undefined) {
           this.stdout.write(bash);
         }
 
-        const task = formatTaskResult(event.call, event.raw);
+        const task = formatTaskResult(event.data.call, event.data.raw);
         if (task !== undefined) {
           this.stdout.write(task);
         }
@@ -50,50 +64,55 @@ export class StdoutEventPrinter implements EventSink {
       }
       case "tool.finished":
         this.stdout.write(
-          `${formatToolLine("tool.finished", event.call).trimEnd()} ok=${event.ok}\n`,
+          `${formatToolLine("tool.finished", event.data.call).trimEnd()} ok=${event.data.ok}\n`,
         );
         break;
       case "mcp.server.connected":
         this.stdout.write(
-          `mcp.server.connected name=${event.serverName} tools=${event.toolCount}\n`,
+          `mcp.server.connected name=${event.data.serverName} tools=${event.data.toolCount}\n`,
         );
         break;
       case "bash.task.backgrounded":
         this.stdout.write(
-          `bash.task.backgrounded task=${event.task.taskId} status=${event.task.status}\n`,
+          `bash.task.backgrounded task=${event.data.task.taskId} status=${event.data.task.status}\n`,
         );
         break;
       case "bash.task.stopping":
         this.stdout.write(
-          `bash.task.stopping task=${event.task.taskId} status=${event.task.status}\n`,
+          `bash.task.stopping task=${event.data.task.taskId} status=${event.data.task.status}\n`,
         );
         break;
       case "bash.task.finished":
         this.stdout.write(
-          `bash.task.finished task=${event.task.taskId} status=${event.task.status}${
-            event.task.exitCode === undefined ? "" : ` exit=${event.task.exitCode}`
-          }${event.task.signal === undefined ? "" : ` signal=${event.task.signal}`}\n`,
+          `bash.task.finished task=${event.data.task.taskId} status=${event.data.task.status}${
+            event.data.task.exitCode === undefined
+              ? ""
+              : ` exit=${event.data.task.exitCode}`
+          }${event.data.task.signal === undefined ? "" : ` signal=${event.data.task.signal}`}\n`,
         );
         break;
       case "mcp.server.failed":
         this.stderr.write(
-          `mcp.server.failed name=${event.serverName} error=${event.error}\n`,
+          `mcp.server.failed name=${event.data.serverName} error=${event.data.error}\n`,
         );
         break;
-      case "run.finished":
-        this.stdout.write(`run.finished status=${resultStatus(event.result)}\n`);
+      case "turn.finished":
+        this.stdout.write(`turn.finished status=${resultStatus(event.data.result)}\n`);
         break;
-      case "run.cancelled":
+      case "turn.cancelled":
         this.stdout.write(
-          `run.cancelled phase=${event.cancellation.phase} step=${event.cancellation.step}${
-            event.cancellation.toolName === undefined
+          `turn.cancelled phase=${event.data.cancellation.phase} iteration=${event.data.cancellation.iterationNumber}${
+            event.data.cancellation.toolName === undefined
               ? ""
-              : ` tool=${event.cancellation.toolName}`
+              : ` tool=${event.data.cancellation.toolName}`
           }\n`,
         );
         break;
-      case "run.failed":
-        this.stderr.write(`run.failed error=${event.error}\n`);
+      case "turn.failed":
+        this.stderr.write(`turn.failed error=${event.data.error}\n`);
+        break;
+      case "session.finished":
+        this.stdout.write(`session.finished reason=${event.data.reason}\n`);
         break;
       default:
         break;

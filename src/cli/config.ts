@@ -4,10 +4,11 @@ import { FakeModelClient } from "../model/fake-model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import { createUuidV7 } from "../ids/uuid-v7";
+import type { SessionId } from "../ids/runtime-id";
 
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_MODEL = "deepseek-v4-flash";
-export const DEFAULT_MAX_STEPS = 100;
+export const DEFAULT_MAX_ITERATIONS = 100;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
 
 export const SYSTEM_PROMPT = (
@@ -45,23 +46,27 @@ Bash and TaskOutput return outputFilePath. Use Read on outputFilePath when you n
 When you are done, respond with a concise summary of what you did.`;
 
 export type RunnerConfig = {
-  runId: string;
+  sessionId: SessionId;
   workspaceRoot: string;
   modelName: string;
-  maxSteps: number;
+  maxIterations: number;
   includeReasoningContent: boolean;
 };
 
 export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerConfig {
   return {
-    runId: overrides.runId ?? createUuidV7(),
+    sessionId: overrides.sessionId ?? (createUuidV7() as SessionId),
     workspaceRoot: path.resolve(
       overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
     ),
     modelName: overrides.modelName ?? process.env.TINKER_MODEL ?? DEFAULT_MODEL,
-    maxSteps:
-      overrides.maxSteps ??
-      parsePositiveInteger(process.env.TINKER_MAX_STEPS, DEFAULT_MAX_STEPS),
+    maxIterations:
+      overrides.maxIterations ??
+      parsePositiveInteger(
+        process.env.TINKER_MAX_ITERATIONS,
+        DEFAULT_MAX_ITERATIONS,
+        "TINKER_MAX_ITERATIONS",
+      ),
     includeReasoningContent:
       overrides.includeReasoningContent ??
       parseBoolean(
@@ -108,25 +113,36 @@ export function createWebFetchRefinerFromEnv(mainModelName: string): Refiner {
   });
 }
 
-export function eventLogPath(workspaceRoot: string, runId: string): string {
-  return path.join(workspaceRoot, ".tinker", "runs", `${runId}.jsonl`);
+export function eventLogPath(workspaceRoot: string, sessionId: SessionId): string {
+  return path.join(workspaceRoot, ".tinker", "sessions", sessionId, "events.jsonl");
 }
 
-export function observationLogPath(workspaceRoot: string, runId: string): string {
-  return path.join(workspaceRoot, ".tinker", "runs", `${runId}.observations.md`);
+export function observationLogPath(
+  workspaceRoot: string,
+  sessionId: SessionId,
+): string {
+  return path.join(workspaceRoot, ".tinker", "sessions", sessionId, "observations.md");
 }
 
 export function promptHistoryPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, ".tinker", "prompt-history.jsonl");
 }
 
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
+function parsePositiveInteger(
+  value: string | undefined,
+  fallback: number,
+  name: string,
+): number {
   if (value === undefined) {
     return fallback;
   }
 
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer; received ${value}`);
+  }
+
+  return parsed;
 }
 
 function parseBoolean(

@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import type {
   ModelClient,
-  ModelStepInput,
-  ModelStepOptions,
-  ModelStepOutput,
+  ModelRequestInput,
+  ModelRequestOptions,
+  ModelRequestOutput,
 } from "./model-client";
 import {
   fromOpenAIChatCompletion,
@@ -32,10 +32,10 @@ export class OpenAIChatModelClient implements ModelClient {
     });
   }
 
-  async step(
-    input: ModelStepInput,
-    options: ModelStepOptions,
-  ): Promise<ModelStepOutput> {
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
     const response = await this.client.chat.completions.create(
       {
         model: this.options.model,
@@ -48,6 +48,6 @@ export class OpenAIChatModelClient implements ModelClient {
       { signal: options.signal },
     );
 
-    return fromOpenAIChatCompletion(response);
+    return fromOpenAIChatCompletion(response, options.identity);
   }
 }

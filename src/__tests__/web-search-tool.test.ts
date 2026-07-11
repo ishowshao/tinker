@@ -8,10 +8,12 @@ import { createWebSearchToolExecutor as createWebSearchToolExecutorBase } from "
 import type { ToolExecutionContext, WebSearchRawResult } from "../tools/types";
 import type { ToolCall } from "../agent/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
 };
+const testRuntime = createTestRuntime();
 
 function createWebSearchToolExecutor(
   options: Parameters<typeof createWebSearchToolExecutorBase>[0],
@@ -21,9 +23,14 @@ function createWebSearchToolExecutor(
     ...tool,
     execute: (
       args: unknown,
-      call: ToolCall,
+      call: TestToolCallInput | ToolCall,
       context: ToolExecutionContext = testToolContext,
-    ) => tool.execute(args, call, context),
+    ) =>
+      tool.execute(
+        args,
+        "sessionId" in call ? call : testRuntime.toolCall(call),
+        context,
+      ),
   };
 }
 
@@ -97,7 +104,7 @@ describe("WebSearch tool", () => {
 
     const pending = tool.execute(
       { query: "latest bun release" },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
       { signal: controller.signal },
     );
     controller.abort(new TurnCancelledError());
@@ -115,7 +122,7 @@ describe("WebSearch tool", () => {
         allowed_domains: ["bun.sh"],
         blocked_domains: ["pinterest.com"],
       },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(true);
@@ -138,7 +145,7 @@ describe("WebSearch tool", () => {
 
     const raw = (await tool.execute(
       { query: "bun 2.0 release notes" },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(true);
@@ -163,11 +170,11 @@ describe("WebSearch tool", () => {
 
     const missing = (await tool.execute(
       {},
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
     const tooShort = (await tool.execute(
       { query: "a" },
-      { id: "call_2", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_2", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(missing.ok).toBe(false);
@@ -182,7 +189,7 @@ describe("WebSearch tool", () => {
 
     const raw = (await tool.execute(
       { query: "bun release", allowed_domains: ["bun.sh", 42] },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(false);
@@ -198,7 +205,7 @@ describe("WebSearch tool", () => {
 
     const raw = (await tool.execute(
       { query: "bun release" },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(false);
@@ -212,7 +219,7 @@ describe("WebSearch tool", () => {
 
     const raw = (await tool.execute(
       { query: "bun release" },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(false);
@@ -225,7 +232,7 @@ describe("WebSearch tool", () => {
 
     const raw = (await tool.execute(
       { query: "bun release" },
-      { id: "call_1", name: "WebSearch", args: {} },
+      { providerToolCallId: "call_1", name: "WebSearch", args: {} },
     )) as WebSearchRawResult;
 
     expect(raw.ok).toBe(false);
@@ -245,11 +252,11 @@ describe("WebSearch tool", () => {
     const runtime = new ToolRuntime(registry);
 
     const raw = await runtime.execute(
-      {
-        id: "call_1",
+      testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "WebSearch",
         args: { query: "bun release" },
-      },
+      }),
       testToolContext,
     );
 
@@ -286,11 +293,11 @@ describe("WebSearch observation", () => {
   test("renders numbered results with highlights collapsed to one line", async () => {
     const { fetchImpl } = createFetchStub({ payload: samplePayload });
     const tool = createWebSearchToolExecutor({ apiKey: "exa-key", fetchImpl });
-    const call = {
-      id: "call_1",
+    const call = testRuntime.toolCall({
+      providerToolCallId: "call_1",
       name: "WebSearch",
       args: { query: "bun 2.0 release notes" },
-    };
+    });
     const raw = await tool.execute(call.args, call);
 
     const observation = new ObservationBuilder().build({ call, raw });
@@ -308,7 +315,11 @@ describe("WebSearch observation", () => {
   test("renders empty results and failures", async () => {
     const { fetchImpl } = createFetchStub({ payload: { results: [] } });
     const tool = createWebSearchToolExecutor({ apiKey: "exa-key", fetchImpl });
-    const call = { id: "call_1", name: "WebSearch", args: { query: "no hits" } };
+    const call = testRuntime.toolCall({
+      providerToolCallId: "call_1",
+      name: "WebSearch",
+      args: { query: "no hits" },
+    });
     const raw = await tool.execute(call.args, call);
     const builder = new ObservationBuilder();
 

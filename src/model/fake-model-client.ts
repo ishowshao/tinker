@@ -1,17 +1,24 @@
 import type { AgentMessage } from "../agent/types";
-import type { ModelClient, ModelStepInput, ModelStepOutput } from "./model-client";
-import { createUuidV7 } from "../ids/uuid-v7";
+import type {
+  ModelClient,
+  ModelRequestInput,
+  ModelRequestOptions,
+  ModelRequestOutput,
+} from "./model-client";
 
 export class FakeModelClient implements ModelClient {
   private steps = 0;
 
   constructor(private readonly mode: string) {}
 
-  async step(input: ModelStepInput): Promise<ModelStepOutput> {
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
     this.steps += 1;
 
     if (this.mode === "write-notes") {
-      return this.writeNotes(input);
+      return this.writeNotes(input, options);
     }
 
     return {
@@ -23,17 +30,27 @@ export class FakeModelClient implements ModelClient {
     };
   }
 
-  private writeNotes(input: ModelStepInput): ModelStepOutput {
+  private writeNotes(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
     const sawToolResult = input.messages.some((message) => message.role === "tool");
 
     if (!sawToolResult) {
+      if (options.identity === undefined) {
+        throw new Error("Fake tool call requires an iteration identity context.");
+      }
       return {
         message: {
           role: "assistant",
           content: "I will create notes.txt.",
           toolCalls: [
             {
-              id: createUuidV7(),
+              ...options.identity.runtimeSession.createToolCall(
+                options.identity.iteration,
+                1,
+              ),
+              providerToolCallId: "fake-write-notes-1",
               name: "Write",
               args: {
                 file_path: "notes.txt",

@@ -1,22 +1,30 @@
-import type { EventSink } from "../events/event-sink";
 import type { ModelClient } from "../model/model-client";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ContextBuilder } from "./context-builder";
+import type { RuntimeSession } from "./runtime-session";
 import { throwIfTurnCancelled } from "./turn-cancellation";
-import type { AgentMessage, RunAgentResult, ToolCall, TurnCancellation } from "./types";
+import type {
+  AgentMessage,
+  IterationIdentity,
+  RunAgentResult,
+  ToolCall,
+  TurnCancellation,
+  TurnIdentity,
+} from "./types";
 
 export type RunAgentInput = {
   systemPrompt: string;
   userPrompt: string;
   initialMessages?: AgentMessage[];
-  maxSteps: number;
+  maxIterations: number;
   model: ModelClient;
   tools: ToolRegistry;
   toolRuntime: ToolRuntime;
   observationBuilder: ObservationBuilder;
   contextBuilder?: ContextBuilder;
-  eventSink: EventSink;
+  runtimeSession: RuntimeSession;
+  turn: TurnIdentity;
   signal: AbortSignal;
 };
 
@@ -30,97 +38,113 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         ]
       : [...input.initialMessages, { role: "user", content: input.userPrompt }];
 
-  if (input.signal.aborted) {
-    return cancelledResult(messages, {
-      source: "user",
-      phase: "agent_boundary",
-      step: 1,
-    });
-  }
+  let lastIteration: IterationIdentity | undefined;
 
-  for (let step = 1; step <= input.maxSteps; step += 1) {
-    await input.eventSink.append({
-      type: "model.step.started",
-      step,
+  for (
+    let iterationNumber = 1;
+    iterationNumber <= input.maxIterations;
+    iterationNumber += 1
+  ) {
+    const iteration = input.runtimeSession.createIteration(input.turn, iterationNumber);
+    lastIteration = iteration;
+    await input.runtimeSession.append({
+      type: "agent.iteration.started",
+      ...iteration,
+      data: { iterationNumber },
+    });
+
+    if (input.signal.aborted) {
+      return cancelledResult(
+        messages,
+        cancellation(iteration, "agent_boundary"),
+        iteration,
+      );
+    }
+
+    await input.runtimeSession.append({
+      type: "model.request.started",
+      ...iteration,
+      data: {},
     });
 
     let modelOutput;
-
     try {
       throwIfTurnCancelled(input.signal);
-      modelOutput = await input.model.step(
+      modelOutput = await input.model.request(
         contextBuilder.build({
           messages,
           tools: input.tools.definitions(),
         }),
-        { signal: input.signal },
+        {
+          signal: input.signal,
+          identity: {
+            iteration,
+            runtimeSession: input.runtimeSession,
+          },
+        },
       );
       throwIfTurnCancelled(input.signal);
     } catch (error) {
       if (input.signal.aborted) {
-        return cancelledResult(messages, {
-          source: "user",
-          phase: "model_request",
-          step,
-        });
+        return cancelledResult(
+          messages,
+          cancellation(iteration, "model_request"),
+          iteration,
+        );
       }
 
-      return failedResult(messages, error);
+      return failedResult(messages, error, iteration);
     }
 
     messages.push(modelOutput.message);
 
-    await input.eventSink.append({
-      type: "model.step.finished",
-      step,
-      output: modelOutput,
+    await input.runtimeSession.append({
+      type: "model.request.finished",
+      ...iteration,
+      data: { output: modelOutput },
     });
 
-    const toolCalls =
-      modelOutput.message.role === "assistant"
-        ? (modelOutput.message.toolCalls ?? [])
-        : [];
-
+    const toolCalls = modelOutput.message.toolCalls ?? [];
     if (toolCalls.length === 0) {
+      await input.runtimeSession.append({
+        type: "agent.iteration.finished",
+        ...iteration,
+        data: { outcome: "completed", toolCallCount: 0 },
+      });
       return {
         status: "completed",
-        finalText:
-          modelOutput.message.role === "assistant"
-            ? (modelOutput.message.content ?? "")
-            : "",
+        finalText: modelOutput.message.content ?? "",
         messages,
+        lastIteration: iteration,
       };
     }
 
-    const progressContent =
-      modelOutput.message.role === "assistant"
-        ? modelOutput.message.content?.trim()
-        : undefined;
-
+    const progressContent = modelOutput.message.content?.trim();
     if (progressContent !== undefined && progressContent !== "") {
-      await input.eventSink.append({
+      await input.runtimeSession.append({
         type: "assistant.progress",
-        step,
-        content: progressContent,
+        ...iteration,
+        data: { content: progressContent },
       });
     }
 
     for (let callIndex = 0; callIndex < toolCalls.length; callIndex += 1) {
       const call = requireToolCall(toolCalls, callIndex);
+      requireCallInIteration(call, iteration, callIndex + 1);
 
       if (input.signal.aborted) {
         appendCancelledToolMessages(messages, toolCalls, callIndex);
-        return cancelledResult(messages, {
-          source: "user",
-          phase: "agent_boundary",
-          step,
-        });
+        return cancelledResult(
+          messages,
+          cancellation(iteration, "agent_boundary"),
+          iteration,
+        );
       }
 
-      await input.eventSink.append({
+      await input.runtimeSession.append({
         type: "tool.started",
-        step,
-        call,
+        ...call,
+        data: { call },
       });
 
       let raw;
@@ -128,75 +152,69 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         raw = await input.toolRuntime.execute(call, { signal: input.signal });
       } catch (error) {
         if (!input.signal.aborted) {
-          return failedResult(messages, error);
+          return failedResult(messages, error, iteration);
         }
 
         appendCancelledToolMessages(messages, toolCalls, callIndex, call);
-        return cancelledResult(messages, {
-          source: "user",
-          phase: "tool_execution",
-          step,
-          toolCallId: call.id,
-          toolName: call.name,
-        });
+        return cancelledResult(
+          messages,
+          cancellation(iteration, "tool_execution", call),
+          iteration,
+        );
       }
 
-      await input.eventSink.append({
+      await input.runtimeSession.append({
         type: "tool.raw_result",
-        step,
-        call,
-        raw,
+        ...call,
+        data: { call, raw },
       });
-
-      await input.eventSink.append({
+      await input.runtimeSession.append({
         type: "tool.finished",
-        step,
-        call,
-        ok: raw.ok,
+        ...call,
+        data: { call, ok: raw.ok },
       });
 
-      const observation = input.observationBuilder.build({
-        call,
-        raw,
-      });
-
+      const observation = input.observationBuilder.build({ call, raw });
       messages.push({
         role: "tool",
-        toolCallId: call.id,
+        toolCallId: call.toolCallId,
+        providerToolCallId: call.providerToolCallId,
         name: call.name,
         content: observation.content,
       });
 
-      await input.eventSink.append({
+      await input.runtimeSession.append({
         type: "tool.observation",
-        step,
-        call,
-        observation,
+        ...call,
+        data: { call, observation },
       });
 
       if (input.signal.aborted) {
         appendCancelledToolMessages(messages, toolCalls, callIndex + 1);
-        return cancelledResult(messages, {
-          source: "user",
-          phase: "agent_boundary",
-          step,
-        });
+        return cancelledResult(
+          messages,
+          cancellation(iteration, "agent_boundary"),
+          iteration,
+        );
       }
     }
+
+    await input.runtimeSession.append({
+      type: "agent.iteration.finished",
+      ...iteration,
+      data: { outcome: "continue", toolCallCount: toolCalls.length },
+    });
   }
 
-  if (input.signal.aborted) {
-    return cancelledResult(messages, {
-      source: "user",
-      phase: "agent_boundary",
-      step: input.maxSteps,
-    });
+  if (lastIteration === undefined) {
+    throw new Error("Agent loop did not create an iteration identity.");
   }
 
   return {
     status: "failed",
-    error: `Agent stopped after maxSteps=${input.maxSteps}`,
+    error: `Agent turn ${input.turn.turnId} stopped after maxIterations=${input.maxIterations}; last iteration=${lastIteration.iterationId}`,
     messages,
+    lastIteration,
   };
 }
 
@@ -214,7 +232,8 @@ function appendCancelledToolMessages(
     const call = requireToolCall(toolCalls, index);
     messages.push({
       role: "tool",
-      toolCallId: call.id,
+      toolCallId: call.toolCallId,
+      providerToolCallId: call.providerToolCallId,
       name: call.name,
       content: call === activeCall ? cancelledToolContent : skippedToolContent,
     });
@@ -226,25 +245,63 @@ function requireToolCall(toolCalls: ToolCall[], index: number): ToolCall {
   if (call === undefined) {
     throw new Error(`Missing tool call at index ${index}.`);
   }
-
   return call;
+}
+
+function requireCallInIteration(
+  call: ToolCall,
+  iteration: IterationIdentity,
+  toolCallNumber: number,
+): void {
+  if (
+    call.sessionId !== iteration.sessionId ||
+    call.turnId !== iteration.turnId ||
+    call.iterationId !== iteration.iterationId ||
+    call.toolCallNumber !== toolCallNumber
+  ) {
+    throw new Error(
+      `Tool call ${call.toolCallId} has invalid identity for iteration ${iteration.iterationId}.`,
+    );
+  }
+}
+
+function cancellation(
+  iteration: IterationIdentity,
+  phase: TurnCancellation["phase"],
+  call?: ToolCall,
+): TurnCancellation {
+  return {
+    source: "user",
+    phase,
+    iterationId: iteration.iterationId,
+    iterationNumber: iteration.iterationNumber,
+    toolCallId: call?.toolCallId,
+    toolName: call?.name,
+  };
 }
 
 function cancelledResult(
   messages: AgentMessage[],
-  cancellation: TurnCancellation,
+  turnCancellation: TurnCancellation,
+  lastIteration: IterationIdentity,
 ): RunAgentResult {
   return {
     status: "cancelled",
-    cancellation,
+    cancellation: turnCancellation,
     messages,
+    lastIteration,
   };
 }
 
-function failedResult(messages: AgentMessage[], error: unknown): RunAgentResult {
+function failedResult(
+  messages: AgentMessage[],
+  error: unknown,
+  lastIteration: IterationIdentity,
+): RunAgentResult {
   return {
     status: "failed",
     error: error instanceof Error ? error.message : String(error),
     messages,
+    lastIteration,
   };
 }

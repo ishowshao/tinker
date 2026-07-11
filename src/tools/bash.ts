@@ -20,7 +20,6 @@ type BashArgs = {
 
 export type BashToolOptions = {
   workspaceRoot: string;
-  runId: string;
   cwdState: CwdState;
   taskManager: ShellTaskManager;
   defaultTimeoutMs?: number;
@@ -77,7 +76,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         required: ["command"],
       },
     },
-    async execute(args, _call, context: ToolExecutionContext): Promise<BashRawResult> {
+    async execute(args, call, context: ToolExecutionContext): Promise<BashRawResult> {
       throwIfTurnCancelled(context.signal);
       const parsed = parseBashArgs(args, maxTimeoutMs);
 
@@ -86,7 +85,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
           ok: false,
           command: "",
           taskId: "",
-          runId: options.runId,
+          sessionId: call.sessionId,
           status: "failed",
           cwd: options.cwdState.cwd,
           outputFilePath: "",
@@ -104,6 +103,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       const task = await options.taskManager.start({
         command: input.command,
         description: input.description ?? input.command,
+        origin: call,
       });
 
       if (input.run_in_background === true) {
@@ -288,7 +288,7 @@ function buildRunningResult(input: {
     ok: true,
     command: task.command,
     taskId: task.taskId,
-    runId: task.runId,
+    sessionId: task.origin.sessionId,
     status: "running",
     cwd: task.cwd,
     outputFilePath: task.outputFilePath,
@@ -323,7 +323,7 @@ async function buildCompletedResult(
     ok: interpretation.ok,
     command: task.command,
     taskId: task.taskId,
-    runId: task.runId,
+    sessionId: task.origin.sessionId,
     status: interpretation.status,
     exitCode: task.exitCode,
     signal: task.signal,

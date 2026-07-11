@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
+import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type { ToolExecutionContext } from "../tools/types";
@@ -11,14 +12,27 @@ const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
 };
 
-function createDefaultTooling(options: Parameters<typeof createDefaultToolingBase>[0]) {
-  const tooling = createDefaultToolingBase(options);
+function createDefaultTooling(
+  options: Omit<Parameters<typeof createDefaultToolingBase>[0], "runtimeSession">,
+) {
+  const testRuntime = createTestRuntime();
+  const tooling = createDefaultToolingBase({
+    ...options,
+    runtimeSession: testRuntime.runtimeSession,
+  });
   return {
     ...tooling,
     runtime: {
-      execute: (call: ToolCall, context: ToolExecutionContext = testToolContext) =>
-        tooling.runtime.execute(call, context),
+      execute: (
+        call: TestToolCallInput | ToolCall,
+        context: ToolExecutionContext = testToolContext,
+      ) =>
+        tooling.runtime.execute(
+          "sessionId" in call ? call : testRuntime.toolCall(call),
+          context,
+        ),
     },
+    testRuntime,
   };
 }
 
@@ -30,7 +44,7 @@ describe("Read and Write tools", () => {
       await writeFile(path.join(workspace, "notes.txt"), "a\nb\nc\n", "utf8");
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt", offset: 2, limit: 1 },
       });
@@ -50,7 +64,7 @@ describe("Read and Write tools", () => {
     try {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "../outside.txt" },
       });
@@ -73,7 +87,7 @@ describe("Read and Write tools", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       const read = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: filePath },
       });
@@ -81,7 +95,7 @@ describe("Read and Write tools", () => {
       expect("content" in read ? read.content : "").toBe("before");
 
       const write = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Write",
         args: { file_path: filePath, content: "after\n" },
       });
@@ -98,7 +112,7 @@ describe("Read and Write tools", () => {
     try {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Write",
         args: { file_path: "notes.txt", content: "hello\n" },
       });
@@ -121,12 +135,12 @@ describe("Read and Write tools", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Write",
         args: { file_path: "notes.txt", content: "new\nsame\n" },
       });
@@ -147,7 +161,7 @@ describe("Read and Write tools", () => {
       await writeFile(path.join(workspace, "notes.txt"), "old\n", "utf8");
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Write",
         args: { file_path: "notes.txt", content: "new\n" },
       });
@@ -171,14 +185,14 @@ describe("Read and Write tools", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
       await writeFile(filePath, "external\n", "utf8");
 
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Write",
         args: { file_path: "notes.txt", content: "new\n" },
       });
@@ -202,12 +216,12 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -219,7 +233,7 @@ describe("Edit tool", () => {
       expect(raw.ok).toBe(true);
       expect("replacementCount" in raw ? raw.replacementCount : 0).toBe(1);
       const secondRaw = await tooling.runtime.execute({
-        id: "call_3",
+        providerToolCallId: "call_3",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -246,12 +260,12 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: filePath },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: filePath,
@@ -276,12 +290,12 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -306,7 +320,7 @@ describe("Edit tool", () => {
     try {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Edit",
         args: {
           file_path: "fresh.txt",
@@ -333,12 +347,12 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt", offset: 2, limit: 1 },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -366,7 +380,7 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
@@ -375,7 +389,7 @@ describe("Edit tool", () => {
       await utimes(filePath, future, future);
 
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -401,13 +415,13 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
 
       const missing = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -419,7 +433,7 @@ describe("Edit tool", () => {
       expect("error" in missing ? missing.error : "").toContain("not found");
 
       const ambiguous = await tooling.runtime.execute({
-        id: "call_3",
+        providerToolCallId: "call_3",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -444,12 +458,12 @@ describe("Edit tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Read",
         args: { file_path: "notes.txt" },
       });
       const raw = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "notes.txt",
@@ -473,7 +487,7 @@ describe("Edit tool", () => {
     try {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const created = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Edit",
         args: {
           file_path: "created.txt",
@@ -488,7 +502,7 @@ describe("Edit tool", () => {
 
       await writeFile(path.join(workspace, "empty.txt"), "", "utf8");
       const empty = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Edit",
         args: {
           file_path: "empty.txt",
@@ -502,7 +516,7 @@ describe("Edit tool", () => {
       );
 
       const nonEmpty = await tooling.runtime.execute({
-        id: "call_3",
+        providerToolCallId: "call_3",
         name: "Edit",
         args: {
           file_path: "created.txt",
@@ -541,7 +555,7 @@ describe("Glob tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Glob",
         args: { pattern: "**/*" },
       });
@@ -568,7 +582,7 @@ describe("Glob tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Glob",
         args: { pattern: "*.ts", path: "src" },
       });
@@ -593,7 +607,7 @@ describe("Glob tool", () => {
       await writeFile(filePath, "", "utf8");
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Glob",
         args: { pattern: "*.ts", path: outside },
       });
@@ -612,7 +626,7 @@ describe("Glob tool", () => {
     try {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Glob",
         args: { pattern: "**/*.ts", path: "../outside" },
       });
@@ -632,11 +646,11 @@ describe("Glob tool", () => {
       await writeFile(path.join(workspace, "src", "app.ts"), "", "utf8");
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
-      const call = {
-        id: "call_1",
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "Glob",
         args: { pattern: "**/*.ts" },
-      };
+      });
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
@@ -685,7 +699,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo" },
       });
@@ -704,7 +718,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", output_mode: "content" },
       });
@@ -721,7 +735,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", output_mode: "content", "-C": 1 },
       });
@@ -741,7 +755,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", output_mode: "count" },
       });
@@ -761,7 +775,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const firstPage = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", head_limit: 2 },
       });
@@ -775,7 +789,7 @@ describe("Grep tool", () => {
       expect("truncated" in firstPage ? firstPage.truncated : undefined).toBe(true);
 
       const secondPage = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Grep",
         args: { pattern: "foo", head_limit: 2, offset: 2 },
       });
@@ -799,7 +813,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const globFiltered = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", glob: "*.ts" },
       });
@@ -808,7 +822,7 @@ describe("Grep tool", () => {
       ]);
 
       const typeFiltered = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Grep",
         args: { pattern: "foo", type: "js" },
       });
@@ -824,14 +838,14 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const caseSensitive = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo" },
       });
       expect("numFiles" in caseSensitive ? caseSensitive.numFiles : -1).toBe(0);
 
       const caseInsensitive = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Grep",
         args: { pattern: "foo", "-i": true },
       });
@@ -840,14 +854,14 @@ describe("Grep tool", () => {
       ]);
 
       const withoutMultiline = await tooling.runtime.execute({
-        id: "call_3",
+        providerToolCallId: "call_3",
         name: "Grep",
         args: { pattern: "FOO.bar" },
       });
       expect("numFiles" in withoutMultiline ? withoutMultiline.numFiles : -1).toBe(0);
 
       const multiline = await tooling.runtime.execute({
-        id: "call_4",
+        providerToolCallId: "call_4",
         name: "Grep",
         args: { pattern: "FOO.bar", multiline: true },
       });
@@ -861,7 +875,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "--verbose" },
       });
@@ -877,7 +891,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "missing" },
       });
@@ -895,7 +909,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", path: "a.ts", output_mode: "content" },
       });
@@ -915,7 +929,7 @@ describe("Grep tool", () => {
       await writeFile(filePath, "foo\n", "utf8");
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", path: filePath, output_mode: "content" },
       });
@@ -934,7 +948,7 @@ describe("Grep tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
       const escape = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", path: "../outside" },
       });
@@ -942,7 +956,7 @@ describe("Grep tool", () => {
       expect("error" in escape ? escape.error : "").toContain("escapes workspace");
 
       const missing = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Grep",
         args: { pattern: "foo", path: "does-not-exist" },
       });
@@ -967,7 +981,7 @@ describe("Grep tool", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo" },
       });
@@ -985,7 +999,7 @@ describe("Grep tool", () => {
       try {
         const tooling = createDefaultTooling({ workspaceRoot: workspace });
         const raw = await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Grep",
           args: { pattern: "foo" },
         });
@@ -1010,13 +1024,21 @@ describe("Grep tool", () => {
       await writeFile(path.join(workspace, "b.ts"), "foo\n", "utf8");
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
-      const call = { id: "call_1", name: "Grep", args: { pattern: "foo" } };
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
+        name: "Grep",
+        args: { pattern: "foo" },
+      });
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
       expect(observation.content).toBe("Found 2 files\na.ts\nb.ts");
 
-      const emptyCall = { id: "call_2", name: "Grep", args: { pattern: "missing" } };
+      const emptyCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_2",
+        name: "Grep",
+        args: { pattern: "missing" },
+      });
       const emptyRaw = await tooling.runtime.execute(emptyCall);
       const emptyObservation = new ObservationBuilder().build({
         call: emptyCall,
@@ -1033,11 +1055,11 @@ describe("Grep tool", () => {
       await writeFile(path.join(workspace, "b.ts"), "foo\nfoo\nfoo\n", "utf8");
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
-      const contentCall = {
-        id: "call_1",
+      const contentCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", path: "a.ts", output_mode: "content" },
-      };
+      });
       const contentRaw = await tooling.runtime.execute(contentCall);
       const contentObservation = new ObservationBuilder().build({
         call: contentCall,
@@ -1045,11 +1067,11 @@ describe("Grep tool", () => {
       });
       expect(contentObservation.content).toBe("a.ts:1:foo");
 
-      const noMatchCall = {
-        id: "call_2",
+      const noMatchCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_2",
         name: "Grep",
         args: { pattern: "missing", output_mode: "content" },
-      };
+      });
       const noMatchRaw = await tooling.runtime.execute(noMatchCall);
       const noMatchObservation = new ObservationBuilder().build({
         call: noMatchCall,
@@ -1057,11 +1079,11 @@ describe("Grep tool", () => {
       });
       expect(noMatchObservation.content).toBe("No matches found");
 
-      const countCall = {
-        id: "call_3",
+      const countCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_3",
         name: "Grep",
         args: { pattern: "foo", output_mode: "count" },
-      };
+      });
       const countRaw = await tooling.runtime.execute(countCall);
       const countObservation = new ObservationBuilder().build({
         call: countCall,
@@ -1080,11 +1102,11 @@ describe("Grep tool", () => {
       await writeFile(path.join(workspace, "c.ts"), "foo\n", "utf8");
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
-      const call = {
-        id: "call_1",
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", head_limit: 1, offset: 1 },
-      };
+      });
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
@@ -1098,11 +1120,11 @@ describe("Grep tool", () => {
   test("renders failure observations with the pattern", async () => {
     await withGrepWorkspace(async (workspace) => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
-      const call = {
-        id: "call_1",
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "Grep",
         args: { pattern: "foo", path: "../outside" },
-      };
+      });
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 

@@ -22,6 +22,9 @@ import type { ToolCall } from "../agent/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { McpToolRawResult, ToolExecutionContext } from "../tools/types";
 import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
+import { RuntimeSession } from "../agent/runtime-session";
+import type { SessionId } from "../ids/runtime-id";
+import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 
 const ECHO_TOOL: Tool = {
   name: "echo",
@@ -36,6 +39,7 @@ const ECHO_TOOL: Tool = {
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
 };
+const testRuntime = createTestRuntime();
 
 function createMcpToolExecutor(
   options: Parameters<typeof createMcpToolExecutorBase>[0],
@@ -45,9 +49,14 @@ function createMcpToolExecutor(
     ...tool,
     execute: (
       args: unknown,
-      call: ToolCall,
+      call: TestToolCallInput | ToolCall,
       context: ToolExecutionContext = testToolContext,
-    ) => tool.execute(args, call, context),
+    ) =>
+      tool.execute(
+        args,
+        "sessionId" in call ? call : testRuntime.toolCall(call),
+        context,
+      ),
   };
 }
 
@@ -130,7 +139,11 @@ describe("mcp tool executor", () => {
 
     const pending = executor.execute(
       { message: "wait" },
-      { id: "call_1", name: "mcp__srv__echo", args: { message: "wait" } },
+      {
+        providerToolCallId: "call_1",
+        name: "mcp__srv__echo",
+        args: { message: "wait" },
+      },
       { signal: controller.signal },
     );
     controller.abort(new TurnCancelledError());
@@ -174,7 +187,7 @@ describe("mcp tool executor", () => {
     });
     const raw = (await executor.execute(
       { message: "hi" },
-      { id: "call_1", name: "mcp__srv__echo", args: { message: "hi" } },
+      { providerToolCallId: "call_1", name: "mcp__srv__echo", args: { message: "hi" } },
     )) as McpToolRawResult;
 
     expect(receivedArgs).toEqual({ message: "hi" });
@@ -204,7 +217,7 @@ describe("mcp tool executor", () => {
     });
     const raw = (await executor.execute(
       {},
-      { id: "call_1", name: "mcp__srv__echo", args: {} },
+      { providerToolCallId: "call_1", name: "mcp__srv__echo", args: {} },
     )) as McpToolRawResult;
 
     expect(raw.text).toBe("first\n[image image/png content omitted]\nsecond");
@@ -228,7 +241,7 @@ describe("mcp tool executor", () => {
     });
     const raw = (await executor.execute(
       {},
-      { id: "call_1", name: "mcp__srv__echo", args: {} },
+      { providerToolCallId: "call_1", name: "mcp__srv__echo", args: {} },
     )) as McpToolRawResult;
 
     expect(raw.text).toBe("x".repeat(10));
@@ -252,7 +265,7 @@ describe("mcp tool executor", () => {
     });
     const raw = (await executor.execute(
       {},
-      { id: "call_1", name: "mcp__srv__echo", args: {} },
+      { providerToolCallId: "call_1", name: "mcp__srv__echo", args: {} },
     )) as McpToolRawResult;
 
     expect(raw.ok).toBe(false);
@@ -276,7 +289,7 @@ describe("mcp tool executor", () => {
     });
     const raw = (await executor.execute(
       {},
-      { id: "call_1", name: "mcp__srv__echo", args: {} },
+      { providerToolCallId: "call_1", name: "mcp__srv__echo", args: {} },
     )) as McpToolRawResult;
 
     expect(raw.ok).toBe(false);
@@ -298,7 +311,7 @@ describe("mcp tool executor", () => {
       tool: ECHO_TOOL,
     });
     const raw = (await executor.execute("nope", {
-      id: "call_1",
+      providerToolCallId: "call_1",
       name: "mcp__srv__echo",
       args: "nope",
     })) as McpToolRawResult;
@@ -317,6 +330,7 @@ describe("mcp manager", () => {
     });
     let closed = false;
     const sink = collectingEventSink();
+    const runtimeSession = new RuntimeSession(sink);
 
     const manager = await createMcpManager({
       config: {
@@ -325,7 +339,7 @@ describe("mcp manager", () => {
           ["good", { command: "nope", args: [], env: {} }],
         ]),
       },
-      eventSink: sink,
+      runtimeSession,
       clientFactory: async (serverName) => {
         if (serverName === "bad") {
           throw new Error("spawn failed");
@@ -344,9 +358,17 @@ describe("mcp manager", () => {
     expect(manager.executors.map((executor) => executor.definition.name)).toEqual([
       "mcp__good__echo",
     ]);
-    expect(sink.events).toEqual([
-      { type: "mcp.server.failed", serverName: "bad", error: "spawn failed" },
-      { type: "mcp.server.connected", serverName: "good", toolCount: 1 },
+    expect(
+      sink.events.map((event) => ({ type: event.type, data: event.data })),
+    ).toEqual([
+      {
+        type: "mcp.server.failed",
+        data: { serverName: "bad", error: "spawn failed" },
+      },
+      {
+        type: "mcp.server.connected",
+        data: { serverName: "good", toolCount: 1 },
+      },
     ]);
 
     await manager.dispose();
@@ -357,6 +379,7 @@ describe("mcp manager", () => {
     "connects to a real stdio server",
     async () => {
       const sink = collectingEventSink();
+      const runtimeSession = new RuntimeSession(sink);
       const fixturePath = path.join(import.meta.dir, "fixtures", "fake-mcp-server.ts");
 
       const manager = await createMcpManager({
@@ -365,12 +388,17 @@ describe("mcp manager", () => {
             ["fixture", { command: process.execPath, args: [fixturePath], env: {} }],
           ]),
         },
-        eventSink: sink,
+        runtimeSession,
       });
 
       try {
-        expect(sink.events).toEqual([
-          { type: "mcp.server.connected", serverName: "fixture", toolCount: 1 },
+        expect(
+          sink.events.map((event) => ({ type: event.type, data: event.data })),
+        ).toEqual([
+          {
+            type: "mcp.server.connected",
+            data: { serverName: "fixture", toolCount: 1 },
+          },
         ]);
 
         const executor = manager.executors[0];
@@ -378,7 +406,11 @@ describe("mcp manager", () => {
 
         const raw = (await executor?.execute(
           { message: "hi" },
-          { id: "call_1", name: "mcp__fixture__echo", args: { message: "hi" } },
+          testRuntime.toolCall({
+            providerToolCallId: "call_1",
+            name: "mcp__fixture__echo",
+            args: { message: "hi" },
+          }),
           testToolContext,
         )) as McpToolRawResult;
         expect(raw.ok).toBe(true);
@@ -393,7 +425,11 @@ describe("mcp manager", () => {
 
 describe("mcp observation", () => {
   const builder = new ObservationBuilder();
-  const call = { id: "call_1", name: "mcp__srv__echo", args: {} };
+  const call = testRuntime.toolCall({
+    providerToolCallId: "call_1",
+    name: "mcp__srv__echo",
+    args: {},
+  });
   const base = {
     toolName: "mcp__srv__echo",
     serverName: "srv",
@@ -446,23 +482,27 @@ describe("mcp observation", () => {
 describe("mcp events in tui and stdout", () => {
   test("tui event store renders mcp server events", () => {
     let state = createInitialTuiState({
-      runId: "run-1",
+      sessionId: "session-1",
       modelName: "model",
       workspaceRoot: "/tmp/workspace",
     });
 
     state = applyAgentEvent(state, {
       type: "mcp.server.connected",
-      serverName: "playwright",
-      toolCount: 21,
+      sessionId: "session-1" as SessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: { serverName: "playwright", toolCount: 21 },
     });
     expect(state.timeline.at(-1)?.text).toBe("mcp playwright connected -> 21 tools");
     expect(state.timeline.at(-1)?.status).toBe("info");
 
     state = applyAgentEvent(state, {
       type: "mcp.server.failed",
-      serverName: "chrome",
-      error: "spawn failed",
+      sessionId: "session-1" as SessionId,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:01.000Z",
+      data: { serverName: "chrome", error: "spawn failed" },
     });
     expect(state.timeline.at(-1)?.text).toBe("mcp chrome failed -> spawn failed");
     expect(state.timeline.at(-1)?.status).toBe("failed");
@@ -478,13 +518,17 @@ describe("mcp events in tui and stdout", () => {
 
     await printer.append({
       type: "mcp.server.connected",
-      serverName: "playwright",
-      toolCount: 21,
+      sessionId: "session-1" as SessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: { serverName: "playwright", toolCount: 21 },
     });
     await printer.append({
       type: "mcp.server.failed",
-      serverName: "chrome",
-      error: "spawn failed",
+      sessionId: "session-1" as SessionId,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:01.000Z",
+      data: { serverName: "chrome", error: "spawn failed" },
     });
 
     expect(out.join("")).toBe("mcp.server.connected name=playwright tools=21\n");

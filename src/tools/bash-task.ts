@@ -1,7 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
-import type { EventSink } from "../events/event-sink";
+import type { RuntimeSession } from "../agent/runtime-session";
+import type { ToolCallIdentity } from "../agent/types";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { TaskOutput, type TaskOutputSnapshot } from "./task-output";
@@ -15,9 +16,11 @@ export type ShellTaskStatus =
 
 export type BackgroundReason = "requested" | "foreground_timeout";
 
+export type ShellTaskOrigin = ToolCallIdentity;
+
 export type ShellTaskSnapshot = {
   taskId: string;
-  runId: string;
+  origin: ShellTaskOrigin;
   command: string;
   description: string;
   status: ShellTaskStatus;
@@ -61,7 +64,7 @@ export type ShutdownResult = {
 
 type ManagedShellTask = {
   id: string;
-  runId: string;
+  origin: ShellTaskOrigin;
   command: string;
   description: string;
   status: ShellTaskStatus;
@@ -85,9 +88,8 @@ type ManagedShellTask = {
 
 export type ShellTaskManagerOptions = {
   workspaceRoot: string;
-  runId: string;
   cwdState: CwdState;
-  eventSink?: EventSink;
+  runtimeSession: RuntimeSession;
   stopGraceMs?: number;
 };
 
@@ -109,6 +111,7 @@ export class ShellTaskManager {
   async start(input: {
     command: string;
     description: string;
+    origin: ShellTaskOrigin;
   }): Promise<ShellTaskHandle> {
     if (!this.acceptingTasks) {
       throw new Error("Cannot start a Bash task after task manager shutdown.");
@@ -155,7 +158,7 @@ export class ShellTaskManager {
 
     const task: ManagedShellTask = {
       id,
-      runId: this.options.runId,
+      origin: input.origin,
       command: input.command,
       description: input.description,
       status: "running",
@@ -199,9 +202,10 @@ export class ShellTaskManager {
     }
 
     const snapshot = this.snapshot(task);
-    await this.options.eventSink?.append({
+    await this.options.runtimeSession.append({
       type: "bash.task.backgrounded",
-      task: snapshot,
+      ...task.origin,
+      data: { task: snapshot },
     });
     return snapshot;
   }
@@ -322,9 +326,10 @@ export class ShellTaskManager {
   ): Promise<StopTaskResult> {
     task.status = "stopping";
     if (task.backgroundedAt !== undefined) {
-      await this.options.eventSink?.append({
+      await this.options.runtimeSession.append({
         type: "bash.task.stopping",
-        task: this.snapshot(task),
+        ...task.origin,
+        data: { task: this.snapshot(task) },
       });
     }
 
@@ -383,9 +388,10 @@ export class ShellTaskManager {
     const snapshot = this.snapshot(task);
     if (task.backgroundedAt !== undefined && !task.terminalEventEmitted) {
       task.terminalEventEmitted = true;
-      await this.options.eventSink?.append({
+      await this.options.runtimeSession.append({
         type: "bash.task.finished",
-        task: snapshot,
+        ...task.origin,
+        data: { task: snapshot },
       });
     }
 
@@ -439,7 +445,7 @@ export class ShellTaskManager {
     const output = task.output.snapshot();
     return {
       taskId: task.id,
-      runId: task.runId,
+      origin: task.origin,
       command: task.command,
       description: task.description,
       status: task.status,

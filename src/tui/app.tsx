@@ -2,6 +2,7 @@ import { Box, Text, useApp, useInput } from "ink";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { RunAgentResult } from "../agent/types";
+import type { SessionId } from "../ids/runtime-id";
 import type { TuiEventStream } from "../events/tui-event-stream";
 import { applyAgentEvent, createInitialTuiState } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
@@ -15,7 +16,7 @@ import { findSlashCommand } from "./slash-commands";
 export type AppProps = {
   modelName: string;
   workspaceRoot: string;
-  runId: string;
+  sessionId: SessionId;
   eventStream: TuiEventStream;
   run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
@@ -29,11 +30,11 @@ export function App(props: AppProps) {
   const initialState = useMemo(
     () =>
       createInitialTuiState({
-        runId: props.runId,
+        sessionId: props.sessionId,
         modelName: props.modelName,
         workspaceRoot: props.workspaceRoot,
       }),
-    [props.runId, props.modelName, props.workspaceRoot],
+    [props.sessionId, props.modelName, props.workspaceRoot],
   );
   const [state, setState] = useState(initialState);
   const [isRunning, setIsRunning] = useState(false);
@@ -142,7 +143,7 @@ export function App(props: AppProps) {
       <Header
         modelName={props.modelName}
         workspaceRoot={props.workspaceRoot}
-        runId={props.runId}
+        sessionId={props.sessionId}
       />
       <Box marginTop={1} flexDirection="column">
         <Timeline events={props.eventStream.events} items={state.timeline} />

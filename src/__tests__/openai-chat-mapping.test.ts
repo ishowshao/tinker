@@ -3,40 +3,48 @@ import {
   fromOpenAIChatCompletion,
   toOpenAIChatMessages,
 } from "../model/openai-chat-mapping";
+import { createTestRuntime } from "./test-runtime";
 
 describe("openai chat mapping", () => {
   test("parses DeepSeek assistant reasoning content", () => {
-    const output = fromOpenAIChatCompletion({
-      choices: [
-        {
-          finish_reason: "tool_calls",
-          message: {
-            role: "assistant",
-            content: "",
-            reasoning_content: "Need to inspect the file before editing.",
-            tool_calls: [
-              {
-                id: "call_1",
-                type: "function",
-                function: {
-                  name: "Read",
-                  arguments: '{"file_path":"README.md"}',
+    const testRuntime = createTestRuntime();
+    const output = fromOpenAIChatCompletion(
+      {
+        choices: [
+          {
+            finish_reason: "tool_calls",
+            message: {
+              role: "assistant",
+              content: "",
+              reasoning_content: "Need to inspect the file before editing.",
+              tool_calls: [
+                {
+                  id: "provider-call-1",
+                  type: "function",
+                  function: {
+                    name: "Read",
+                    arguments: '{"file_path":"README.md"}',
+                  },
                 },
-              },
-            ],
+              ],
+            },
           },
-        },
-      ],
-      usage: { total_tokens: 12 },
-    });
+        ],
+        usage: { total_tokens: 12 },
+      },
+      {
+        iteration: testRuntime.iteration,
+        runtimeSession: testRuntime.runtimeSession,
+      },
+    );
 
-    expect(output.message).toEqual({
+    expect(output.message).toMatchObject({
       role: "assistant",
       content: "",
       reasoningContent: "Need to inspect the file before editing.",
       toolCalls: [
         {
-          id: "call_1",
+          providerToolCallId: "provider-call-1",
           name: "Read",
           args: { file_path: "README.md" },
           rawArgs: '{"file_path":"README.md"}',
@@ -52,7 +60,7 @@ describe("openai chat mapping", () => {
       content: "",
       tool_calls: [
         {
-          id: "call_1",
+          id: "provider-call-1",
           type: "function",
           function: {
             name: "Read",
@@ -65,6 +73,7 @@ describe("openai chat mapping", () => {
   });
 
   test("includes DeepSeek assistant reasoning content when enabled", () => {
+    const testRuntime = createTestRuntime();
     const [mappedMessage] = toOpenAIChatMessages(
       [
         {
@@ -72,12 +81,12 @@ describe("openai chat mapping", () => {
           content: "",
           reasoningContent: "Need to inspect the file before editing.",
           toolCalls: [
-            {
-              id: "call_1",
+            testRuntime.toolCall({
+              providerToolCallId: "provider-call-1",
               name: "Read",
               args: { file_path: "README.md" },
               rawArgs: '{"file_path":"README.md"}',
-            },
+            }),
           ],
         },
       ],
@@ -91,7 +100,7 @@ describe("openai chat mapping", () => {
       reasoning_content: "Need to inspect the file before editing.",
       tool_calls: [
         {
-          id: "call_1",
+          id: "provider-call-1",
           type: "function",
           function: {
             name: "Read",
@@ -117,5 +126,56 @@ describe("openai chat mapping", () => {
       tool_calls: undefined,
     });
     expect("reasoning_content" in mappedRecord).toBe(false);
+  });
+
+  test("uses provider IDs for outbound assistant and tool correlation", () => {
+    const testRuntime = createTestRuntime();
+    const call = testRuntime.toolCall({
+      providerToolCallId: "provider-call-7",
+      name: "Read",
+      args: { file_path: "README.md" },
+    });
+    const [assistant, tool] = toOpenAIChatMessages([
+      { role: "assistant", toolCalls: [call] },
+      {
+        role: "tool",
+        toolCallId: call.toolCallId,
+        providerToolCallId: call.providerToolCallId,
+        name: call.name,
+        content: "done",
+      },
+    ]);
+
+    expect(assistant).toMatchObject({
+      tool_calls: [{ id: "provider-call-7" }],
+    });
+    expect(tool).toMatchObject({ tool_call_id: "provider-call-7" });
+  });
+
+  test("fast-fails a provider tool call without a non-empty ID", () => {
+    const testRuntime = createTestRuntime();
+    expect(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    type: "function",
+                    function: { name: "Read", arguments: "{}" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          iteration: testRuntime.iteration,
+          runtimeSession: testRuntime.runtimeSession,
+        },
+      ),
+    ).toThrow("tool_calls[0].id");
   });
 });

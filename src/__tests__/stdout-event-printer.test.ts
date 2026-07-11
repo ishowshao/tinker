@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { StdoutEventPrinter } from "../events/stdout-event-printer";
+import { createTestRuntime } from "./test-runtime";
 
 describe("stdout event printer", () => {
   test("prints run cancellation separately from failures", async () => {
@@ -10,20 +11,23 @@ describe("stdout event printer", () => {
       { write: (chunk: string) => errors.push(chunk) },
     );
 
-    await printer.append({
-      type: "run.cancelled",
-      cancelledAt: "2026-07-10T00:00:00.000Z",
-      cancellation: {
-        source: "user",
-        phase: "tool_execution",
-        step: 2,
-        toolCallId: "call_1",
-        toolName: "Bash",
+    const runtime = createTestRuntime(printer);
+    await runtime.runtimeSession.append({
+      type: "turn.cancelled",
+      ...runtime.iteration,
+      data: {
+        cancellation: {
+          source: "user",
+          phase: "tool_execution",
+          iterationId: runtime.iteration.iterationId,
+          iterationNumber: 1,
+          toolName: "Bash",
+        },
       },
     });
 
     expect(output.join("")).toBe(
-      "run.cancelled phase=tool_execution step=2 tool=Bash\n",
+      "turn.cancelled phase=tool_execution iteration=1 tool=Bash\n",
     );
     expect(errors).toEqual([]);
   });
@@ -36,16 +40,21 @@ describe("stdout event printer", () => {
       { write: (chunk: string) => stderr.push(chunk) },
     );
 
-    await printer.append({
-      type: "tool.started",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Grep",
+      args: { pattern: "foo" },
     });
-    await printer.append({
+    await runtime.runtimeSession.append({
+      type: "tool.started",
+      ...call,
+      data: { call },
+    });
+    await runtime.runtimeSession.append({
       type: "tool.finished",
-      step: 1,
-      call: { id: "call_1", name: "Grep", args: { pattern: "foo" } },
-      ok: true,
+      ...call,
+      data: { call, ok: true },
     });
 
     expect(stdout).toEqual([
@@ -62,23 +71,31 @@ describe("stdout event printer", () => {
       { write: () => undefined },
     );
 
-    await printer.append({
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Edit",
+      args: { file_path: "notes.txt" },
+    });
+    await runtime.runtimeSession.append({
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Edit", args: { file_path: "notes.txt" } },
-      raw: {
-        ok: true,
-        filePath: "notes.txt",
-        patch: [
-          {
-            oldStart: 1,
-            oldLines: 3,
-            newStart: 1,
-            newLines: 3,
-            lines: [" alpha", "-beta", "+delta", " gamma"],
-          },
-        ],
-        patchTruncated: false,
+      ...call,
+      data: {
+        call,
+        raw: {
+          ok: true,
+          filePath: "notes.txt",
+          patch: [
+            {
+              oldStart: 1,
+              oldLines: 3,
+              newStart: 1,
+              newLines: 3,
+              lines: [" alpha", "-beta", "+delta", " gamma"],
+            },
+          ],
+          patchTruncated: false,
+        },
       },
     });
 
@@ -102,24 +119,31 @@ describe("stdout event printer", () => {
     );
 
     const lines = Array.from({ length: 8 }, (_, index) => `line ${index + 1}`);
-    await printer.append({
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Bash",
+      args: { command: "bun test", description: "Run the test suite" },
+    });
+    await runtime.runtimeSession.append({
       type: "tool.raw_result",
-      step: 1,
-      call: {
-        id: "call_1",
-        name: "Bash",
-        args: { command: "bun test", description: "Run the test suite" },
-      },
-      raw: {
-        ok: true,
-        command: "bun test",
-        status: "completed",
-        exitCode: 0,
-        preview: lines.join("\n"),
-        outputLines: 8,
-        outputBytes: 60,
-        truncated: false,
-        outputFilePath: "/tmp/task-1.log",
+      ...call,
+      data: {
+        call,
+        raw: {
+          ok: true,
+          command: "bun test",
+          taskId: "task-1",
+          sessionId: runtime.runtimeSession.sessionId,
+          status: "completed",
+          exitCode: 0,
+          preview: lines.join("\n"),
+          outputLines: 8,
+          outputBytes: 60,
+          truncated: false,
+          outputFilePath: "/tmp/task-1.log",
+          cwd: "/tmp",
+        },
       },
     });
 
@@ -143,17 +167,36 @@ describe("stdout event printer", () => {
       { write: () => undefined },
     );
 
-    await printer.append({
-      type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_1", name: "Read", args: { file_path: "notes.txt" } },
-      raw: { ok: true, filePath: "notes.txt", content: "alpha" },
+    const runtime = createTestRuntime(printer);
+    const readCall = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Read",
+      args: { file_path: "notes.txt" },
     });
-    await printer.append({
+    await runtime.runtimeSession.append({
       type: "tool.raw_result",
-      step: 1,
-      call: { id: "call_2", name: "Edit", args: { file_path: "notes.txt" } },
-      raw: { ok: false, filePath: "notes.txt", error: "old_string was not found." },
+      ...readCall,
+      data: {
+        call: readCall,
+        raw: { ok: true, filePath: "notes.txt", content: "alpha" },
+      },
+    });
+    const editCall = runtime.toolCall({
+      providerToolCallId: "provider-call-2",
+      name: "Edit",
+      args: { file_path: "notes.txt" },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...editCall,
+      data: {
+        call: editCall,
+        raw: {
+          ok: false,
+          filePath: "notes.txt",
+          error: "old_string was not found.",
+        },
+      },
     });
 
     expect(stdout).toEqual([]);
@@ -166,9 +209,15 @@ describe("stdout event printer", () => {
       { write: (chunk: string) => stdout.push(chunk) },
       { write: (chunk: string) => stderr.push(chunk) },
     );
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "TaskStop",
+      args: { task_id: "task-1" },
+    });
     const task = {
       taskId: "task-1",
-      runId: "run-1",
+      origin: call,
       command: "sleep 30",
       description: "Run server",
       status: "running" as const,
@@ -181,22 +230,27 @@ describe("stdout event printer", () => {
       cwd: "/tmp",
     };
 
-    await printer.append({ type: "bash.task.backgrounded", task });
-    const call = {
-      id: "call_1",
-      name: "TaskStop",
-      args: { task_id: "task-1" },
-    };
-    await printer.append({ type: "tool.started", step: 1, call });
-    await printer.append({
+    await runtime.runtimeSession.append({
+      type: "bash.task.backgrounded",
+      ...call,
+      data: { task },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.started",
+      ...call,
+      data: { call },
+    });
+    await runtime.runtimeSession.append({
       type: "tool.raw_result",
-      step: 1,
-      call,
-      raw: {
-        ok: true,
-        taskId: "task-1",
-        status: "killed",
-        task: { ...task, status: "killed", signal: "SIGTERM" },
+      ...call,
+      data: {
+        call,
+        raw: {
+          ok: true,
+          taskId: "task-1",
+          status: "killed",
+          task: { ...task, status: "killed", signal: "SIGTERM" },
+        },
       },
     });
 

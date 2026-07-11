@@ -33,7 +33,7 @@ export function createModelRefiner(options: {
         ? input.content.slice(0, maxContentChars)
         : input.content;
 
-      const output = await client.step(
+      const output = await client.request(
         {
           messages: [
             { role: "system", content: REFINE_SYSTEM_PROMPT },

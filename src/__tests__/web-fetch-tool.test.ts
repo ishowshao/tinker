@@ -13,6 +13,7 @@ import {
 import type { WebFetchBackend } from "../tools/web-fetch/backend";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ToolCall } from "../agent/types";
+import { createTestRuntime } from "./test-runtime";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { ToolExecutionContext, WebFetchRawResult } from "../tools/types";
 
@@ -98,7 +99,11 @@ function createFakeRefiner(answer = "refined answer"): {
 }
 
 function toolCall(args: unknown): ToolCall {
-  return { id: "call_1", name: "WebFetch", args };
+  return createTestRuntime().toolCall({
+    providerToolCallId: "call_1",
+    name: "WebFetch",
+    args,
+  });
 }
 
 function createFakeBrowserBackend(

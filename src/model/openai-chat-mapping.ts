@@ -1,7 +1,7 @@
-import type { AgentMessage, ToolCall } from "../agent/types";
-import type { ModelStepOutput } from "./model-client";
+import type { AgentMessage, IterationIdentity, ToolCall } from "../agent/types";
+import type { RuntimeSession } from "../agent/runtime-session";
+import type { ModelRequestOutput } from "./model-client";
 import type { ToolDefinition } from "../tools/types";
-import { createUuidV7 } from "../ids/uuid-v7";
 import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionMessageFunctionToolCall,
@@ -42,7 +42,7 @@ export function toOpenAIChatMessages(
     if (message.role === "tool") {
       return {
         role: "tool",
-        tool_call_id: message.toolCallId,
+        tool_call_id: message.providerToolCallId,
         content: message.content,
       };
     }
@@ -62,18 +62,42 @@ export function toOpenAIChatTools(tools: ToolDefinition[]): ChatCompletionTool[]
   }));
 }
 
-export function fromOpenAIChatCompletion(response: unknown): ModelStepOutput {
+export function fromOpenAIChatCompletion(
+  response: unknown,
+  context:
+    | {
+        iteration: IterationIdentity;
+        runtimeSession: RuntimeSession;
+      }
+    | undefined,
+): ModelRequestOutput {
   const completion = asRecord(response);
-  const choices = Array.isArray(completion.choices) ? completion.choices : [];
-  const choice = asRecord(choices[0]);
-  const message = asRecord(choice.message);
+  if (!Array.isArray(completion.choices) || completion.choices.length === 0) {
+    throw new Error("OpenAI Chat Completions response is missing choices[0].");
+  }
+
+  const choice = requireRecord(completion.choices[0], "choices[0]");
+  const message = requireRecord(choice.message, "choices[0].message");
   const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-  const toolCalls = rawToolCalls.map(parseToolCall);
+  if (rawToolCalls.length > 0 && context === undefined) {
+    throw new Error(
+      "OpenAI Chat Completions returned tool calls without an iteration identity context.",
+    );
+  }
+  const toolCalls = rawToolCalls.map((raw, index) =>
+    parseToolCall(raw, index, context!),
+  );
+  const content = normalizeContent(message.content);
+  if ((content === null || content.trim() === "") && toolCalls.length === 0) {
+    throw new Error(
+      "OpenAI Chat Completions assistant message has neither text nor tool calls.",
+    );
+  }
 
   return {
     message: {
       role: "assistant",
-      content: normalizeContent(message.content),
+      content,
       reasoningContent: normalizeContent(message.reasoning_content),
       toolCalls: toolCalls.length === 0 ? undefined : toolCalls,
     },
@@ -86,7 +110,7 @@ export function fromOpenAIChatCompletion(response: unknown): ModelStepOutput {
 
 function toOpenAIToolCall(call: ToolCall): ChatCompletionMessageFunctionToolCall {
   return {
-    id: call.id,
+    id: call.providerToolCallId,
     type: "function",
     function: {
       name: call.name,
@@ -97,9 +121,27 @@ function toOpenAIToolCall(call: ToolCall): ChatCompletionMessageFunctionToolCall
   };
 }
 
-function parseToolCall(raw: unknown): ToolCall {
-  const record = asRecord(raw);
-  const fn = asRecord(record.function);
+function parseToolCall(
+  raw: unknown,
+  index: number,
+  context: {
+    iteration: IterationIdentity;
+    runtimeSession: RuntimeSession;
+  },
+): ToolCall {
+  const record = requireRecord(raw, `choices[0].message.tool_calls[${index}]`);
+  const providerToolCallId = requireNonEmptyString(
+    record.id,
+    `choices[0].message.tool_calls[${index}].id`,
+  );
+  const fn = requireRecord(
+    record.function,
+    `choices[0].message.tool_calls[${index}].function`,
+  );
+  const name = requireNonEmptyString(
+    fn.name,
+    `choices[0].message.tool_calls[${index}].function.name`,
+  );
   const rawArgs = typeof fn.arguments === "string" ? fn.arguments : "";
   let args: unknown = {};
   let argsParseError: string | undefined;
@@ -113,8 +155,9 @@ function parseToolCall(raw: unknown): ToolCall {
   }
 
   return {
-    id: typeof record.id === "string" ? record.id : createUuidV7(),
-    name: typeof fn.name === "string" ? fn.name : "",
+    ...context.runtimeSession.createToolCall(context.iteration, index + 1),
+    providerToolCallId,
+    name,
     args,
     rawArgs,
     argsParseError,
@@ -137,4 +180,21 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function requireRecord(value: unknown, path: string): Record<string, unknown> {
+  const record = asRecord(value);
+  if (Object.keys(record).length === 0) {
+    throw new Error(`OpenAI Chat Completions response has invalid ${path}.`);
+  }
+
+  return record;
+}
+
+function requireNonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`OpenAI Chat Completions response has invalid ${path}.`);
+  }
+
+  return value;
 }

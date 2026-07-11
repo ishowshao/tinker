@@ -10,6 +10,19 @@ import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
 import { TuiEventStream } from "../events/tui-event-stream";
 import type { SlashCommand } from "../tui/slash-commands";
+import type { SessionId } from "../ids/runtime-id";
+import { createTestRuntime } from "./test-runtime";
+
+const testRuntime = createTestRuntime();
+
+function completedResult() {
+  return {
+    status: "completed" as const,
+    finalText: "",
+    messages: [],
+    lastIteration: testRuntime.iteration,
+  };
+}
 
 async function submitInput(stdin: { write: (data: string) => void }, value: string) {
   stdin.write(value);
@@ -23,39 +36,45 @@ describe("tui components", () => {
       <Header
         modelName="deepseek-v4-flash"
         workspaceRoot="/tmp/tinker"
-        runId="run-1"
+        sessionId={"session-1" as SessionId}
       />,
     );
 
     expect(lastFrame()).toContain("deepseek-v4-flash");
     expect(lastFrame()).toContain("tinker");
-    expect(lastFrame()).toContain("run-1");
+    expect(lastFrame()).toContain("session-1");
     cleanup();
   });
 
   test("renders timeline tool status", () => {
+    const call = testRuntime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Read",
+      args: { file_path: "README.md" },
+    });
     const { lastFrame, cleanup } = render(
       <Timeline
         events={[
-          { type: "model.step.started", step: 1 },
+          {
+            type: "model.request.started",
+            ...testRuntime.iteration,
+            eventSequence: 1,
+            timestamp: "2026-07-11T00:00:00.000Z",
+            data: {},
+          },
           {
             type: "tool.started",
-            step: 1,
-            call: {
-              id: "call_1",
-              name: "Read",
-              args: { file_path: "README.md" },
-            },
+            ...call,
+            eventSequence: 2,
+            timestamp: "2026-07-11T00:00:01.000Z",
+            data: { call },
           },
           {
             type: "tool.finished",
-            step: 1,
-            call: {
-              id: "call_1",
-              name: "Read",
-              args: { file_path: "README.md" },
-            },
-            ok: true,
+            ...call,
+            eventSequence: 3,
+            timestamp: "2026-07-11T00:00:02.000Z",
+            data: { call, ok: true },
           },
         ]}
       />,
@@ -84,9 +103,9 @@ describe("tui components", () => {
       <App
         modelName="model"
         workspaceRoot="/tmp/tinker"
-        runId="run-1"
+        sessionId={"session-1" as SessionId}
         eventStream={new TuiEventStream()}
-        run={async () => ({ status: "completed", finalText: "", messages: [] })}
+        run={async () => completedResult()}
         readGitBranch={async () => branches[branchReads++]}
       />,
     );
@@ -102,21 +121,22 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("uses local cancelling feedback until run.cancelled arrives", async () => {
+  test("uses local cancelling feedback until turn.cancelled arrives", async () => {
     const eventStream = new TuiEventStream();
     let abortCount = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
         modelName="model"
         workspaceRoot="/tmp/tinker"
-        runId="run-1"
+        sessionId={"session-1" as SessionId}
         eventStream={eventStream}
         run={async (prompt, signal) => {
           await eventStream.append({
-            type: "run.started",
-            runId: "run-1",
-            createdAt: "2026-07-10T00:00:00.000Z",
-            input: { userPrompt: prompt },
+            type: "turn.started",
+            ...testRuntime.turn,
+            eventSequence: 1,
+            timestamp: "2026-07-10T00:00:00.000Z",
+            data: { userPrompt: prompt },
           });
 
           return await new Promise((resolve) => {
@@ -127,12 +147,17 @@ describe("tui components", () => {
                 setTimeout(() => {
                   void eventStream
                     .append({
-                      type: "run.cancelled",
-                      cancelledAt: "2026-07-10T00:00:01.000Z",
-                      cancellation: {
-                        source: "user",
-                        phase: "model_request",
-                        step: 1,
+                      type: "turn.cancelled",
+                      ...testRuntime.iteration,
+                      eventSequence: 2,
+                      timestamp: "2026-07-10T00:00:01.000Z",
+                      data: {
+                        cancellation: {
+                          source: "user",
+                          phase: "model_request",
+                          iterationId: testRuntime.iteration.iterationId,
+                          iterationNumber: 1,
+                        },
                       },
                     })
                     .then(() =>
@@ -141,9 +166,11 @@ describe("tui components", () => {
                         cancellation: {
                           source: "user" as const,
                           phase: "model_request" as const,
-                          step: 1,
+                          iterationId: testRuntime.iteration.iterationId,
+                          iterationNumber: 1,
                         },
                         messages: [],
+                        lastIteration: testRuntime.iteration,
                       }),
                     );
                 }, 40);
@@ -181,7 +208,11 @@ describe("tui components", () => {
         tasks={[
           {
             taskId: "task-019f",
-            runId: "run-1",
+            origin: testRuntime.toolCall({
+              providerToolCallId: "background-origin",
+              name: "Bash",
+              args: {},
+            }),
             command: "bun run dev",
             description: "Start development server",
             status: "killed",
@@ -290,11 +321,11 @@ describe("tui components", () => {
       <App
         modelName="model"
         workspaceRoot="/tmp/tinker"
-        runId="run-1"
+        sessionId={"session-1" as SessionId}
         eventStream={new TuiEventStream()}
         run={async () => {
           runCount += 1;
-          return { status: "completed", finalText: "", messages: [] };
+          return completedResult();
         }}
         onQuit={() => {
           quitCount += 1;
@@ -318,11 +349,11 @@ describe("tui components", () => {
       <App
         modelName="model"
         workspaceRoot="/tmp/tinker"
-        runId="run-1"
+        sessionId={"session-1" as SessionId}
         eventStream={new TuiEventStream()}
         run={async () => {
           runCount += 1;
-          return { status: "completed", finalText: "", messages: [] };
+          return completedResult();
         }}
         onQuit={() => undefined}
       />,

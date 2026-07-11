@@ -21,6 +21,20 @@ describe("runner config", () => {
       );
     });
   });
+
+  test("reads max iterations from the new environment variable", () => {
+    withEnv("TINKER_MAX_ITERATIONS", "7", () => {
+      expect(readRunnerConfig().maxIterations).toBe(7);
+    });
+  });
+
+  test("fast-fails an invalid max iterations value", () => {
+    withEnv("TINKER_MAX_ITERATIONS", "0", () => {
+      expect(() => readRunnerConfig()).toThrow(
+        "TINKER_MAX_ITERATIONS must be a positive integer",
+      );
+    });
+  });
 });
 
 describe("system prompt", () => {

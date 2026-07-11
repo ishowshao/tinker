@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
+import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type {
@@ -15,14 +16,27 @@ const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
 };
 
-function createDefaultTooling(options: Parameters<typeof createDefaultToolingBase>[0]) {
-  const tooling = createDefaultToolingBase(options);
+function createDefaultTooling(
+  options: Omit<Parameters<typeof createDefaultToolingBase>[0], "runtimeSession">,
+) {
+  const testRuntime = createTestRuntime();
+  const tooling = createDefaultToolingBase({
+    ...options,
+    runtimeSession: testRuntime.runtimeSession,
+  });
   return {
     ...tooling,
     runtime: {
-      execute: (call: ToolCall, context: ToolExecutionContext = testToolContext) =>
-        tooling.runtime.execute(call, context),
+      execute: (
+        call: TestToolCallInput | ToolCall,
+        context: ToolExecutionContext = testToolContext,
+      ) =>
+        tooling.runtime.execute(
+          "sessionId" in call ? call : testRuntime.toolCall(call),
+          context,
+        ),
     },
+    testRuntime,
   };
 }
 
@@ -33,7 +47,6 @@ describe("Bash tool", () => {
     try {
       const tooling = createDefaultTooling({
         workspaceRoot: workspace,
-        runId: "test-run",
       });
       const definition = tooling.registry
         .definitions()
@@ -47,7 +60,7 @@ describe("Bash tool", () => {
       });
 
       const missingCommand = await tooling.runtime.execute({
-        id: "call_1",
+        providerToolCallId: "call_1",
         name: "Bash",
         args: {},
       });
@@ -57,7 +70,7 @@ describe("Bash tool", () => {
       );
 
       const invalidTimeout = await tooling.runtime.execute({
-        id: "call_2",
+        providerToolCallId: "call_2",
         name: "Bash",
         args: { command: "echo nope", timeout: 0 },
       });
@@ -76,17 +89,16 @@ describe("Bash tool", () => {
     try {
       const tooling = createDefaultTooling({
         workspaceRoot: workspace,
-        runId: "test-run",
       });
-      const call = {
-        id: "call_1",
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
         name: "Bash",
         args: { command: "echo hello", description: "print hello" },
-      };
+      });
       const raw = asBashRawResult(await tooling.runtime.execute(call));
 
       expect(raw.ok).toBe(true);
-      expect(raw.runId).toBe("test-run");
+      expect(raw.sessionId).toBe(tooling.testRuntime.runtimeSession.sessionId);
       expect(raw.status).toBe("completed");
       expect(raw.exitCode).toBe(0);
       expect(raw.preview).toBe("hello");
@@ -114,7 +126,7 @@ describe("Bash tool", () => {
 
       const grepRaw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "grep missing notes.txt" },
         }),
@@ -126,7 +138,7 @@ describe("Bash tool", () => {
 
       const diffRaw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_2",
+          providerToolCallId: "call_2",
           name: "Bash",
           args: { command: "diff left.txt right.txt" },
         }),
@@ -147,7 +159,7 @@ describe("Bash tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "false" },
         }),
@@ -168,7 +180,7 @@ describe("Bash tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: {
             command: "sleep 0.05; echo background-done",
@@ -194,7 +206,7 @@ describe("Bash tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "sleep 0.05; echo timeout-done", timeout: 1 },
         }),
@@ -222,7 +234,7 @@ describe("Bash tool", () => {
 
       const cdRaw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "cd subdir" },
         }),
@@ -232,7 +244,7 @@ describe("Bash tool", () => {
 
       const pwdRaw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_2",
+          providerToolCallId: "call_2",
           name: "Bash",
           args: { command: "pwd" },
         }),
@@ -241,7 +253,7 @@ describe("Bash tool", () => {
 
       const backgroundRaw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_3",
+          providerToolCallId: "call_3",
           name: "Bash",
           args: {
             command: "cd ..; sleep 0.05; pwd",
@@ -263,7 +275,7 @@ describe("Bash tool", () => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = asBashRawResult(
         await tooling.runtime.execute({
-          id: "call_1",
+          providerToolCallId: "call_1",
           name: "Bash",
           args: { command: "for i in $(seq 1 205); do echo line-$i; done" },
         }),

@@ -3,13 +3,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
+import { RuntimeSession } from "../agent/runtime-session";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import type {
   ModelClient,
-  ModelStepInput,
-  ModelStepOutput,
+  ModelRequestInput,
+  ModelRequestOptions,
+  ModelRequestOutput,
 } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
@@ -17,7 +19,10 @@ import { createDefaultTooling } from "../tools/registry";
 class ScriptedModel implements ModelClient {
   calls = 0;
 
-  async step(input: ModelStepInput): Promise<ModelStepOutput> {
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
     this.calls += 1;
 
     if (this.calls === 1) {
@@ -27,7 +32,8 @@ class ScriptedModel implements ModelClient {
           content: "I will read README first.",
           toolCalls: [
             {
-              id: "call_1",
+              ...requireRuntime(options).createToolCall(requireIteration(options), 1),
+              providerToolCallId: "provider-call-1",
               name: "Read",
               args: { file_path: "README.md" },
             },
@@ -50,9 +56,9 @@ class ScriptedModel implements ModelClient {
 }
 
 class CapturingModel implements ModelClient {
-  readonly inputs: ModelStepInput[] = [];
+  readonly inputs: ModelRequestInput[] = [];
 
-  async step(input: ModelStepInput): Promise<ModelStepOutput> {
+  async request(input: ModelRequestInput): Promise<ModelRequestOutput> {
     this.inputs.push({
       ...input,
       messages: [...input.messages],
@@ -85,15 +91,18 @@ describe("runAgent", () => {
 
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const events = new ArrayEventSink();
+      const runtimeSession = new RuntimeSession(events);
+      const turn = runtimeSession.createTurn("Read README.md");
       const result = await runAgent({
         systemPrompt: "system",
         userPrompt: "Read README.md",
-        maxSteps: 4,
+        maxIterations: 4,
         model: new ScriptedModel(),
         tools: tooling.registry,
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
-        eventSink: events,
+        runtimeSession,
+        turn,
         signal: new AbortController().signal,
       });
 
@@ -104,13 +113,14 @@ describe("runAgent", () => {
       const progressEvent = events.events.find(
         (event) => event.type === "assistant.progress",
       );
-      expect(progressEvent).toEqual({
+      expect(progressEvent).toMatchObject({
         type: "assistant.progress",
-        step: 1,
-        content: "I will read README first.",
+        data: { content: "I will read README first." },
       });
       expect(events.events.map((event) => event.type)).toContain("tool.observation");
-      expect(events.events.map((event) => event.type)).toContain("model.step.finished");
+      expect(events.events.map((event) => event.type)).toContain(
+        "model.request.finished",
+      );
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -119,6 +129,8 @@ describe("runAgent", () => {
   test("continues from initial messages when provided", async () => {
     const tooling = createDefaultTooling({ workspaceRoot: process.cwd() });
     const events = new ArrayEventSink();
+    const runtimeSession = new RuntimeSession(events);
+    const turn = runtimeSession.createTurn("Second prompt");
     const model = new CapturingModel();
     const initialMessages: AgentMessage[] = [
       { role: "system", content: "system" },
@@ -130,12 +142,13 @@ describe("runAgent", () => {
       systemPrompt: "new system should not be inserted",
       userPrompt: "Second prompt",
       initialMessages,
-      maxSteps: 4,
+      maxIterations: 4,
       model,
       tools: tooling.registry,
       toolRuntime: tooling.runtime,
       observationBuilder: new ObservationBuilder(),
-      eventSink: events,
+      runtimeSession,
+      turn,
       signal: new AbortController().signal,
     });
 
@@ -151,3 +164,17 @@ describe("runAgent", () => {
     ]);
   });
 });
+
+function requireRuntime(options: ModelRequestOptions): RuntimeSession {
+  if (options.identity === undefined) {
+    throw new Error("Expected model request identity.");
+  }
+  return options.identity.runtimeSession;
+}
+
+function requireIteration(options: ModelRequestOptions) {
+  if (options.identity === undefined) {
+    throw new Error("Expected model request identity.");
+  }
+  return options.identity.iteration;
+}

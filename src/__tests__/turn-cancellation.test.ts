@@ -3,15 +3,16 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
+import { RuntimeSession } from "../agent/runtime-session";
 import { cancellationError, TurnCancelledError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
 import type { AgentEvent } from "../events/types";
 import type {
   ModelClient,
-  ModelStepInput,
-  ModelStepOptions,
-  ModelStepOutput,
+  ModelRequestInput,
+  ModelRequestOptions,
+  ModelRequestOutput,
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
@@ -19,6 +20,7 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling, ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ripGrep } from "../tools/ripgrep";
 import type { BashRawResult, ToolExecutor } from "../tools/types";
+import { createTestRuntime } from "./test-runtime";
 
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];
@@ -38,12 +40,12 @@ class WaitingModel implements ModelClient {
     });
   }
 
-  async step(
-    _input: ModelStepInput,
-    options: ModelStepOptions,
-  ): Promise<ModelStepOutput> {
+  async request(
+    _input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
     this.start();
-    return await new Promise<ModelStepOutput>((_resolve, reject) => {
+    return await new Promise<ModelRequestOutput>((_resolve, reject) => {
       const onAbort = () => reject(cancellationError(options.signal));
       if (options.signal.aborted) {
         onAbort();
@@ -56,14 +58,36 @@ class WaitingModel implements ModelClient {
 }
 
 class ToolBatchModel implements ModelClient {
-  async step(): Promise<ModelStepOutput> {
+  async request(
+    _input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    if (options.identity === undefined) {
+      throw new Error("Expected model request identity.");
+    }
+    const { iteration, runtimeSession } = options.identity;
     return {
       message: {
         role: "assistant",
         toolCalls: [
-          { id: "call_read", name: "Read", args: {} },
-          { id: "call_grep", name: "Grep", args: {} },
-          { id: "call_glob", name: "Glob", args: {} },
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: "provider-read",
+            name: "Read",
+            args: {},
+          },
+          {
+            ...runtimeSession.createToolCall(iteration, 2),
+            providerToolCallId: "provider-grep",
+            name: "Grep",
+            args: {},
+          },
+          {
+            ...runtimeSession.createToolCall(iteration, 3),
+            providerToolCallId: "provider-glob",
+            name: "Glob",
+            args: {},
+          },
         ],
       },
     };
@@ -100,7 +124,7 @@ describe("turn cancellation", () => {
       fetch: fetchImpl,
     });
 
-    await client.step(
+    await client.request(
       { messages: [{ role: "user", content: "hello" }], tools: [] },
       { signal: controller.signal },
     );
@@ -116,17 +140,20 @@ describe("turn cancellation", () => {
     const controller = new AbortController();
     const model = new WaitingModel();
     const events = new ArrayEventSink();
+    const runtimeSession = new RuntimeSession(events);
+    const turn = runtimeSession.createTurn("wait");
 
     try {
       const pending = runAgent({
         systemPrompt: "system",
         userPrompt: "wait",
-        maxSteps: 2,
+        maxIterations: 2,
         model,
         tools: tooling.registry,
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
-        eventSink: events,
+        runtimeSession,
+        turn,
         signal: controller.signal,
       });
 
@@ -139,7 +166,10 @@ describe("turn cancellation", () => {
         "model_request",
       );
       expect(result.messages.at(-1)).toEqual({ role: "user", content: "wait" });
-      expect(events.events.map((event) => event.type)).toEqual(["model.step.started"]);
+      expect(events.events.map((event) => event.type)).toEqual([
+        "agent.iteration.started",
+        "model.request.started",
+      ]);
     } finally {
       await tooling.dispose();
       await rm(workspace, { recursive: true });
@@ -157,10 +187,15 @@ describe("turn cancellation", () => {
     );
     const controller = new AbortController();
     controller.abort(new TurnCancelledError());
+    const testRuntime = createTestRuntime();
 
     expect(
       new ToolRuntime(registry).execute(
-        { id: "call_1", name: "Read", args: {} },
+        testRuntime.toolCall({
+          providerToolCallId: "provider-call-1",
+          name: "Read",
+          args: {},
+        }),
         { signal: controller.signal },
       ),
     ).rejects.toBeInstanceOf(TurnCancelledError);
@@ -199,15 +234,18 @@ describe("turn cancellation", () => {
     );
 
     const events = new ArrayEventSink();
+    const runtimeSession = new RuntimeSession(events);
+    const turn = runtimeSession.createTurn("run tools");
     const result = await runAgent({
       systemPrompt: "system",
       userPrompt: "run tools",
-      maxSteps: 2,
+      maxIterations: 2,
       model: new ToolBatchModel(),
       tools: registry,
       toolRuntime: new ToolRuntime(registry),
       observationBuilder: new ObservationBuilder(),
-      eventSink: events,
+      runtimeSession,
+      turn,
       signal: controller.signal,
     });
 
@@ -224,15 +262,19 @@ describe("turn cancellation", () => {
     expect(eventTypes).toContain("tool.finished");
     expect(
       events.events.some(
-        (event) => event.type === "tool.started" && event.call.id === "call_glob",
+        (event) =>
+          event.type === "tool.started" &&
+          event.data.call.providerToolCallId === "provider-glob",
       ),
     ).toBe(false);
   });
 
   test("kills a foreground Bash process group and keeps it out of TaskList", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-cancel-bash-"));
+    const testRuntime = createTestRuntime();
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
+      runtimeSession: testRuntime.runtimeSession,
       taskStopGraceMs: 50,
     });
     const controller = new AbortController();
@@ -242,14 +284,14 @@ describe("turn cancellation", () => {
 
     try {
       const pending = tooling.runtime.execute(
-        {
-          id: "call_bash",
+        testRuntime.toolCall({
+          providerToolCallId: "call_bash",
           name: "Bash",
           args: {
             command:
               'sleep 30 & child=$!; printf "%s %s" "$$" "$child" > pids.txt; wait',
           },
-        },
+        }),
         { signal: controller.signal },
       );
 
@@ -274,19 +316,21 @@ describe("turn cancellation", () => {
 
   test("finishes explicit background publication before observing abort", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-cancel-bg-"));
+    const testRuntime = createTestRuntime();
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
+      runtimeSession: testRuntime.runtimeSession,
       taskStopGraceMs: 50,
     });
     const controller = new AbortController();
 
     try {
       const pending = tooling.runtime.execute(
-        {
-          id: "call_background",
+        testRuntime.toolCall({
+          providerToolCallId: "call_background",
           name: "Bash",
           args: { command: "sleep 30", run_in_background: true },
-        },
+        }),
         { signal: controller.signal },
       );
       controller.abort(new TurnCancelledError());
@@ -309,22 +353,26 @@ describe("turn cancellation", () => {
       async append(event) {
         if (
           event.type === "bash.task.backgrounded" &&
-          event.task.backgroundReason === "foreground_timeout"
+          event.data.task.backgroundReason === "foreground_timeout"
         ) {
           controller.abort(new TurnCancelledError());
         }
       },
     };
+    const runtimeSession = new RuntimeSession(eventSink);
+    const turn = runtimeSession.createTurn("timeout");
+    const iteration = runtimeSession.createIteration(turn, 1);
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
-      eventSink,
+      runtimeSession,
       taskStopGraceMs: 50,
     });
 
     try {
       const raw = (await tooling.runtime.execute(
         {
-          id: "call_timeout",
+          ...runtimeSession.createToolCall(iteration, 1),
+          providerToolCallId: "call_timeout",
           name: "Bash",
           args: { command: "sleep 30", timeout: 1 },
         },
@@ -375,15 +423,20 @@ describe("turn cancellation", () => {
     const logPath = path.join(workspace, "run.md");
 
     try {
-      await new ObservationTextLog(logPath).append({
-        type: "run.cancelled",
-        cancelledAt: "2026-07-10T00:00:00.000Z",
-        cancellation: {
-          source: "user",
-          phase: "tool_execution",
-          step: 2,
-          toolCallId: "call_1",
-          toolName: "Bash",
+      const runtimeSession = new RuntimeSession(new ObservationTextLog(logPath));
+      const turn = runtimeSession.createTurn("cancel me");
+      const iteration = runtimeSession.createIteration(turn, 1);
+      await runtimeSession.append({
+        type: "turn.cancelled",
+        ...iteration,
+        data: {
+          cancellation: {
+            source: "user",
+            phase: "tool_execution",
+            iterationId: iteration.iterationId,
+            iterationNumber: iteration.iterationNumber,
+            toolName: "Bash",
+          },
         },
       });
 

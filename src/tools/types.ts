@@ -1,4 +1,5 @@
 import type { ToolCall } from "../agent/types";
+import type { SessionId } from "../ids/runtime-id";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "./bash-task";
 
 export type JsonSchema = Record<string, unknown>;
@@ -101,7 +102,7 @@ export type BashRawResult = {
   ok: boolean;
   command: string;
   taskId: string;
-  runId: string;
+  sessionId: SessionId;
   status: "completed" | "failed" | "running" | "killed";
   exitCode?: number;
   signal?: string;

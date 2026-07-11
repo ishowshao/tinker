@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { runOneShot } from "../cli/run-runner";
 import { FakeModelClient } from "../model/fake-model-client";
-import type { ModelClient, ModelStepOutput } from "../model/model-client";
+import type {
+  ModelClient,
+  ModelRequestOptions,
+  ModelRequestOutput,
+} from "../model/model-client";
+import type { SessionId } from "../ids/runtime-id";
 
 class MemoryWriter {
   output = "";
@@ -17,15 +22,25 @@ class MemoryWriter {
 class BackgroundTaskModel implements ModelClient {
   private calls = 0;
 
-  async step(): Promise<ModelStepOutput> {
+  async request(
+    optionsInput: unknown,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
     this.calls += 1;
     if (this.calls === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
       return {
         message: {
           role: "assistant",
           toolCalls: [
             {
-              id: "call_background",
+              ...options.identity.runtimeSession.createToolCall(
+                options.identity.iteration,
+                1,
+              ),
+              providerToolCallId: "call_background",
               name: "Bash",
               args: {
                 command: "echo $$; sleep 30",
@@ -50,7 +65,7 @@ describe("runOneShot", () => {
 
     try {
       const code = await runOneShot("Create notes.txt with one line: hello.", {
-        runId: "test-run",
+        sessionId: "test-session" as SessionId,
         workspaceRoot: workspace,
         modelName: "fake",
         modelClient: new FakeModelClient("write-notes"),
@@ -60,34 +75,34 @@ describe("runOneShot", () => {
 
       expect(code).toBe(0);
       expect(stderr.output).toBe("");
-      expect(stdout.output).toContain("run.started runId=test-run");
-      expect(stdout.output).toContain("assistant.progress step=1");
+      expect(stdout.output).toContain("session.started sessionId=test-session");
+      expect(stdout.output).toContain("assistant.progress iteration=1");
       expect(stdout.output).toContain("I will create notes.txt.");
       expect(stdout.output).toContain("tool.started name=Write path=notes.txt");
-      expect(stdout.output).toContain("run.finished status=completed");
+      expect(stdout.output).toContain("turn.finished status=completed");
       expect(stdout.output).toContain("Created notes.txt");
       expect(await readFile(path.join(workspace, "notes.txt"), "utf8")).toBe(
         "hello.\n",
       );
 
       const jsonl = await readFile(
-        path.join(workspace, ".tinker", "runs", "test-run.jsonl"),
+        path.join(workspace, ".tinker", "sessions", "test-session", "events.jsonl"),
         "utf8",
       );
-      expect(jsonl).toContain('"type":"run.started"');
+      expect(jsonl).toContain('"type":"session.started"');
       expect(jsonl).toContain('"type":"tool.observation"');
-      expect(jsonl).toContain('"type":"run.finished"');
+      expect(jsonl).toContain('"type":"turn.finished"');
 
       const observations = await readFile(
-        path.join(workspace, ".tinker", "runs", "test-run.observations.md"),
+        path.join(workspace, ".tinker", "sessions", "test-session", "observations.md"),
         "utf8",
       );
-      expect(observations).toContain("# Tinker Run test-run");
-      expect(observations).toContain("## Prompt");
+      expect(observations).toContain("# Tinker Session test-session");
+      expect(observations).toContain("- Prompt");
       expect(observations).toContain("Create notes.txt with one line: hello.");
-      expect(observations).toContain("## Step 1 - Assistant");
+      expect(observations).toContain("- Assistant");
       expect(observations).toContain("I will create notes.txt.");
-      expect(observations).toContain("## Step 1 - Write");
+      expect(observations).toContain("- Write");
       expect(observations).toContain("Write succeeded for notes.txt.");
       expect(observations).toContain("## Final");
       expect(observations).toContain("Created notes.txt");
@@ -103,7 +118,7 @@ describe("runOneShot", () => {
 
     try {
       const code = await runOneShot("Start a background task.", {
-        runId: "background-run",
+        sessionId: "background-session" as SessionId,
         workspaceRoot: workspace,
         modelName: "fake",
         modelClient: new BackgroundTaskModel(),
@@ -114,7 +129,13 @@ describe("runOneShot", () => {
       expect(stderr.output).toBe("");
 
       const jsonl = await readFile(
-        path.join(workspace, ".tinker", "runs", "background-run.jsonl"),
+        path.join(
+          workspace,
+          ".tinker",
+          "sessions",
+          "background-session",
+          "events.jsonl",
+        ),
         "utf8",
       );
       const events = jsonl
@@ -123,12 +144,14 @@ describe("runOneShot", () => {
         .map((line) => JSON.parse(line) as Record<string, unknown>);
       const finished = events.find((event) => event.type === "bash.task.finished");
       expect(finished).toBeDefined();
-      expect((finished?.task as Record<string, unknown> | undefined)?.status).toBe(
+      const finishedData = finished?.data as Record<string, unknown> | undefined;
+      expect((finishedData?.task as Record<string, unknown> | undefined)?.status).toBe(
         "killed",
       );
 
       const rawEvent = events.find((event) => event.type === "tool.raw_result");
-      const raw = rawEvent?.raw as Record<string, unknown> | undefined;
+      const rawEventData = rawEvent?.data as Record<string, unknown> | undefined;
+      const raw = rawEventData?.raw as Record<string, unknown> | undefined;
       const outputFilePath = raw?.outputFilePath;
       expect(outputFilePath).toBeString();
       const pid = Number(

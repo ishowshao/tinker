@@ -3,7 +3,7 @@ import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { EventSink } from "../events/event-sink";
+import type { RuntimeSession } from "../agent/runtime-session";
 import type { ToolExecutor } from "../tools/types";
 import type { McpConfig, McpServerConfig } from "./mcp-config";
 import { createMcpToolExecutor } from "./mcp-tool-executor";
@@ -27,7 +27,7 @@ export type McpManager = {
 
 export type CreateMcpManagerOptions = {
   config: McpConfig;
-  eventSink: EventSink;
+  runtimeSession: RuntimeSession;
   clientFactory?: McpClientFactory;
   timeoutMs?: number;
   maxObservationChars?: number;
@@ -52,10 +52,13 @@ export async function createMcpManager(
     try {
       connection = await clientFactory(serverName, serverConfig);
     } catch (error) {
-      await options.eventSink.append({
+      await options.runtimeSession.append({
         type: "mcp.server.failed",
-        serverName,
-        error: error instanceof Error ? error.message : String(error),
+        sessionId: options.runtimeSession.sessionId,
+        data: {
+          serverName,
+          error: error instanceof Error ? error.message : String(error),
+        },
       });
       continue;
     }
@@ -64,10 +67,13 @@ export async function createMcpManager(
       tools = (await connection.client.listTools()).tools;
     } catch (error) {
       await connection.close().catch(() => undefined);
-      await options.eventSink.append({
+      await options.runtimeSession.append({
         type: "mcp.server.failed",
-        serverName,
-        error: error instanceof Error ? error.message : String(error),
+        sessionId: options.runtimeSession.sessionId,
+        data: {
+          serverName,
+          error: error instanceof Error ? error.message : String(error),
+        },
       });
       continue;
     }
@@ -93,10 +99,10 @@ export async function createMcpManager(
       );
     }
 
-    await options.eventSink.append({
+    await options.runtimeSession.append({
       type: "mcp.server.connected",
-      serverName,
-      toolCount: seenToolNames.size,
+      sessionId: options.runtimeSession.sessionId,
+      data: { serverName, toolCount: seenToolNames.size },
     });
   }
 

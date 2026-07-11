@@ -28,21 +28,21 @@ export function Timeline(props: TimelineProps) {
 
 function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
   return events.flatMap((event, index): TimelineItem[] => {
-    if (event.type === "model.step.started") {
+    if (event.type === "model.request.started") {
       return [
         {
           id: `${index}-model-started`,
-          text: `model step ${event.step} started`,
+          text: `model iteration ${event.iterationNumber} started`,
           status: "running",
         },
       ];
     }
 
-    if (event.type === "model.step.finished") {
+    if (event.type === "model.request.finished") {
       return [
         {
           id: `${index}-model-finished`,
-          text: `model step ${event.step} finished`,
+          text: `model iteration ${event.iterationNumber} finished`,
           status: "ok",
         },
       ];
@@ -52,7 +52,7 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
       return [
         {
           id: `${index}-tool-started`,
-          text: `${event.call.name} ${toolPath(event.call.args) ?? ""}`.trim(),
+          text: `${event.data.call.name} ${toolPath(event.data.call.args) ?? ""}`.trim(),
           status: "running",
         },
       ];
@@ -62,40 +62,40 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
       return [
         {
           id: `${index}-tool-finished`,
-          text: `${event.call.name} ${toolPath(event.call.args) ?? ""}`.trim(),
-          status: event.ok ? "ok" : "failed",
+          text: `${event.data.call.name} ${toolPath(event.data.call.args) ?? ""}`.trim(),
+          status: event.data.ok ? "ok" : "failed",
         },
       ];
     }
 
-    if (event.type === "run.finished") {
-      const text = finalText(event.result);
+    if (event.type === "turn.finished") {
+      const text = finalText(event.data.result);
       return [
         {
-          id: `${index}-run-finished`,
-          text: text === undefined || text.trim() === "" ? "run finished" : text,
+          id: `${index}-turn-finished`,
+          text: text === undefined || text.trim() === "" ? "turn finished" : text,
           label: text === undefined || text.trim() === "" ? undefined : "assistant",
           status: text === undefined || text.trim() === "" ? "ok" : "text",
         },
       ];
     }
 
-    if (event.type === "run.cancelled") {
+    if (event.type === "turn.cancelled") {
       return [
         {
-          id: `${index}-run-cancelled`,
+          id: `${index}-turn-cancelled`,
           text: "turn cancelled",
           status: "cancelled",
         },
       ];
     }
 
-    if (event.type === "run.failed") {
+    if (event.type === "turn.failed") {
       return [
         {
-          id: `${index}-run-failed`,
+          id: `${index}-turn-failed`,
           label: "error",
-          text: event.error,
+          text: event.data.error,
           status: "failed",
         },
       ];
