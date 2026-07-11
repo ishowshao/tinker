@@ -3,6 +3,7 @@ import {
   applyAgentEvent as applyAgentEventCore,
   createInitialTuiState,
   type TuiState,
+  visibleTimelineItems,
 } from "../tui/event-store";
 import type { AgentEvent } from "../events/types";
 import type { ToolCall } from "../agent/types";
@@ -15,7 +16,24 @@ let eventSequence = 0;
 type TestEventInput = Record<string, unknown> & { type: string };
 
 function applyAgentEvent(state: TuiState, input: TestEventInput): TuiState {
+  if (state.activeTurn === undefined && requiresActiveTurn(input.type)) {
+    state = applyAgentEventCore(
+      state,
+      testEvent({ type: "turn.started", input: { userPrompt: "prompt" } }),
+    );
+  }
   return applyAgentEventCore(state, testEvent(input));
+}
+
+function requiresActiveTurn(type: string): boolean {
+  return (
+    type.startsWith("model.") ||
+    type.startsWith("tool.") ||
+    type === "assistant.progress" ||
+    type === "turn.finished" ||
+    type === "turn.failed" ||
+    type === "turn.cancelled"
+  );
 }
 
 function testEvent(input: TestEventInput): AgentEvent {
@@ -224,7 +242,7 @@ describe("tui event store", () => {
 
     state = applyAgentEvent(state, { type: "bash.task.backgrounded", task });
     expect(state.backgroundTasks).toEqual([task]);
-    expect(state.timeline).toEqual([]);
+    expect(visibleTimelineItems(state)).toEqual([]);
 
     state = applyAgentEvent(state, {
       type: "bash.task.stopping",
@@ -267,7 +285,9 @@ describe("tui event store", () => {
       call: listCall,
       raw: { kind: "task_list", ok: true, tasks: [{}, {}], runningCount: 1 },
     });
-    expect(state.timeline.at(-1)?.text).toBe("TaskList -> 2 tasks, 1 running");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "TaskList -> 2 tasks, 1 running",
+    );
 
     const outputCall = {
       providerToolCallId: "call_2",
@@ -295,8 +315,13 @@ describe("tui event store", () => {
         outputFilePath: "/tmp/task-1.log",
       },
     });
-    expect(state.timeline.at(-1)?.text).toBe("TaskOutput task-1 -> running, 2 lines");
-    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual(["starting", "ready"]);
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "TaskOutput task-1 -> running, 2 lines",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toEqual([
+      "starting",
+      "ready",
+    ]);
   });
 
   test("tracks run, tool, final and failure state", () => {
@@ -333,8 +358,8 @@ describe("tui event store", () => {
       },
       ok: true,
     });
-    expect(state.timeline.at(-1)?.text).toContain("README.md");
-    expect(state.timeline.at(-1)?.status).toBe("ok");
+    expect(visibleTimelineItems(state).at(-1)?.text).toContain("README.md");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("ok");
 
     state = applyAgentEvent(state, {
       type: "turn.finished",
@@ -345,9 +370,9 @@ describe("tui event store", () => {
     expect(state.status).toBe("done");
     expect(state.workedForMs).toBe(207_000);
     expect(state.finalText).toBe("done");
-    expect(state.timeline.at(-1)?.label).toBe("assistant");
-    expect(state.timeline.at(-1)?.text).toBe("done");
-    expect(state.timeline.at(-1)?.status).toBe("text");
+    expect(visibleTimelineItems(state).at(-1)?.label).toBe("assistant");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("done");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("text");
 
     state = applyAgentEvent(state, {
       type: "turn.failed",
@@ -355,8 +380,8 @@ describe("tui event store", () => {
     });
     expect(state.status).toBe("failed");
     expect(state.error).toBe("failed");
-    expect(state.timeline.at(-1)?.label).toBe("error");
-    expect(state.timeline.at(-1)?.text).toBe("failed");
+    expect(visibleTimelineItems(state).at(-1)?.label).toBe("error");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("failed");
   });
 
   test("starts a new prompt while preserving previous final answers", () => {
@@ -387,17 +412,17 @@ describe("tui event store", () => {
 
     expect(state.status).toBe("running");
     expect(state.workedForMs).toBeUndefined();
-    expect(state.timeline.map((item) => item.text)).toEqual([
+    expect(visibleTimelineItems(state).map((item) => item.text)).toEqual([
       "first",
       "first done",
       "second",
     ]);
-    expect(state.timeline.map((item) => item.label)).toEqual([
+    expect(visibleTimelineItems(state).map((item) => item.label)).toEqual([
       "prompt",
       "assistant",
       "prompt",
     ]);
-    expect(new Set(state.timeline.map((item) => item.id)).size).toBe(3);
+    expect(new Set(visibleTimelineItems(state).map((item) => item.id)).size).toBe(3);
   });
 
   test("records only the terminal cancelled state from events", () => {
@@ -424,8 +449,8 @@ describe("tui event store", () => {
     });
 
     expect(state.status).toBe("cancelled");
-    expect(state.timeline.at(-1)?.status).toBe("cancelled");
-    expect(state.timeline.at(-1)?.text).toContain("cancelled");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("cancelled");
+    expect(visibleTimelineItems(state).at(-1)?.text).toContain("cancelled");
 
     state = applyAgentEvent(state, {
       type: "tool.started",
@@ -447,8 +472,8 @@ describe("tui event store", () => {
         toolName: "Bash",
       },
     });
-    expect(state.timeline.at(-1)?.status).toBe("cancelled");
-    expect(state.timeline.at(-1)?.text).toContain("Bash");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("cancelled");
+    expect(visibleTimelineItems(state).at(-1)?.text).toContain("Bash");
   });
 
   test("updates model and tool timeline items with useful summaries", () => {
@@ -484,17 +509,19 @@ describe("tui event store", () => {
       },
     });
 
-    expect(state.timeline).toHaveLength(1);
-    expect(state.timeline[0]?.text).toBe("model iteration 1 -> 2 tool calls");
-    expect(state.timeline[0]?.status).toBe("ok");
+    expect(visibleTimelineItems(state)).toHaveLength(2);
+    expect(visibleTimelineItems(state)[1]?.text).toBe(
+      "model iteration 1 -> 2 tool calls",
+    );
+    expect(visibleTimelineItems(state)[1]?.status).toBe("ok");
 
     state = applyAgentEvent(state, {
       type: "assistant.progress",
       iterationNumber: 1,
       content: "I will inspect the matching tests.",
     });
-    expect(state.timeline).toHaveLength(2);
-    expect(state.timeline[1]).toMatchObject({
+    expect(visibleTimelineItems(state)).toHaveLength(3);
+    expect(visibleTimelineItems(state)[2]).toMatchObject({
       label: "assistant",
       text: "I will inspect the matching tests.",
       status: "text",
@@ -536,9 +563,9 @@ describe("tui event store", () => {
       ok: true,
     });
 
-    expect(state.timeline).toHaveLength(3);
-    expect(state.timeline[2]?.text).toBe("Glob **/*.test.ts -> 5 matches");
-    expect(state.timeline[2]?.status).toBe("ok");
+    expect(visibleTimelineItems(state)).toHaveLength(4);
+    expect(visibleTimelineItems(state)[3]?.text).toBe("Glob **/*.test.ts -> 5 matches");
+    expect(visibleTimelineItems(state)[3]?.status).toBe("ok");
   });
 
   test("summarizes Grep tool calls per output mode", () => {
@@ -553,8 +580,8 @@ describe("tui event store", () => {
       iterationNumber: 1,
       call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
     });
-    expect(state.timeline.at(-1)?.text).toBe("Grep foo");
-    expect(state.timeline.at(-1)?.status).toBe("running");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Grep foo");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("running");
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
@@ -569,7 +596,7 @@ describe("tui event store", () => {
         numFiles: 2,
       },
     });
-    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 2 files");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Grep foo -> 2 files");
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
@@ -585,7 +612,7 @@ describe("tui event store", () => {
         numLines: 7,
       },
     });
-    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 7 lines");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Grep foo -> 7 lines");
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
@@ -601,7 +628,9 @@ describe("tui event store", () => {
         numMatches: 9,
       },
     });
-    expect(state.timeline.at(-1)?.text).toBe("Grep foo -> 9 matches across 2 files");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Grep foo -> 9 matches across 2 files",
+    );
 
     state = applyAgentEvent(state, {
       type: "tool.finished",
@@ -609,7 +638,7 @@ describe("tui event store", () => {
       call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       ok: true,
     });
-    expect(state.timeline.at(-1)?.status).toBe("ok");
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("ok");
   });
 });
 
@@ -628,8 +657,10 @@ describe("bash detail in timeline", () => {
     };
 
     state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
-    expect(state.timeline.at(-1)?.text).toBe("Bash Show working tree status");
-    expect(state.timeline.at(-1)?.bash).toEqual({ command: "git status" });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Bash Show working tree status",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.bash).toEqual({ command: "git status" });
 
     state = applyAgentEvent(state, {
       type: "tool.raw_result",
@@ -649,8 +680,10 @@ describe("bash detail in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.text).toBe("Bash Show working tree status -> exit 0");
-    expect(state.timeline.at(-1)?.bash).toEqual({
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Bash Show working tree status -> exit 0",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.bash).toEqual({
       command: "git status",
       outputPreview: ["On branch main", "nothing to commit, working tree clean"],
       omittedOutputLines: 0,
@@ -691,14 +724,14 @@ describe("bash detail in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual([
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toEqual([
       "line 8",
       "line 9",
       "line 10",
       "line 11",
       "line 12",
     ]);
-    expect(state.timeline.at(-1)?.bash?.omittedOutputLines).toBe(7);
+    expect(visibleTimelineItems(state).at(-1)?.bash?.omittedOutputLines).toBe(7);
   });
 
   test("widens the output preview to 15 tail lines on failure", () => {
@@ -734,9 +767,11 @@ describe("bash detail in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.bash?.outputPreview).toHaveLength(15);
-    expect(state.timeline.at(-1)?.bash?.outputPreview?.at(0)).toBe("line 6");
-    expect(state.timeline.at(-1)?.bash?.omittedOutputLines).toBe(5);
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toHaveLength(15);
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview?.at(0)).toBe(
+      "line 6",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.bash?.omittedOutputLines).toBe(5);
   });
 
   test("strips ANSI escapes and control characters from the output preview", () => {
@@ -771,7 +806,9 @@ describe("bash detail in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.bash?.outputPreview).toEqual(["green  text"]);
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toEqual([
+      "green  text",
+    ]);
   });
 
   test("keeps the started command when the raw result carries no bash detail", () => {
@@ -800,7 +837,7 @@ describe("bash detail in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.bash).toEqual({ command: "false" });
+    expect(visibleTimelineItems(state).at(-1)?.bash).toEqual({ command: "false" });
   });
 });
 
@@ -841,9 +878,9 @@ describe("edit diff in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.text).toBe("Edit notes.txt -> +1 -1");
-    expect(state.timeline.at(-1)?.diff).toEqual(patch);
-    expect(state.timeline.at(-1)?.diffTruncated).toBe(false);
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Edit notes.txt -> +1 -1");
+    expect(visibleTimelineItems(state).at(-1)?.diff).toEqual(patch);
+    expect(visibleTimelineItems(state).at(-1)?.diffTruncated).toBe(false);
   });
 
   test("marks new files in Write summaries", () => {
@@ -876,7 +913,9 @@ describe("edit diff in timeline", () => {
       },
     });
 
-    expect(state.timeline.at(-1)?.text).toBe("Write fresh.txt -> +1 -0 (new file)");
-    expect(state.timeline.at(-1)?.diff).toHaveLength(1);
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Write fresh.txt -> +1 -0 (new file)",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.diff).toHaveLength(1);
   });
 });

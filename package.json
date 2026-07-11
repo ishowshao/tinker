@@ -2,6 +2,7 @@
   "name": "tinker",
   "type": "module",
   "scripts": {
+    "bench:long-session": "bun scripts/bench-long-session-memory.ts",
     "tinker": "bun src/cli/index.ts",
     "check": "bun run typecheck && bun run format:check && bun run lint && bun test",
     "format": "biome format --write .",

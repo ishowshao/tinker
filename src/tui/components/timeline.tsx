@@ -1,122 +1,25 @@
 import { Box, Text } from "ink";
 import { Fragment } from "react";
-import type { AgentEvent } from "../../events/types";
 import type { TimelineItem } from "../event-store";
 import { AssistantMarkdown } from "./assistant-markdown";
 import { BashResultView } from "./bash-result-view";
 import { DiffView } from "./diff-view";
 
 export type TimelineProps = {
-  events?: AgentEvent[];
-  items?: TimelineItem[];
+  items: TimelineItem[];
 };
 
 export function Timeline(props: TimelineProps) {
-  const items = props.items ?? timelineItemsFromEvents(props.events ?? []);
-
   return (
     <Box flexDirection="column">
       <Text bold>Timeline</Text>
-      {items.length === 0 ? (
+      {props.items.length === 0 ? (
         <Text color="gray">idle</Text>
       ) : (
-        items.map((item) => renderTimelineItem(item))
+        props.items.map((item) => renderTimelineItem(item))
       )}
     </Box>
   );
-}
-
-function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
-  return events.flatMap((event, index): TimelineItem[] => {
-    if (event.type === "model.request.started") {
-      return [
-        {
-          id: `${index}-model-started`,
-          text: `model iteration ${event.iterationNumber} started`,
-          status: "running",
-        },
-      ];
-    }
-
-    if (event.type === "model.request.finished") {
-      return [
-        {
-          id: `${index}-model-finished`,
-          text: `model iteration ${event.iterationNumber} finished`,
-          status: "ok",
-        },
-      ];
-    }
-
-    if (event.type === "tool.started") {
-      return [
-        {
-          id: `${index}-tool-started`,
-          text: `${event.data.call.name} ${toolPath(event.data.call.args) ?? ""}`.trim(),
-          status: "running",
-        },
-      ];
-    }
-
-    if (event.type === "tool.finished") {
-      return [
-        {
-          id: `${index}-tool-finished`,
-          text: `${event.data.call.name} ${toolPath(event.data.call.args) ?? ""}`.trim(),
-          status: event.data.ok ? "ok" : "failed",
-        },
-      ];
-    }
-
-    if (event.type === "turn.finished") {
-      const text = event.data.finalText;
-      return [
-        {
-          id: `${index}-turn-finished`,
-          text: text.trim() === "" ? "turn finished" : text,
-          label: text.trim() === "" ? undefined : "assistant",
-          status: text.trim() === "" ? "ok" : "text",
-        },
-      ];
-    }
-
-    if (event.type === "turn.cancelled") {
-      return [
-        {
-          id: `${index}-turn-cancelled`,
-          text: "turn cancelled",
-          status: "cancelled",
-        },
-      ];
-    }
-
-    if (event.type === "turn.failed") {
-      return [
-        {
-          id: `${index}-turn-failed`,
-          label: "error",
-          text: event.data.error,
-          status: "failed",
-        },
-      ];
-    }
-
-    return [];
-  });
-}
-
-function toolPath(args: unknown): string | undefined {
-  if (
-    typeof args === "object" &&
-    args !== null &&
-    !Array.isArray(args) &&
-    "file_path" in args &&
-    typeof args.file_path === "string"
-  ) {
-    return args.file_path;
-  }
-
-  return undefined;
 }
 
 function renderTimelineItem(item: TimelineItem) {

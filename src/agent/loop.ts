@@ -1,43 +1,31 @@
 import type { ModelClient } from "../model/model-client";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
-import { ContextBuilder } from "./context-builder";
 import type { RuntimeSessionContext } from "./runtime-session";
+import type { AgentTurnConversation } from "./session-conversation";
 import { throwIfTurnCancelled, turnCancellationSource } from "./turn-cancellation";
 import type {
-  AgentMessage,
   IterationIdentity,
   RunAgentResult,
   ToolCall,
+  ToolMessage,
   TurnCancellation,
   TurnIdentity,
 } from "./types";
 
 export type RunAgentInput = {
-  systemPrompt: string;
-  userPrompt: string;
-  initialMessages?: AgentMessage[];
+  conversation: AgentTurnConversation;
   maxIterations: number;
   model: ModelClient;
   tools: ToolRegistry;
   toolRuntime: ToolRuntime;
   observationBuilder: ObservationBuilder;
-  contextBuilder?: ContextBuilder;
   runtimeSession: RuntimeSessionContext;
   turn: TurnIdentity;
   signal: AbortSignal;
 };
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
-  const contextBuilder = input.contextBuilder ?? new ContextBuilder();
-  const messages: AgentMessage[] =
-    input.initialMessages === undefined
-      ? [
-          { role: "system", content: input.systemPrompt },
-          { role: "user", content: input.userPrompt },
-        ]
-      : [...input.initialMessages, { role: "user", content: input.userPrompt }];
-
   let lastIteration: IterationIdentity | undefined;
 
   for (
@@ -55,7 +43,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 
     if (input.signal.aborted) {
       return cancelledResult(
-        messages,
         cancellation(input.signal, iteration, "agent_boundary"),
         iteration,
       );
@@ -71,10 +58,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     try {
       throwIfTurnCancelled(input.signal);
       modelOutput = await input.model.request(
-        contextBuilder.build({
-          messages,
-          tools: input.tools.definitions(),
-        }),
+        input.conversation.buildModelRequest(input.tools.definitions()),
         {
           signal: input.signal,
           identity: {
@@ -87,16 +71,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     } catch (error) {
       if (input.signal.aborted) {
         return cancelledResult(
-          messages,
           cancellation(input.signal, iteration, "model_request"),
           iteration,
         );
       }
 
-      return failedResult(messages, error, iteration);
+      return failedResult(error, iteration);
     }
 
-    messages.push(modelOutput.message);
+    input.conversation.appendAssistant(modelOutput.message);
 
     await input.runtimeSession.append({
       type: "model.request.finished",
@@ -114,7 +97,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       return {
         status: "completed",
         finalText: modelOutput.message.content ?? "",
-        messages,
         lastIteration: iteration,
       };
     }
@@ -133,9 +115,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       requireCallInIteration(call, iteration, callIndex + 1);
 
       if (input.signal.aborted) {
-        appendCancelledToolMessages(messages, toolCalls, callIndex);
+        appendCancelledToolMessages(input.conversation, toolCalls, callIndex);
         return cancelledResult(
-          messages,
           cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
         );
@@ -152,13 +133,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         raw = await input.toolRuntime.execute(call, { signal: input.signal });
       } catch (error) {
         if (!input.signal.aborted) {
-          appendFailedToolMessages(messages, toolCalls, callIndex, error);
-          return failedResult(messages, error, iteration);
+          appendFailedToolMessages(input.conversation, toolCalls, callIndex, error);
+          return failedResult(error, iteration);
         }
 
-        appendCancelledToolMessages(messages, toolCalls, callIndex, call);
+        appendCancelledToolMessages(input.conversation, toolCalls, callIndex, call);
         return cancelledResult(
-          messages,
           cancellation(input.signal, iteration, "tool_execution", call),
           iteration,
         );
@@ -176,7 +156,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       });
 
       const observation = input.observationBuilder.build({ call, raw });
-      messages.push({
+      input.conversation.appendTool({
         role: "tool",
         toolCallId: call.toolCallId,
         providerToolCallId: call.providerToolCallId,
@@ -191,9 +171,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       });
 
       if (input.signal.aborted) {
-        appendCancelledToolMessages(messages, toolCalls, callIndex + 1);
+        appendCancelledToolMessages(input.conversation, toolCalls, callIndex + 1);
         return cancelledResult(
-          messages,
           cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
         );
@@ -214,7 +193,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   return {
     status: "failed",
     error: `Agent turn ${input.turn.turnId} stopped after maxIterations=${input.maxIterations}; last iteration=${lastIteration.iterationId}`,
-    messages,
     lastIteration,
   };
 }
@@ -226,14 +204,14 @@ const skippedAfterFailureToolContent =
   "Tool call was skipped because an earlier tool call failed.";
 
 function appendCancelledToolMessages(
-  messages: AgentMessage[],
+  conversation: AgentTurnConversation,
   toolCalls: ToolCall[],
   startIndex: number,
   activeCall?: ToolCall,
 ): void {
   for (let index = startIndex; index < toolCalls.length; index += 1) {
     const call = requireToolCall(toolCalls, index);
-    messages.push({
+    conversation.appendTool({
       role: "tool",
       toolCallId: call.toolCallId,
       providerToolCallId: call.providerToolCallId,
@@ -244,14 +222,14 @@ function appendCancelledToolMessages(
 }
 
 function appendFailedToolMessages(
-  messages: AgentMessage[],
+  conversation: AgentTurnConversation,
   toolCalls: ToolCall[],
   startIndex: number,
   error: unknown,
 ): void {
   for (let index = startIndex; index < toolCalls.length; index += 1) {
     const call = requireToolCall(toolCalls, index);
-    messages.push({
+    const message: ToolMessage = {
       role: "tool",
       toolCallId: call.toolCallId,
       providerToolCallId: call.providerToolCallId,
@@ -260,7 +238,8 @@ function appendFailedToolMessages(
         index === startIndex
           ? `Tool execution failed: ${errorMessage(error)}. Side effects may have partially completed; inspect current state before retrying.`
           : skippedAfterFailureToolContent,
-    });
+    };
+    conversation.appendTool(message);
   }
 }
 
@@ -306,27 +285,23 @@ function cancellation(
 }
 
 function cancelledResult(
-  messages: AgentMessage[],
   turnCancellation: TurnCancellation,
   lastIteration: IterationIdentity,
 ): RunAgentResult {
   return {
     status: "cancelled",
     cancellation: turnCancellation,
-    messages,
     lastIteration,
   };
 }
 
 function failedResult(
-  messages: AgentMessage[],
   error: unknown,
   lastIteration: IterationIdentity,
 ): RunAgentResult {
   return {
     status: "failed",
     error: errorMessage(error),
-    messages,
     lastIteration,
   };
 }

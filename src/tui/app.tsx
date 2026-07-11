@@ -1,10 +1,10 @@
 import { Box, Text, useApp, useInput } from "ink";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { RunAgentResult } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
-import type { TuiEventStream } from "../events/tui-event-stream";
-import { applyAgentEvent, createInitialTuiState } from "./event-store";
+import { visibleTimelineItems } from "./event-store";
+import type { TuiProjectionStore } from "./tui-projection-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
 import { BackgroundTasks } from "./components/background-tasks";
@@ -17,7 +17,7 @@ export type AppProps = {
   modelName: string;
   workspaceRoot: string;
   sessionId: SessionId;
-  eventStream: TuiEventStream;
+  projectionStore: TuiProjectionStore;
   run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
@@ -27,16 +27,11 @@ export type AppProps = {
 export function App(props: AppProps) {
   const { exit } = useApp();
   const { readGitBranch, workspaceRoot } = props;
-  const initialState = useMemo(
-    () =>
-      createInitialTuiState({
-        sessionId: props.sessionId,
-        modelName: props.modelName,
-        workspaceRoot: props.workspaceRoot,
-      }),
-    [props.sessionId, props.modelName, props.workspaceRoot],
+  const state = useSyncExternalStore(
+    props.projectionStore.subscribe,
+    props.projectionStore.getSnapshot,
+    props.projectionStore.getSnapshot,
   );
-  const [state, setState] = useState(initialState);
   const [isRunning, setIsRunning] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
@@ -44,12 +39,6 @@ export function App(props: AppProps) {
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
   const activeController = useRef<AbortController | undefined>(undefined);
-
-  useEffect(() => {
-    return props.eventStream.subscribe((event) => {
-      setState((current) => applyAgentEvent(current, event));
-    });
-  }, [props.eventStream]);
 
   useEffect(() => {
     if (readGitBranch === undefined) {
@@ -146,7 +135,7 @@ export function App(props: AppProps) {
         sessionId={props.sessionId}
       />
       <Box marginTop={1} flexDirection="column">
-        <Timeline events={props.eventStream.events} items={state.timeline} />
+        <Timeline items={visibleTimelineItems(state)} />
       </Box>
       {state.backgroundTasks.length === 0 ? null : (
         <Box marginTop={1}>

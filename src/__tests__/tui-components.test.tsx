@@ -8,7 +8,7 @@ import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
-import { TuiEventStream } from "../events/tui-event-stream";
+import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
 import type { SessionId } from "../ids/runtime-id";
 import { createTestRuntime } from "./test-runtime";
@@ -19,9 +19,16 @@ function completedResult() {
   return {
     status: "completed" as const,
     finalText: "",
-    messages: [],
     lastIteration: testRuntime.iteration,
   };
+}
+
+function createProjectionStore(): TuiProjectionStore {
+  return new TuiProjectionStore({
+    sessionId: "session-1",
+    modelName: "model",
+    workspaceRoot: "/tmp/tinker",
+  });
 }
 
 async function submitInput(stdin: { write: (data: string) => void }, value: string) {
@@ -47,34 +54,13 @@ describe("tui components", () => {
   });
 
   test("renders timeline tool status", () => {
-    const call = testRuntime.toolCall({
-      providerToolCallId: "provider-call-1",
-      name: "Read",
-      args: { file_path: "README.md" },
-    });
     const { lastFrame, cleanup } = render(
       <Timeline
-        events={[
+        items={[
           {
-            type: "model.request.started",
-            ...testRuntime.iteration,
-            eventSequence: 1,
-            timestamp: "2026-07-11T00:00:00.000Z",
-            data: {},
-          },
-          {
-            type: "tool.started",
-            ...call,
-            eventSequence: 2,
-            timestamp: "2026-07-11T00:00:01.000Z",
-            data: { call },
-          },
-          {
-            type: "tool.finished",
-            ...call,
-            eventSequence: 3,
-            timestamp: "2026-07-11T00:00:02.000Z",
-            data: { call, ok: true },
+            id: "tool-read",
+            text: "Read README.md",
+            status: "ok",
           },
         ]}
       />,
@@ -104,7 +90,7 @@ describe("tui components", () => {
         modelName="model"
         workspaceRoot="/tmp/tinker"
         sessionId={"session-1" as SessionId}
-        eventStream={new TuiEventStream()}
+        projectionStore={createProjectionStore()}
         run={async () => completedResult()}
         readGitBranch={async () => branches[branchReads++]}
       />,
@@ -122,21 +108,28 @@ describe("tui components", () => {
   });
 
   test("uses local cancelling feedback until turn.cancelled arrives", async () => {
-    const eventStream = new TuiEventStream();
+    const projectionStore = createProjectionStore();
     let abortCount = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
         modelName="model"
         workspaceRoot="/tmp/tinker"
         sessionId={"session-1" as SessionId}
-        eventStream={eventStream}
+        projectionStore={projectionStore}
         run={async (prompt, signal) => {
-          await eventStream.append({
+          await projectionStore.append({
             type: "turn.started",
             ...testRuntime.turn,
             eventSequence: 1,
             timestamp: "2026-07-10T00:00:00.000Z",
             data: { userPrompt: prompt },
+          });
+          await projectionStore.append({
+            type: "model.request.started",
+            ...testRuntime.iteration,
+            eventSequence: 2,
+            timestamp: "2026-07-10T00:00:00.100Z",
+            data: {},
           });
 
           return await new Promise((resolve) => {
@@ -145,11 +138,11 @@ describe("tui components", () => {
               () => {
                 abortCount += 1;
                 setTimeout(() => {
-                  void eventStream
+                  void projectionStore
                     .append({
                       type: "turn.cancelled",
                       ...testRuntime.iteration,
-                      eventSequence: 2,
+                      eventSequence: 3,
                       timestamp: "2026-07-10T00:00:01.000Z",
                       data: {
                         cancellation: {
@@ -169,7 +162,6 @@ describe("tui components", () => {
                           iterationId: testRuntime.iteration.iterationId,
                           iterationNumber: 1,
                         },
-                        messages: [],
                         lastIteration: testRuntime.iteration,
                       }),
                     );
@@ -322,7 +314,7 @@ describe("tui components", () => {
         modelName="model"
         workspaceRoot="/tmp/tinker"
         sessionId={"session-1" as SessionId}
-        eventStream={new TuiEventStream()}
+        projectionStore={createProjectionStore()}
         run={async () => {
           runCount += 1;
           return completedResult();
@@ -350,7 +342,7 @@ describe("tui components", () => {
         modelName="model"
         workspaceRoot="/tmp/tinker"
         sessionId={"session-1" as SessionId}
-        eventStream={new TuiEventStream()}
+        projectionStore={createProjectionStore()}
         run={async () => {
           runCount += 1;
           return completedResult();

@@ -21,7 +21,11 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolCall } from "../agent/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { McpToolRawResult, ToolExecutionContext } from "../tools/types";
-import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
+import {
+  applyAgentEvent,
+  createInitialTuiState,
+  visibleTimelineItems,
+} from "../tui/event-store";
 import type { SessionId } from "../ids/runtime-id";
 import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 
@@ -494,8 +498,10 @@ describe("mcp events in tui and stdout", () => {
       timestamp: "2026-07-11T00:00:00.000Z",
       data: { serverName: "playwright", toolCount: 21 },
     });
-    expect(state.timeline.at(-1)?.text).toBe("mcp playwright connected -> 21 tools");
-    expect(state.timeline.at(-1)?.status).toBe("info");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "mcp playwright connected -> 21 tools",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("info");
 
     state = applyAgentEvent(state, {
       type: "mcp.server.failed",
@@ -504,8 +510,10 @@ describe("mcp events in tui and stdout", () => {
       timestamp: "2026-07-11T00:00:01.000Z",
       data: { serverName: "chrome", error: "spawn failed" },
     });
-    expect(state.timeline.at(-1)?.text).toBe("mcp chrome failed -> spawn failed");
-    expect(state.timeline.at(-1)?.status).toBe("failed");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "mcp chrome failed -> spawn failed",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.status).toBe("failed");
   });
 
   test("stdout event printer prints mcp server events", async () => {

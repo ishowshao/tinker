@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../agent/types";
+import { cancellationError } from "../agent/turn-cancellation";
 import type {
   ModelClient,
   ModelRequestInput,
@@ -19,6 +20,9 @@ export class FakeModelClient implements ModelClient {
 
     if (this.mode === "write-notes") {
       return this.writeNotes(input, options);
+    }
+    if (this.mode === "wait-for-cancel") {
+      return waitForCancellation(options.signal);
     }
 
     return {
@@ -71,6 +75,17 @@ export class FakeModelClient implements ModelClient {
       finishReason: "stop",
     };
   }
+}
+
+function waitForCancellation(signal: AbortSignal): Promise<ModelRequestOutput> {
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(cancellationError(signal));
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function lastUserMessage(messages: AgentMessage[]): string {

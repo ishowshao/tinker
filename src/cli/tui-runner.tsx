@@ -4,10 +4,10 @@ import {
   type RuntimeSession,
   type SessionDisposeReason,
 } from "../agent/runtime-session";
-import { TuiEventStream } from "../events/tui-event-stream";
 import { App } from "../tui/app";
 import { readCurrentGitBranch } from "../tui/git-branch";
 import { PromptHistory } from "../tui/prompt-history";
+import { TuiProjectionStore } from "../tui/tui-projection-store";
 import {
   createRunnerModelClient,
   createWebFetchRefinerFromEnv,
@@ -19,7 +19,11 @@ import {
 export async function runTui(): Promise<void> {
   const config = readRunnerConfig();
   const modelClient = createRunnerModelClient(config);
-  const eventStream = new TuiEventStream();
+  const projectionStore = new TuiProjectionStore({
+    sessionId: config.sessionId,
+    modelName: config.modelName,
+    workspaceRoot: config.workspaceRoot,
+  });
   let session: RuntimeSession | undefined;
   let instance: ReturnType<typeof render> | undefined;
   let disposeReason: SessionDisposeReason = { type: "tui_exit" };
@@ -35,7 +39,7 @@ export async function runTui(): Promise<void> {
       includeReasoningContent: config.includeReasoningContent,
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       modelClient,
-      presentationSinks: [eventStream],
+      presentationSinks: [projectionStore],
       webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
     });
     const promptHistory = await PromptHistory.load(
@@ -48,7 +52,7 @@ export async function runTui(): Promise<void> {
         modelName={config.modelName}
         workspaceRoot={config.workspaceRoot}
         sessionId={runtimeSession.sessionId}
-        eventStream={eventStream}
+        projectionStore={projectionStore}
         run={(userPrompt, signal) => runtimeSession.executeTurn({ userPrompt, signal })}
         readGitBranch={readCurrentGitBranch}
         history={promptHistory}

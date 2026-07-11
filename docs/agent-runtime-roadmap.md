@@ -118,7 +118,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F1：收束长 Session 的内存与所有权
 
-**状态：下一阶段。**
+**状态：已完成（2026-07-11）。**
+
+详细设计见
+[`long-session-memory-ownership-design.md`](long-session-memory-ownership-design.md)。
 
 目标是在不改变模型输入内容的前提下，消除两个会随 session 长度持续放大的内存问题，
 并为 SessionStore 留出单一接入边界。
@@ -130,7 +133,8 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 - `RuntimeSession` 继续是唯一 session owner；agent loop 不再返回和提交完整 session
   history，只返回本 turn 的终态和必要 delta。
 - 明确 completed、failed、cancelled 三条路径的 message 提交边界。
-- `TuiEventStream` 改为实时分发加有界 replay buffer，不再永久缓存完整事件数组。
+- TUI presentation sink 不再保存或 replay 完整原始事件，改为维护有界 projection
+  snapshot，新订阅者直接读取当前 snapshot。
 - `TuiState` 只保留当前 turn、最近若干 turn 和后台任务最新快照；完整诊断历史仍写入
   event log。
 - presentation 路径只保留渲染所需投影，避免 provider raw response 或完整 tool output
@@ -172,7 +176,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F3：建立协议安全的会话账本
 
-**状态：待 F1 完成。**
+**状态：待 F2 完成。**
 
 在写入 SQLite 前，先用内存实现把 canonical history 的数据契约和协议边界验证清楚，
 避免把当前可变消息数组直接固化成长期 schema。
@@ -332,5 +336,5 @@ swap-only。
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **F1：收束长 Session 的内存与所有权**。在 F1 验收前，不启动
-SessionStore 或 compaction 的实现。
+当前明确的下一项是 **F2：Context 计量、模型配置与请求预检**。F1 已完成；在 F2
+建立预算与观测真相前，不启动 SessionStore 或 compaction 的实现。

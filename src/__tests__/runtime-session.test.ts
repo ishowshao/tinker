@@ -5,8 +5,10 @@ import { mkdtemp, mkdir } from "node:fs/promises";
 import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
+  RuntimeEventAppendError,
   type RuntimeSession,
 } from "../agent/runtime-session";
+import { InMemorySessionConversation } from "../agent/session-conversation";
 import { cancellationError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import type {
@@ -104,6 +106,87 @@ class FailingToolCallModel implements ModelClient {
   }
 }
 
+class FailsThenCompletesModel implements ModelClient {
+  readonly inputs: ModelRequestInput[] = [];
+
+  async request(input: ModelRequestInput): Promise<ModelRequestOutput> {
+    this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
+    if (this.inputs.length === 1) {
+      throw new Error("model unavailable");
+    }
+    return { message: { role: "assistant", content: "recovered" } };
+  }
+}
+
+class CancelsThenCompletesModel implements ModelClient {
+  readonly inputs: ModelRequestInput[] = [];
+  readonly firstStarted: Promise<void>;
+  private markFirstStarted!: () => void;
+
+  constructor() {
+    this.firstStarted = new Promise((resolve) => {
+      this.markFirstStarted = resolve;
+    });
+  }
+
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
+    if (this.inputs.length > 1) {
+      return { message: { role: "assistant", content: "after cancellation" } };
+    }
+
+    this.markFirstStarted();
+    return new Promise((_resolve, reject) => {
+      const abort = () => reject(cancellationError(options.signal));
+      if (options.signal.aborted) {
+        abort();
+        return;
+      }
+      options.signal.addEventListener("abort", abort, { once: true });
+    });
+  }
+}
+
+class RejectsInvariantThenCompletesModel implements ModelClient {
+  readonly inputs: ModelRequestInput[] = [];
+
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
+    if (this.inputs.length > 1) {
+      return { message: { role: "assistant", content: "clean recovery" } };
+    }
+    if (options.identity === undefined) {
+      throw new Error("Expected model request identity.");
+    }
+
+    const call = options.identity.runtimeSession.createToolCall(
+      options.identity.iteration,
+      1,
+    );
+    return {
+      message: {
+        role: "assistant",
+        content: "invalid transient assistant",
+        toolCalls: [
+          {
+            ...call,
+            toolCallNumber: 2,
+            providerToolCallId: "invalid-provider-call",
+            name: "Read",
+            args: { file_path: "README.md" },
+          },
+        ],
+      },
+    };
+  }
+}
+
 describe("RuntimeSession lifecycle", () => {
   test("owns ordered turns, events, and cross-turn messages", async () => {
     const sink = collectingEventSink();
@@ -122,6 +205,8 @@ describe("RuntimeSession lifecycle", () => {
 
     expect(first.status).toBe("completed");
     expect(second.status).toBe("completed");
+    expect(first).not.toHaveProperty("messages");
+    expect(second).not.toHaveProperty("messages");
     expect(
       sink.events
         .filter((event) => event.type === "turn.started")
@@ -146,6 +231,7 @@ describe("RuntimeSession lifecycle", () => {
     const sink = collectingEventSink();
     const model = new FailingToolCallModel();
     const input = createInput(model, sink, "tool-failure");
+    let conversation: InMemorySessionConversation | undefined;
     const session = await createRuntimeSession(input, {
       idFactory: deterministicIdFactory("tool-failure"),
       loadMcpConfig: async () => undefined,
@@ -156,12 +242,17 @@ describe("RuntimeSession lifecycle", () => {
         };
         return tooling;
       },
+      createConversation: (systemPrompt) => {
+        conversation = new InMemorySessionConversation(systemPrompt);
+        return conversation;
+      },
     });
 
     const failed = await session.executeTurn({
       userPrompt: "use tools",
       signal: new AbortController().signal,
     });
+    const failedMessages = requireConversation(conversation).snapshot();
     const recovered = await session.executeTurn({
       userPrompt: "continue",
       signal: new AbortController().signal,
@@ -170,7 +261,7 @@ describe("RuntimeSession lifecycle", () => {
 
     expect(failed.status).toBe("failed");
     expect(recovered.status).toBe("completed");
-    const failedToolMessages = failed.messages.filter(
+    const failedToolMessages = failedMessages.filter(
       (message) => message.role === "tool",
     );
     expect(failedToolMessages).toHaveLength(2);
@@ -178,11 +269,152 @@ describe("RuntimeSession lifecycle", () => {
       "Tool execution failed: tool transport broke",
     );
     expect(failedToolMessages[1]?.content).toContain("skipped");
-    expect(() => toOpenAIChatMessages(failed.messages)).not.toThrow();
+    expect(() => toOpenAIChatMessages(failedMessages)).not.toThrow();
     expect(model.inputs[1]?.messages).toEqual([
-      ...failed.messages,
+      ...failedMessages,
       { role: "user", content: "continue" },
     ]);
+  });
+
+  test("commits user-only deltas after structured model failure", async () => {
+    const sink = collectingEventSink();
+    const model = new FailsThenCompletesModel();
+    const session = await createTestSession(model, sink, "model-failure");
+
+    const failed = await session.executeTurn({
+      userPrompt: "first failed prompt",
+      signal: new AbortController().signal,
+    });
+    const recovered = await session.executeTurn({
+      userPrompt: "continue",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(failed).toMatchObject({ status: "failed", error: "model unavailable" });
+    expect(recovered.status).toBe("completed");
+    expect(model.inputs[1]?.messages).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "first failed prompt" },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  test("commits user-only deltas after cancellation", async () => {
+    const sink = collectingEventSink();
+    const model = new CancelsThenCompletesModel();
+    const session = await createTestSession(model, sink, "model-cancelled");
+    const controller = new AbortController();
+
+    const pending = session.executeTurn({
+      userPrompt: "cancel this",
+      signal: controller.signal,
+    });
+    await model.firstStarted;
+    controller.abort();
+    const cancelled = await pending;
+    const recovered = await session.executeTurn({
+      userPrompt: "continue",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(recovered.status).toBe("completed");
+    expect(model.inputs[1]?.messages).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "cancel this" },
+      { role: "user", content: "continue" },
+    ]);
+  });
+
+  test("discards the entire turn delta after an unexpected agent reject", async () => {
+    const sink = collectingEventSink();
+    const model = new RejectsInvariantThenCompletesModel();
+    let conversation: InMemorySessionConversation | undefined;
+    const session = await createRuntimeSession(
+      createInput(model, sink, "unexpected-reject"),
+      {
+        idFactory: deterministicIdFactory("unexpected-reject"),
+        loadMcpConfig: async () => undefined,
+        createConversation: (systemPrompt) => {
+          conversation = new InMemorySessionConversation(systemPrompt);
+          return conversation;
+        },
+      },
+    );
+
+    const error = await session
+      .executeTurn({
+        userPrompt: "bad turn",
+        signal: new AbortController().signal,
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("invalid identity");
+    expect(requireConversation(conversation).snapshot()).toEqual([
+      { role: "system", content: "system" },
+    ]);
+
+    const recovered = await session.executeTurn({
+      userPrompt: "clean turn",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(recovered.status).toBe("completed");
+    expect(model.inputs[1]?.messages).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "clean turn" },
+    ]);
+    expect(sink.events.some((event) => event.type === "turn.failed")).toBe(true);
+  });
+
+  test("discards terminal delta and faults the session when a required sink fails", async () => {
+    const events = collectingEventSink();
+    let conversation: InMemorySessionConversation | undefined;
+    const session = await createRuntimeSession(
+      createInput(new CapturingModel(), events, "terminal-sink-failure"),
+      {
+        idFactory: deterministicIdFactory("terminal-sink-failure"),
+        loadMcpConfig: async () => undefined,
+        createConversation: (systemPrompt) => {
+          conversation = new InMemorySessionConversation(systemPrompt);
+          return conversation;
+        },
+        createEventSink: () => ({
+          name: "terminal-failure",
+          async append(event) {
+            await events.append(event);
+            if (event.type === "turn.finished") {
+              throw new Error("terminal storage unavailable");
+            }
+          },
+        }),
+      },
+    );
+
+    const error = await session
+      .executeTurn({
+        userPrompt: "do not commit",
+        signal: new AbortController().signal,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(RuntimeEventAppendError);
+    expect(requireConversation(conversation).snapshot()).toEqual([
+      { role: "system", content: "system" },
+    ]);
+    expect(() =>
+      session.executeTurn({
+        userPrompt: "after fault",
+        signal: new AbortController().signal,
+      }),
+    ).toThrow("faulted");
+    const disposeError = await session
+      .dispose({ type: "runner_failed", error: "sink failed" })
+      .catch((caught: unknown) => caught);
+    expect(disposeError).toBeInstanceOf(RuntimeEventAppendError);
   });
 
   test("fast-fails empty and concurrent turns without allocating identities", async () => {
@@ -358,6 +590,15 @@ async function createTestSession(
     idFactory: deterministicIdFactory(prefix),
     loadMcpConfig: async () => undefined,
   });
+}
+
+function requireConversation(
+  conversation: InMemorySessionConversation | undefined,
+): InMemorySessionConversation {
+  if (conversation === undefined) {
+    throw new Error("Expected an in-memory conversation fixture.");
+  }
+  return conversation;
 }
 
 function createInput(

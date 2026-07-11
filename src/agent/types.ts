@@ -34,17 +34,19 @@ export type AssistantMessage = {
   toolCalls?: ToolCall[];
 };
 
+export type ToolMessage = {
+  role: "tool";
+  toolCallId: ToolCallId;
+  providerToolCallId: string;
+  name: string;
+  content: string;
+};
+
 export type AgentMessage =
   | { role: "system"; content: string }
   | { role: "user"; content: string }
   | AssistantMessage
-  | {
-      role: "tool";
-      toolCallId: ToolCallId;
-      providerToolCallId: string;
-      name: string;
-      content: string;
-    };
+  | ToolMessage;
 
 export type TurnCancellation = {
   source: TurnCancellationSource;
@@ -61,18 +63,15 @@ export type RunAgentResult =
   | {
       status: "completed";
       finalText: string;
-      messages: AgentMessage[];
       lastIteration: IterationIdentity;
     }
   | {
       status: "failed";
       error: string;
-      messages: AgentMessage[];
       lastIteration: IterationIdentity;
     }
   | {
       status: "cancelled";
       cancellation: TurnCancellation;
-      messages: AgentMessage[];
       lastIteration: IterationIdentity;
     };

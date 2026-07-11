@@ -16,9 +16,12 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import { runAgent } from "./loop";
+import {
+  InMemorySessionConversation,
+  type SessionConversation,
+} from "./session-conversation";
 import { TurnCancelledError } from "./turn-cancellation";
 import type {
-  AgentMessage,
   IterationIdentity,
   RunAgentResult,
   ToolCallIdentity,
@@ -76,6 +79,8 @@ export type RuntimeSessionFactoryDependencies = {
   loadMcpConfig: typeof loadMcpConfig;
   createMcpManager: typeof createMcpManager;
   createObservationBuilder: () => ObservationBuilder;
+  createConversation: (systemPrompt: string) => SessionConversation;
+  createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
 };
 
 export class RuntimeEventAppendError extends Error {
@@ -107,6 +112,8 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   loadMcpConfig,
   createMcpManager,
   createObservationBuilder: () => new ObservationBuilder(),
+  createConversation: (systemPrompt) => new InMemorySessionConversation(systemPrompt),
+  createEventSink,
 };
 
 class DefaultRuntimeSession implements RuntimeSession {
@@ -122,7 +129,6 @@ class DefaultRuntimeSession implements RuntimeSession {
   private eventTail: Promise<void> = Promise.resolve();
   private tooling?: DefaultTooling;
   private mcpManager?: McpManager;
-  private sessionMessages?: AgentMessage[];
   private activeTurn?: ActiveTurn;
   private disposePromise?: Promise<void>;
   private faultCause?: RuntimeEventAppendError;
@@ -134,6 +140,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     private readonly dependencies: RuntimeSessionFactoryDependencies,
     private readonly eventSink: EventSink,
     private readonly observationBuilder: ObservationBuilder,
+    private readonly conversation: SessionConversation,
   ) {
     this.sessionId = input.sessionId;
     this.context = {
@@ -154,8 +161,9 @@ class DefaultRuntimeSession implements RuntimeSession {
     const session = new DefaultRuntimeSession(
       input,
       dependencies,
-      createEventSink(input),
+      dependencies.createEventSink(input),
       dependencies.createObservationBuilder(),
+      dependencies.createConversation(input.systemPrompt),
     );
     let started = false;
 
@@ -210,10 +218,12 @@ class DefaultRuntimeSession implements RuntimeSession {
     const controller = new AbortController();
     const removeExternalAbortListener = forwardExternalAbort(input.signal, controller);
     const turn = this.createTurn(input.userPrompt);
+    const pendingConversation = this.conversation.beginTurn(input.userPrompt);
     this.state = "executing";
     const completion = this.performExecuteTurn(
       input.userPrompt,
       turn,
+      pendingConversation,
       controller.signal,
       removeExternalAbortListener,
     );
@@ -229,6 +239,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private async performExecuteTurn(
     userPrompt: string,
     turn: TurnIdentity,
+    pendingConversation: ReturnType<SessionConversation["beginTurn"]>,
     signal: AbortSignal,
     removeExternalAbortListener: () => void,
   ): Promise<RunAgentResult> {
@@ -244,9 +255,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       let result: RunAgentResult;
       try {
         result = await runAgent({
-          systemPrompt: this.input.systemPrompt,
-          userPrompt,
-          initialMessages: this.sessionMessages,
+          conversation: pendingConversation.agent,
           maxIterations: this.input.maxIterations,
           model: this.input.modelClient,
           tools: this.requireTooling().registry,
@@ -270,11 +279,13 @@ class DefaultRuntimeSession implements RuntimeSession {
         throw error;
       }
 
+      const projectedMessageCount = pendingConversation.projectedMessageCount();
       terminalAttempted = true;
-      await this.appendTerminalEvent(turn, result);
-      this.sessionMessages = result.messages;
+      await this.appendTerminalEvent(turn, result, projectedMessageCount);
+      pendingConversation.commit();
       return result;
     } catch (error) {
+      pendingConversation.discard();
       if (error instanceof RuntimeEventAppendError || terminalAttempted) {
         throw error;
       }
@@ -297,6 +308,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private async appendTerminalEvent(
     turn: TurnIdentity,
     result: RunAgentResult,
+    projectedMessageCount: number,
   ): Promise<void> {
     if (result.status === "completed") {
       await this.append({
@@ -306,7 +318,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           status: result.status,
           finalText: result.finalText,
           lastIteration: result.lastIteration,
-          messageCount: result.messages.length,
+          messageCount: projectedMessageCount,
         },
       });
       return;

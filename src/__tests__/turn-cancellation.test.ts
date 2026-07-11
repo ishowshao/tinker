@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
+import { InMemorySessionConversation } from "../agent/session-conversation";
 import { cancellationError, TurnCancelledError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
@@ -147,9 +148,10 @@ describe("turn cancellation", () => {
     });
 
     try {
+      const conversation = new InMemorySessionConversation("system");
+      const pendingConversation = conversation.beginTurn("wait");
       const pending = runAgent({
-        systemPrompt: "system",
-        userPrompt: "wait",
+        conversation: pendingConversation.agent,
         maxIterations: 2,
         model,
         tools: tooling.registry,
@@ -168,7 +170,12 @@ describe("turn cancellation", () => {
       expect(result.status === "cancelled" ? result.cancellation.phase : "").toBe(
         "model_request",
       );
-      expect(result.messages.at(-1)).toEqual({ role: "user", content: "wait" });
+      expect(pendingConversation.projectedMessageCount()).toBe(2);
+      pendingConversation.commit();
+      expect(conversation.snapshot().at(-1)).toEqual({
+        role: "user",
+        content: "wait",
+      });
       expect(events.events.map((event) => event.type)).toEqual([
         "agent.iteration.started",
         "model.request.started",
@@ -242,9 +249,10 @@ describe("turn cancellation", () => {
     const identity = createTestRuntime(events);
     const runtimeSession = identity.runtimeSession;
     const turn = identity.turn;
+    const conversation = new InMemorySessionConversation("system");
+    const pendingConversation = conversation.beginTurn("run tools");
     const result = await runAgent({
-      systemPrompt: "system",
-      userPrompt: "run tools",
+      conversation: pendingConversation.agent,
       maxIterations: 2,
       model: new ToolBatchModel(),
       tools: registry,
@@ -257,12 +265,14 @@ describe("turn cancellation", () => {
 
     expect(result.status).toBe("cancelled");
     expect(thirdToolCalls).toBe(0);
-    const toolMessages = result.messages.filter((message) => message.role === "tool");
+    pendingConversation.commit();
+    const messages = conversation.snapshot();
+    const toolMessages = messages.filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(3);
     expect(toolMessages[0]?.content).toContain("Read succeeded");
     expect(toolMessages[1]?.content).toContain("cancelled by the user");
     expect(toolMessages[2]?.content).toContain("skipped");
-    expect(() => toOpenAIChatMessages(result.messages)).not.toThrow();
+    expect(() => toOpenAIChatMessages(messages)).not.toThrow();
 
     const eventTypes = events.events.map((event) => event.type);
     expect(eventTypes).toContain("tool.finished");

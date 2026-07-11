@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
+import { InMemorySessionConversation } from "../agent/session-conversation";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
@@ -98,9 +99,10 @@ describe("runAgent", () => {
         workspaceRoot: workspace,
         runtimeSession,
       });
+      const conversation = new InMemorySessionConversation("system");
+      const pendingConversation = conversation.beginTurn("Read README.md");
       const result = await runAgent({
-        systemPrompt: "system",
-        userPrompt: "Read README.md",
+        conversation: pendingConversation.agent,
         maxIterations: 4,
         model: new ScriptedModel(),
         tools: tooling.registry,
@@ -126,6 +128,7 @@ describe("runAgent", () => {
       expect(events.events.map((event) => event.type)).toContain(
         "model.request.finished",
       );
+      pendingConversation.commit();
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -141,16 +144,18 @@ describe("runAgent", () => {
       runtimeSession,
     });
     const model = new CapturingModel();
-    const initialMessages: AgentMessage[] = [
-      { role: "system", content: "system" },
-      { role: "user", content: "First prompt" },
-      { role: "assistant", content: "First prompt answered." },
-    ];
+    const conversation = new InMemorySessionConversation("system");
+    const firstTurn = conversation.beginTurn("First prompt");
+    firstTurn.agent.appendAssistant({
+      role: "assistant",
+      content: "First prompt answered.",
+    });
+    firstTurn.commit();
+    const initialMessages: AgentMessage[] = conversation.snapshot();
+    const secondTurn = conversation.beginTurn("Second prompt");
 
     const result = await runAgent({
-      systemPrompt: "new system should not be inserted",
-      userPrompt: "Second prompt",
-      initialMessages,
+      conversation: secondTurn.agent,
       maxIterations: 4,
       model,
       tools: tooling.registry,
@@ -166,11 +171,13 @@ describe("runAgent", () => {
       ...initialMessages,
       { role: "user", content: "Second prompt" },
     ]);
-    expect(result.messages).toEqual([
+    secondTurn.commit();
+    expect(conversation.snapshot()).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },
       { role: "assistant", content: "Second prompt answered." },
     ]);
+    expect(result).not.toHaveProperty("messages");
   });
 });
 

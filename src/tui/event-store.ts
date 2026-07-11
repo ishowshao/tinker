@@ -5,9 +5,14 @@ import {
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
 import type { ModelRequestOutput } from "../model/model-client";
-import type { ShellTaskSnapshot } from "../tools/bash-task";
+import type { ShellTaskSnapshot, ShellTaskStatus } from "../tools/bash-task";
 import { countPatchChanges } from "../tools/file-diff";
 import type { DiffHunk, ToolRawResult } from "../tools/types";
+import {
+  defaultTuiProjectionPolicy,
+  type TuiProjectionPolicy,
+  validateTuiProjectionPolicy,
+} from "./tui-projection-policy";
 
 export type TimelineItem = {
   id: string;
@@ -20,246 +25,452 @@ export type TimelineItem = {
   bash?: BashDisplayDetail;
 };
 
-export type TuiState = {
-  status: "idle" | "running" | "done" | "failed" | "cancelled";
-  sessionId?: string;
-  modelName?: string;
-  workspaceRoot?: string;
-  turnStartedAt?: number;
+export type TuiTurnProjection = {
+  turnId: string;
+  turnNumber: number;
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: string;
   workedForMs?: number;
-  timeline: TimelineItem[];
+  items: TimelineItem[];
+  omittedItemCount: number;
+};
+
+export type TuiProjectionState = {
+  status: "idle" | "running" | "done" | "failed" | "cancelled";
+  sessionId: string;
+  modelName: string;
+  workspaceRoot: string;
+  workedForMs?: number;
+  activeTurn?: TuiTurnProjection;
+  recentTurns: TuiTurnProjection[];
+  notices: TimelineItem[];
   backgroundTasks: ShellTaskSnapshot[];
+  omittedTurnCount: number;
   finalText?: string;
   error?: string;
 };
+
+export type TuiState = TuiProjectionState;
 
 export function createInitialTuiState(input: {
   sessionId: string;
   modelName: string;
   workspaceRoot: string;
-}): TuiState {
+}): TuiProjectionState {
   return {
     status: "idle",
     sessionId: input.sessionId,
     modelName: input.modelName,
     workspaceRoot: input.workspaceRoot,
-    timeline: [],
+    recentTurns: [],
+    notices: [],
     backgroundTasks: [],
+    omittedTurnCount: 0,
   };
 }
 
-export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
+export const createInitialTuiProjectionState = createInitialTuiState;
+
+export function reduceTuiProjection(
+  state: TuiProjectionState,
+  event: AgentEvent,
+  policy: TuiProjectionPolicy = defaultTuiProjectionPolicy,
+): TuiProjectionState {
+  validateTuiProjectionPolicy(policy);
+
   switch (event.type) {
     case "session.started":
       return {
         ...state,
         sessionId: event.sessionId,
+        modelName: event.data.model,
+        workspaceRoot: event.data.workspaceRoot,
       };
-    case "turn.started":
+    case "turn.started": {
+      if (state.activeTurn !== undefined) {
+        throw new Error(
+          `Cannot project turn ${event.turnId} while turn ${state.activeTurn.turnId} is active.`,
+        );
+      }
+      const turnId = requireEventString(event.turnId, "turn.started turnId");
+      const turnNumber = requireEventNumber(
+        event.turnNumber,
+        "turn.started turnNumber",
+      );
+      parseEventTimestamp(event.timestamp);
       return {
         ...state,
         status: "running",
-        turnStartedAt: parseEventTimestamp(event.timestamp),
         workedForMs: undefined,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `${event.turnId}-started`),
-            label: "prompt",
-            text: event.data.userPrompt,
-            status: "text",
-          },
-        ],
+        finalText: undefined,
+        error: undefined,
+        activeTurn: {
+          turnId,
+          turnNumber,
+          status: "running",
+          startedAt: event.timestamp,
+          items: [
+            {
+              id: `turn-${turnId}-prompt-${event.eventSequence}`,
+              label: "prompt",
+              text: event.data.userPrompt,
+              status: "text",
+            },
+          ],
+          omittedItemCount: 0,
+        },
       };
+    }
     case "model.request.started":
-      return {
-        ...state,
-        status: "running",
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `model-${event.iterationId}-started`),
-            ref: modelRequestRef(event.iterationId),
-            text: `model iteration ${event.iterationNumber}`,
-            status: "running",
-          },
-        ],
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `model-${event.iterationId}`,
+          ref: modelRequestRef(event.iterationId),
+          text: `model iteration ${event.iterationNumber}`,
+          status: "running",
+        }),
+      );
     case "model.request.finished":
-      return {
-        ...state,
-        timeline: updateLastTimelineItem(
-          state,
-          modelRequestRef(event.iterationId),
-          (item) => ({
-            ...item,
-            text: `model iteration ${event.iterationNumber}${modelRequestSummary(event.data.output)}`,
-            status: "ok",
-          }),
-        ),
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
+          ...item,
+          text: `model iteration ${event.iterationNumber}${modelRequestSummary(event.data.output)}`,
+          status: "ok",
+        })),
+      );
     case "assistant.progress":
-      return {
-        ...state,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `assistant-${event.iterationId}-progress`),
-            label: "assistant",
-            text: event.data.content,
-            status: "text",
-          },
-        ],
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `assistant-${event.iterationId}-${event.eventSequence}`,
+          label: "assistant",
+          text: event.data.content,
+          status: "text",
+        }),
+      );
     case "tool.started":
-      return {
-        ...state,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `${event.toolCallId}-started`),
-            ref: toolCallRef(event.data.call.toolCallId),
-            text: toolCallSummary(event.data.call),
-            status: "running",
-            ...toolStartedBashDetail(event.data.call),
-          },
-        ],
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `tool-${event.toolCallId}`,
+          ref: toolCallRef(event.data.call.toolCallId),
+          text: toolCallSummary(event.data.call),
+          status: "running",
+          ...toolStartedBashDetail(event.data.call),
+        }),
+      );
     case "tool.raw_result":
-      return {
-        ...state,
-        timeline: updateLastTimelineItem(
-          state,
-          toolCallRef(event.data.call.toolCallId),
-          (item) => ({
-            ...item,
-            text: toolRawResultSummary(
-              event.data.call.name,
-              event.data.call.args,
-              event.data.raw,
-            ),
-            ...toolRawResultDiff(event.data.raw),
-            ...toolRawResultBashDetail(event.data.raw),
-          }),
-        ),
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(turn, toolCallRef(event.data.call.toolCallId), (item) => ({
+          ...item,
+          text: toolRawResultSummary(
+            event.data.call.name,
+            event.data.call.args,
+            event.data.raw,
+          ),
+          ...toolRawResultDiff(event.data.raw),
+          ...toolRawResultBashDetail(event.data.raw),
+        })),
+      );
     case "tool.finished":
-      return {
-        ...state,
-        timeline: updateLastTimelineItem(
-          state,
-          toolCallRef(event.data.call.toolCallId),
-          (item) => ({
-            ...item,
-            status: event.data.ok ? "ok" : "failed",
-          }),
-        ),
-      };
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(turn, toolCallRef(event.data.call.toolCallId), (item) => ({
+          ...item,
+          status: event.data.ok ? "ok" : "failed",
+        })),
+      );
     case "bash.task.backgrounded":
     case "bash.task.stopping":
     case "bash.task.finished":
       return {
         ...state,
-        backgroundTasks: upsertBackgroundTask(state.backgroundTasks, event.data.task),
+        backgroundTasks: upsertBackgroundTask(
+          state.backgroundTasks,
+          event.data.task,
+          policy.completedTaskLimit,
+        ),
       };
     case "mcp.server.connected":
-      return {
-        ...state,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `mcp-${event.data.serverName}-connected`),
-            label: "mcp",
-            text: `mcp ${event.data.serverName} connected -> ${event.data.toolCount} tool${event.data.toolCount === 1 ? "" : "s"}`,
-            status: "info",
-          },
-        ],
-      };
+      return appendNotice(
+        state,
+        {
+          id: `notice-mcp-${event.eventSequence}`,
+          label: "mcp",
+          text: `mcp ${event.data.serverName} connected -> ${event.data.toolCount} tool${event.data.toolCount === 1 ? "" : "s"}`,
+          status: "info",
+        },
+        policy.sessionNoticeLimit,
+      );
     case "mcp.server.failed":
-      return {
-        ...state,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `mcp-${event.data.serverName}-failed`),
-            label: "mcp",
-            text: `mcp ${event.data.serverName} failed -> ${event.data.error}`,
-            status: "failed",
-          },
-        ],
-      };
+      return appendNotice(
+        state,
+        {
+          id: `notice-mcp-${event.eventSequence}`,
+          label: "mcp",
+          text: `mcp ${event.data.serverName} failed -> ${boundedToolError(event.data.error)}`,
+          status: "failed",
+        },
+        policy.sessionNoticeLimit,
+      );
     case "diagnostic.sink_failed":
-      return {
-        ...state,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `sink-${event.eventSequence}-${event.data.sinkName}`),
-            label: "diagnostic",
-            text: `event sink ${event.data.sinkName} disabled after ${event.data.failedEventType} failed -> ${event.data.error}`,
-            status: "failed",
-          },
-        ],
-      };
-    case "turn.finished":
-      return {
-        ...state,
-        status: "done",
-        workedForMs: turnDurationMs(state.turnStartedAt, event.timestamp),
-        finalText: event.data.finalText,
-        timeline: appendFinalTimelineItem(state, event.data.finalText),
-      };
-    case "turn.cancelled":
-      return {
-        ...state,
-        status: "cancelled",
-        timeline: applyTurnCancellation(state, event),
-      };
-    case "turn.failed":
-      return {
-        ...state,
+      return appendNotice(
+        state,
+        {
+          id: `notice-sink-${event.eventSequence}`,
+          label: "diagnostic",
+          text: `event sink ${event.data.sinkName} disabled after ${event.data.failedEventType} failed -> ${boundedToolError(event.data.error)}`,
+          status: "failed",
+        },
+        policy.sessionNoticeLimit,
+      );
+    case "turn.finished": {
+      const active = requireActiveTurn(state, event);
+      const withFinal =
+        event.data.finalText.trim() === ""
+          ? active
+          : appendTurnItem(active, {
+              id: `turn-${active.turnId}-final-${event.eventSequence}`,
+              label: "assistant",
+              text: event.data.finalText,
+              status: "text",
+            });
+      return finishActiveTurn(
+        state,
+        event,
+        limitTurnItems(withFinal, policy.itemLimitPerTurn),
+        "completed",
+        policy,
+        {
+          status: "done",
+          finalText: event.data.finalText,
+          error: undefined,
+        },
+      );
+    }
+    case "turn.cancelled": {
+      const active = requireActiveTurn(state, event);
+      const cancelled = applyTurnCancellation(active, event);
+      return finishActiveTurn(
+        state,
+        event,
+        limitTurnItems(cancelled, policy.itemLimitPerTurn),
+        "cancelled",
+        policy,
+        {
+          status: "cancelled",
+          finalText: undefined,
+          error: undefined,
+        },
+      );
+    }
+    case "turn.failed": {
+      const active = requireActiveTurn(state, event);
+      const failed = appendTurnItem(active, {
+        id: `turn-${active.turnId}-failed-${event.eventSequence}`,
+        label: "error",
+        text: event.data.error,
         status: "failed",
-        error: event.data.error,
-        timeline: [
-          ...state.timeline,
-          {
-            id: timelineId(state, `${event.turnId}-failed`),
-            label: "error",
-            text: event.data.error,
-            status: "failed",
-          },
-        ],
-      };
-    default:
+      });
+      return finishActiveTurn(
+        state,
+        event,
+        limitTurnItems(failed, policy.itemLimitPerTurn),
+        "failed",
+        policy,
+        {
+          status: "failed",
+          finalText: undefined,
+          error: event.data.error,
+        },
+      );
+    }
+    case "session.finished":
+    case "agent.iteration.started":
+    case "agent.iteration.finished":
+    case "tool.observation":
       return state;
+    default:
+      return assertNever(event);
   }
 }
 
-function turnDurationMs(startedAt: number | undefined, finishedAt: string): number {
-  if (startedAt === undefined) {
-    throw new Error("turn.finished received before turn.started");
+export const applyAgentEvent = reduceTuiProjection;
+
+export function visibleTimelineItems(state: TuiProjectionState): TimelineItem[] {
+  const items = [...state.notices];
+
+  if (state.omittedTurnCount > 0) {
+    items.push({
+      id: "projection-omitted-turns",
+      label: "live view",
+      text: `${state.omittedTurnCount} earlier turn${state.omittedTurnCount === 1 ? "" : "s"} omitted; full diagnostics remain on disk`,
+      status: "info",
+    });
   }
 
-  return Math.max(0, parseEventTimestamp(finishedAt) - startedAt);
+  for (const turn of [
+    ...state.recentTurns,
+    ...(state.activeTurn === undefined ? [] : [state.activeTurn]),
+  ]) {
+    items.push(...visibleTurnItems(turn));
+  }
+
+  return items;
 }
 
-function parseEventTimestamp(value: string): number {
-  const timestamp = Date.parse(value);
-
-  if (!Number.isFinite(timestamp)) {
-    throw new Error(`Invalid event timestamp: ${value}`);
+function visibleTurnItems(turn: TuiTurnProjection): TimelineItem[] {
+  if (turn.omittedItemCount === 0) {
+    return turn.items;
   }
 
-  return timestamp;
+  const marker: TimelineItem = {
+    id: `turn-${turn.turnId}-omitted-items`,
+    label: "live view",
+    text: `${turn.omittedItemCount} earlier timeline item${turn.omittedItemCount === 1 ? "" : "s"} omitted; full diagnostics remain on disk`,
+    status: "info",
+  };
+  const promptIndex = turn.items.findIndex((item) => item.label === "prompt");
+  if (promptIndex < 0) {
+    return [marker, ...turn.items];
+  }
+
+  return [
+    ...turn.items.slice(0, promptIndex + 1),
+    marker,
+    ...turn.items.slice(promptIndex + 1),
+  ];
+}
+
+function updateActiveTurn(
+  state: TuiProjectionState,
+  event: AgentEvent,
+  policy: TuiProjectionPolicy,
+  update: (turn: TuiTurnProjection) => TuiTurnProjection,
+): TuiProjectionState {
+  const active = requireActiveTurn(state, event);
+  return {
+    ...state,
+    status: "running",
+    activeTurn: limitTurnItems(update(active), policy.itemLimitPerTurn),
+  };
+}
+
+function requireActiveTurn(
+  state: TuiProjectionState,
+  event: AgentEvent,
+): TuiTurnProjection {
+  const active = state.activeTurn;
+  if (active === undefined) {
+    throw new Error(`Cannot project ${event.type} without an active turn.`);
+  }
+  if (event.turnId !== active.turnId) {
+    throw new Error(
+      `Event ${event.type} belongs to turn ${event.turnId}, expected ${active.turnId}.`,
+    );
+  }
+  return active;
+}
+
+function appendTurnItem(
+  turn: TuiTurnProjection,
+  item: TimelineItem,
+): TuiTurnProjection {
+  return { ...turn, items: [...turn.items, item] };
+}
+
+function updateTurnItem(
+  turn: TuiTurnProjection,
+  ref: string,
+  update: (item: TimelineItem) => TimelineItem,
+): TuiTurnProjection {
+  const index = findLastItemIndex(turn.items, ref);
+  if (index < 0) {
+    throw new Error(`Cannot update missing TUI timeline item ${ref}.`);
+  }
+
+  const items = [...turn.items];
+  const item = items[index];
+  if (item === undefined) {
+    throw new Error(`TUI timeline item ${ref} disappeared during update.`);
+  }
+  items[index] = update(item);
+  return { ...turn, items };
+}
+
+function findLastItemIndex(items: TimelineItem[], ref: string): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.ref === ref) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function limitTurnItems(turn: TuiTurnProjection, limit: number): TuiTurnProjection {
+  if (turn.items.length <= limit) {
+    return turn;
+  }
+
+  const retained = new Set<number>();
+  const promptIndex = turn.items.findIndex((item) => item.label === "prompt");
+  if (promptIndex >= 0) {
+    retained.add(promptIndex);
+  }
+
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    if (retained.size >= limit) {
+      break;
+    }
+    if (turn.items[index]?.status === "running") {
+      retained.add(index);
+    }
+  }
+
+  for (let index = turn.items.length - 1; index >= 0; index -= 1) {
+    if (retained.size >= limit) {
+      break;
+    }
+    retained.add(index);
+  }
+
+  const items = turn.items.filter((_item, index) => retained.has(index));
+  return {
+    ...turn,
+    items,
+    omittedItemCount: turn.omittedItemCount + turn.items.length - items.length,
+  };
+}
+
+function finishActiveTurn(
+  state: TuiProjectionState,
+  event: AgentEvent,
+  turn: TuiTurnProjection,
+  turnStatus: Exclude<TuiTurnProjection["status"], "running">,
+  policy: TuiProjectionPolicy,
+  terminalState: Pick<TuiProjectionState, "status" | "finalText" | "error">,
+): TuiProjectionState {
+  const workedForMs = turnDurationMs(turn.startedAt, event.timestamp);
+  const finished = { ...turn, status: turnStatus, workedForMs };
+  const allRecent = [...state.recentTurns, finished];
+  const omittedNow = Math.max(0, allRecent.length - policy.recentTurnLimit);
+  const recentTurns =
+    policy.recentTurnLimit === 0 ? [] : allRecent.slice(-policy.recentTurnLimit);
+
+  return {
+    ...state,
+    ...terminalState,
+    activeTurn: undefined,
+    recentTurns,
+    omittedTurnCount: state.omittedTurnCount + omittedNow,
+    workedForMs,
+  };
 }
 
 function applyTurnCancellation(
-  state: TuiState,
+  turn: TuiTurnProjection,
   event: Extract<AgentEvent, { type: "turn.cancelled" }>,
-): TimelineItem[] {
+): TuiTurnProjection {
   if (event.data.cancellation.phase === "model_request") {
-    return updateLastTimelineItem(
-      state,
+    return updateTurnItem(
+      turn,
       modelRequestRef(event.data.cancellation.iterationId),
       (item) => ({
         ...item,
@@ -273,8 +484,8 @@ function applyTurnCancellation(
     event.data.cancellation.phase === "tool_execution" &&
     event.data.cancellation.toolCallId !== undefined
   ) {
-    return updateLastTimelineItem(
-      state,
+    return updateTurnItem(
+      turn,
       toolCallRef(event.data.cancellation.toolCallId),
       (item) => ({
         ...item,
@@ -284,55 +495,53 @@ function applyTurnCancellation(
     );
   }
 
-  return [
-    ...state.timeline,
-    {
-      id: timelineId(state, `${event.turnId}-cancelled`),
-      text: "turn cancelled",
-      status: "cancelled",
-    },
-  ];
+  return appendTurnItem(turn, {
+    id: `turn-${turn.turnId}-cancelled-${event.eventSequence}`,
+    text: "turn cancelled",
+    status: "cancelled",
+  });
 }
 
-function updateLastTimelineItem(
-  state: TuiState,
-  ref: string,
-  update: (item: TimelineItem) => TimelineItem,
-): TimelineItem[] {
-  const timeline = [...state.timeline];
+function appendNotice(
+  state: TuiProjectionState,
+  notice: TimelineItem,
+  limit: number,
+): TuiProjectionState {
+  const notices = [...state.notices, notice];
+  return {
+    ...state,
+    notices: limit === 0 ? [] : notices.slice(-limit),
+  };
+}
 
-  for (let index = timeline.length - 1; index >= 0; index -= 1) {
-    if (timeline[index]?.ref === ref) {
-      timeline[index] = update(timeline[index]);
-      return timeline;
-    }
+function turnDurationMs(startedAt: string, finishedAt: string): number {
+  return Math.max(0, parseEventTimestamp(finishedAt) - parseEventTimestamp(startedAt));
+}
+
+function parseEventTimestamp(value: string): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`Invalid event timestamp: ${value}`);
   }
-
-  return timeline;
+  return timestamp;
 }
 
-function appendFinalTimelineItem(state: TuiState, finalText: string): TimelineItem[] {
-  if (finalText.trim() === "") {
-    return state.timeline;
+function requireEventString(value: string | undefined, name: string): string {
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`${name} must be present.`);
   }
-
-  return [
-    ...state.timeline,
-    {
-      id: timelineId(state, "final"),
-      label: "assistant",
-      text: finalText,
-      status: "text",
-    },
-  ];
+  return value;
 }
 
-function timelineId(state: TuiState, suffix: string): string {
-  return `${state.timeline.length}-${suffix}`;
+function requireEventNumber(value: number | undefined, name: string): number {
+  if (!Number.isInteger(value) || value === undefined || value < 1) {
+    throw new Error(`${name} must be a positive integer.`);
+  }
+  return value;
 }
 
 function modelRequestRef(iterationId: string | undefined): string {
-  return `model-request-${iterationId}`;
+  return `model-request-${requireEventString(iterationId, "model request iterationId")}`;
 }
 
 function toolCallRef(callId: string): string {
@@ -341,11 +550,9 @@ function toolCallRef(callId: string): string {
 
 function modelRequestSummary(output: ModelRequestOutput): string {
   const toolCalls = output.message.toolCalls ?? [];
-
   if (toolCalls.length > 0) {
     return ` -> ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"}`;
   }
-
   return " -> assistant response";
 }
 
@@ -353,27 +560,21 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "Bash") {
     return `Bash ${bashDescription(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "Glob") {
     return `Glob ${toolPattern(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "Grep") {
     return `Grep ${toolPattern(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "WebSearch") {
     return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "WebFetch") {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "TaskOutput" || input.name === "TaskStop") {
     return `${input.name} ${toolTaskId(input.args) ?? ""}`.trim();
   }
-
   if (input.name === "TaskList") {
     return "TaskList";
   }
@@ -384,19 +585,16 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
 
 function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): string {
   const base = toolCallSummary({ name, args });
-
   if (!raw.ok && raw.error !== undefined) {
-    return `${base} -> ${raw.error}`;
+    return `${base} -> ${boundedToolError(raw.error)}`;
   }
 
   switch (raw.kind) {
-    case "glob": {
-      if (raw.ok && raw.matchCount !== undefined) {
-        return `${base} -> ${raw.matchCount} match${raw.matchCount === 1 ? "" : "es"}`;
-      }
-      return base;
-    }
-    case "grep": {
+    case "glob":
+      return raw.ok && raw.matchCount !== undefined
+        ? `${base} -> ${raw.matchCount} match${raw.matchCount === 1 ? "" : "es"}`
+        : base;
+    case "grep":
       if (raw.mode === "content" && raw.numLines !== undefined) {
         return `${base} -> ${raw.numLines} line${raw.numLines === 1 ? "" : "s"}`;
       }
@@ -408,7 +606,6 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         return `${base} -> ${raw.numMatches} match${raw.numMatches === 1 ? "" : "es"} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
       }
       return `${base} -> ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
-    }
     case "read":
       if (
         raw.startLine !== undefined &&
@@ -470,8 +667,9 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
   }
 }
 
-function assertNever(value: never): never {
-  throw new Error(`Unhandled tool raw result: ${JSON.stringify(value)}`);
+function boundedToolError(error: string): string {
+  const limit = 1_000;
+  return error.length <= limit ? error : `${error.slice(0, limit)}…`;
 }
 
 function toolStartedBashDetail(call: {
@@ -481,7 +679,6 @@ function toolStartedBashDetail(call: {
   if (call.name !== "Bash") {
     return {};
   }
-
   const command = bashCommandFromArgs(call.args);
   return command === undefined ? {} : { bash: { command } };
 }
@@ -510,15 +707,6 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
   }
 }
 
-function upsertBackgroundTask(
-  tasks: ShellTaskSnapshot[],
-  task: ShellTaskSnapshot,
-): ShellTaskSnapshot[] {
-  const next = tasks.filter((candidate) => candidate.taskId !== task.taskId);
-  next.push(task);
-  return next.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
-}
-
 function toolRawResultDiff(
   raw: ToolRawResult,
 ): Pick<TimelineItem, "diff" | "diffTruncated"> {
@@ -527,7 +715,13 @@ function toolRawResultDiff(
     case "edit":
       return raw.patch === undefined || raw.patch.length === 0
         ? {}
-        : { diff: raw.patch, diffTruncated: raw.patchTruncated === true };
+        : {
+            diff: raw.patch.map((hunk) => ({
+              ...hunk,
+              lines: [...hunk.lines],
+            })),
+            diffTruncated: raw.patchTruncated === true,
+          };
     case "read":
     case "glob":
     case "grep":
@@ -545,6 +739,36 @@ function toolRawResultDiff(
   }
 }
 
+function upsertBackgroundTask(
+  tasks: ShellTaskSnapshot[],
+  task: ShellTaskSnapshot,
+  completedTaskLimit: number,
+): ShellTaskSnapshot[] {
+  const snapshot = cloneTaskSnapshot(task);
+  const updated = [
+    ...tasks.filter((candidate) => candidate.taskId !== snapshot.taskId),
+    snapshot,
+  ];
+  const active = updated.filter((candidate) => isActiveTask(candidate.status));
+  const terminal = updated
+    .filter((candidate) => !isActiveTask(candidate.status))
+    .sort((left, right) =>
+      (right.endedAt ?? right.startedAt).localeCompare(left.endedAt ?? left.startedAt),
+    )
+    .slice(0, completedTaskLimit);
+  return [...active, ...terminal].sort((left, right) =>
+    right.startedAt.localeCompare(left.startedAt),
+  );
+}
+
+function cloneTaskSnapshot(task: ShellTaskSnapshot): ShellTaskSnapshot {
+  return { ...task, origin: { ...task.origin } };
+}
+
+function isActiveTask(status: ShellTaskStatus): boolean {
+  return status === "running" || status === "stopping";
+}
+
 function bashDescription(args: unknown): string | undefined {
   const argsRecord = asRecord(args);
   return (
@@ -553,37 +777,24 @@ function bashDescription(args: unknown): string | undefined {
 }
 
 function toolPattern(args: unknown): string | undefined {
-  const argsRecord = asRecord(args);
-  return stringProperty(argsRecord, "pattern");
+  return stringProperty(asRecord(args), "pattern");
 }
 
 function toolQuery(args: unknown): string | undefined {
-  const argsRecord = asRecord(args);
-  return stringProperty(argsRecord, "query");
+  return stringProperty(asRecord(args), "query");
 }
 
 function toolUrl(args: unknown): string | undefined {
-  const argsRecord = asRecord(args);
-  return stringProperty(argsRecord, "url");
+  return stringProperty(asRecord(args), "url");
 }
 
 function toolPath(args: unknown): string | undefined {
-  if (
-    typeof args === "object" &&
-    args !== null &&
-    !Array.isArray(args) &&
-    "file_path" in args &&
-    typeof args.file_path === "string"
-  ) {
-    return args.file_path;
-  }
-
-  return undefined;
+  const record = asRecord(args);
+  return stringProperty(record, "file_path");
 }
 
 function toolTaskId(args: unknown): string | undefined {
-  const record = asRecord(args);
-  return stringProperty(record, "task_id");
+  return stringProperty(asRecord(args), "task_id");
 }
 
 function stringProperty(
@@ -597,4 +808,8 @@ function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled value: ${JSON.stringify(value)}`);
 }
