@@ -152,6 +152,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         raw = await input.toolRuntime.execute(call, { signal: input.signal });
       } catch (error) {
         if (!input.signal.aborted) {
+          appendFailedToolMessages(messages, toolCalls, callIndex, error);
           return failedResult(messages, error, iteration);
         }
 
@@ -221,6 +222,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 const cancelledToolContent =
   "Tool execution was cancelled by the user. Side effects may have partially completed; inspect current state before retrying.";
 const skippedToolContent = "Tool call was skipped because the user cancelled the turn.";
+const skippedAfterFailureToolContent =
+  "Tool call was skipped because an earlier tool call failed.";
 
 function appendCancelledToolMessages(
   messages: AgentMessage[],
@@ -236,6 +239,27 @@ function appendCancelledToolMessages(
       providerToolCallId: call.providerToolCallId,
       name: call.name,
       content: call === activeCall ? cancelledToolContent : skippedToolContent,
+    });
+  }
+}
+
+function appendFailedToolMessages(
+  messages: AgentMessage[],
+  toolCalls: ToolCall[],
+  startIndex: number,
+  error: unknown,
+): void {
+  for (let index = startIndex; index < toolCalls.length; index += 1) {
+    const call = requireToolCall(toolCalls, index);
+    messages.push({
+      role: "tool",
+      toolCallId: call.toolCallId,
+      providerToolCallId: call.providerToolCallId,
+      name: call.name,
+      content:
+        index === startIndex
+          ? `Tool execution failed: ${errorMessage(error)}. Side effects may have partially completed; inspect current state before retrying.`
+          : skippedAfterFailureToolContent,
     });
   }
 }
@@ -301,8 +325,12 @@ function failedResult(
 ): RunAgentResult {
   return {
     status: "failed",
-    error: error instanceof Error ? error.message : String(error),
+    error: errorMessage(error),
     messages,
     lastIteration,
   };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

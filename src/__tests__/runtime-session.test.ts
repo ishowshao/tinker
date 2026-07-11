@@ -15,6 +15,7 @@ import type {
   ModelRequestOptions,
   ModelRequestOutput,
 } from "../model/model-client";
+import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import type { SessionId } from "../ids/runtime-id";
 import { createDefaultTooling } from "../tools/registry";
 import { collectingEventSink, deterministicIdFactory } from "./test-runtime";
@@ -59,6 +60,50 @@ class WaitingModel implements ModelClient {
   }
 }
 
+class FailingToolCallModel implements ModelClient {
+  readonly inputs: ModelRequestInput[] = [];
+
+  async request(
+    input: ModelRequestInput,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
+
+    if (this.inputs.length === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
+      const { iteration, runtimeSession } = options.identity;
+      return {
+        message: {
+          role: "assistant",
+          toolCalls: [
+            {
+              ...runtimeSession.createToolCall(iteration, 1),
+              providerToolCallId: "provider-read",
+              name: "Read",
+              args: { file_path: "README.md" },
+            },
+            {
+              ...runtimeSession.createToolCall(iteration, 2),
+              providerToolCallId: "provider-glob",
+              name: "Glob",
+              args: { pattern: "*" },
+            },
+          ],
+        },
+      };
+    }
+
+    return {
+      message: {
+        role: "assistant",
+        content: "recovered",
+      },
+    };
+  }
+}
+
 describe("RuntimeSession lifecycle", () => {
   test("owns ordered turns, events, and cross-turn messages", async () => {
     const sink = collectingEventSink();
@@ -95,6 +140,49 @@ describe("RuntimeSession lifecycle", () => {
       type: "session.finished",
       data: { reason: "oneshot_complete" },
     });
+  });
+
+  test("keeps history protocol-valid after tool execution throws", async () => {
+    const sink = collectingEventSink();
+    const model = new FailingToolCallModel();
+    const input = createInput(model, sink, "tool-failure");
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("tool-failure"),
+      loadMcpConfig: async () => undefined,
+      createTooling: (options) => {
+        const tooling = createDefaultTooling(options);
+        tooling.runtime.execute = async () => {
+          throw new Error("tool transport broke");
+        };
+        return tooling;
+      },
+    });
+
+    const failed = await session.executeTurn({
+      userPrompt: "use tools",
+      signal: new AbortController().signal,
+    });
+    const recovered = await session.executeTurn({
+      userPrompt: "continue",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(failed.status).toBe("failed");
+    expect(recovered.status).toBe("completed");
+    const failedToolMessages = failed.messages.filter(
+      (message) => message.role === "tool",
+    );
+    expect(failedToolMessages).toHaveLength(2);
+    expect(failedToolMessages[0]?.content).toContain(
+      "Tool execution failed: tool transport broke",
+    );
+    expect(failedToolMessages[1]?.content).toContain("skipped");
+    expect(() => toOpenAIChatMessages(failed.messages)).not.toThrow();
+    expect(model.inputs[1]?.messages).toEqual([
+      ...failed.messages,
+      { role: "user", content: "continue" },
+    ]);
   });
 
   test("fast-fails empty and concurrent turns without allocating identities", async () => {
