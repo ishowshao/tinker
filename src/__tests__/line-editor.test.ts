@@ -5,10 +5,12 @@ import {
   deleteForward,
   deleteToLineStart,
   insert,
+  moveDown,
   moveLeft,
   moveRight,
   moveToLineEnd,
   moveToLineStart,
+  moveUp,
   splitAtCursor,
 } from "../tui/line-editor";
 
@@ -138,6 +140,46 @@ describe("line editor", () => {
     const value = "你\n😀x";
     expect(moveToLineStart({ value, cursor: 3 }).cursor).toBe(2);
     expect(moveToLineEnd({ value, cursor: 3 }).cursor).toBe(4);
+  });
+
+  test("moves vertically across logical lines while preserving the target column", () => {
+    const value = "0123456789\nshort\nabcdefghijk";
+    const firstLineEnd = { value, cursor: 10 };
+    const shortLineEnd = moveDown(firstLineEnd);
+    const thirdLine = moveDown(shortLineEnd);
+
+    expect(shortLineEnd).toEqual({ value, cursor: 16, preferredColumn: 10 });
+    expect(thirdLine).toEqual({ value, cursor: 27, preferredColumn: 10 });
+    expect(moveUp(thirdLine)).toEqual(shortLineEnd);
+    expect(moveUp(shortLineEnd)).toEqual({
+      ...firstLineEnd,
+      preferredColumn: 10,
+    });
+  });
+
+  test("moves to the directional line boundary before stopping", () => {
+    const value = "first\nsecond";
+    const firstLineMiddle = { value, cursor: 3 };
+    const lastLineMiddle = { value, cursor: 9 };
+
+    const firstLineStart = moveUp(firstLineMiddle);
+    const lastLineEnd = moveDown(lastLineMiddle);
+
+    expect(firstLineStart).toEqual({ value, cursor: 0, preferredColumn: 3 });
+    expect(moveUp(firstLineStart)).toBe(firstLineStart);
+    expect(lastLineEnd).toEqual({ value, cursor: 12, preferredColumn: 3 });
+    expect(moveDown(lastLineEnd)).toBe(lastLineEnd);
+  });
+
+  test("clears the preferred column after horizontal movement and editing", () => {
+    const state = { value: "first\nsecond", cursor: 9, preferredColumn: 3 };
+
+    expect(moveLeft(state)).toEqual({ value: state.value, cursor: 8 });
+    expect(moveRight(state)).toEqual({ value: state.value, cursor: 10 });
+    expect(insert(state, "!")).toEqual({
+      value: "first\nsec!ond",
+      cursor: 10,
+    });
   });
 
   test("splits the value around the cursor", () => {

@@ -9,10 +9,12 @@ import {
   deleteToLineStart,
   insert,
   type LineEditorState,
+  moveDown,
   moveLeft,
   moveRight,
   moveToLineEnd,
   moveToLineStart,
+  moveUp,
   splitAtCursor,
 } from "../line-editor";
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
@@ -30,7 +32,8 @@ export type PromptInputProps = {
 
 type HistoryNavigation = {
   index: number;
-  draft: string;
+  originalDraft: LineEditorState;
+  browsing: boolean;
 };
 
 type PromptInputState = {
@@ -68,11 +71,11 @@ export function PromptInput(props: PromptInputProps) {
     setState((current) => {
       const editor = update(current.editor);
 
-      if (editor.value === current.editor.value) {
-        return { ...current, editor };
+      if (!editorChanged(current.editor, editor)) {
+        return current;
       }
 
-      return { ...current, editor, suggestionIndex: 0, suggestionsDismissed: false };
+      return applyEditorChange(current, editor);
     });
   };
 
@@ -80,53 +83,31 @@ export function PromptInput(props: PromptInputProps) {
     setState((current) => {
       const entries = props.history?.entries ?? [];
 
-      if (current.navigation === undefined) {
-        if (entries.length === 0) {
-          return current;
-        }
-
-        const index = entries.length - 1;
-        return {
-          editor: createLineEditorState(entries[index] ?? ""),
-          navigation: { index, draft: current.editor.value },
-          suggestionIndex: 0,
-          suggestionsDismissed: true,
-        };
+      if (current.navigation?.browsing === true) {
+        return navigateHistoryUp(current, entries);
       }
 
-      if (current.navigation.index === 0) {
-        return current;
+      const editor = moveUp(current.editor);
+      if (editorChanged(current.editor, editor)) {
+        return applyEditorChange(current, editor);
       }
 
-      const index = current.navigation.index - 1;
-      return {
-        editor: createLineEditorState(entries[index] ?? ""),
-        navigation: { ...current.navigation, index },
-        suggestionIndex: 0,
-        suggestionsDismissed: true,
-      };
+      return navigateHistoryUp(current, entries);
     });
   };
 
   const navigateDown = () => {
     setState((current) => {
-      if (current.navigation === undefined) {
-        return current;
-      }
-
       const entries = props.history?.entries ?? [];
 
-      if (current.navigation.index >= entries.length - 1) {
-        return createPromptInputState(current.navigation.draft);
+      if (current.navigation?.browsing === true) {
+        return navigateHistoryDown(current, entries);
       }
 
-      const index = current.navigation.index + 1;
-      return {
-        editor: createLineEditorState(entries[index] ?? ""),
-        navigation: { ...current.navigation, index },
-        suggestionIndex: 0,
-        suggestionsDismissed: true,
-      };
+      const editor = moveDown(current.editor);
+      return editorChanged(current.editor, editor)
+        ? applyEditorChange(current, editor)
+        : navigateHistoryDown(current, entries);
     });
   };
 
@@ -321,4 +302,106 @@ function renderEditor(editor: LineEditorState, props: PromptInputProps) {
 
 function normalizeLineBreaks(value: string): string {
   return value.replace(/\r\n?/g, "\n");
+}
+
+function editorChanged(before: LineEditorState, after: LineEditorState): boolean {
+  return before.value !== after.value || before.cursor !== after.cursor;
+}
+
+function applyEditorChange(
+  state: PromptInputState,
+  editor: LineEditorState,
+): PromptInputState {
+  const valueChanged = state.editor.value !== editor.value;
+  let navigation = state.navigation;
+
+  if (valueChanged) {
+    navigation = undefined;
+  } else if (navigation !== undefined) {
+    navigation = { ...navigation, browsing: false };
+  }
+
+  return {
+    ...state,
+    editor,
+    navigation,
+    suggestionIndex: valueChanged ? 0 : state.suggestionIndex,
+    suggestionsDismissed: valueChanged ? false : state.suggestionsDismissed,
+  };
+}
+
+function navigateHistoryUp(
+  state: PromptInputState,
+  entries: readonly string[],
+): PromptInputState {
+  if (entries.length === 0) {
+    return state;
+  }
+
+  if (state.navigation === undefined) {
+    const index = entries.length - 1;
+    return showHistoryEntry(state, entries, {
+      index,
+      originalDraft: state.editor,
+      browsing: true,
+    });
+  }
+
+  if (state.navigation.index === 0) {
+    return {
+      ...state,
+      navigation: { ...state.navigation, browsing: true },
+    };
+  }
+
+  const navigation = {
+    ...state.navigation,
+    index: state.navigation.index - 1,
+    browsing: true,
+  };
+  return showHistoryEntry(state, entries, navigation);
+}
+
+function navigateHistoryDown(
+  state: PromptInputState,
+  entries: readonly string[],
+): PromptInputState {
+  const navigation = state.navigation;
+  if (navigation === undefined) {
+    return state;
+  }
+
+  if (navigation.index >= entries.length - 1) {
+    return {
+      editor: navigation.originalDraft,
+      suggestionIndex: 0,
+      suggestionsDismissed: false,
+    };
+  }
+
+  const nextNavigation = {
+    ...navigation,
+    index: navigation.index + 1,
+    browsing: true,
+  };
+  return showHistoryEntry(state, entries, nextNavigation);
+}
+
+function showHistoryEntry(
+  state: PromptInputState,
+  entries: readonly string[],
+  navigation: HistoryNavigation,
+): PromptInputState {
+  const entry = entries[navigation.index];
+  if (entry === undefined) {
+    throw new Error(`History entry ${navigation.index} does not exist`);
+  }
+
+  return {
+    ...state,
+    editor: createLineEditorState(entry),
+    navigation,
+    suggestionIndex: 0,
+    suggestionsDismissed: true,
+  };
 }

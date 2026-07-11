@@ -1,6 +1,7 @@
 export type LineEditorState = {
   value: string;
   cursor: number;
+  preferredColumn?: number;
 };
 
 export function createLineEditorState(value = ""): LineEditorState {
@@ -56,13 +57,50 @@ export function deleteToLineStart(state: LineEditorState): LineEditorState {
 }
 
 export function moveLeft(state: LineEditorState): LineEditorState {
-  return state.cursor === 0 ? state : { ...state, cursor: state.cursor - 1 };
+  return state.cursor === 0 ? state : { value: state.value, cursor: state.cursor - 1 };
 }
 
 export function moveRight(state: LineEditorState): LineEditorState {
   return state.cursor >= codePointLength(state.value)
     ? state
-    : { ...state, cursor: state.cursor + 1 };
+    : { value: state.value, cursor: state.cursor + 1 };
+}
+
+export function moveUp(state: LineEditorState): LineEditorState {
+  const chars = [...state.value];
+  const lineStart = currentLineStart(chars, state.cursor);
+  const preferredColumn = state.preferredColumn ?? state.cursor - lineStart;
+
+  if (lineStart === 0) {
+    return state.cursor === 0 ? state : { ...state, cursor: 0, preferredColumn };
+  }
+
+  const previousLineEnd = lineStart - 1;
+  const previousLineStart = currentLineStart(chars, previousLineEnd);
+  const cursor =
+    previousLineStart + Math.min(preferredColumn, previousLineEnd - previousLineStart);
+
+  return { ...state, cursor, preferredColumn };
+}
+
+export function moveDown(state: LineEditorState): LineEditorState {
+  const chars = [...state.value];
+  const lineStart = currentLineStart(chars, state.cursor);
+  const preferredColumn = state.preferredColumn ?? state.cursor - lineStart;
+  const lineEnd = chars.indexOf("\n", state.cursor);
+
+  if (lineEnd === -1) {
+    return state.cursor === chars.length
+      ? state
+      : { ...state, cursor: chars.length, preferredColumn };
+  }
+
+  const nextLineStart = lineEnd + 1;
+  const nextLineBreak = chars.indexOf("\n", nextLineStart);
+  const nextLineEnd = nextLineBreak === -1 ? chars.length : nextLineBreak;
+  const cursor = nextLineStart + Math.min(preferredColumn, nextLineEnd - nextLineStart);
+
+  return { ...state, cursor, preferredColumn };
 }
 
 export function moveToLineStart(state: LineEditorState): LineEditorState {
@@ -70,11 +108,13 @@ export function moveToLineStart(state: LineEditorState): LineEditorState {
   const lineStart = currentLineStart(chars, state.cursor);
 
   if (state.cursor !== lineStart || lineStart === 0) {
-    return { ...state, cursor: lineStart };
+    return state.cursor === lineStart
+      ? state
+      : { value: state.value, cursor: lineStart };
   }
 
   return {
-    ...state,
+    value: state.value,
     cursor: lineStart === 1 ? 0 : chars.lastIndexOf("\n", lineStart - 2) + 1,
   };
 }
@@ -85,12 +125,12 @@ export function moveToLineEnd(state: LineEditorState): LineEditorState {
   const lineEnd = lineBreak === -1 ? chars.length : lineBreak;
 
   if (state.cursor !== lineEnd || lineEnd === chars.length) {
-    return { ...state, cursor: lineEnd };
+    return state.cursor === lineEnd ? state : { value: state.value, cursor: lineEnd };
   }
 
   const nextLineBreak = chars.indexOf("\n", lineEnd + 1);
   return {
-    ...state,
+    value: state.value,
     cursor: nextLineBreak === -1 ? chars.length : nextLineBreak,
   };
 }

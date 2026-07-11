@@ -7,6 +7,7 @@ import { PromptInput } from "../tui/components/prompt-input";
 const ARROW_UP = "[A";
 const ARROW_DOWN = "[B";
 const ARROW_LEFT = "[D";
+const ARROW_RIGHT = "[C";
 const BACKSPACE = "";
 const CTRL_A = "\u0001";
 const CTRL_E = "\u0005";
@@ -217,6 +218,12 @@ describe("prompt input", () => {
     await press(stdin, ARROW_UP);
     expect(stripAnsi(lastFrame())).toContain("first prompt");
 
+    await press(stdin, ARROW_DOWN);
+    expect(stripAnsi(lastFrame())).toContain("second prompt");
+
+    await press(stdin, ARROW_UP);
+    expect(stripAnsi(lastFrame())).toContain("first prompt");
+
     await press(stdin, "\r");
     expect(submitted).toEqual(["first prompt"]);
     cleanup();
@@ -236,13 +243,16 @@ describe("prompt input", () => {
 
     await press(stdin, "draft");
     await press(stdin, ARROW_UP);
+    expect(stripAnsi(lastFrame())).toContain("draft");
+
+    await press(stdin, ARROW_UP);
     expect(stripAnsi(lastFrame())).toContain("old prompt");
 
     await press(stdin, ARROW_DOWN);
     expect(stripAnsi(lastFrame())).toContain("draft");
 
-    await press(stdin, "\r");
-    expect(submitted).toEqual(["draft"]);
+    await press(stdin, ">", "\r");
+    expect(submitted).toEqual([">draft"]);
     cleanup();
   });
 
@@ -258,8 +268,144 @@ describe("prompt input", () => {
       />,
     );
 
-    await press(stdin, ARROW_UP, BACKSPACE, "t again", "\r");
+    await press(stdin, ARROW_UP, BACKSPACE, "t again", ARROW_DOWN, "\r");
     expect(submitted).toEqual(["run test again"]);
+    cleanup();
+  });
+
+  test("moves vertically across logical lines before entering history", async () => {
+    const history = { entries: ["old prompt"] };
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, `${PASTE_START}first\nsecond${PASTE_END}`);
+    await press(stdin, ARROW_UP, "!", "\r");
+
+    expect(submitted).toEqual(["first!\nsecond"]);
+    cleanup();
+  });
+
+  test("moves to the first line start before recalling history", async () => {
+    const history = { entries: ["old prompt"] };
+    const submitted: string[] = [];
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "draft", ARROW_LEFT, ARROW_LEFT, ARROW_UP);
+    expect(stripAnsi(lastFrame())).toContain("draft");
+
+    await press(stdin, ARROW_UP);
+    expect(stripAnsi(lastFrame())).toContain("old prompt");
+
+    await press(stdin, ARROW_DOWN, ">", "\r");
+    expect(submitted).toEqual([">draft"]);
+    cleanup();
+  });
+
+  test("moves to the last line end before handling the next history action", async () => {
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, `${PASTE_START}first\nsecond${PASTE_END}`);
+    await press(stdin, ARROW_LEFT, ARROW_LEFT, ARROW_LEFT, ARROW_DOWN, "!", "\r");
+
+    expect(submitted).toEqual(["first\nsecond!"]);
+    cleanup();
+  });
+
+  test("continues to the previous history after moving the cursor to line start", async () => {
+    const history = { entries: ["older", "latest"] };
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, ARROW_UP, ARROW_LEFT, ARROW_UP, ARROW_UP, "\r");
+
+    expect(submitted).toEqual(["older"]);
+    cleanup();
+  });
+
+  test("continues to the next history after moving the cursor to line end", async () => {
+    const history = { entries: ["older", "latest"] };
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, ARROW_UP, ARROW_UP, ARROW_LEFT, ARROW_DOWN, ARROW_DOWN, "\r");
+
+    expect(submitted).toEqual(["latest"]);
+    cleanup();
+  });
+
+  test("keeps history navigation after an ineffective cursor move", async () => {
+    const history = { entries: ["old prompt"] };
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={history}
+        placeholder="ready"
+        onSubmit={() => undefined}
+      />,
+    );
+
+    await press(stdin, ARROW_UP, ARROW_RIGHT, ARROW_DOWN);
+
+    expect(stripAnsi(lastFrame())).toContain("ready");
+    expect(stripAnsi(lastFrame())).not.toContain("old prompt");
+    cleanup();
+  });
+
+  test("gives slash command suggestions priority over history", async () => {
+    const submitted: string[] = [];
+    const commands = [
+      { name: "alpha", description: "Alpha command" },
+      { name: "beta", description: "Beta command" },
+    ];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={{ entries: ["old prompt"] }}
+        commands={commands}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "/", ARROW_UP, "\t", "\r");
+
+    expect(submitted).toEqual(["/beta "]);
     cleanup();
   });
 
