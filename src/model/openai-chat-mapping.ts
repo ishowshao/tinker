@@ -95,22 +95,12 @@ export function fromOpenAIChatCompletion(
     );
   }
   const rawToolCalls = message.tool_calls ?? [];
-  if (rawToolCalls.length > 0 && options.identity === undefined) {
-    throw providerResponseError(
-      options,
-      "choices[0].message.tool_calls",
-      "requires an iteration identity context",
-    );
-  }
-  const toolCalls = rawToolCalls.map((raw, index) =>
-    parseToolCall(raw, index, options.identity!, options),
-  );
   const content = normalizeContent(
     message.content,
     "choices[0].message.content",
     options,
   );
-  if ((content === null || content.trim() === "") && toolCalls.length === 0) {
+  if ((content === null || content.trim() === "") && rawToolCalls.length === 0) {
     throw providerResponseError(
       options,
       "choices[0].message",
@@ -122,6 +112,18 @@ export function fromOpenAIChatCompletion(
     choice.finish_reason,
     "choices[0].finish_reason",
     options,
+  );
+  const usage = parseUsage(completion.usage, options);
+
+  if (rawToolCalls.length > 0 && options.identity === undefined) {
+    throw providerResponseError(
+      options,
+      "choices[0].message.tool_calls",
+      "requires an iteration identity context",
+    );
+  }
+  const toolCalls = rawToolCalls.map((raw, index) =>
+    parseToolCall(raw, index, options.identity!, options),
   );
 
   return {
@@ -136,7 +138,7 @@ export function fromOpenAIChatCompletion(
       toolCalls: toolCalls.length === 0 ? undefined : toolCalls,
     },
     finishReason,
-    usage: parseUsage(completion.usage, options),
+    usage,
     rawResponse: response,
   };
 }
@@ -265,36 +267,106 @@ function optionalString(
 function parseUsage(
   value: unknown,
   options: { provider: string; model: string },
-): ModelUsage | undefined {
+): ModelUsage {
   if (value === undefined || value === null) {
-    return undefined;
+    throw providerResponseError(options, "usage", "is required");
   }
 
   const usage = requireRecord(value, "usage", options);
-  const promptTokens = optionalTokenCount(
+  const promptTokens = requireTokenCount(
     usage.prompt_tokens,
     "usage.prompt_tokens",
     options,
   );
-  const completionTokens = optionalTokenCount(
+  const completionTokens = requireTokenCount(
     usage.completion_tokens,
     "usage.completion_tokens",
     options,
   );
-  const totalTokens = optionalTokenCount(
+  const totalTokens = requireTokenCount(
     usage.total_tokens,
     "usage.total_tokens",
     options,
   );
+  if (totalTokens !== promptTokens + completionTokens) {
+    throw providerResponseError(
+      options,
+      "usage.total_tokens",
+      `must equal usage.prompt_tokens + usage.completion_tokens (${promptTokens + completionTokens})`,
+    );
+  }
+
+  const directHit = optionalTokenCount(
+    usage.prompt_cache_hit_tokens,
+    "usage.prompt_cache_hit_tokens",
+    options,
+  );
+  const directMiss = optionalTokenCount(
+    usage.prompt_cache_miss_tokens,
+    "usage.prompt_cache_miss_tokens",
+    options,
+  );
+  if ((directHit === undefined) !== (directMiss === undefined)) {
+    throw providerResponseError(
+      options,
+      "usage.prompt_cache_hit_tokens",
+      "and usage.prompt_cache_miss_tokens must be provided together",
+    );
+  }
+
+  const cachedTokens = parseNestedTokenCount(
+    usage.prompt_tokens_details,
+    "usage.prompt_tokens_details",
+    "cached_tokens",
+    options,
+  );
+  const detailHit = cachedTokens;
+  const detailMiss =
+    cachedTokens === undefined ? undefined : promptTokens - cachedTokens;
+  if (detailMiss !== undefined && detailMiss < 0) {
+    throw providerResponseError(
+      options,
+      "usage.prompt_tokens_details.cached_tokens",
+      "must not exceed usage.prompt_tokens",
+    );
+  }
   if (
-    promptTokens === undefined &&
-    completionTokens === undefined &&
-    totalTokens === undefined
+    directHit !== undefined &&
+    (directHit !== detailHit || directMiss !== detailMiss) &&
+    detailHit !== undefined
   ) {
     throw providerResponseError(
       options,
-      "usage",
-      "must contain at least one token count",
+      "usage.prompt_cache_hit_tokens",
+      "conflicts with usage.prompt_tokens_details.cached_tokens",
+    );
+  }
+
+  const promptCacheHitTokens = directHit ?? detailHit;
+  const promptCacheMissTokens = directMiss ?? detailMiss;
+  if (
+    promptCacheHitTokens !== undefined &&
+    promptCacheMissTokens !== undefined &&
+    promptCacheHitTokens + promptCacheMissTokens !== promptTokens
+  ) {
+    throw providerResponseError(
+      options,
+      "usage.prompt_cache_hit_tokens",
+      "plus usage.prompt_cache_miss_tokens must equal usage.prompt_tokens",
+    );
+  }
+
+  const reasoningTokens = parseNestedTokenCount(
+    usage.completion_tokens_details,
+    "usage.completion_tokens_details",
+    "reasoning_tokens",
+    options,
+  );
+  if (reasoningTokens !== undefined && reasoningTokens > completionTokens) {
+    throw providerResponseError(
+      options,
+      "usage.completion_tokens_details.reasoning_tokens",
+      "must not exceed usage.completion_tokens",
     );
   }
 
@@ -302,8 +374,47 @@ function parseUsage(
     promptTokens,
     completionTokens,
     totalTokens,
-    source: "provider",
+    ...(promptCacheHitTokens === undefined
+      ? {}
+      : { promptCacheHitTokens, promptCacheMissTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
   };
+}
+
+function requireTokenCount(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): number {
+  const count = optionalTokenCount(value, path, options);
+  if (count === undefined) {
+    throw providerResponseError(options, path, "is required");
+  }
+  return count;
+}
+
+function parseNestedTokenCount(
+  value: unknown,
+  path: string,
+  property: string,
+  options: { provider: string; model: string },
+): number | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const record = requireObject(value, path, options);
+  return optionalTokenCount(record[property], `${path}.${property}`, options);
+}
+
+function requireObject(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw providerResponseError(options, path, "must be an object");
+  }
+  return value as Record<string, unknown>;
 }
 
 function optionalTokenCount(

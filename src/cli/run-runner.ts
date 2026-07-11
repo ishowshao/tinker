@@ -10,10 +10,10 @@ import {
   createWebFetchRefinerFromEnv,
   readRunnerConfig,
   SYSTEM_PROMPT,
-  type RunnerConfig,
+  type RunnerConfigOverrides,
 } from "./config";
 
-export type RunOneShotOptions = Partial<RunnerConfig> & {
+export type RunOneShotOptions = RunnerConfigOverrides & {
   modelClient?: ModelClient;
   stdout?: WritableLike;
   stderr?: WritableLike;
@@ -40,12 +40,14 @@ export async function runOneShot(
       modelName: config.modelName,
       maxIterations: config.maxIterations,
       includeReasoningContent: config.includeReasoningContent,
+      contextProfile: config.contextProfile,
+      contextBudget: config.contextBudget,
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       modelClient,
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:
         options.eventLogPath === false ? false : { eventLogPath: options.eventLogPath },
-      webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
+      webFetchRefiner: createWebFetchRefinerFromEnv(config),
     });
 
     const result = await session.executeTurn({

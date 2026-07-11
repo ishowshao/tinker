@@ -9,10 +9,9 @@ import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
 import type { AgentEvent } from "../events/types";
 import type {
-  ModelClient,
-  ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedModelRequest,
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
@@ -20,7 +19,13 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling, ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ripGrep } from "../tools/ripgrep";
 import type { BashRawResult, ToolExecutor } from "../tools/types";
-import { createTestRuntime } from "./test-runtime";
+import {
+  createTestContextMeter,
+  createTestRuntime,
+  TEST_CONTEXT_BUDGET,
+  TestModelClient,
+  testModelOutput,
+} from "./test-runtime";
 
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];
@@ -30,18 +35,19 @@ class ArrayEventSink implements EventSink {
   }
 }
 
-class WaitingModel implements ModelClient {
+class WaitingModel extends TestModelClient {
   readonly started: Promise<void>;
   private start!: () => void;
 
   constructor() {
+    super();
     this.started = new Promise((resolve) => {
       this.start = resolve;
     });
   }
 
   async request(
-    _input: ModelRequestInput,
+    _prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
     this.start();
@@ -57,40 +63,38 @@ class WaitingModel implements ModelClient {
   }
 }
 
-class ToolBatchModel implements ModelClient {
+class ToolBatchModel extends TestModelClient {
   async request(
-    _input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
     if (options.identity === undefined) {
       throw new Error("Expected model request identity.");
     }
     const { iteration, runtimeSession } = options.identity;
-    return {
-      message: {
-        role: "assistant",
-        toolCalls: [
-          {
-            ...runtimeSession.createToolCall(iteration, 1),
-            providerToolCallId: "provider-read",
-            name: "Read",
-            args: {},
-          },
-          {
-            ...runtimeSession.createToolCall(iteration, 2),
-            providerToolCallId: "provider-grep",
-            name: "Grep",
-            args: {},
-          },
-          {
-            ...runtimeSession.createToolCall(iteration, 3),
-            providerToolCallId: "provider-glob",
-            name: "Glob",
-            args: {},
-          },
-        ],
-      },
-    };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      toolCalls: [
+        {
+          ...runtimeSession.createToolCall(iteration, 1),
+          providerToolCallId: "provider-read",
+          name: "Read",
+          args: {},
+        },
+        {
+          ...runtimeSession.createToolCall(iteration, 2),
+          providerToolCallId: "provider-grep",
+          name: "Grep",
+          args: {},
+        },
+        {
+          ...runtimeSession.createToolCall(iteration, 3),
+          providerToolCallId: "provider-glob",
+          name: "Glob",
+          args: {},
+        },
+      ],
+    });
   }
 }
 
@@ -113,6 +117,11 @@ describe("turn cancellation", () => {
               logprobs: null,
             },
           ],
+          usage: {
+            prompt_tokens: 5,
+            completion_tokens: 1,
+            total_tokens: 6,
+          },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -121,13 +130,15 @@ describe("turn cancellation", () => {
     const client = new OpenAIChatModelClient({
       apiKey: "test-key",
       model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
       fetch: fetchImpl,
     });
 
-    await client.request(
-      { messages: [{ role: "user", content: "hello" }], tools: [] },
-      { signal: controller.signal },
-    );
+    const prepared = client.prepare({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+    });
+    await client.request(prepared, { signal: controller.signal });
 
     expect(receivedSignal).toBeDefined();
     controller.abort(new TurnCancelledError("user"));
@@ -154,6 +165,7 @@ describe("turn cancellation", () => {
         conversation: pendingConversation.agent,
         maxIterations: 2,
         model,
+        contextMeter: createTestContextMeter(),
         tools: tooling.registry,
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
@@ -178,6 +190,7 @@ describe("turn cancellation", () => {
       });
       expect(events.events.map((event) => event.type)).toEqual([
         "agent.iteration.started",
+        "context.usage.updated",
         "model.request.started",
       ]);
     } finally {
@@ -255,6 +268,7 @@ describe("turn cancellation", () => {
       conversation: pendingConversation.agent,
       maxIterations: 2,
       model: new ToolBatchModel(),
+      contextMeter: createTestContextMeter(),
       tools: registry,
       toolRuntime: new ToolRuntime(registry),
       observationBuilder: new ObservationBuilder(),

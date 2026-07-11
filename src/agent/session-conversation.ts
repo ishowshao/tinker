@@ -5,6 +5,11 @@ import type { AgentMessage, AssistantMessage, ToolMessage } from "./types";
 
 export type SessionConversation = {
   beginTurn(userPrompt: string): PendingTurnConversation;
+  buildCommittedModelRequest(tools: ToolDefinition[]): ModelRequestInput;
+  buildCandidateModelRequest(
+    userPrompt: string,
+    tools: ToolDefinition[],
+  ): ModelRequestInput;
   committedMessageCount(): number;
 };
 
@@ -61,6 +66,29 @@ export class InMemorySessionConversation implements SessionConversation {
     );
     this.pending = pending;
     return pending;
+  }
+
+  buildCommittedModelRequest(tools: ToolDefinition[]): ModelRequestInput {
+    if (this.pending !== undefined) {
+      throw new Error("Cannot build committed context while a turn is open.");
+    }
+    return this.contextBuilder.build({ messages: [...this.committed], tools });
+  }
+
+  buildCandidateModelRequest(
+    userPrompt: string,
+    tools: ToolDefinition[],
+  ): ModelRequestInput {
+    if (userPrompt.trim() === "") {
+      throw new Error("Cannot build a candidate context with an empty prompt.");
+    }
+    if (this.pending !== undefined) {
+      throw new Error("Cannot build a candidate context while a turn is open.");
+    }
+    return this.contextBuilder.build({
+      messages: [...this.committed, { role: "user", content: userPrompt }],
+      tools,
+    });
   }
 
   committedMessageCount(): number {

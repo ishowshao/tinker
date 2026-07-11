@@ -7,7 +7,11 @@ import {
 } from "../tui/event-store";
 import type { AgentEvent } from "../events/types";
 import type { ToolCall } from "../agent/types";
-import { createTestRuntime } from "./test-runtime";
+import {
+  createTestRuntime,
+  TEST_CONTEXT_BUDGET,
+  TEST_CONTEXT_PROFILE,
+} from "./test-runtime";
 
 const testRuntime = createTestRuntime();
 const toolCalls = new Map<string, ReturnType<typeof testRuntime.toolCall>>();
@@ -57,6 +61,8 @@ function testEvent(input: TestEventInput): AgentEvent {
         model: "model",
         maxIterations: 100,
         includeReasoningContent: false,
+        contextProfile: TEST_CONTEXT_PROFILE,
+        contextBudget: TEST_CONTEXT_BUDGET,
       },
     };
   }

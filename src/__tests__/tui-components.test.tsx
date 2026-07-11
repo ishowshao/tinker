@@ -11,7 +11,13 @@ import { PromptInput } from "../tui/components/prompt-input";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
 import type { SessionId } from "../ids/runtime-id";
-import { createTestRuntime } from "./test-runtime";
+import type { ContextUsageSnapshot } from "../agent/context-meter";
+import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import {
+  createTestRuntime,
+  TEST_CONTEXT_BUDGET,
+  TEST_CONTEXT_PROFILE,
+} from "./test-runtime";
 
 const testRuntime = createTestRuntime();
 
@@ -35,6 +41,26 @@ async function submitInput(stdin: { write: (data: string) => void }, value: stri
   stdin.write(value);
   await Bun.sleep(15);
   stdin.write("\r");
+}
+
+function contextSnapshot(
+  overrides: Partial<ContextUsageSnapshot> = {},
+): ContextUsageSnapshot {
+  return {
+    usedInputTokens: 10_000,
+    source: "estimated_full",
+    pressure: "normal",
+    inputBudgetTokens: TEST_CONTEXT_BUDGET.inputBudgetTokens,
+    triggerTokens: TEST_CONTEXT_BUDGET.triggerTokens,
+    triggerRatio: TEST_CONTEXT_BUDGET.triggerRatio,
+    requestMaxOutputTokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
+    correctionFactor: 1.25,
+    calibrationSampleCount: 0,
+    prefixHash: "a".repeat(64),
+    requestConfigHash: "b".repeat(64),
+    toolSchemaHash: "c".repeat(64),
+    ...overrides,
+  };
 }
 
 describe("tui components", () => {
@@ -79,6 +105,118 @@ describe("tui components", () => {
 
     expect(lastFrame()).toContain("✔ Worked for 3m 27s");
     expect(lastFrame()).not.toContain("done");
+    cleanup();
+  });
+
+  test("renders context usage in the prompt input status bar", () => {
+    const normal = render(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        contextUsage={contextSnapshot({
+          usedInputTokens: 700 * 1_024,
+          inputBudgetTokens: 896 * 1_024,
+        })}
+        onSubmit={() => undefined}
+      />,
+    );
+    expect(normal.lastFrame()).toContain(
+      "deepseek-v4-flash · /tmp/tinker · main · context 700K / 896K (78% used)",
+    );
+    normal.cleanup();
+
+    const blocked = render(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        contextUsage={contextSnapshot({
+          usedInputTokens: 930 * 1_024,
+          inputBudgetTokens: 896 * 1_024,
+          pressure: "blocked",
+        })}
+        onSubmit={() => undefined}
+      />,
+    );
+    expect(blocked.lastFrame()).toContain("context 930K / 896K (104% used, blocked)");
+    blocked.cleanup();
+  });
+
+  test("shows /status locally without running the agent", async () => {
+    const projectionStore = createProjectionStore();
+    await projectionStore.append({
+      type: "session.started",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: {
+        workspaceRoot: "/tmp/tinker",
+        model: "model",
+        maxIterations: 100,
+        includeReasoningContent: false,
+        contextProfile: TEST_CONTEXT_PROFILE,
+        contextBudget: TEST_CONTEXT_BUDGET,
+      },
+    });
+    await projectionStore.append({
+      type: "context.usage.updated",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:00.001Z",
+      data: { phase: "initial", snapshot: contextSnapshot() },
+    });
+    let runCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        modelName="model"
+        workspaceRoot="/tmp/tinker"
+        sessionId={"session-1" as SessionId}
+        projectionStore={projectionStore}
+        run={async () => {
+          runCalls += 1;
+          return completedResult();
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/status");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain("model window: 256K");
+    expect(lastFrame()).toContain("request max output: 64K");
+    expect(lastFrame()).toContain("Estimator");
+    expect(runCalls).toBe(0);
+
+    await submitInput(stdin, "/nope");
+    await Bun.sleep(25);
+    expect(lastFrame()).not.toContain("Estimator");
+    cleanup();
+  });
+
+  test("shows an admission budget error thrown before a run promise exists", async () => {
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        modelName="model"
+        workspaceRoot="/tmp/tinker"
+        sessionId={"session-1" as SessionId}
+        projectionStore={createProjectionStore()}
+        run={() => {
+          throw new ContextBudgetExceededError({
+            projectedInputTokens: 220_000,
+            source: "estimated_full",
+            contextWindowTokens: TEST_CONTEXT_BUDGET.contextWindowTokens,
+            inputBudgetTokens: TEST_CONTEXT_BUDGET.inputBudgetTokens,
+            requestMaxOutputTokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
+            triggerTokens: TEST_CONTEXT_BUDGET.triggerTokens,
+          });
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "oversized prompt");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain("Model request blocked before provider call");
+    expect(lastFrame()).toContain("input budget 192K");
     cleanup();
   });
 

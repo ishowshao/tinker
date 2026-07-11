@@ -2,6 +2,12 @@ import path from "node:path";
 import type { ModelClient } from "../model/model-client";
 import { FakeModelClient } from "../model/fake-model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import {
+  deriveModelContextBudget,
+  readModelContextProfileFromEnv,
+  type ModelContextBudget,
+  type ModelContextProfile,
+} from "../model/model-context-profile";
 import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
@@ -51,15 +57,24 @@ export type RunnerConfig = {
   modelName: string;
   maxIterations: number;
   includeReasoningContent: boolean;
+  contextProfile: ModelContextProfile;
+  contextBudget: ModelContextBudget;
 };
 
-export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerConfig {
+export type RunnerConfigOverrides = Partial<Omit<RunnerConfig, "contextBudget">>;
+
+export function readRunnerConfig(overrides: RunnerConfigOverrides = {}): RunnerConfig {
+  const modelName = overrides.modelName ?? process.env.TINKER_MODEL ?? DEFAULT_MODEL;
+  validateWebFetchRefinerModel(modelName);
+  const contextProfile = overrides.contextProfile ?? readModelContextProfileFromEnv();
+  const contextBudget = deriveModelContextBudget(contextProfile);
+
   return {
     sessionId: overrides.sessionId ?? (createUuidV7() as SessionId),
     workspaceRoot: path.resolve(
       overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
     ),
-    modelName: overrides.modelName ?? process.env.TINKER_MODEL ?? DEFAULT_MODEL,
+    modelName,
     maxIterations:
       overrides.maxIterations ??
       parsePositiveInteger(
@@ -74,16 +89,20 @@ export function readRunnerConfig(overrides: Partial<RunnerConfig> = {}): RunnerC
         DEFAULT_INCLUDE_REASONING_CONTENT,
         "TINKER_INCLUDE_REASONING_CONTENT",
       ),
+    contextProfile,
+    contextBudget,
   };
 }
 
 export function createModelClientFromEnv(
-  modelName: string,
-  options: { includeReasoningContent?: boolean } = {},
+  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
 ): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
-    return new FakeModelClient(fakeMode);
+    return new FakeModelClient(fakeMode, {
+      model: config.modelName,
+      contextBudget: config.contextBudget,
+    });
   }
 
   const apiKey = process.env.API_KEY;
@@ -94,34 +113,25 @@ export function createModelClientFromEnv(
   return new OpenAIChatModelClient({
     apiKey,
     baseURL: process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL,
-    includeReasoningContent:
-      options.includeReasoningContent ?? DEFAULT_INCLUDE_REASONING_CONTENT,
-    model: modelName,
+    includeReasoningContent: config.includeReasoningContent,
+    model: config.modelName,
+    contextBudget: config.contextBudget,
   });
 }
 
 export function createRunnerModelClient(
-  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent">,
+  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
   injected?: ModelClient,
 ): ModelClient {
-  return (
-    injected ??
-    createModelClientFromEnv(config.modelName, {
-      includeReasoningContent: config.includeReasoningContent,
-    })
-  );
+  return injected ?? createModelClientFromEnv(config);
 }
 
-export function createWebFetchRefinerFromEnv(mainModelName: string): Refiner {
+export function createWebFetchRefinerFromEnv(
+  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
+): Refiner {
   return createModelRefiner({
-    createModelClient: () => {
-      const refineModelName = process.env.TINKER_WEBFETCH_REFINE_MODEL;
-      return createModelClientFromEnv(
-        refineModelName === undefined || refineModelName.trim() === ""
-          ? mainModelName
-          : refineModelName,
-      );
-    },
+    createModelClient: () => createModelClientFromEnv(config),
+    contextBudget: config.contextBudget,
   });
 }
 
@@ -177,4 +187,17 @@ function parseBoolean(
   throw new Error(
     `${name} must be one of true/false, 1/0, yes/no, or on/off; received ${value}`,
   );
+}
+
+function validateWebFetchRefinerModel(mainModelName: string): void {
+  const refinerModel = process.env.TINKER_WEBFETCH_REFINE_MODEL;
+  if (
+    refinerModel !== undefined &&
+    refinerModel.trim() !== "" &&
+    refinerModel !== mainModelName
+  ) {
+    throw new Error(
+      `TINKER_WEBFETCH_REFINE_MODEL must match TINKER_MODEL in F2; received ${JSON.stringify(refinerModel)} for main model ${JSON.stringify(mainModelName)}.`,
+    );
+  }
 }

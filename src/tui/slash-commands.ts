@@ -4,6 +4,7 @@ export type SlashCommand = {
 };
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
+  { name: "status", description: "Show session and context details" },
   { name: "quit", description: "Exit the TUI" },
 ];
 

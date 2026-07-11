@@ -16,38 +16,47 @@ import type {
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedModelRequest,
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import type { SessionId } from "../ids/runtime-id";
 import { createDefaultTooling } from "../tools/registry";
-import { collectingEventSink, deterministicIdFactory } from "./test-runtime";
+import {
+  collectingEventSink,
+  deterministicIdFactory,
+  TEST_CONTEXT_BUDGET,
+  TEST_CONTEXT_PROFILE,
+  TestModelClient,
+  testModelOutput,
+  testModelRequestInput,
+} from "./test-runtime";
 
-class CapturingModel implements ModelClient {
+class CapturingModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
-  async request(input: ModelRequestInput): Promise<ModelRequestOutput> {
+  async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
-    return {
-      message: {
-        role: "assistant",
-        content: `answer-${this.inputs.length}`,
-      },
-    };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: `answer-${this.inputs.length}`,
+    });
   }
 }
 
-class WaitingModel implements ModelClient {
+class WaitingModel extends TestModelClient {
   readonly started: Promise<void>;
   private markStarted!: () => void;
 
   constructor() {
+    super();
     this.started = new Promise((resolve) => {
       this.markStarted = resolve;
     });
   }
 
   async request(
-    _input: ModelRequestInput,
+    _prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
     this.markStarted();
@@ -62,13 +71,14 @@ class WaitingModel implements ModelClient {
   }
 }
 
-class FailingToolCallModel implements ModelClient {
+class FailingToolCallModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
   async request(
-    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
 
     if (this.inputs.length === 1) {
@@ -76,66 +86,71 @@ class FailingToolCallModel implements ModelClient {
         throw new Error("Expected model request identity.");
       }
       const { iteration, runtimeSession } = options.identity;
-      return {
-        message: {
-          role: "assistant",
-          toolCalls: [
-            {
-              ...runtimeSession.createToolCall(iteration, 1),
-              providerToolCallId: "provider-read",
-              name: "Read",
-              args: { file_path: "README.md" },
-            },
-            {
-              ...runtimeSession.createToolCall(iteration, 2),
-              providerToolCallId: "provider-glob",
-              name: "Glob",
-              args: { pattern: "*" },
-            },
-          ],
-        },
-      };
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: "provider-read",
+            name: "Read",
+            args: { file_path: "README.md" },
+          },
+          {
+            ...runtimeSession.createToolCall(iteration, 2),
+            providerToolCallId: "provider-glob",
+            name: "Glob",
+            args: { pattern: "*" },
+          },
+        ],
+      });
     }
 
-    return {
-      message: {
-        role: "assistant",
-        content: "recovered",
-      },
-    };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "recovered",
+    });
   }
 }
 
-class FailsThenCompletesModel implements ModelClient {
+class FailsThenCompletesModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
-  async request(input: ModelRequestInput): Promise<ModelRequestOutput> {
+  async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
     if (this.inputs.length === 1) {
       throw new Error("model unavailable");
     }
-    return { message: { role: "assistant", content: "recovered" } };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "recovered",
+    });
   }
 }
 
-class CancelsThenCompletesModel implements ModelClient {
+class CancelsThenCompletesModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
   readonly firstStarted: Promise<void>;
   private markFirstStarted!: () => void;
 
   constructor() {
+    super();
     this.firstStarted = new Promise((resolve) => {
       this.markFirstStarted = resolve;
     });
   }
 
   async request(
-    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
     if (this.inputs.length > 1) {
-      return { message: { role: "assistant", content: "after cancellation" } };
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "after cancellation",
+      });
     }
 
     this.markFirstStarted();
@@ -150,16 +165,20 @@ class CancelsThenCompletesModel implements ModelClient {
   }
 }
 
-class RejectsInvariantThenCompletesModel implements ModelClient {
+class RejectsInvariantThenCompletesModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
   async request(
-    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({ messages: [...input.messages], tools: [...input.tools] });
     if (this.inputs.length > 1) {
-      return { message: { role: "assistant", content: "clean recovery" } };
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "clean recovery",
+      });
     }
     if (options.identity === undefined) {
       throw new Error("Expected model request identity.");
@@ -169,21 +188,53 @@ class RejectsInvariantThenCompletesModel implements ModelClient {
       options.identity.iteration,
       1,
     );
-    return {
-      message: {
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "invalid transient assistant",
+      toolCalls: [
+        {
+          ...call,
+          toolCallNumber: 2,
+          providerToolCallId: "invalid-provider-call",
+          name: "Read",
+          args: { file_path: "README.md" },
+        },
+      ],
+    });
+  }
+}
+
+class HugeObservationModel extends TestModelClient {
+  calls = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (options.identity === undefined) {
+      throw new Error("Expected model request identity.");
+    }
+    if (this.calls > 1) {
+      return testModelOutput(prepared, {
         role: "assistant",
-        content: "invalid transient assistant",
-        toolCalls: [
-          {
-            ...call,
-            toolCallNumber: 2,
-            providerToolCallId: "invalid-provider-call",
-            name: "Read",
-            args: { file_path: "README.md" },
-          },
-        ],
-      },
-    };
+        content: "should not be reached",
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      toolCalls: [
+        {
+          ...options.identity.runtimeSession.createToolCall(
+            options.identity.iteration,
+            1,
+          ),
+          providerToolCallId: "provider-huge-read",
+          name: "Read",
+          args: { file_path: "huge.txt" },
+        },
+      ],
+    });
   }
 }
 
@@ -463,6 +514,86 @@ describe("RuntimeSession lifecycle", () => {
     ).toThrow("disposed");
   });
 
+  test("rejects an oversized prompt before allocating a turn or calling provider", async () => {
+    const sink = collectingEventSink();
+    const model = new CapturingModel();
+    const session = await createTestSession(model, sink, "admission-budget");
+
+    let caught: unknown;
+    try {
+      await session.executeTurn({
+        userPrompt: "x".repeat(1_000_000),
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain(
+      "Model request blocked before provider call",
+    );
+    expect(model.inputs).toHaveLength(0);
+    expect(sink.events.some((event) => event.type === "turn.started")).toBe(false);
+    expect(sink.events.some((event) => event.type === "model.request.started")).toBe(
+      false,
+    );
+  });
+
+  test("keeps tool protocol delta when the next iteration is blocked", async () => {
+    const sink = collectingEventSink();
+    const model = new HugeObservationModel();
+    let conversation: InMemorySessionConversation | undefined;
+    const session = await createRuntimeSession(
+      createInput(model, sink, "tool-budget"),
+      {
+        idFactory: deterministicIdFactory("tool-budget"),
+        loadMcpConfig: async () => undefined,
+        createConversation: (systemPrompt) => {
+          conversation = new InMemorySessionConversation(systemPrompt);
+          return conversation;
+        },
+        createTooling: (options) => {
+          const tooling = createDefaultTooling(options);
+          tooling.runtime.execute = async () => ({
+            kind: "read",
+            ok: true,
+            filePath: "huge.txt",
+            content: "x".repeat(1_000_000),
+            sha256: "0".repeat(64),
+            sizeBytes: 1_000_000,
+            totalLines: 1,
+            startLine: 1,
+            endLine: 1,
+            truncated: false,
+          });
+          return tooling;
+        },
+      },
+    );
+
+    const result = await session.executeTurn({
+      userPrompt: "read the huge fixture",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" ? result.error : "").toContain(
+      "Model request blocked before provider call",
+    );
+    expect(model.calls).toBe(1);
+    expect(
+      sink.events.filter((event) => event.type === "model.request.started"),
+    ).toHaveLength(1);
+    expect(
+      requireConversation(conversation)
+        .snapshot()
+        .filter((message) => message.role === "tool"),
+    ).toHaveLength(1);
+  });
+
   test("rolls back tooling and finishes a successfully started session", async () => {
     const sink = collectingEventSink();
     let toolingDisposed = false;
@@ -612,6 +743,8 @@ function createInput(
     modelName: "test-model",
     maxIterations: 2,
     includeReasoningContent: false,
+    contextProfile: TEST_CONTEXT_PROFILE,
+    contextBudget: TEST_CONTEXT_BUDGET,
     systemPrompt: "system",
     modelClient: model,
     presentationSinks: [sink],

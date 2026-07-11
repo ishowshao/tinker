@@ -6,6 +6,8 @@ import type { ShellTaskSnapshot, ShellTaskStatus } from "../tools/bash-task";
 import { visibleTimelineItems } from "../tui/event-store";
 import type { TuiProjectionPolicy } from "../tui/tui-projection-policy";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
+import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
+import type { ContextUsageSnapshot } from "../agent/context-meter";
 
 const sessionId = "projection-session" as SessionId;
 const smallPolicy: TuiProjectionPolicy = {
@@ -68,6 +70,7 @@ describe("TuiProjectionStore", () => {
       data: {
         output: {
           message: { role: "assistant", toolCalls: [call] },
+          usage: testUsage(),
           rawResponse: { body: providerSecret },
         },
       },
@@ -193,6 +196,29 @@ describe("TuiProjectionStore", () => {
     expect(JSON.stringify(snapshot)).not.toContain('"events"');
   });
 
+  test("keeps only the latest context snapshot across one thousand updates", async () => {
+    const store = createStore();
+    await store.append(sessionStarted(1));
+    for (let index = 1; index <= 1_000; index += 1) {
+      await store.append({
+        type: "context.usage.updated",
+        sessionId,
+        eventSequence: index + 1,
+        timestamp: timestamp(index + 1),
+        data: {
+          phase: "initial",
+          snapshot: contextUsage(index),
+        },
+      });
+    }
+
+    const snapshot = store.getSnapshot();
+    expect(snapshot.contextUsage?.usedInputTokens).toBe(1_000);
+    expect(snapshot.recentTurns).toEqual([]);
+    expect(snapshot.notices).toEqual([]);
+    expect(JSON.stringify(snapshot)).not.toContain('"contextUsageHistory"');
+  });
+
   test("retains all active tasks and only the newest terminal task", async () => {
     const store = createStore(smallPolicy);
     const tasks = [
@@ -245,6 +271,8 @@ function sessionStarted(eventSequence: number): AgentEvent {
       model: "event-model",
       maxIterations: 10,
       includeReasoningContent: false,
+      contextProfile: TEST_CONTEXT_PROFILE,
+      contextBudget: TEST_CONTEXT_BUDGET,
     },
   };
 }
@@ -320,8 +348,32 @@ function modelFinished(
     eventSequence,
     timestamp: timestamp(eventSequence),
     data: {
-      output: { message: { role: "assistant", content: "response" } },
+      output: {
+        message: { role: "assistant", content: "response" },
+        usage: testUsage(),
+      },
     },
+  };
+}
+
+function testUsage() {
+  return { promptTokens: 10, completionTokens: 2, totalTokens: 12 };
+}
+
+function contextUsage(usedInputTokens: number): ContextUsageSnapshot {
+  return {
+    usedInputTokens,
+    source: "estimated_full",
+    pressure: "normal",
+    inputBudgetTokens: TEST_CONTEXT_BUDGET.inputBudgetTokens,
+    triggerTokens: TEST_CONTEXT_BUDGET.triggerTokens,
+    triggerRatio: TEST_CONTEXT_BUDGET.triggerRatio,
+    requestMaxOutputTokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
+    correctionFactor: 1.25,
+    calibrationSampleCount: 0,
+    prefixHash: "a".repeat(64),
+    requestConfigHash: "b".repeat(64),
+    toolSchemaHash: "c".repeat(64),
   };
 }
 

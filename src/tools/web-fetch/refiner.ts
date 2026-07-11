@@ -1,4 +1,6 @@
 import type { ModelClient } from "../../model/model-client";
+import type { ModelContextBudget } from "../../model/model-context-profile";
+import { ContextMeter } from "../../agent/context-meter";
 import type { ToolExecutionContext } from "../types";
 
 export type Refiner = {
@@ -19,10 +21,12 @@ const DEFAULT_MAX_CONTENT_CHARS = 50_000;
 
 export function createModelRefiner(options: {
   createModelClient: () => ModelClient;
+  contextBudget: ModelContextBudget;
   maxContentChars?: number;
 }): Refiner {
   const maxContentChars = options.maxContentChars ?? DEFAULT_MAX_CONTENT_CHARS;
   let client: ModelClient | undefined;
+  const meter = new ContextMeter(options.contextBudget, { enableAnchor: false });
 
   return {
     async refine(input, context) {
@@ -33,30 +37,31 @@ export function createModelRefiner(options: {
         ? input.content.slice(0, maxContentChars)
         : input.content;
 
-      const output = await client.request(
-        {
-          messages: [
-            { role: "system", content: REFINE_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content: [
-                `Web page: ${input.url}`,
-                truncated
-                  ? `Page content (markdown, truncated to ${maxContentChars} characters):`
-                  : "Page content (markdown):",
-                "",
-                content,
-                "",
-                "---",
-                "",
-                `Prompt: ${input.prompt}`,
-              ].join("\n"),
-            },
-          ],
-          tools: [],
-        },
-        { signal: context.signal },
-      );
+      const prepared = client.prepare({
+        messages: [
+          { role: "system", content: REFINE_SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: [
+              `Web page: ${input.url}`,
+              truncated
+                ? `Page content (markdown, truncated to ${maxContentChars} characters):`
+                : "Page content (markdown):",
+              "",
+              content,
+              "",
+              "---",
+              "",
+              `Prompt: ${input.prompt}`,
+            ].join("\n"),
+          },
+        ],
+        tools: [],
+      });
+      const preflight = meter.measure(prepared);
+      meter.assertWithinBudget(preflight);
+      const output = await client.request(prepared, { signal: context.signal });
+      meter.recordProviderUsage(prepared, output);
 
       const message = output.message;
       if (

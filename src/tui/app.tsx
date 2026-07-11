@@ -1,12 +1,14 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import type { RunAgentResult } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
 import { visibleTimelineItems } from "./event-store";
 import type { TuiProjectionStore } from "./tui-projection-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
+import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { PromptInput } from "./components/prompt-input";
@@ -35,6 +37,7 @@ export function App(props: AppProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [showStatus, setShowStatus] = useState(false);
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
@@ -85,6 +88,7 @@ export function App(props: AppProps) {
 
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
+    setShowStatus(false);
 
     if (trimmed.startsWith("/")) {
       const command = findSlashCommand(trimmed);
@@ -96,6 +100,10 @@ export function App(props: AppProps) {
 
       setNotice(undefined);
 
+      if (command.name === "status") {
+        setShowStatus(true);
+        return;
+      }
       if (command.name === "quit") {
         props.onQuit?.();
         exit();
@@ -113,15 +121,25 @@ export function App(props: AppProps) {
     const controller = new AbortController();
     activeController.current = controller;
     void props.history?.append(trimmed).catch(() => undefined);
-    void props
-      .run(trimmed, controller.signal)
-      .catch(() => undefined)
+    let retainNotice = false;
+    void Promise.resolve()
+      .then(() => props.run(trimmed, controller.signal))
+      .catch((error: unknown) => {
+        retainNotice = true;
+        setNotice(
+          error instanceof ContextBudgetExceededError
+            ? error.message
+            : `Runtime failed: ${errorMessage(error)}`,
+        );
+      })
       .finally(() => {
         if (activeController.current === controller) {
           activeController.current = undefined;
           setIsRunning(false);
           setIsCancelling(false);
-          setNotice(undefined);
+          if (!retainNotice) {
+            setNotice(undefined);
+          }
           setGitBranchRefresh((current) => current + 1);
         }
       });
@@ -142,6 +160,11 @@ export function App(props: AppProps) {
           <BackgroundTasks tasks={state.backgroundTasks} />
         </Box>
       )}
+      {showStatus ? (
+        <Box marginTop={1}>
+          <ContextStatus state={state} />
+        </Box>
+      ) : null}
       <Box marginTop={1}>
         <Footer
           status={isCancelling ? "cancelling" : state.status}
@@ -153,6 +176,7 @@ export function App(props: AppProps) {
           modelName={props.modelName}
           workspaceRoot={props.workspaceRoot}
           gitBranch={gitBranch}
+          contextUsage={state.contextUsage}
           isDisabled={isRunning}
           history={props.history}
           onSubmit={onSubmit}
@@ -162,4 +186,8 @@ export function App(props: AppProps) {
       </Box>
     </Box>
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

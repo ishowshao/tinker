@@ -9,70 +9,72 @@ import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import type {
-  ModelClient,
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedModelRequest,
 } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
-import { createTestRuntime } from "./test-runtime";
+import {
+  createTestContextMeter,
+  createTestRuntime,
+  TestModelClient,
+  testModelOutput,
+  testModelRequestInput,
+} from "./test-runtime";
 
-class ScriptedModel implements ModelClient {
+class ScriptedModel extends TestModelClient {
   calls = 0;
 
   async request(
-    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.calls += 1;
 
     if (this.calls === 1) {
-      return {
-        message: {
-          role: "assistant",
-          content: "I will read README first.",
-          toolCalls: [
-            {
-              ...requireRuntime(options).createToolCall(requireIteration(options), 1),
-              providerToolCallId: "provider-call-1",
-              name: "Read",
-              args: { file_path: "README.md" },
-            },
-          ],
-        },
-      };
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "I will read README first.",
+        toolCalls: [
+          {
+            ...requireRuntime(options).createToolCall(requireIteration(options), 1),
+            providerToolCallId: "provider-call-1",
+            name: "Read",
+            args: { file_path: "README.md" },
+          },
+        ],
+      });
     }
 
     const toolMessage = input.messages.at(-1) as AgentMessage;
     expect(toolMessage.role).toBe("tool");
     expect(toolMessage.content).toContain("Read succeeded");
 
-    return {
-      message: {
-        role: "assistant",
-        content: "README was read.",
-      },
-    };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "README was read.",
+    });
   }
 }
 
-class CapturingModel implements ModelClient {
+class CapturingModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
-  async request(input: ModelRequestInput): Promise<ModelRequestOutput> {
+  async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
     this.inputs.push({
       ...input,
       messages: [...input.messages],
       tools: [...input.tools],
     });
 
-    return {
-      message: {
-        role: "assistant",
-        content: "Second prompt answered.",
-      },
-    };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "Second prompt answered.",
+    });
   }
 }
 
@@ -105,6 +107,7 @@ describe("runAgent", () => {
         conversation: pendingConversation.agent,
         maxIterations: 4,
         model: new ScriptedModel(),
+        contextMeter: createTestContextMeter(),
         tools: tooling.registry,
         toolRuntime: tooling.runtime,
         observationBuilder: new ObservationBuilder(),
@@ -158,6 +161,7 @@ describe("runAgent", () => {
       conversation: secondTurn.agent,
       maxIterations: 4,
       model,
+      contextMeter: createTestContextMeter(),
       tools: tooling.registry,
       toolRuntime: tooling.runtime,
       observationBuilder: new ObservationBuilder(),
@@ -167,6 +171,19 @@ describe("runAgent", () => {
     });
 
     expect(result.status).toBe("completed");
+    expect(events.events.map((event) => event.type)).toEqual([
+      "agent.iteration.started",
+      "context.usage.updated",
+      "model.request.started",
+      "model.request.finished",
+      "context.usage.updated",
+      "agent.iteration.finished",
+    ]);
+    expect(
+      events.events
+        .filter((event) => event.type === "context.usage.updated")
+        .map((event) => event.data.phase),
+    ).toEqual(["preflight", "measured"]);
     expect(model.inputs[0]?.messages).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },

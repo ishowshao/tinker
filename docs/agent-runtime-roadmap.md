@@ -97,7 +97,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 - 稳定 `MessageId`、不可变 canonical history 和 context revision。
 - `SessionStore`、single-writer lock、崩溃恢复和 `/resume`。
-- `/status`、context footer 和严格的请求 preflight。
+- `/status`、Prompt Input context 状态栏和严格的请求 preflight。
 - `Recall`、session 内搜索和精确历史 page-in。
 - 确定性换出、结构化 checkpoint、`/compact` 和自动 compaction。
 
@@ -149,34 +149,40 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F2：Context 计量、模型配置与请求预检
 
-**状态：待实施；不改变消息选择行为。**
+**状态：已完成（2026-07-11）；未改变消息选择行为。**
+
+详细设计与真实 provider 验证记录见
+[`context-measurement-model-profile-preflight-design.md`](context-measurement-model-profile-preflight-design.md)。
 
 这一步只建立可观测性和预算真相，不执行换出或摘要。
 
 实施范围：
 
-- 增加显式 `ModelContextProfile`：context window、最大输出、safety margin、后续使用的
-  trigger/target。
-- adapter 必须真正发送最大输出限制；无法约束输出时，不把 profile 标记为严格可用。
-- 扩展 `ModelUsage`，规范化 provider 的 prompt cache hit/miss。
-- 在 adapter 最终消息和 tool schema 上做下一请求本地估值，不只统计 message 正文。
-- `ContextBuilder` 输出 kernel、user、assistant、tool、tool schema 等分项。
-- 增加 `context.usage.updated`，在 TUI footer 和 `/status` 中区分：
-  - 上一请求 provider measured usage；
-  - 下一请求 local estimated usage；
-  - 上限未知的状态。
-- 记录规范化出站 payload 的前缀哈希，为后续验证 prefix cache 稳定性提供证据。
+- 每个可运行模型必须显式配置 context window 与最大输出能力；缺失或非法时启动
+  fast-fail，不按 model name 猜测，也不保留 unknown-profile 模式。
+- 产品输出上限固定为 `128K`；adapter 对 prepared payload 真正发送派生的
+  `max_tokens`，输入预算固定为 `context window - request max output`。
+- provider 成功响应强制包含内部一致的 prompt/completion/total usage，并规范化 cache
+  hit/miss 与 reasoning tokens。
+- 对 adapter 最终 messages、tool calls 和 tool schemas 做确定性字符估值，以最近八次
+  provider prompt usage 校准；append-only 时使用 measured total + estimated delta。
+- 增加 `context.usage.updated`、80% pressure trigger、请求前 hard preflight、Prompt Input 状态栏与
+  本地 `/status`；F2 不执行 compaction。
+- 使用累计 prefix hash、request config hash 和 tool schema hash 验证 anchor 前缀稳定性。
 
 验收门槛：
 
-- 没有可信 profile 时只展示 usage，不自动 compact，也不伪造剩余预算。
-- 每次模型请求前都有确定性的估值和分项；超过严格输入预算时在请求前 fast-fail。
-- provider usage 可用时原样记录，估算值始终标记为 estimated。
-- 使用真实 provider smoke test 对比估值、实际 prompt tokens 和 cache hit/miss。
+- 没有合法 profile 时 one-shot 与 TUI 均无法创建 RuntimeSession。
+- 每次模型请求前都有确定性的估值和分项；超过严格输入预算时不发出
+  `model.request.started`，也不访问 provider。
+- provider usage 与下一请求 estimate 使用不同来源类型；TUI projection 只保留最新数量和
+  hash，不保留 prompt 或 raw response。
+- 真实 DeepSeek smoke test 已验证 `max_tokens=131072`、guarded estimate、anchor delta、
+  cache hit/miss 与 reasoning usage；真实 PTY 已验证 Prompt Input 状态栏和 `/status`。
 
 ### F3：建立协议安全的会话账本
 
-**状态：待 F2 完成。**
+**状态：待实施；F2 已完成。**
 
 在写入 SQLite 前，先用内存实现把 canonical history 的数据契约和协议边界验证清楚，
 避免把当前可变消息数组直接固化成长期 schema。
@@ -201,7 +207,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F4：SessionStore v1 与 `/resume`
 
-**状态：待 F2、F3 完成。**
+**状态：待 F3 完成。**
 
 第一版只追求“未压缩历史可完整恢复”，不同时实现 Recall、换出或 checkpoint。
 
@@ -336,5 +342,6 @@ swap-only。
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **F2：Context 计量、模型配置与请求预检**。F1 已完成；在 F2
-建立预算与观测真相前，不启动 SessionStore 或 compaction 的实现。
+当前明确的下一项是 **F3：建立协议安全的会话账本**。F1、F2 已完成；在 F3
+完成 canonical history 与 protocol frame 契约前，不启动 SessionStore 或 compaction
+的实现。

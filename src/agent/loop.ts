@@ -1,6 +1,7 @@
-import type { ModelClient } from "../model/model-client";
+import type { ModelClient, PreparedModelRequest } from "../model/model-client";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
+import type { ContextMeter } from "./context-meter";
 import type { RuntimeSessionContext } from "./runtime-session";
 import type { AgentTurnConversation } from "./session-conversation";
 import { throwIfTurnCancelled, turnCancellationSource } from "./turn-cancellation";
@@ -17,6 +18,7 @@ export type RunAgentInput = {
   conversation: AgentTurnConversation;
   maxIterations: number;
   model: ModelClient;
+  contextMeter: ContextMeter;
   tools: ToolRegistry;
   toolRuntime: ToolRuntime;
   observationBuilder: ObservationBuilder;
@@ -48,6 +50,34 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       );
     }
 
+    let prepared: PreparedModelRequest;
+    let preflight;
+    try {
+      throwIfTurnCancelled(input.signal);
+      prepared = input.model.prepare(
+        input.conversation.buildModelRequest(input.tools.definitions()),
+      );
+      preflight = input.contextMeter.measure(prepared);
+    } catch (error) {
+      if (input.signal.aborted) {
+        return cancelledResult(
+          cancellation(input.signal, iteration, "agent_boundary"),
+          iteration,
+        );
+      }
+      return failedResult(error, iteration);
+    }
+    await input.runtimeSession.append({
+      type: "context.usage.updated",
+      ...iteration,
+      data: { phase: "preflight", snapshot: preflight },
+    });
+    try {
+      input.contextMeter.assertWithinBudget(preflight);
+    } catch (error) {
+      return failedResult(error, iteration);
+    }
+
     await input.runtimeSession.append({
       type: "model.request.started",
       ...iteration,
@@ -57,16 +87,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     let modelOutput;
     try {
       throwIfTurnCancelled(input.signal);
-      modelOutput = await input.model.request(
-        input.conversation.buildModelRequest(input.tools.definitions()),
-        {
-          signal: input.signal,
-          identity: {
-            iteration,
-            runtimeSession: input.runtimeSession,
-          },
+      modelOutput = await input.model.request(prepared, {
+        signal: input.signal,
+        identity: {
+          iteration,
+          runtimeSession: input.runtimeSession,
         },
-      );
+      });
       throwIfTurnCancelled(input.signal);
     } catch (error) {
       if (input.signal.aborted) {
@@ -85,6 +112,12 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       type: "model.request.finished",
       ...iteration,
       data: { output: modelOutput },
+    });
+    const measured = input.contextMeter.recordProviderUsage(prepared, modelOutput);
+    await input.runtimeSession.append({
+      type: "context.usage.updated",
+      ...iteration,
+      data: { phase: "measured", snapshot: measured },
     });
 
     const toolCalls = modelOutput.message.toolCalls ?? [];

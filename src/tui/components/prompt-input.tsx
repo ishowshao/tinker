@@ -2,6 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { Box, Text, useInput, usePaste } from "ink";
 import { useState } from "react";
+import type { ContextUsageSnapshot } from "../../agent/context-meter";
+import { formatContextUsageLine } from "../context-format";
 import {
   backspace,
   createLineEditorState,
@@ -23,6 +25,7 @@ export type PromptInputProps = {
   modelName: string;
   workspaceRoot: string;
   gitBranch?: string;
+  contextUsage?: ContextUsageSnapshot;
   isDisabled?: boolean;
   placeholder?: string;
   history?: { entries: readonly string[] };
@@ -220,10 +223,23 @@ export function PromptInput(props: PromptInputProps) {
         {renderEditor(state.editor, props)}
       </Box>
       {showSuggestions ? null : (
-        <Text dimColor>
-          {props.modelName} · {formatWorkspacePath(props.workspaceRoot)}
-          {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
-        </Text>
+        <Box>
+          <Text dimColor>
+            {props.modelName} · {formatWorkspacePath(props.workspaceRoot)}
+            {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
+          </Text>
+          {props.contextUsage === undefined ? null : (
+            <>
+              <Text dimColor> · </Text>
+              <Text
+                color={contextColor(props.contextUsage.pressure)}
+                dimColor={props.contextUsage.pressure === "normal"}
+              >
+                {formatContextUsageLine(props.contextUsage)}
+              </Text>
+            </>
+          )}
+        </Box>
       )}
       {showSuggestions ? (
         <Box flexDirection="column">
@@ -237,6 +253,15 @@ export function PromptInput(props: PromptInputProps) {
       ) : null}
     </Box>
   );
+}
+
+function contextColor(
+  pressure: ContextUsageSnapshot["pressure"],
+): "yellow" | "red" | undefined {
+  if (pressure === "blocked") {
+    return "red";
+  }
+  return pressure === "triggered" ? "yellow" : undefined;
 }
 
 function formatWorkspacePath(workspaceRoot: string): string {

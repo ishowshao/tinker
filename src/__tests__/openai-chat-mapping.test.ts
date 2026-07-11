@@ -30,7 +30,11 @@ describe("openai chat mapping", () => {
             },
           },
         ],
-        usage: { total_tokens: 12 },
+        usage: {
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 12,
+        },
       },
       {
         identity: {
@@ -174,6 +178,11 @@ describe("openai chat mapping", () => {
               },
             },
           ],
+          usage: {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+          },
         },
         {
           identity: {
@@ -209,8 +218,118 @@ describe("openai chat mapping", () => {
       promptTokens: 9,
       completionTokens: 3,
       totalTokens: 12,
-      source: "provider",
     });
+  });
+
+  test("normalizes cache and reasoning usage variants", () => {
+    const deepSeek = fromOpenAIChatCompletion(
+      completionWithUsage({
+        prompt_tokens: 90,
+        completion_tokens: 10,
+        total_tokens: 100,
+        prompt_cache_hit_tokens: 70,
+        prompt_cache_miss_tokens: 20,
+        completion_tokens_details: { reasoning_tokens: 6 },
+      }),
+      { provider: "deepseek", model: "test-model" },
+    );
+    expect(deepSeek.usage).toEqual({
+      promptTokens: 90,
+      completionTokens: 10,
+      totalTokens: 100,
+      promptCacheHitTokens: 70,
+      promptCacheMissTokens: 20,
+      reasoningTokens: 6,
+    });
+
+    const openAi = fromOpenAIChatCompletion(
+      completionWithUsage({
+        prompt_tokens: 90,
+        completion_tokens: 10,
+        total_tokens: 100,
+        prompt_tokens_details: { cached_tokens: 70 },
+      }),
+      { provider: "openai", model: "test-model" },
+    );
+    expect(openAi.usage).toMatchObject({
+      promptCacheHitTokens: 70,
+      promptCacheMissTokens: 20,
+    });
+  });
+
+  test("requires internally consistent provider usage before parsing tool calls", () => {
+    expect(() =>
+      fromOpenAIChatCompletion(completionWithUsage(undefined), {
+        provider: "test-provider",
+        model: "test-model",
+      }),
+    ).toThrow("usage is required");
+
+    for (const field of ["prompt_tokens", "completion_tokens", "total_tokens"]) {
+      const usage: Record<string, unknown> = {
+        prompt_tokens: 9,
+        completion_tokens: 3,
+        total_tokens: 12,
+      };
+      delete usage[field];
+      expect(() =>
+        fromOpenAIChatCompletion(completionWithUsage(usage), {
+          provider: "test-provider",
+          model: "test-model",
+        }),
+      ).toThrow(`usage.${field} is required`);
+    }
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        completionWithUsage({
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 11,
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("usage.total_tokens must equal");
+  });
+
+  test("fast-fails inconsistent optional usage details", () => {
+    expect(() =>
+      fromOpenAIChatCompletion(
+        completionWithUsage({
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 12,
+          prompt_cache_hit_tokens: 4,
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("prompt_cache_miss_tokens must be provided together");
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        completionWithUsage({
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 12,
+          prompt_cache_hit_tokens: 4,
+          prompt_cache_miss_tokens: 5,
+          prompt_tokens_details: { cached_tokens: 3 },
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("conflicts with usage.prompt_tokens_details.cached_tokens");
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        completionWithUsage({
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 12,
+          completion_tokens_details: { reasoning_tokens: 4 },
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("reasoning_tokens must not exceed usage.completion_tokens");
   });
 
   test("fast-fails malformed provider responses with provider and model context", () => {
@@ -238,6 +357,11 @@ describe("openai chat mapping", () => {
               message: { role: "assistant", content: "" },
             },
           ],
+          usage: {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+          },
         },
         { provider: "test-provider", model: "test-model" },
       ),
@@ -260,6 +384,11 @@ describe("openai chat mapping", () => {
               },
             },
           ],
+          usage: {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+          },
         },
         {
           identity: createTestRuntime(),
@@ -277,10 +406,26 @@ describe("openai chat mapping", () => {
               message: { role: "assistant", content: "done" },
             },
           ],
-          usage: { total_tokens: "12" },
+          usage: {
+            prompt_tokens: 9,
+            completion_tokens: 3,
+            total_tokens: "12",
+          },
         },
         { provider: "test-provider", model: "test-model" },
       ),
     ).toThrow("usage.total_tokens must be a non-negative integer");
   });
 });
+
+function completionWithUsage(usage: unknown): Record<string, unknown> {
+  return {
+    choices: [
+      {
+        finish_reason: "stop",
+        message: { role: "assistant", content: "done" },
+      },
+    ],
+    ...(usage === undefined ? {} : { usage }),
+  };
+}

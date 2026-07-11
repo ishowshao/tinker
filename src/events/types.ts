@@ -7,6 +7,11 @@ import type {
 } from "../agent/types";
 import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-id";
 import type { ModelRequestOutput } from "../model/model-client";
+import type {
+  ModelContextBudget,
+  ModelContextProfile,
+} from "../model/model-context-profile";
+import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { ShellTaskSnapshot } from "../tools/bash-task";
 import type { ToolObservation } from "../observation/observation-builder";
 import type { ToolRawResult } from "../tools/types";
@@ -16,6 +21,13 @@ export type SessionStartedData = {
   model: string;
   maxIterations: number;
   includeReasoningContent: boolean;
+  contextProfile: ModelContextProfile;
+  contextBudget: ModelContextBudget;
+};
+
+export type ContextUsageUpdatedData = {
+  phase: "initial" | "preflight" | "measured" | "invalidated";
+  snapshot: ContextUsageSnapshot;
 };
 
 export type SessionFinishedData = {
@@ -40,6 +52,7 @@ export type AgentEventDataMap = {
   "agent.iteration.started": { iterationNumber: number };
   "model.request.started": Record<string, never>;
   "model.request.finished": { output: ModelRequestOutput };
+  "context.usage.updated": ContextUsageUpdatedData;
   "assistant.progress": { content: string };
   "tool.started": { call: ToolCall };
   "tool.raw_result": { call: ToolCall; raw: ToolRawResult };
@@ -103,7 +116,7 @@ type ToolEventInput<TType extends AgentEventType> = ToolCallIdentity & {
 };
 
 export type AgentEventInput =
-  | SessionEventInput<"session.started" | "session.finished">
+  | SessionEventInput<"session.started" | "session.finished" | "context.usage.updated">
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">
   | TurnEventInput<"turn.started" | "turn.finished">
@@ -115,6 +128,7 @@ export type AgentEventInput =
       | "agent.iteration.started"
       | "model.request.started"
       | "model.request.finished"
+      | "context.usage.updated"
       | "assistant.progress"
       | "agent.iteration.finished"
     >

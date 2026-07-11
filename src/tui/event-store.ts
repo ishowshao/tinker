@@ -4,7 +4,12 @@ import {
   type BashDisplayDetail,
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
+import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { ModelRequestOutput } from "../model/model-client";
+import type {
+  ModelContextBudget,
+  ModelContextProfile,
+} from "../model/model-context-profile";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "../tools/bash-task";
 import { countPatchChanges } from "../tools/file-diff";
 import type { DiffHunk, ToolRawResult } from "../tools/types";
@@ -41,6 +46,9 @@ export type TuiProjectionState = {
   modelName: string;
   workspaceRoot: string;
   workedForMs?: number;
+  contextProfile?: ModelContextProfile;
+  contextBudget?: ModelContextBudget;
+  contextUsage?: ContextUsageSnapshot;
   activeTurn?: TuiTurnProjection;
   recentTurns: TuiTurnProjection[];
   notices: TimelineItem[];
@@ -85,7 +93,11 @@ export function reduceTuiProjection(
         sessionId: event.sessionId,
         modelName: event.data.model,
         workspaceRoot: event.data.workspaceRoot,
+        contextProfile: event.data.contextProfile,
+        contextBudget: event.data.contextBudget,
       };
+    case "context.usage.updated":
+      return { ...state, contextUsage: event.data.snapshot };
     case "turn.started": {
       if (state.activeTurn !== undefined) {
         throw new Error(

@@ -37,10 +37,12 @@ export async function runTui(): Promise<void> {
       modelName: config.modelName,
       maxIterations: config.maxIterations,
       includeReasoningContent: config.includeReasoningContent,
+      contextProfile: config.contextProfile,
+      contextBudget: config.contextBudget,
       systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
       modelClient,
       presentationSinks: [projectionStore],
-      webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
+      webFetchRefiner: createWebFetchRefinerFromEnv(config),
     });
     const promptHistory = await PromptHistory.load(
       promptHistoryPath(config.workspaceRoot),

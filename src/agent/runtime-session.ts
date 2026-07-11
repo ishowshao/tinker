@@ -12,6 +12,11 @@ import {
 import { loadMcpConfig } from "../mcp/mcp-config";
 import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
+import {
+  assertMatchingContextBudget,
+  type ModelContextBudget,
+  type ModelContextProfile,
+} from "../model/model-context-profile";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
@@ -27,6 +32,7 @@ import type {
   ToolCallIdentity,
   TurnIdentity,
 } from "./types";
+import { ContextMeter } from "./context-meter";
 
 export type ExecuteTurnInput = {
   userPrompt: string;
@@ -61,6 +67,8 @@ export type CreateRuntimeSessionInput = {
   modelName: string;
   maxIterations: number;
   includeReasoningContent: boolean;
+  contextProfile: ModelContextProfile;
+  contextBudget: ModelContextBudget;
   systemPrompt: string;
   modelClient: ModelClient;
   presentationSinks?: EventSink[];
@@ -132,6 +140,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private activeTurn?: ActiveTurn;
   private disposePromise?: Promise<void>;
   private faultCause?: RuntimeEventAppendError;
+  private readonly contextMeter: ContextMeter;
 
   private readonly context: RuntimeSessionContext;
 
@@ -143,6 +152,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     private readonly conversation: SessionConversation,
   ) {
     this.sessionId = input.sessionId;
+    this.contextMeter = new ContextMeter(input.contextBudget);
     this.context = {
       sessionId: this.sessionId,
       createIteration: (turn, iterationNumber) =>
@@ -176,6 +186,8 @@ class DefaultRuntimeSession implements RuntimeSession {
           model: input.modelName,
           maxIterations: input.maxIterations,
           includeReasoningContent: input.includeReasoningContent,
+          contextProfile: input.contextProfile,
+          contextBudget: input.contextBudget,
         },
       });
       started = true;
@@ -197,6 +209,18 @@ class DefaultRuntimeSession implements RuntimeSession {
         }
       }
 
+      const initialPrepared = input.modelClient.prepare(
+        session.conversation.buildCommittedModelRequest(
+          session.requireTooling().registry.definitions(),
+        ),
+      );
+      const initialSnapshot = session.contextMeter.measure(initialPrepared);
+      await session.append({
+        type: "context.usage.updated",
+        sessionId: session.sessionId,
+        data: { phase: "initial", snapshot: initialSnapshot },
+      });
+
       session.state = "ready";
       return session;
     } catch (error) {
@@ -214,6 +238,15 @@ class DefaultRuntimeSession implements RuntimeSession {
     if (this.activeTurn !== undefined) {
       throw new Error("Cannot execute concurrent turns in one RuntimeSession.");
     }
+
+    const admissionPrepared = this.input.modelClient.prepare(
+      this.conversation.buildCandidateModelRequest(
+        input.userPrompt,
+        this.requireTooling().registry.definitions(),
+      ),
+    );
+    const admissionSnapshot = this.contextMeter.measure(admissionPrepared);
+    this.contextMeter.assertWithinBudget(admissionSnapshot);
 
     const controller = new AbortController();
     const removeExternalAbortListener = forwardExternalAbort(input.signal, controller);
@@ -258,6 +291,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           conversation: pendingConversation.agent,
           maxIterations: this.input.maxIterations,
           model: this.input.modelClient,
+          contextMeter: this.contextMeter,
           tools: this.requireTooling().registry,
           toolRuntime: this.requireTooling().runtime,
           observationBuilder: this.observationBuilder,
@@ -661,10 +695,14 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
   if (
     typeof input.modelClient !== "object" ||
     input.modelClient === null ||
+    typeof input.modelClient.prepare !== "function" ||
     typeof input.modelClient.request !== "function"
   ) {
-    throw new Error("RuntimeSession modelClient must implement request().");
+    throw new Error(
+      "RuntimeSession modelClient must implement prepare() and request().",
+    );
   }
+  assertMatchingContextBudget(input.contextProfile, input.contextBudget);
 }
 
 function forwardExternalAbort(

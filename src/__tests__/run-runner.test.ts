@@ -5,11 +5,17 @@ import path from "node:path";
 import { runOneShot } from "../cli/run-runner";
 import { FakeModelClient } from "../model/fake-model-client";
 import type {
-  ModelClient,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedModelRequest,
 } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
+import {
+  TEST_CONTEXT_BUDGET,
+  TEST_CONTEXT_PROFILE,
+  TestModelClient,
+  testModelOutput,
+} from "./test-runtime";
 
 class MemoryWriter {
   output = "";
@@ -19,11 +25,11 @@ class MemoryWriter {
   }
 }
 
-class BackgroundTaskModel implements ModelClient {
+class BackgroundTaskModel extends TestModelClient {
   private calls = 0;
 
   async request(
-    optionsInput: unknown,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
     this.calls += 1;
@@ -31,29 +37,30 @@ class BackgroundTaskModel implements ModelClient {
       if (options.identity === undefined) {
         throw new Error("Expected model request identity.");
       }
-      return {
-        message: {
-          role: "assistant",
-          toolCalls: [
-            {
-              ...options.identity.runtimeSession.createToolCall(
-                options.identity.iteration,
-                1,
-              ),
-              providerToolCallId: "call_background",
-              name: "Bash",
-              args: {
-                command: "echo $$; sleep 30",
-                run_in_background: true,
-              },
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "call_background",
+            name: "Bash",
+            args: {
+              command: "echo $$; sleep 30",
+              run_in_background: true,
             },
-          ],
-        },
-      };
+          },
+        ],
+      });
     }
 
     await Bun.sleep(50);
-    return { message: { role: "assistant", content: "Background task started." } };
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "Background task started.",
+    });
   }
 }
 
@@ -68,7 +75,11 @@ describe("runOneShot", () => {
         sessionId: "test-session" as SessionId,
         workspaceRoot: workspace,
         modelName: "fake",
-        modelClient: new FakeModelClient("write-notes"),
+        contextProfile: TEST_CONTEXT_PROFILE,
+        modelClient: new FakeModelClient("write-notes", {
+          model: "fake",
+          contextBudget: TEST_CONTEXT_BUDGET,
+        }),
         stdout,
         stderr,
       });
@@ -137,6 +148,7 @@ describe("runOneShot", () => {
         sessionId: "background-session" as SessionId,
         workspaceRoot: workspace,
         modelName: "fake",
+        contextProfile: TEST_CONTEXT_PROFILE,
         modelClient: new BackgroundTaskModel(),
         stdout,
         stderr,

@@ -40,6 +40,11 @@ export class StdoutEventPrinter implements EventSink {
           `model.request.finished iteration=${event.iterationNumber}\n`,
         );
         break;
+      case "context.usage.updated":
+        this.stdout.write(
+          `context.usage.updated phase=${event.data.phase} used=${event.data.snapshot.usedInputTokens} budget=${event.data.snapshot.inputBudgetTokens} source=${event.data.snapshot.source} pressure=${event.data.snapshot.pressure}\n`,
+        );
+        break;
       case "assistant.progress":
         this.stdout.write(
           `assistant.progress iteration=${event.iterationNumber}\n${event.data.content}\n`,

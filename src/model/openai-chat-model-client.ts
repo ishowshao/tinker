@@ -1,22 +1,37 @@
 import OpenAI from "openai";
+import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
+import type { AssistantMessage } from "../agent/types";
+import type { ModelContextBudget } from "./model-context-profile";
 import type {
   ModelClient,
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedModelRequest,
+  PreparedPromptSegment,
 } from "./model-client";
 import {
   fromOpenAIChatCompletion,
   toOpenAIChatMessages,
   toOpenAIChatTools,
 } from "./openai-chat-mapping";
+import {
+  canonicalJsonValue,
+  sha256,
+  stableJsonStringify,
+} from "./model-request-preflight";
+
+const OPENAI_CHAT_SERIALIZATION_VERSION = "openai-chat-v1";
 
 export class OpenAIChatModelClient implements ModelClient {
   private readonly client: OpenAI;
+  private readonly preparedRequests = new WeakSet<object>();
+  private readonly provider: string;
 
   constructor(
     private readonly options: {
       apiKey: string;
+      contextBudget: ModelContextBudget;
       baseURL?: string;
       includeReasoningContent?: boolean;
       model: string;
@@ -25,6 +40,7 @@ export class OpenAIChatModelClient implements ModelClient {
       fetch?: typeof fetch;
     },
   ) {
+    this.provider = options.providerName ?? "openai-compatible";
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -33,26 +49,142 @@ export class OpenAIChatModelClient implements ModelClient {
     });
   }
 
+  prepare(input: ModelRequestInput): PreparedModelRequest {
+    const messages = toOpenAIChatMessages(input.messages, {
+      includeReasoningContent: this.options.includeReasoningContent,
+    });
+    const tools = input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined;
+    const payload = deepFreeze(
+      canonicalJsonValue({
+        model: this.options.model,
+        messages,
+        tools,
+        tool_choice: tools === undefined ? undefined : "auto",
+        max_tokens: this.options.contextBudget.requestMaxOutputTokens,
+      }),
+    ) as ChatCompletionCreateParamsNonStreaming;
+    const toolSegments = (payload.tools ?? []).map(
+      (tool): PreparedPromptSegment => ({
+        kind: "tool_schema",
+        normalizedText: stableJsonStringify(tool),
+      }),
+    );
+    const messageSegments = payload.messages.map(
+      (message, index): PreparedPromptSegment => ({
+        kind: segmentKind(input.messages[index]?.role),
+        normalizedText: stableJsonStringify(message),
+      }),
+    );
+    const requestConfigHash = sha256(
+      stableJsonStringify({
+        provider: this.provider,
+        baseURL: nonSecretBaseUrl(this.options.baseURL),
+        model: this.options.model,
+        serializationVersion: OPENAI_CHAT_SERIALIZATION_VERSION,
+        requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
+        includeReasoningContent: this.options.includeReasoningContent === true,
+      }),
+    );
+    const prepared: PreparedModelRequest = {
+      provider: this.provider,
+      model: this.options.model,
+      payload,
+      promptSegments: Object.freeze([...toolSegments, ...messageSegments]),
+      requestConfigHash,
+      toolSchemaHash: sha256(
+        toolSegments.map((segment) => segment.normalizedText).join("\n"),
+      ),
+      requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
+      assistantReplaySegments: (message) => this.assistantReplaySegments(message),
+    };
+    Object.freeze(prepared);
+    this.preparedRequests.add(prepared);
+    return prepared;
+  }
+
   async request(
-    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    if (!this.preparedRequests.has(prepared)) {
+      throw new Error(
+        `OpenAI chat request was not prepared by this client (provider=${this.provider}, model=${this.options.model}).`,
+      );
+    }
+    if (
+      prepared.provider !== this.provider ||
+      prepared.model !== this.options.model ||
+      prepared.requestMaxOutputTokens !==
+        this.options.contextBudget.requestMaxOutputTokens
+    ) {
+      throw new Error(
+        "Prepared OpenAI chat request configuration does not match client.",
+      );
+    }
+
     const response = await this.client.chat.completions.create(
-      {
-        model: this.options.model,
-        messages: toOpenAIChatMessages(input.messages, {
-          includeReasoningContent: this.options.includeReasoningContent,
-        }),
-        tools: input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined,
-        tool_choice: input.tools.length > 0 ? "auto" : undefined,
-      },
+      prepared.payload as ChatCompletionCreateParamsNonStreaming,
       { signal: options.signal },
     );
 
     return fromOpenAIChatCompletion(response, {
       identity: options.identity,
-      provider: this.options.providerName ?? "openai-compatible",
+      provider: this.provider,
       model: this.options.model,
     });
   }
+
+  private assistantReplaySegments(message: AssistantMessage): PreparedPromptSegment[] {
+    const [mapped] = toOpenAIChatMessages([message], {
+      includeReasoningContent: this.options.includeReasoningContent,
+    });
+    if (mapped === undefined) {
+      throw new Error("OpenAI assistant replay mapping produced no message.");
+    }
+    return [
+      {
+        kind: "assistant",
+        normalizedText: stableJsonStringify(canonicalJsonValue(mapped)),
+      },
+    ];
+  }
+}
+
+function segmentKind(
+  role: ModelRequestInput["messages"][number]["role"] | undefined,
+): PreparedPromptSegment["kind"] {
+  switch (role) {
+    case "system":
+      return "kernel";
+    case "user":
+      return "user";
+    case "assistant":
+      return "assistant";
+    case "tool":
+      return "tool";
+    case undefined:
+      throw new Error("OpenAI message mapping changed the message count.");
+  }
+}
+
+function nonSecretBaseUrl(value: string | undefined): string {
+  if (value === undefined) {
+    return "https://api.openai.com/v1";
+  }
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return value.split(/[?#]/, 1)[0] ?? value;
+  }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
+    return value;
+  }
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+  return Object.freeze(value);
 }
