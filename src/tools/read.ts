@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { sha256Bytes } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
+import { defineToolExecutor } from "./types";
 import type {
   ReadFileRawResult,
   ReadSnapshotStore,
@@ -27,7 +28,7 @@ const defaultMaxDisplayedBytes = 20_000;
 export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
   const maxDisplayedBytes = options.maxDisplayedBytes ?? defaultMaxDisplayedBytes;
 
-  return {
+  return defineToolExecutor("read", {
     definition: {
       name: "Read",
       description:
@@ -151,7 +152,7 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         };
       }
     },
-  };
+  });
 }
 
 function parseReadArgs(

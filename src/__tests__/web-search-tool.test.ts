@@ -329,7 +329,12 @@ describe("WebSearch observation", () => {
 
     const failure = builder.build({
       call,
-      raw: { ok: false, query: "no hits", error: "Exa /search returned HTTP 429" },
+      raw: {
+        kind: "web_search",
+        ok: false,
+        query: "no hits",
+        error: "Exa /search returned HTTP 429",
+      },
     });
     expect(failure.content).toBe(
       'WebSearch failed for query="no hits": Exa /search returned HTTP 429',

@@ -185,7 +185,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           runtimeSession: session.context,
         });
         for (const executor of session.mcpManager.executors) {
-          session.tooling.registry.register(executor);
+          session.tooling.registry.register(executor, "MCP");
         }
       }
 
@@ -469,7 +469,16 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.eventSequence += 1;
 
     const write = this.eventTail
-      .then(() => this.eventSink.append(event))
+      .then(async () => {
+        const result = await this.eventSink.append(event);
+        for (const diagnostic of result?.diagnostics ?? []) {
+          void this.append({
+            type: "diagnostic.sink_failed",
+            sessionId: this.sessionId,
+            data: diagnostic,
+          }).catch(() => undefined);
+        }
+      })
       .catch((error) => {
         const appendError =
           error instanceof RuntimeEventAppendError
@@ -595,7 +604,7 @@ export async function createRuntimeSession(
 }
 
 function createEventSink(input: CreateRuntimeSessionInput): EventSink {
-  const sinks: EventSink[] = [];
+  const requiredSinks: EventSink[] = [];
   if (input.persistence !== false) {
     const basePath = path.join(
       input.workspaceRoot,
@@ -603,7 +612,7 @@ function createEventSink(input: CreateRuntimeSessionInput): EventSink {
       "sessions",
       input.sessionId,
     );
-    sinks.push(
+    requiredSinks.push(
       new JsonlEventLog(
         input.persistence?.eventLogPath ?? path.join(basePath, "events.jsonl"),
       ),
@@ -612,8 +621,10 @@ function createEventSink(input: CreateRuntimeSessionInput): EventSink {
       ),
     );
   }
-  sinks.push(...(input.presentationSinks ?? []));
-  return new CompositeEventSink(sinks);
+  return new CompositeEventSink({
+    requiredSinks,
+    auxiliarySinks: input.presentationSinks ?? [],
+  });
 }
 
 function validateCreateInput(input: CreateRuntimeSessionInput): void {

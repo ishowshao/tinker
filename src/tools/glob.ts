@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { glob } from "glob";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
+import { defineToolExecutor } from "./types";
 import type { GlobRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 type GlobArgs = {
@@ -17,7 +18,7 @@ export type GlobToolOptions = {
 const ignoredDirectories = ["node_modules", ".git"];
 
 export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
-  return {
+  return defineToolExecutor("glob", {
     definition: {
       name: "Glob",
       description: "Find files by glob pattern. node_modules and .git are ignored.",
@@ -124,7 +125,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
         };
       }
     },
-  };
+  });
 }
 
 function parseGlobArgs(

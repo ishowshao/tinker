@@ -779,6 +779,7 @@ describe("WebFetch observation", () => {
     const redirect = builder.build({
       call,
       raw: {
+        kind: "web_fetch",
         ok: true,
         url: "http://localhost:3000/docs",
         route: "local",
@@ -793,6 +794,7 @@ describe("WebFetch observation", () => {
     const failure = builder.build({
       call,
       raw: {
+        kind: "web_fetch",
         ok: false,
         url: "https://bun.sh/gone",
         error: "Exa could not fetch the page: CRAWL_NOT_FOUND (HTTP 404).",

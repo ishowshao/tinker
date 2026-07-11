@@ -28,12 +28,18 @@ import type { ToolCall } from "../agent/types";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
+  private readonly sources = new Map<string, string>();
 
-  register(tool: ToolExecutor): void {
-    if (this.tools.has(tool.definition.name)) {
-      throw new Error(`Tool already registered: ${tool.definition.name}.`);
+  register(tool: ToolExecutor, source = "built-in"): void {
+    const name = tool.definition.name;
+    const existingSource = this.sources.get(name);
+    if (existingSource !== undefined) {
+      throw new Error(
+        `Tool ${name} from ${source} conflicts with an existing registration from ${existingSource}.`,
+      );
     }
-    this.tools.set(tool.definition.name, tool);
+    this.tools.set(name, tool);
+    this.sources.set(name, source);
   }
 
   definitions(): ToolDefinition[] {
@@ -53,6 +59,7 @@ export class ToolRuntime {
 
     if (call.argsParseError !== undefined) {
       return {
+        kind: "generic",
         ok: false,
         toolName: call.name,
         error: `Invalid tool arguments JSON: ${call.argsParseError}`,
@@ -63,6 +70,7 @@ export class ToolRuntime {
 
     if (tool === undefined) {
       return {
+        kind: "generic",
         ok: false,
         toolName: call.name,
         error: `Unknown tool: ${call.name}`,
@@ -77,6 +85,7 @@ export class ToolRuntime {
       }
 
       return {
+        kind: "generic",
         ok: false,
         toolName: call.name,
         error: error instanceof Error ? error.message : String(error),

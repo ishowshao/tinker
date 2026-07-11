@@ -83,6 +83,7 @@ describe("stdout event printer", () => {
       data: {
         call,
         raw: {
+          kind: "edit",
           ok: true,
           filePath: "notes.txt",
           patch: [
@@ -131,6 +132,7 @@ describe("stdout event printer", () => {
       data: {
         call,
         raw: {
+          kind: "bash",
           ok: true,
           command: "bun test",
           taskId: "task-1",
@@ -178,7 +180,7 @@ describe("stdout event printer", () => {
       ...readCall,
       data: {
         call: readCall,
-        raw: { ok: true, filePath: "notes.txt", content: "alpha" },
+        raw: { kind: "read", ok: true, filePath: "notes.txt", content: "alpha" },
       },
     });
     const editCall = runtime.toolCall({
@@ -192,6 +194,7 @@ describe("stdout event printer", () => {
       data: {
         call: editCall,
         raw: {
+          kind: "edit",
           ok: false,
           filePath: "notes.txt",
           error: "old_string was not found.",
@@ -246,6 +249,7 @@ describe("stdout event printer", () => {
       data: {
         call,
         raw: {
+          kind: "task_stop",
           ok: true,
           taskId: "task-1",
           status: "killed",

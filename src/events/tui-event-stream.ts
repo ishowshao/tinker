@@ -4,6 +4,8 @@ import type { AgentEvent } from "./types";
 export type TuiEventListener = (event: AgentEvent) => void;
 
 export class TuiEventStream implements EventSink {
+  readonly name = "tui-event-stream";
+
   private readonly listeners = new Set<TuiEventListener>();
   readonly events: AgentEvent[] = [];
 

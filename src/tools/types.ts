@@ -213,20 +213,27 @@ export type McpToolRawResult = {
   error?: string;
 };
 
-export type ToolRawResult =
-  | ReadFileRawResult
-  | WriteFileRawResult
-  | EditFileRawResult
-  | GlobRawResult
-  | GrepRawResult
-  | BashRawResult
-  | TaskListRawResult
-  | TaskOutputRawResult
-  | TaskStopRawResult
-  | WebSearchRawResult
-  | WebFetchRawResult
-  | McpToolRawResult
-  | GenericToolRawResult;
+export type ToolRawResultByKind = {
+  read: ReadFileRawResult;
+  write: WriteFileRawResult;
+  edit: EditFileRawResult;
+  glob: GlobRawResult;
+  grep: GrepRawResult;
+  bash: BashRawResult;
+  task_list: TaskListRawResult;
+  task_output: TaskOutputRawResult;
+  task_stop: TaskStopRawResult;
+  web_search: WebSearchRawResult;
+  web_fetch: WebFetchRawResult;
+  mcp: McpToolRawResult;
+  generic: GenericToolRawResult;
+};
+
+export type ToolRawResultKind = keyof ToolRawResultByKind;
+
+export type ToolRawResult = {
+  [TKind in ToolRawResultKind]: ToolRawResultByKind[TKind] & { kind: TKind };
+}[ToolRawResultKind];
 
 export type ToolExecutor = {
   definition: ToolDefinition;
@@ -236,6 +243,28 @@ export type ToolExecutor = {
     context: ToolExecutionContext,
   ): Promise<ToolRawResult>;
 };
+
+type UntaggedToolExecutor<TKind extends ToolRawResultKind> = {
+  definition: ToolDefinition;
+  execute(
+    args: unknown,
+    call: ToolCall,
+    context: ToolExecutionContext,
+  ): Promise<ToolRawResultByKind[TKind]>;
+};
+
+export function defineToolExecutor<TKind extends ToolRawResultKind>(
+  kind: TKind,
+  executor: UntaggedToolExecutor<TKind>,
+): ToolExecutor {
+  return {
+    definition: executor.definition,
+    async execute(args, call, context) {
+      const raw = await executor.execute(args, call, context);
+      return { ...raw, kind } as ToolRawResult;
+    },
+  };
+}
 
 export type ToolExecutionContext = {
   signal: AbortSignal;

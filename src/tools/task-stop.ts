@@ -1,12 +1,13 @@
 import type { ShellTaskManager } from "./bash-task";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { parseTaskIdArgs } from "./task-tool-args";
+import { defineToolExecutor } from "./types";
 import type { TaskStopRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 export function createTaskStopToolExecutor(options: {
   taskManager: ShellTaskManager;
 }): ToolExecutor {
-  return {
+  return defineToolExecutor("task_stop", {
     definition: {
       name: "TaskStop",
       description: "Stop a running background shell task.",
@@ -54,5 +55,5 @@ export function createTaskStopToolExecutor(options: {
         };
       }
     },
-  };
+  });
 }

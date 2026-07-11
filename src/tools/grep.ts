@@ -4,6 +4,7 @@ import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { ripGrep } from "./ripgrep";
+import { defineToolExecutor } from "./types";
 import type {
   GrepOutputMode,
   GrepRawResult,
@@ -47,7 +48,7 @@ const ignoredDirectories = [
 const defaultHeadLimit = 250;
 
 export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
-  return {
+  return defineToolExecutor("grep", {
     definition: {
       name: "Grep",
       description: "Search file contents with ripgrep.",
@@ -255,7 +256,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         error: partialWarning,
       };
     },
-  };
+  });
 }
 
 export function buildRipgrepArgs(

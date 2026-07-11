@@ -185,7 +185,7 @@ describe("turn cancellation", () => {
     registry.register(
       testExecutor("Read", async () => {
         calls += 1;
-        return { ok: true, filePath: "test.txt" };
+        return { kind: "read", ok: true, filePath: "test.txt" };
       }),
     );
     const controller = new AbortController();
@@ -212,6 +212,7 @@ describe("turn cancellation", () => {
 
     registry.register(
       testExecutor("Read", async () => ({
+        kind: "read",
         ok: true,
         filePath: "first.txt",
         content: "first",
@@ -227,6 +228,7 @@ describe("turn cancellation", () => {
       testExecutor("Glob", async () => {
         thirdToolCalls += 1;
         return {
+          kind: "glob",
           ok: true,
           pattern: "*",
           searchPath: ".",

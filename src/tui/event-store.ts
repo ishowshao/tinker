@@ -4,9 +4,11 @@ import {
   type BashDisplayDetail,
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
+import type { RunAgentResult } from "../agent/types";
+import type { ModelRequestOutput } from "../model/model-client";
 import type { ShellTaskSnapshot } from "../tools/bash-task";
-import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
-import type { DiffHunk } from "../tools/types";
+import { countPatchChanges } from "../tools/file-diff";
+import type { DiffHunk, ToolRawResult } from "../tools/types";
 
 export type TimelineItem = {
   id: string;
@@ -138,7 +140,7 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
               event.data.raw,
             ),
             ...toolRawResultDiff(event.data.raw),
-            ...toolRawResultBashDetail(event.data.call.name, event.data.raw),
+            ...toolRawResultBashDetail(event.data.raw),
           }),
         ),
       };
@@ -183,6 +185,19 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
             id: timelineId(state, `mcp-${event.data.serverName}-failed`),
             label: "mcp",
             text: `mcp ${event.data.serverName} failed -> ${event.data.error}`,
+            status: "failed",
+          },
+        ],
+      };
+    case "diagnostic.sink_failed":
+      return {
+        ...state,
+        timeline: [
+          ...state.timeline,
+          {
+            id: timelineId(state, `sink-${event.eventSequence}-${event.data.sinkName}`),
+            label: "diagnostic",
+            text: `event sink ${event.data.sinkName} disabled after ${event.data.failedEventType} failed -> ${event.data.error}`,
             status: "failed",
           },
         ],
@@ -297,7 +312,10 @@ function updateLastTimelineItem(
   return timeline;
 }
 
-function appendFinalTimelineItem(state: TuiState, result: unknown): TimelineItem[] {
+function appendFinalTimelineItem(
+  state: TuiState,
+  result: RunAgentResult,
+): TimelineItem[] {
   const text = finalText(result);
   if (text === undefined || text.trim() === "") {
     return state.timeline;
@@ -326,10 +344,8 @@ function toolCallRef(callId: string): string {
   return `tool-call-${callId}`;
 }
 
-function modelRequestSummary(output: unknown): string {
-  const outputRecord = asRecord(output);
-  const message = asRecord(outputRecord.message);
-  const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : [];
+function modelRequestSummary(output: ModelRequestOutput): string {
+  const toolCalls = output.message.toolCalls ?? [];
 
   if (toolCalls.length > 0) {
     return ` -> ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"}`;
@@ -371,132 +387,96 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
 }
 
-function toolRawResultSummary(name: string, args: unknown, raw: unknown): string {
+function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): string {
   const base = toolCallSummary({ name, args });
-  const rawRecord = asRecord(raw);
 
-  if (rawRecord.ok !== true) {
-    const error = stringProperty(rawRecord, "error");
-    if (error !== undefined) {
-      return `${base} -> ${error}`;
-    }
-
-    const exitCode =
-      name === "Bash" ? numberProperty(rawRecord, "exitCode") : undefined;
-    return exitCode === undefined ? base : `${base} -> exit ${exitCode}`;
+  if (!raw.ok && raw.error !== undefined) {
+    return `${base} -> ${raw.error}`;
   }
 
-  if (name === "Glob") {
-    const matchCount = numberProperty(rawRecord, "matchCount");
-    if (matchCount !== undefined) {
-      return `${base} -> ${matchCount} match${matchCount === 1 ? "" : "es"}`;
-    }
-  }
-
-  if (name === "Grep") {
-    const mode = stringProperty(rawRecord, "mode");
-
-    if (mode === "content") {
-      const numLines = numberProperty(rawRecord, "numLines");
-      if (numLines !== undefined) {
-        return `${base} -> ${numLines} line${numLines === 1 ? "" : "s"}`;
+  switch (raw.kind) {
+    case "glob": {
+      if (raw.ok && raw.matchCount !== undefined) {
+        return `${base} -> ${raw.matchCount} match${raw.matchCount === 1 ? "" : "es"}`;
       }
-    } else if (mode === "count") {
-      const numMatches = numberProperty(rawRecord, "numMatches");
-      const numFiles = numberProperty(rawRecord, "numFiles");
-      if (numMatches !== undefined && numFiles !== undefined) {
-        return `${base} -> ${numMatches} match${numMatches === 1 ? "" : "es"} across ${numFiles} file${numFiles === 1 ? "" : "s"}`;
+      return base;
+    }
+    case "grep": {
+      if (raw.mode === "content" && raw.numLines !== undefined) {
+        return `${base} -> ${raw.numLines} line${raw.numLines === 1 ? "" : "s"}`;
       }
-    } else {
-      const numFiles = numberProperty(rawRecord, "numFiles");
-      if (numFiles !== undefined) {
-        return `${base} -> ${numFiles} file${numFiles === 1 ? "" : "s"}`;
+      if (
+        raw.mode === "count" &&
+        raw.numMatches !== undefined &&
+        raw.numFiles !== undefined
+      ) {
+        return `${base} -> ${raw.numMatches} match${raw.numMatches === 1 ? "" : "es"} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
       }
+      return `${base} -> ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
     }
+    case "read":
+      if (
+        raw.startLine !== undefined &&
+        raw.endLine !== undefined &&
+        raw.totalLines !== undefined
+      ) {
+        return `${base} -> lines ${raw.startLine}-${raw.endLine} of ${raw.totalLines}`;
+      }
+      return base;
+    case "write":
+    case "edit": {
+      const patch = raw.patch;
+      if (patch !== undefined) {
+        const changes = countPatchChanges(patch);
+        const created = raw.created === true ? " (new file)" : "";
+        return `${base} -> +${changes.additions} -${changes.deletions}${created}`;
+      }
+      return raw.bytesWritten === undefined
+        ? base
+        : `${base} -> ${raw.bytesWritten} bytes`;
+    }
+    case "web_search":
+      return raw.resultCount === undefined
+        ? base
+        : `${base} -> ${raw.resultCount} result${raw.resultCount === 1 ? "" : "s"}`;
+    case "web_fetch":
+      if (raw.redirectUrl !== undefined) {
+        return `${base} -> redirected`;
+      }
+      return raw.route === undefined
+        ? base
+        : `${base} -> ok (${raw.route}${raw.refined === true ? ", refined" : ""})`;
+    case "task_list":
+      return `${base} -> ${raw.tasks.length} task${raw.tasks.length === 1 ? "" : "s"}, ${raw.runningCount} running`;
+    case "task_output":
+      if (raw.status !== undefined && raw.outputLines !== undefined) {
+        return `${base} -> ${raw.status}, ${raw.outputLines} line${raw.outputLines === 1 ? "" : "s"}`;
+      }
+      return base;
+    case "task_stop": {
+      if (raw.status === undefined) {
+        return base;
+      }
+      const signal = raw.task?.signal;
+      return `${base} -> ${raw.status}${signal === undefined ? "" : ` (${signal})`}`;
+    }
+    case "bash":
+      if (raw.status === "running") {
+        return raw.outputFilePath === undefined
+          ? `${base} -> running`
+          : `${base} -> running ${raw.outputFilePath}`;
+      }
+      return raw.exitCode === undefined ? base : `${base} -> exit ${raw.exitCode}`;
+    case "mcp":
+    case "generic":
+      return base;
+    default:
+      return assertNever(raw);
   }
+}
 
-  if (name === "Read") {
-    const startLine = numberProperty(rawRecord, "startLine");
-    const endLine = numberProperty(rawRecord, "endLine");
-    const totalLines = numberProperty(rawRecord, "totalLines");
-
-    if (startLine !== undefined && endLine !== undefined && totalLines !== undefined) {
-      return `${base} -> lines ${startLine}-${endLine} of ${totalLines}`;
-    }
-  }
-
-  if (name === "Write" || name === "Edit") {
-    const patch = diffHunksProperty(rawRecord);
-    if (patch !== undefined) {
-      const changes = countPatchChanges(patch);
-      const created = rawRecord.created === true ? " (new file)" : "";
-      return `${base} -> +${changes.additions} -${changes.deletions}${created}`;
-    }
-
-    const bytesWritten = numberProperty(rawRecord, "bytesWritten");
-    if (bytesWritten !== undefined) {
-      return `${base} -> ${bytesWritten} bytes`;
-    }
-  }
-
-  if (name === "WebSearch") {
-    const resultCount = numberProperty(rawRecord, "resultCount");
-    if (resultCount !== undefined) {
-      return `${base} -> ${resultCount} result${resultCount === 1 ? "" : "s"}`;
-    }
-  }
-
-  if (name === "WebFetch") {
-    if (stringProperty(rawRecord, "redirectUrl") !== undefined) {
-      return `${base} -> redirected`;
-    }
-
-    const route = stringProperty(rawRecord, "route");
-    if (route !== undefined) {
-      return `${base} -> ok (${route}${rawRecord.refined === true ? ", refined" : ""})`;
-    }
-  }
-
-  if (name === "TaskList") {
-    const tasks = Array.isArray(rawRecord.tasks) ? rawRecord.tasks : [];
-    const runningCount = numberProperty(rawRecord, "runningCount") ?? 0;
-    return `${base} -> ${tasks.length} task${tasks.length === 1 ? "" : "s"}, ${runningCount} running`;
-  }
-
-  if (name === "TaskOutput") {
-    const status = stringProperty(rawRecord, "status");
-    const outputLines = numberProperty(rawRecord, "outputLines");
-    if (status !== undefined && outputLines !== undefined) {
-      return `${base} -> ${status}, ${outputLines} line${outputLines === 1 ? "" : "s"}`;
-    }
-  }
-
-  if (name === "TaskStop") {
-    const status = stringProperty(rawRecord, "status");
-    const task = asRecord(rawRecord.task);
-    const signal = stringProperty(task, "signal");
-    if (status !== undefined) {
-      return `${base} -> ${status}${signal === undefined ? "" : ` (${signal})`}`;
-    }
-  }
-
-  if (name === "Bash") {
-    const status = stringProperty(rawRecord, "status");
-    const outputFilePath = stringProperty(rawRecord, "outputFilePath");
-    const exitCode = numberProperty(rawRecord, "exitCode");
-
-    if (status === "running") {
-      return outputFilePath === undefined
-        ? `${base} -> running`
-        : `${base} -> running ${outputFilePath}`;
-    }
-
-    if (exitCode !== undefined) {
-      return `${base} -> exit ${exitCode}`;
-    }
-  }
-
-  return base;
+function assertNever(value: never): never {
+  throw new Error(`Unhandled tool raw result: ${JSON.stringify(value)}`);
 }
 
 function toolStartedBashDetail(call: {
@@ -511,16 +491,28 @@ function toolStartedBashDetail(call: {
   return command === undefined ? {} : { bash: { command } };
 }
 
-function toolRawResultBashDetail(
-  name: string,
-  raw: unknown,
-): Pick<TimelineItem, "bash"> {
-  if (name !== "Bash" && name !== "TaskOutput") {
-    return {};
+function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash"> {
+  switch (raw.kind) {
+    case "bash":
+    case "task_output": {
+      const detail = bashResultDetail(raw);
+      return detail === undefined ? {} : { bash: detail };
+    }
+    case "read":
+    case "write":
+    case "edit":
+    case "glob":
+    case "grep":
+    case "task_list":
+    case "task_stop":
+    case "web_search":
+    case "web_fetch":
+    case "mcp":
+    case "generic":
+      return {};
+    default:
+      return assertNever(raw);
   }
-
-  const detail = bashResultDetail(raw);
-  return detail === undefined ? {} : { bash: detail };
 }
 
 function upsertBackgroundTask(
@@ -532,22 +524,30 @@ function upsertBackgroundTask(
   return next.sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 
-function toolRawResultDiff(raw: unknown): Pick<TimelineItem, "diff" | "diffTruncated"> {
-  const rawRecord = asRecord(raw);
-  const hunks = diffHunksProperty(rawRecord);
-
-  if (hunks === undefined || hunks.length === 0) {
-    return {};
+function toolRawResultDiff(
+  raw: ToolRawResult,
+): Pick<TimelineItem, "diff" | "diffTruncated"> {
+  switch (raw.kind) {
+    case "write":
+    case "edit":
+      return raw.patch === undefined || raw.patch.length === 0
+        ? {}
+        : { diff: raw.patch, diffTruncated: raw.patchTruncated === true };
+    case "read":
+    case "glob":
+    case "grep":
+    case "bash":
+    case "task_list":
+    case "task_output":
+    case "task_stop":
+    case "web_search":
+    case "web_fetch":
+    case "mcp":
+    case "generic":
+      return {};
+    default:
+      return assertNever(raw);
   }
-
-  return {
-    diff: hunks,
-    diffTruncated: rawRecord.patchTruncated === true,
-  };
-}
-
-function diffHunksProperty(record: Record<string, unknown>): DiffHunk[] | undefined {
-  return parseDiffHunks(record.patch);
 }
 
 function bashDescription(args: unknown): string | undefined {
@@ -591,13 +591,6 @@ function toolTaskId(args: unknown): string | undefined {
   return stringProperty(record, "task_id");
 }
 
-function numberProperty(
-  record: Record<string, unknown>,
-  property: string,
-): number | undefined {
-  return typeof record[property] === "number" ? record[property] : undefined;
-}
-
 function stringProperty(
   record: Record<string, unknown>,
   property: string,
@@ -605,19 +598,8 @@ function stringProperty(
   return typeof record[property] === "string" ? record[property] : undefined;
 }
 
-function finalText(result: unknown): string | undefined {
-  if (
-    typeof result === "object" &&
-    result !== null &&
-    "status" in result &&
-    result.status === "completed" &&
-    "finalText" in result &&
-    typeof result.finalText === "string"
-  ) {
-    return result.finalText;
-  }
-
-  return undefined;
+function finalText(result: RunAgentResult): string | undefined {
+  return result.status === "completed" ? result.finalText : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

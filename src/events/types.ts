@@ -48,6 +48,11 @@ export type AgentEventDataMap = {
   "bash.task.finished": { task: ShellTaskSnapshot };
   "mcp.server.connected": { serverName: string; toolCount: number };
   "mcp.server.failed": { serverName: string; error: string };
+  "diagnostic.sink_failed": {
+    sinkName: string;
+    failedEventType: AgentEventType;
+    error: string;
+  };
 };
 
 export type AgentEventType = keyof AgentEventDataMap;
@@ -94,6 +99,7 @@ type ToolEventInput<TType extends AgentEventType> = ToolCallIdentity & {
 export type AgentEventInput =
   | SessionEventInput<"session.started" | "session.finished">
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
+  | SessionEventInput<"diagnostic.sink_failed">
   | TurnEventInput<"turn.started" | "turn.finished">
   | (
       | TurnEventInput<"turn.failed" | "turn.cancelled">

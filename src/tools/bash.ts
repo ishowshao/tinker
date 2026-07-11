@@ -8,6 +8,7 @@ import {
 } from "./bash-task";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { buildOutputSnapshotFromText } from "./task-output-snapshot";
+import { defineToolExecutor } from "./types";
 import type { TaskOutputSnapshot } from "./task-output";
 import type { BashRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
@@ -46,7 +47,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       maxTimeoutMs,
     );
 
-  return {
+  return defineToolExecutor("bash", {
     definition: {
       name: "Bash",
       description: "Run a shell command in the local workspace.",
@@ -155,7 +156,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       });
       return raw;
     },
-  };
+  });
 }
 
 export function parseBashArgs(

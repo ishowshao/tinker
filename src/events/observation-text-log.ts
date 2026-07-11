@@ -1,10 +1,13 @@
 import path from "node:path";
 import { appendFile, mkdir } from "node:fs/promises";
-import type { ToolCall } from "../agent/types";
+import type { RunAgentResult, ToolCall } from "../agent/types";
+import type { ToolObservation } from "../observation/observation-builder";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
 
 export class ObservationTextLog implements EventSink {
+  readonly name = "observation-text-log";
+
   constructor(private readonly filePath: string) {}
 
   async append(event: AgentEvent): Promise<void> {
@@ -96,8 +99,8 @@ function renderToolObservation(
   ].join("\n");
 }
 
-function renderTurnFinished(result: unknown): string {
-  const final = finalText(result);
+function renderTurnFinished(result: RunAgentResult): string {
+  const final = result.status === "completed" ? result.finalText : undefined;
 
   return [
     "## Final",
@@ -168,21 +171,8 @@ function toolCallSummary(call: ToolCall): string {
     .join("\n");
 }
 
-function observationContent(observation: unknown): string {
-  const record = asRecord(observation);
-  const content = stringProperty(record, "content");
-  if (content !== undefined) {
-    return content;
-  }
-
-  return JSON.stringify(observation, undefined, 2);
-}
-
-function finalText(result: unknown): string | undefined {
-  const record = asRecord(result);
-  return record.status === "completed"
-    ? stringProperty(record, "finalText")
-    : undefined;
+function observationContent(observation: ToolObservation): string {
+  return observation.content;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

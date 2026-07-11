@@ -25,6 +25,13 @@ export type ModelRequestInput = {
 export type ModelRequestOutput = {
   message: AssistantMessage;
   finishReason?: string;
-  usage?: unknown;
+  usage?: ModelUsage;
   rawResponse?: unknown;
+};
+
+export type ModelUsage = {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  source: "provider" | "estimated";
 };

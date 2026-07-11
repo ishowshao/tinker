@@ -6,11 +6,7 @@ import type { ToolCall } from "../agent/types";
 import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
-import type {
-  BashRawResult,
-  ToolExecutionContext,
-  ToolRawResult,
-} from "../tools/types";
+import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -297,9 +293,9 @@ describe("Bash tool", () => {
   });
 });
 
-function asBashRawResult(raw: ToolRawResult): BashRawResult {
-  expect("taskId" in raw).toBe(true);
-  return raw as BashRawResult;
+function asBashRawResult(raw: ToolRawResult): Extract<ToolRawResult, { kind: "bash" }> {
+  expect(raw.kind).toBe("bash");
+  return raw as Extract<ToolRawResult, { kind: "bash" }>;
 }
 
 async function waitForFileContent(filePath: string, expected: string): Promise<void> {

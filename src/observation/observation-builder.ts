@@ -1,5 +1,4 @@
 import type { ToolCall } from "../agent/types";
-import { isMcpToolName } from "../mcp/mcp-tool-executor";
 import type {
   BashRawResult,
   EditFileRawResult,
@@ -23,62 +22,41 @@ export type ToolObservation = {
 
 export class ObservationBuilder {
   build(input: { call: ToolCall; raw: ToolRawResult }): ToolObservation {
-    if (input.call.name === "Glob") {
-      return { content: renderGlobObservation(input.raw as GlobRawResult) };
+    switch (input.raw.kind) {
+      case "glob":
+        return { content: renderGlobObservation(input.raw) };
+      case "grep":
+        return { content: renderGrepObservation(input.raw) };
+      case "read":
+        return { content: renderReadObservation(input.raw) };
+      case "write":
+        return { content: renderWriteObservation(input.raw) };
+      case "edit":
+        return { content: renderEditObservation(input.raw) };
+      case "bash":
+        return { content: renderBashObservation(input.raw) };
+      case "task_list":
+        return { content: renderTaskListObservation(input.raw) };
+      case "task_output":
+        return { content: renderTaskOutputObservation(input.raw) };
+      case "task_stop":
+        return { content: renderTaskStopObservation(input.raw) };
+      case "web_search":
+        return { content: renderWebSearchObservation(input.raw) };
+      case "web_fetch":
+        return { content: renderWebFetchObservation(input.raw) };
+      case "mcp":
+        return { content: renderMcpObservation(input.raw) };
+      case "generic":
+        return { content: renderGenericObservation(input.raw) };
+      default:
+        return assertNever(input.raw);
     }
-
-    if (input.call.name === "Grep") {
-      return { content: renderGrepObservation(input.raw as GrepRawResult) };
-    }
-
-    if (input.call.name === "Read") {
-      return { content: renderReadObservation(input.raw as ReadFileRawResult) };
-    }
-
-    if (input.call.name === "Write") {
-      return { content: renderWriteObservation(input.raw as WriteFileRawResult) };
-    }
-
-    if (input.call.name === "Edit") {
-      return { content: renderEditObservation(input.raw as EditFileRawResult) };
-    }
-
-    if (input.call.name === "Bash") {
-      return { content: renderBashObservation(input.raw as BashRawResult) };
-    }
-
-    if (input.call.name === "TaskList") {
-      return { content: renderTaskListObservation(input.raw as TaskListRawResult) };
-    }
-
-    if (input.call.name === "TaskOutput") {
-      return {
-        content: renderTaskOutputObservation(input.raw as TaskOutputRawResult),
-      };
-    }
-
-    if (input.call.name === "TaskStop") {
-      return { content: renderTaskStopObservation(input.raw as TaskStopRawResult) };
-    }
-
-    if (input.call.name === "WebSearch") {
-      return {
-        content: renderWebSearchObservation(input.raw as WebSearchRawResult),
-      };
-    }
-
-    if (input.call.name === "WebFetch") {
-      return {
-        content: renderWebFetchObservation(input.raw as WebFetchRawResult),
-      };
-    }
-
-    if (isMcpToolName(input.call.name)) {
-      return { content: renderMcpObservation(input.raw as McpToolRawResult) };
-    }
-
-    return { content: renderGenericObservation(input.raw as GenericToolRawResult) };
   }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled tool raw result: ${JSON.stringify(value)}`);
 }
 
 function renderGlobObservation(raw: GlobRawResult): string {

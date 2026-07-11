@@ -4,6 +4,8 @@ import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
 
 export class JsonlEventLog implements EventSink {
+  readonly name = "jsonl-event-log";
+
   constructor(private readonly filePath: string) {}
 
   async append(event: AgentEvent): Promise<void> {

@@ -260,7 +260,7 @@ describe("tui event store", () => {
       type: "tool.raw_result",
       iterationNumber: 1,
       call: listCall,
-      raw: { ok: true, tasks: [{}, {}], runningCount: 1 },
+      raw: { kind: "task_list", ok: true, tasks: [{}, {}], runningCount: 1 },
     });
     expect(state.timeline.at(-1)?.text).toBe("TaskList -> 2 tasks, 1 running");
 
@@ -279,6 +279,7 @@ describe("tui event store", () => {
       iterationNumber: 1,
       call: outputCall,
       raw: {
+        kind: "task_output",
         ok: true,
         taskId: "task-1",
         status: "running",
@@ -509,7 +510,13 @@ describe("tui event store", () => {
         name: "Glob",
         args: { pattern: "**/*.test.ts" },
       },
-      raw: { ok: true, pattern: "**/*.test.ts", matchCount: 5, matches: [] },
+      raw: {
+        kind: "glob",
+        ok: true,
+        pattern: "**/*.test.ts",
+        matchCount: 5,
+        matches: [],
+      },
     });
     state = applyAgentEvent(state, {
       type: "tool.finished",
@@ -547,6 +554,7 @@ describe("tui event store", () => {
       iterationNumber: 1,
       call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
+        kind: "grep",
         ok: true,
         pattern: "foo",
         mode: "files_with_matches",
@@ -561,6 +569,7 @@ describe("tui event store", () => {
       iterationNumber: 1,
       call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
+        kind: "grep",
         ok: true,
         pattern: "foo",
         mode: "content",
@@ -576,6 +585,7 @@ describe("tui event store", () => {
       iterationNumber: 1,
       call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
       raw: {
+        kind: "grep",
         ok: true,
         pattern: "foo",
         mode: "count",
@@ -619,6 +629,7 @@ describe("bash detail in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "bash",
         ok: true,
         command: "git status",
         status: "completed",
@@ -660,6 +671,7 @@ describe("bash detail in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "bash",
         ok: true,
         command: "bun test",
         status: "completed",
@@ -702,6 +714,7 @@ describe("bash detail in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "bash",
         ok: false,
         command: "bun test",
         status: "failed",
@@ -738,6 +751,7 @@ describe("bash detail in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "bash",
         ok: true,
         command: "ls",
         status: "completed",
@@ -772,6 +786,7 @@ describe("bash detail in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "bash",
         ok: false,
         command: "",
         error: "Bash.command must be a non-empty string.",
@@ -810,7 +825,13 @@ describe("edit diff in timeline", () => {
       type: "tool.raw_result",
       iterationNumber: 1,
       call,
-      raw: { ok: true, filePath: "notes.txt", patch, patchTruncated: false },
+      raw: {
+        kind: "edit",
+        ok: true,
+        filePath: "notes.txt",
+        patch,
+        patchTruncated: false,
+      },
     });
 
     expect(state.timeline.at(-1)?.text).toBe("Edit notes.txt -> +1 -1");
@@ -837,6 +858,7 @@ describe("edit diff in timeline", () => {
       iterationNumber: 1,
       call,
       raw: {
+        kind: "write",
         ok: true,
         filePath: "fresh.txt",
         created: true,

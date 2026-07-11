@@ -20,6 +20,7 @@ export class OpenAIChatModelClient implements ModelClient {
       baseURL?: string;
       includeReasoningContent?: boolean;
       model: string;
+      providerName?: string;
       timeoutMs?: number;
       fetch?: typeof fetch;
     },
@@ -48,6 +49,10 @@ export class OpenAIChatModelClient implements ModelClient {
       { signal: options.signal },
     );
 
-    return fromOpenAIChatCompletion(response, options.identity);
+    return fromOpenAIChatCompletion(response, {
+      identity: options.identity,
+      provider: this.options.providerName ?? "openai-compatible",
+      model: this.options.model,
+    });
   }
 }

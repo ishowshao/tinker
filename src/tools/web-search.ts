@@ -1,4 +1,5 @@
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
+import { defineToolExecutor } from "./types";
 import type {
   ToolExecutionContext,
   ToolExecutor,
@@ -36,7 +37,7 @@ export function createWebSearchToolExecutor(
   const numResults = options.numResults ?? WEB_SEARCH_DEFAULT_NUM_RESULTS;
   const timeoutMs = options.timeoutMs ?? WEB_SEARCH_DEFAULT_TIMEOUT_MS;
 
-  return {
+  return defineToolExecutor("web_search", {
     definition: {
       name: "WebSearch",
       description: [
@@ -188,7 +189,7 @@ export function createWebSearchToolExecutor(
         durationMs: Date.now() - startedAt,
       };
     },
-  };
+  });
 }
 
 function parseWebSearchArgs(

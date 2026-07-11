@@ -5,6 +5,7 @@ import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
+import { defineToolExecutor } from "./types";
 import type {
   EditFileRawResult,
   ReadSnapshotStore,
@@ -25,7 +26,7 @@ export type EditToolOptions = {
 };
 
 export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
-  return {
+  return defineToolExecutor("edit", {
     definition: {
       name: "Edit",
       description:
@@ -184,7 +185,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         signal: context.signal,
       });
     },
-  };
+  });
 }
 
 function parseEditArgs(

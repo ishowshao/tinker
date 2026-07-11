@@ -5,6 +5,7 @@ import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
+import { defineToolExecutor } from "./types";
 import type {
   ReadSnapshotStore,
   ToolExecutionContext,
@@ -23,7 +24,7 @@ export type WriteToolOptions = {
 };
 
 export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor {
-  return {
+  return defineToolExecutor("write", {
     definition: {
       name: "Write",
       description:
@@ -157,7 +158,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         patchTruncated: patch.truncated,
       };
     },
-  };
+  });
 }
 
 function parseWriteArgs(

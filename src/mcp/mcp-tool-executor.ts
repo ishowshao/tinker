@@ -1,6 +1,7 @@
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
+import { defineToolExecutor } from "../tools/types";
 import type {
   JsonSchema,
   McpToolRawResult,
@@ -57,7 +58,7 @@ export function createMcpToolExecutor(
     serverToolName: options.tool.name,
   };
 
-  return {
+  return defineToolExecutor("mcp", {
     definition: {
       name: toolName,
       description:
@@ -115,7 +116,7 @@ export function createMcpToolExecutor(
         contentBlockCount: blocks.length,
       };
     },
-  };
+  });
 }
 
 function renderContentBlocks(

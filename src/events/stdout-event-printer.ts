@@ -1,5 +1,6 @@
-import type { ToolCall } from "../agent/types";
+import type { RunAgentResult, ToolCall } from "../agent/types";
 import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
+import type { ToolRawResult } from "../tools/types";
 import { bashResultDetail } from "./bash-result-detail";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
@@ -9,6 +10,8 @@ export type WritableLike = {
 };
 
 export class StdoutEventPrinter implements EventSink {
+  readonly name = "stdout-event-printer";
+
   constructor(
     private readonly stdout: WritableLike,
     private readonly stderr: WritableLike,
@@ -46,19 +49,8 @@ export class StdoutEventPrinter implements EventSink {
         this.stdout.write(formatToolLine("tool.started", event.data.call));
         break;
       case "tool.raw_result": {
-        const diff = formatDiff(event.data.call, event.data.raw);
-        if (diff !== undefined) {
-          this.stdout.write(diff);
-        }
-
-        const bash = formatBashResult(event.data.call, event.data.raw);
-        if (bash !== undefined) {
-          this.stdout.write(bash);
-        }
-
-        const task = formatTaskResult(event.data.call, event.data.raw);
-        if (task !== undefined) {
-          this.stdout.write(task);
+        for (const line of formatToolRawResult(event.data.call, event.data.raw)) {
+          this.stdout.write(line);
         }
         break;
       }
@@ -96,6 +88,11 @@ export class StdoutEventPrinter implements EventSink {
           `mcp.server.failed name=${event.data.serverName} error=${event.data.error}\n`,
         );
         break;
+      case "diagnostic.sink_failed":
+        this.stderr.write(
+          `diagnostic.sink_failed sink=${event.data.sinkName} event=${event.data.failedEventType} error=${event.data.error}\n`,
+        );
+        break;
       case "turn.finished":
         this.stdout.write(`turn.finished status=${resultStatus(event.data.result)}\n`);
         break;
@@ -120,21 +117,47 @@ export class StdoutEventPrinter implements EventSink {
   }
 }
 
-function formatDiff(call: ToolCall, raw: unknown): string | undefined {
-  if (call.name !== "Edit" && call.name !== "Write") {
+function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
+  switch (raw.kind) {
+    case "write":
+    case "edit":
+      return optionalLine(formatDiff(call, raw));
+    case "bash":
+    case "task_output":
+      return optionalLine(formatBashResult(call, raw));
+    case "task_list":
+    case "task_stop":
+      return optionalLine(formatTaskResult(call, raw));
+    case "read":
+    case "glob":
+    case "grep":
+    case "web_search":
+    case "web_fetch":
+    case "mcp":
+    case "generic":
+      return [];
+    default:
+      return assertNever(raw);
+  }
+}
+
+function optionalLine(line: string | undefined): string[] {
+  return line === undefined ? [] : [line];
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled tool raw result: ${JSON.stringify(value)}`);
+}
+
+function formatDiff(call: ToolCall, raw: ToolRawResult): string | undefined {
+  if (raw.kind !== "edit" && raw.kind !== "write") {
+    return undefined;
+  }
+  if (!raw.ok) {
     return undefined;
   }
 
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    return undefined;
-  }
-
-  const rawRecord = raw as Record<string, unknown>;
-  if (rawRecord.ok !== true) {
-    return undefined;
-  }
-
-  const hunks = parseDiffHunks(rawRecord.patch);
+  const hunks = parseDiffHunks(raw.patch);
   if (hunks === undefined || hunks.length === 0) {
     return undefined;
   }
@@ -152,15 +175,15 @@ function formatDiff(call: ToolCall, raw: unknown): string | undefined {
     lines.push(...hunk.lines);
   }
 
-  if (rawRecord.patchTruncated === true) {
+  if (raw.patchTruncated === true) {
     lines.push("(diff truncated)");
   }
 
   return `${lines.join("\n")}\n`;
 }
 
-function formatBashResult(call: ToolCall, raw: unknown): string | undefined {
-  if (call.name !== "Bash" && call.name !== "TaskOutput") {
+function formatBashResult(_call: ToolCall, raw: ToolRawResult): string | undefined {
+  if (raw.kind !== "bash" && raw.kind !== "task_output") {
     return undefined;
   }
 
@@ -186,25 +209,19 @@ function formatBashResult(call: ToolCall, raw: unknown): string | undefined {
   return `${lines.join("\n")}\n`;
 }
 
-function formatTaskResult(call: ToolCall, raw: unknown): string | undefined {
-  const record = asRecord(raw);
-  if (record.ok !== true) {
+function formatTaskResult(_call: ToolCall, raw: ToolRawResult): string | undefined {
+  if (!raw.ok) {
     return undefined;
   }
 
-  if (call.name === "TaskList") {
-    const tasks = Array.isArray(record.tasks) ? record.tasks : [];
-    const running = numberProperty(record, "runningCount") ?? 0;
-    return `task.list total=${tasks.length} running=${running}\n`;
+  if (raw.kind === "task_list") {
+    return `task.list total=${raw.tasks.length} running=${raw.runningCount}\n`;
   }
 
-  if (call.name === "TaskStop") {
-    const task = asRecord(record.task);
-    const taskId = stringProperty(record, "taskId");
-    const status = stringProperty(record, "status");
-    const signal = stringProperty(task, "signal");
-    if (taskId !== undefined && status !== undefined) {
-      return `task.stop task=${taskId} status=${status}${signal === undefined ? "" : ` signal=${signal}`}\n`;
+  if (raw.kind === "task_stop") {
+    if (raw.status !== undefined) {
+      const signal = raw.task?.signal;
+      return `task.stop task=${raw.taskId} status=${raw.status}${signal === undefined ? "" : ` signal=${signal}`}\n`;
     }
   }
 
@@ -337,14 +354,6 @@ function stringProperty(
   return typeof record[property] === "string" ? record[property] : undefined;
 }
 
-function numberProperty(
-  record: Record<string, unknown>,
-  property: string,
-): number | undefined {
-  return typeof record[property] === "number" ? record[property] : undefined;
-}
-
-function resultStatus(result: unknown): string {
-  const record = asRecord(result);
-  return typeof record.status === "string" ? record.status : "unknown";
+function resultStatus(result: RunAgentResult): string {
+  return result.status;
 }

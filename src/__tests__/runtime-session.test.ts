@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import os from "node:os";
+import path from "node:path";
+import { mkdtemp, mkdir } from "node:fs/promises";
 import {
   createRuntimeSession,
-  RuntimeEventAppendError,
+  type CreateRuntimeSessionInput,
   type RuntimeSession,
 } from "../agent/runtime-session";
 import { cancellationError } from "../agent/turn-cancellation";
-import type { AgentEvent } from "../events/types";
 import type { EventSink } from "../events/event-sink";
 import type {
   ModelClient,
@@ -175,42 +177,64 @@ describe("RuntimeSession lifecycle", () => {
     });
   });
 
-  test("faults on terminal event failure and does not emit a second terminal", async () => {
-    const events: AgentEvent[] = [];
-    const terminalFailure = new Error("event storage unavailable");
-    const sink: EventSink = {
-      async append(event) {
-        events.push(event);
-        if (event.type === "turn.finished") {
-          throw terminalFailure;
-        }
+  test("disables a failed presentation sink and reports the failure to healthy sinks", async () => {
+    const healthySink = collectingEventSink();
+    let failedAppendCount = 0;
+    const failedSink: EventSink = {
+      name: "broken-presenter",
+      async append() {
+        failedAppendCount += 1;
+        throw new Error("render failed");
       },
     };
-    const session = await createTestSession(new CapturingModel(), sink, "faulted");
+    const model = new CapturingModel();
+    const input = createInput(model, healthySink, "auxiliary-failure");
+    input.presentationSinks = [failedSink, healthySink];
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("auxiliary-failure"),
+      loadMcpConfig: async () => undefined,
+    });
 
-    const executeError = await session
-      .executeTurn({
-        userPrompt: "finish",
-        signal: new AbortController().signal,
-      })
-      .catch((error: unknown) => error);
-    expect(executeError).toBeInstanceOf(RuntimeEventAppendError);
-    expect(
-      events.filter((event) =>
-        ["turn.finished", "turn.failed", "turn.cancelled"].includes(event.type),
-      ),
-    ).toHaveLength(1);
-    expect(() =>
-      session.executeTurn({
-        userPrompt: "retry",
-        signal: new AbortController().signal,
-      }),
-    ).toThrow("faulted");
-    const disposeError = await session
-      .dispose({ type: "runner_failed", error: "fault" })
-      .catch((error: unknown) => error);
-    expect(disposeError).toBeInstanceOf(RuntimeEventAppendError);
-    expect(events.at(-1)?.type).toBe("session.finished");
+    const result = await session.executeTurn({
+      userPrompt: "continue",
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(result.status).toBe("completed");
+    expect(failedAppendCount).toBe(1);
+    const diagnostic = healthySink.events.find(
+      (event) => event.type === "diagnostic.sink_failed",
+    );
+    expect(diagnostic?.data).toEqual({
+      sinkName: "broken-presenter",
+      failedEventType: "session.started",
+      error: "render failed",
+    });
+    expect(healthySink.events.at(-1)?.type).toBe("session.finished");
+  });
+
+  test("fast-fails an unusable persistence path before requesting the model", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-events-"));
+    const directoryAsLog = path.join(workspace, "events-as-directory");
+    await mkdir(directoryAsLog);
+    const sink = collectingEventSink();
+    const model = new CapturingModel();
+    const input = createInput(model, sink, "persistence-failure");
+    input.workspaceRoot = workspace;
+    input.persistence = {
+      eventLogPath: directoryAsLog,
+      observationLogPath: path.join(workspace, "observations.md"),
+    };
+
+    const error = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("persistence-failure"),
+      loadMcpConfig: async () => undefined,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(model.inputs).toHaveLength(0);
+    expect(sink.events[0]?.type).toBe("session.started");
   });
 
   test("returns only the runner-facing API and uses UUIDv7 production IDs", async () => {
@@ -248,7 +272,11 @@ async function createTestSession(
   });
 }
 
-function createInput(model: ModelClient, sink: EventSink, prefix: string) {
+function createInput(
+  model: ModelClient,
+  sink: EventSink,
+  prefix: string,
+): CreateRuntimeSessionInput {
   return {
     sessionId: `${prefix}-session` as SessionId,
     workspaceRoot: process.cwd(),
@@ -258,6 +286,6 @@ function createInput(model: ModelClient, sink: EventSink, prefix: string) {
     systemPrompt: "system",
     modelClient: model,
     presentationSinks: [sink],
-    persistence: false as const,
+    persistence: false,
   };
 }

@@ -1,11 +1,12 @@
 import type { ShellTaskManager } from "./bash-task";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
+import { defineToolExecutor } from "./types";
 import type { TaskListRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 export function createTaskListToolExecutor(options: {
   taskManager: ShellTaskManager;
 }): ToolExecutor {
-  return {
+  return defineToolExecutor("task_list", {
     definition: {
       name: "TaskList",
       description: "List background shell tasks in the current session.",
@@ -50,7 +51,7 @@ export function createTaskListToolExecutor(options: {
         tasks,
       };
     },
-  };
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

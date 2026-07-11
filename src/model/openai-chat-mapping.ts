@@ -1,6 +1,6 @@
 import type { AgentMessage, IterationIdentity, ToolCall } from "../agent/types";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
-import type { ModelRequestOutput } from "./model-client";
+import type { ModelRequestOutput, ModelUsage } from "./model-client";
 import type { ToolDefinition } from "../tools/types";
 import type {
   ChatCompletionAssistantMessageParam,
@@ -64,46 +64,79 @@ export function toOpenAIChatTools(tools: ToolDefinition[]): ChatCompletionTool[]
 
 export function fromOpenAIChatCompletion(
   response: unknown,
-  context:
-    | {
-        iteration: IterationIdentity;
-        runtimeSession: RuntimeSessionContext;
-      }
-    | undefined,
+  options: {
+    identity?: {
+      iteration: IterationIdentity;
+      runtimeSession: RuntimeSessionContext;
+    };
+    provider: string;
+    model: string;
+  },
 ): ModelRequestOutput {
-  const completion = asRecord(response);
+  const completion = requireRecord(response, "response", options);
   if (!Array.isArray(completion.choices) || completion.choices.length === 0) {
-    throw new Error("OpenAI Chat Completions response is missing choices[0].");
+    throw providerResponseError(options, "choices[0]", "is missing");
   }
 
-  const choice = requireRecord(completion.choices[0], "choices[0]");
-  const message = requireRecord(choice.message, "choices[0].message");
-  const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-  if (rawToolCalls.length > 0 && context === undefined) {
-    throw new Error(
-      "OpenAI Chat Completions returned tool calls without an iteration identity context.",
+  const choice = requireRecord(completion.choices[0], "choices[0]", options);
+  const message = requireRecord(choice.message, "choices[0].message", options);
+  if (message.role !== "assistant") {
+    throw providerResponseError(
+      options,
+      "choices[0].message.role",
+      'must be "assistant"',
+    );
+  }
+  if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
+    throw providerResponseError(
+      options,
+      "choices[0].message.tool_calls",
+      "must be an array",
+    );
+  }
+  const rawToolCalls = message.tool_calls ?? [];
+  if (rawToolCalls.length > 0 && options.identity === undefined) {
+    throw providerResponseError(
+      options,
+      "choices[0].message.tool_calls",
+      "requires an iteration identity context",
     );
   }
   const toolCalls = rawToolCalls.map((raw, index) =>
-    parseToolCall(raw, index, context!),
+    parseToolCall(raw, index, options.identity!, options),
   );
-  const content = normalizeContent(message.content);
+  const content = normalizeContent(
+    message.content,
+    "choices[0].message.content",
+    options,
+  );
   if ((content === null || content.trim() === "") && toolCalls.length === 0) {
-    throw new Error(
-      "OpenAI Chat Completions assistant message has neither text nor tool calls.",
+    throw providerResponseError(
+      options,
+      "choices[0].message",
+      "has neither non-empty text nor tool calls",
     );
   }
+
+  const finishReason = optionalString(
+    choice.finish_reason,
+    "choices[0].finish_reason",
+    options,
+  );
 
   return {
     message: {
       role: "assistant",
       content,
-      reasoningContent: normalizeContent(message.reasoning_content),
+      reasoningContent: normalizeContent(
+        message.reasoning_content,
+        "choices[0].message.reasoning_content",
+        options,
+      ),
       toolCalls: toolCalls.length === 0 ? undefined : toolCalls,
     },
-    finishReason:
-      typeof choice.finish_reason === "string" ? choice.finish_reason : undefined,
-    usage: completion.usage,
+    finishReason,
+    usage: parseUsage(completion.usage, options),
     rawResponse: response,
   };
 }
@@ -128,21 +161,17 @@ function parseToolCall(
     iteration: IterationIdentity;
     runtimeSession: RuntimeSessionContext;
   },
+  options: { provider: string; model: string },
 ): ToolCall {
-  const record = requireRecord(raw, `choices[0].message.tool_calls[${index}]`);
-  const providerToolCallId = requireNonEmptyString(
-    record.id,
-    `choices[0].message.tool_calls[${index}].id`,
-  );
-  const fn = requireRecord(
-    record.function,
-    `choices[0].message.tool_calls[${index}].function`,
-  );
-  const name = requireNonEmptyString(
-    fn.name,
-    `choices[0].message.tool_calls[${index}].function.name`,
-  );
-  const rawArgs = typeof fn.arguments === "string" ? fn.arguments : "";
+  const path = `choices[0].message.tool_calls[${index}]`;
+  const record = requireRecord(raw, path, options);
+  if (record.type !== "function") {
+    throw providerResponseError(options, `${path}.type`, 'must be "function"');
+  }
+  const providerToolCallId = requireNonEmptyString(record.id, `${path}.id`, options);
+  const fn = requireRecord(record.function, `${path}.function`, options);
+  const name = requireNonEmptyString(fn.name, `${path}.function.name`, options);
+  const rawArgs = requireString(fn.arguments, `${path}.function.arguments`, options);
   let args: unknown = {};
   let argsParseError: string | undefined;
 
@@ -164,7 +193,11 @@ function parseToolCall(
   };
 }
 
-function normalizeContent(content: unknown): string | null {
+function normalizeContent(
+  content: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): string | null {
   if (content === null || content === undefined) {
     return null;
   }
@@ -173,7 +206,7 @@ function normalizeContent(content: unknown): string | null {
     return content;
   }
 
-  return JSON.stringify(content);
+  throw providerResponseError(options, path, "must be a string or null");
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -182,19 +215,117 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function requireRecord(value: unknown, path: string): Record<string, unknown> {
+function requireRecord(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): Record<string, unknown> {
   const record = asRecord(value);
   if (Object.keys(record).length === 0) {
-    throw new Error(`OpenAI Chat Completions response has invalid ${path}.`);
+    throw providerResponseError(options, path, "must be a non-empty object");
   }
 
   return record;
 }
 
-function requireNonEmptyString(value: unknown, path: string): string {
+function requireNonEmptyString(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): string {
   if (typeof value !== "string" || value.trim() === "") {
-    throw new Error(`OpenAI Chat Completions response has invalid ${path}.`);
+    throw providerResponseError(options, path, "must be a non-empty string");
   }
 
   return value;
+}
+
+function requireString(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): string {
+  if (typeof value !== "string") {
+    throw providerResponseError(options, path, "must be a string");
+  }
+  return value;
+}
+
+function optionalString(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return requireString(value, path, options);
+}
+
+function parseUsage(
+  value: unknown,
+  options: { provider: string; model: string },
+): ModelUsage | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  const usage = requireRecord(value, "usage", options);
+  const promptTokens = optionalTokenCount(
+    usage.prompt_tokens,
+    "usage.prompt_tokens",
+    options,
+  );
+  const completionTokens = optionalTokenCount(
+    usage.completion_tokens,
+    "usage.completion_tokens",
+    options,
+  );
+  const totalTokens = optionalTokenCount(
+    usage.total_tokens,
+    "usage.total_tokens",
+    options,
+  );
+  if (
+    promptTokens === undefined &&
+    completionTokens === undefined &&
+    totalTokens === undefined
+  ) {
+    throw providerResponseError(
+      options,
+      "usage",
+      "must contain at least one token count",
+    );
+  }
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    source: "provider",
+  };
+}
+
+function optionalTokenCount(
+  value: unknown,
+  path: string,
+  options: { provider: string; model: string },
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw providerResponseError(options, path, "must be a non-negative integer");
+  }
+  return value as number;
+}
+
+function providerResponseError(
+  options: { provider: string; model: string },
+  path: string,
+  detail: string,
+): Error {
+  return new Error(
+    `Invalid provider response (provider=${options.provider}, model=${options.model}): ${path} ${detail}.`,
+  );
 }

@@ -135,6 +135,10 @@ one-shot CLI 只执行一次 `executeTurn`；TUI 可以多次执行同一个 ses
 
 ## 三、收紧 ModelClient 和 Provider 边界
 
+本项已经实施：`ModelRequestOutput` 只接收 assistant message，并通过 `ModelUsage`
+暴露规范化 token usage；OpenAI-compatible adapter 会校验 choice、assistant message、
+tool call、content 和 usage 结构，协议错误包含 provider、model 与字段路径。
+
 ### 当前问题
 
 `ModelStepOutput.message` 当前使用完整的 `AgentMessage` 类型，但 agent loop 实际只接受
@@ -186,6 +190,11 @@ Provider adapter 应在以下情况立即返回清晰错误：
 
 ## 四、明确事件可靠性策略
 
+本项已经实施：持久化 sink 作为必需组件在 `session.started` 时完成首次写入，失败会阻止
+session 进入工具初始化和模型执行；展示 sink 按确定顺序发送，单个失败后会被隔离，并向
+其余健康 sink 发送 `diagnostic.sink_failed`。核心事件 payload 已使用领域类型，展示层
+不再重新断言 model output、tool result、observation 和 turn result。
+
 ### 当前问题
 
 `CompositeEventSink` 按顺序等待每一个 sink。前面的持久化 sink 写入失败时，后面的
@@ -217,6 +226,10 @@ runner 随后再向同一个失败的 sink 写入 `run.failed`，也可能再次
 - 事件消费者不再依赖不受约束的类型断言读取核心 payload。
 
 ## 五、强化工具结果契约
+
+本项已经实施：所有内建与 MCP raw result 都携带稳定的 `kind`，observation、stdout 和
+TUI 展示使用穷尽分发；`ToolRegistry` 对重复名称 fast-fail，并在错误中报告新旧注册
+来源。
 
 ### 当前问题
 

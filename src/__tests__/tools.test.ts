@@ -5,8 +5,11 @@ import path from "node:path";
 import type { ToolCall } from "../agent/types";
 import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
-import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
-import type { ToolExecutionContext } from "../tools/types";
+import {
+  createDefaultTooling as createDefaultToolingBase,
+  ToolRegistry,
+} from "../tools/registry";
+import { defineToolExecutor, type ToolExecutionContext } from "../tools/types";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -35,6 +38,27 @@ function createDefaultTooling(
     testRuntime,
   };
 }
+
+describe("ToolRegistry", () => {
+  test("rejects duplicate names with both registration sources", () => {
+    const registry = new ToolRegistry();
+    const executor = defineToolExecutor("generic", {
+      definition: {
+        name: "Duplicate",
+        description: "duplicate test tool",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute() {
+        return { ok: false, toolName: "Duplicate", error: "not executed" };
+      },
+    });
+
+    registry.register(executor, "test-source-a");
+    expect(() => registry.register(executor, "test-source-b")).toThrow(
+      "Tool Duplicate from test-source-b conflicts with an existing registration from test-source-a",
+    );
+  });
+});
 
 describe("Read and Write tools", () => {
   test("reads a workspace file with metadata", async () => {

@@ -430,6 +430,7 @@ describe("mcp observation", () => {
     args: {},
   });
   const base = {
+    kind: "mcp" as const,
     toolName: "mcp__srv__echo",
     serverName: "srv",
     serverToolName: "echo",

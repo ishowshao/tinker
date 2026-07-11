@@ -33,8 +33,12 @@ describe("openai chat mapping", () => {
         usage: { total_tokens: 12 },
       },
       {
-        iteration: testRuntime.iteration,
-        runtimeSession: testRuntime.runtimeSession,
+        identity: {
+          iteration: testRuntime.iteration,
+          runtimeSession: testRuntime.runtimeSession,
+        },
+        provider: "test-provider",
+        model: "test-model",
       },
     );
 
@@ -172,10 +176,111 @@ describe("openai chat mapping", () => {
           ],
         },
         {
-          iteration: testRuntime.iteration,
-          runtimeSession: testRuntime.runtimeSession,
+          identity: {
+            iteration: testRuntime.iteration,
+            runtimeSession: testRuntime.runtimeSession,
+          },
+          provider: "test-provider",
+          model: "test-model",
         },
       ),
     ).toThrow("tool_calls[0].id");
+  });
+
+  test("normalizes provider usage", () => {
+    const output = fromOpenAIChatCompletion(
+      {
+        choices: [
+          {
+            finish_reason: "stop",
+            message: { role: "assistant", content: "done" },
+          },
+        ],
+        usage: {
+          prompt_tokens: 9,
+          completion_tokens: 3,
+          total_tokens: 12,
+        },
+      },
+      { provider: "test-provider", model: "test-model" },
+    );
+
+    expect(output.usage).toEqual({
+      promptTokens: 9,
+      completionTokens: 3,
+      totalTokens: 12,
+      source: "provider",
+    });
+  });
+
+  test("fast-fails malformed provider responses with provider and model context", () => {
+    expect(() =>
+      fromOpenAIChatCompletion(
+        { choices: [] },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow(
+      "Invalid provider response (provider=test-provider, model=test-model): choices[0] is missing",
+    );
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        { choices: [{ finish_reason: "stop" }] },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("choices[0].message must be a non-empty object");
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              message: { role: "assistant", content: "" },
+            },
+          ],
+        },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("choices[0].message has neither non-empty text nor tool calls");
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call-1",
+                    type: "custom",
+                    function: { name: "Read", arguments: "{}" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          identity: createTestRuntime(),
+          provider: "test-provider",
+          model: "test-model",
+        },
+      ),
+    ).toThrow('choices[0].message.tool_calls[0].type must be "function"');
+
+    expect(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              message: { role: "assistant", content: "done" },
+            },
+          ],
+          usage: { total_tokens: "12" },
+        },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    ).toThrow("usage.total_tokens must be a non-negative integer");
   });
 });

@@ -1,12 +1,13 @@
 import type { ShellTaskManager } from "./bash-task";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { parseTaskIdArgs } from "./task-tool-args";
+import { defineToolExecutor } from "./types";
 import type { TaskOutputRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
 export function createTaskOutputToolExecutor(options: {
   taskManager: ShellTaskManager;
 }): ToolExecutor {
-  return {
+  return defineToolExecutor("task_output", {
     definition: {
       name: "TaskOutput",
       description: "Get the current status and latest output of a shell task.",
@@ -57,5 +58,5 @@ export function createTaskOutputToolExecutor(options: {
         outputFilePath: inspection.task.outputFilePath,
       };
     },
-  };
+  });
 }

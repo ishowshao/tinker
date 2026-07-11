@@ -1,4 +1,5 @@
 import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
+import { defineToolExecutor } from "../types";
 import type { ToolExecutionContext, ToolExecutor, WebFetchRawResult } from "../types";
 import type { WebFetchBackend, WebFetchBackendResult, WebFetchRoute } from "./backend";
 import {
@@ -57,7 +58,7 @@ export function createWebFetchToolExecutor(
   const cacheTtlMs = options.cacheTtlMs ?? WEB_FETCH_DEFAULT_CACHE_TTL_MS;
   const cache = new Map<string, CacheEntry>();
 
-  return {
+  return defineToolExecutor("web_fetch", {
     definition: {
       name: "WebFetch",
       description: [
@@ -226,7 +227,7 @@ export function createWebFetchToolExecutor(
       cache.set(cacheKey, { expiresAt: Date.now() + cacheTtlMs, result });
       return result;
     },
-  };
+  });
 }
 
 function parseWebFetchArgs(
