@@ -29,6 +29,10 @@ Bash 和后台任务管理、Web、MCP、事件日志、TUI 以及 turn cancella
 
 ## 一、明确 Session、Turn 和 Step 身份
 
+本项已经通过
+[Session、Turn、Iteration 身份模型设计](./session-turn-iteration-identity-design.md) 完成
+细化和实现。以下内容保留为最初的架构评审摘要。
+
 ### 当前问题
 
 TUI 启动时生成一个 `runId`，后续每次用户提交都复用该 ID；与此同时，agent loop
@@ -79,14 +83,19 @@ Session 级事件可以省略 `turnId`；模型步骤、工具调用和 turn 结
 
 ## 二、统一 Runtime Session 生命周期
 
+本节的可实施设计已经细化为
+[Runtime Session 生命周期设计](./runtime-session-lifecycle-design.md)。以下内容保留为架构
+评审摘要，具体 API、资源所有权、失败回滚、状态机和测试计划以细化文档为准。
+
 ### 当前问题
 
 one-shot runner 和 TUI runner 都负责创建事件 sinks、默认工具、MCP manager、
 ObservationBuilder，并分别处理运行结束事件和资源释放。这导致两条入口的初始化与清理
 行为容易漂移。
 
-TUI runner 还会在进入主 `try/finally` 之前创建 tooling、连接 MCP 和加载 prompt
-history。如果后续初始化失败，已经创建的 runtime 资源不一定经过统一的释放路径。
+两条 runner 目前已经各自用 `try/finally` 覆盖大部分初始化和退出路径，但资源所有权仍
+散落在 runner 中。factory 在返回完整资源前失败、某个 dispose 抛错或 active turn 期间
+退出时，仍缺少统一的回滚和终止契约。
 
 ### 建议边界
 
