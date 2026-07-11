@@ -3,7 +3,6 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
-import { RuntimeSession } from "../agent/runtime-session";
 import { cancellationError, TurnCancelledError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
@@ -130,18 +129,22 @@ describe("turn cancellation", () => {
     );
 
     expect(receivedSignal).toBeDefined();
-    controller.abort(new TurnCancelledError());
+    controller.abort(new TurnCancelledError("user"));
     expect(receivedSignal?.aborted).toBe(true);
   });
 
   test("cancels an in-flight model request without recording a failure", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-cancel-model-"));
-    const tooling = createDefaultTooling({ workspaceRoot: workspace });
     const controller = new AbortController();
     const model = new WaitingModel();
     const events = new ArrayEventSink();
-    const runtimeSession = new RuntimeSession(events);
-    const turn = runtimeSession.createTurn("wait");
+    const identity = createTestRuntime(events);
+    const runtimeSession = identity.runtimeSession;
+    const turn = identity.turn;
+    const tooling = createDefaultTooling({
+      workspaceRoot: workspace,
+      runtimeSession,
+    });
 
     try {
       const pending = runAgent({
@@ -158,7 +161,7 @@ describe("turn cancellation", () => {
       });
 
       await model.started;
-      controller.abort(new TurnCancelledError());
+      controller.abort(new TurnCancelledError("user"));
       const result = await pending;
 
       expect(result.status).toBe("cancelled");
@@ -186,7 +189,7 @@ describe("turn cancellation", () => {
       }),
     );
     const controller = new AbortController();
-    controller.abort(new TurnCancelledError());
+    controller.abort(new TurnCancelledError("user"));
     const testRuntime = createTestRuntime();
 
     expect(
@@ -216,7 +219,7 @@ describe("turn cancellation", () => {
     );
     registry.register(
       testExecutor("Grep", async (_args, _call, context) => {
-        controller.abort(new TurnCancelledError());
+        controller.abort(new TurnCancelledError("user"));
         throw cancellationError(context.signal);
       }),
     );
@@ -234,8 +237,9 @@ describe("turn cancellation", () => {
     );
 
     const events = new ArrayEventSink();
-    const runtimeSession = new RuntimeSession(events);
-    const turn = runtimeSession.createTurn("run tools");
+    const identity = createTestRuntime(events);
+    const runtimeSession = identity.runtimeSession;
+    const turn = identity.turn;
     const result = await runAgent({
       systemPrompt: "system",
       userPrompt: "run tools",
@@ -301,7 +305,7 @@ describe("turn cancellation", () => {
       expect(isProcessAlive(parentPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
 
-      controller.abort(new TurnCancelledError());
+      controller.abort(new TurnCancelledError("user"));
       expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
       await waitForProcessExit(parentPid);
       await waitForProcessExit(childPid);
@@ -333,7 +337,7 @@ describe("turn cancellation", () => {
         }),
         { signal: controller.signal },
       );
-      controller.abort(new TurnCancelledError());
+      controller.abort(new TurnCancelledError("user"));
 
       const raw = (await pending) as BashRawResult;
       expect(raw.ok).toBe(true);
@@ -355,13 +359,13 @@ describe("turn cancellation", () => {
           event.type === "bash.task.backgrounded" &&
           event.data.task.backgroundReason === "foreground_timeout"
         ) {
-          controller.abort(new TurnCancelledError());
+          controller.abort(new TurnCancelledError("user"));
         }
       },
     };
-    const runtimeSession = new RuntimeSession(eventSink);
-    const turn = runtimeSession.createTurn("timeout");
-    const iteration = runtimeSession.createIteration(turn, 1);
+    const identity = createTestRuntime(eventSink);
+    const runtimeSession = identity.runtimeSession;
+    const iteration = identity.iteration;
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
       runtimeSession,
@@ -405,7 +409,7 @@ describe("turn cancellation", () => {
         signal: controller.signal,
       });
       await Bun.sleep(20);
-      controller.abort(new TurnCancelledError());
+      controller.abort(new TurnCancelledError("user"));
 
       expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
     } finally {
@@ -423,9 +427,9 @@ describe("turn cancellation", () => {
     const logPath = path.join(workspace, "run.md");
 
     try {
-      const runtimeSession = new RuntimeSession(new ObservationTextLog(logPath));
-      const turn = runtimeSession.createTurn("cancel me");
-      const iteration = runtimeSession.createIteration(turn, 1);
+      const identity = createTestRuntime(new ObservationTextLog(logPath));
+      const runtimeSession = identity.runtimeSession;
+      const iteration = identity.iteration;
       await runtimeSession.append({
         type: "turn.cancelled",
         ...iteration,

@@ -87,7 +87,7 @@ export function App(props: AppProps) {
         return;
       }
 
-      controller.abort(new TurnCancelledError());
+      controller.abort(new TurnCancelledError("user"));
       setIsCancelling(true);
       setNotice("Cancelling current turn...");
     },

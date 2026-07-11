@@ -47,13 +47,15 @@ export type AgentMessage =
     };
 
 export type TurnCancellation = {
-  source: "user";
+  source: TurnCancellationSource;
   phase: "model_request" | "tool_execution" | "agent_boundary";
   iterationId: IterationId;
   iterationNumber: number;
   toolCallId?: ToolCallId;
   toolName?: string;
 };
+
+export type TurnCancellationSource = "user" | "session_dispose";
 
 export type RunAgentResult =
   | {

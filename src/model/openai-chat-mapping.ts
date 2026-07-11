@@ -1,5 +1,5 @@
 import type { AgentMessage, IterationIdentity, ToolCall } from "../agent/types";
-import type { RuntimeSession } from "../agent/runtime-session";
+import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ModelRequestOutput } from "./model-client";
 import type { ToolDefinition } from "../tools/types";
 import type {
@@ -67,7 +67,7 @@ export function fromOpenAIChatCompletion(
   context:
     | {
         iteration: IterationIdentity;
-        runtimeSession: RuntimeSession;
+        runtimeSession: RuntimeSessionContext;
       }
     | undefined,
 ): ModelRequestOutput {
@@ -126,7 +126,7 @@ function parseToolCall(
   index: number,
   context: {
     iteration: IterationIdentity;
-    runtimeSession: RuntimeSession;
+    runtimeSession: RuntimeSessionContext;
   },
 ): ToolCall {
   const record = requireRecord(raw, `choices[0].message.tool_calls[${index}]`);

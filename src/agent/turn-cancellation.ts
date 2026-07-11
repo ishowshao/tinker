@@ -1,7 +1,18 @@
+import type { TurnCancellationSource } from "./types";
+
 export class TurnCancelledError extends Error {
-  constructor(message = "Turn cancelled by the user.", options?: ErrorOptions) {
+  readonly source: TurnCancellationSource;
+
+  constructor(
+    source: TurnCancellationSource,
+    message = source === "user"
+      ? "Turn cancelled by the user."
+      : "Turn cancelled because the session is disposing.",
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = "TurnCancelledError";
+    this.source = source;
   }
 }
 
@@ -19,11 +30,15 @@ export function cancellationError(
     throw new Error("Cannot create a turn cancellation error before abort.");
   }
 
-  if (signal.reason instanceof TurnCancelledError) {
-    return signal.reason;
+  if (!(signal.reason instanceof TurnCancelledError)) {
+    throw new Error("Aborted turn signal must carry a TurnCancelledError reason.", {
+      cause: cause ?? signal.reason,
+    });
   }
 
-  return new TurnCancelledError("Turn cancelled by the user.", {
-    cause: cause ?? signal.reason,
-  });
+  return signal.reason;
+}
+
+export function turnCancellationSource(signal: AbortSignal): TurnCancellationSource {
+  return cancellationError(signal).source;
 }

@@ -1,23 +1,16 @@
 import { render } from "ink";
-import { runAgent } from "../agent/loop";
-import { RuntimeSession } from "../agent/runtime-session";
-import type { AgentMessage } from "../agent/types";
-import { CompositeEventSink } from "../events/composite-event-sink";
-import { JsonlEventLog } from "../events/jsonl-event-log";
-import { ObservationTextLog } from "../events/observation-text-log";
+import {
+  createRuntimeSession,
+  type RuntimeSession,
+  type SessionDisposeReason,
+} from "../agent/runtime-session";
 import { TuiEventStream } from "../events/tui-event-stream";
-import { loadMcpConfig } from "../mcp/mcp-config";
-import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
-import { ObservationBuilder } from "../observation/observation-builder";
-import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import { App } from "../tui/app";
 import { readCurrentGitBranch } from "../tui/git-branch";
 import { PromptHistory } from "../tui/prompt-history";
 import {
-  createModelClientFromEnv,
+  createRunnerModelClient,
   createWebFetchRefinerFromEnv,
-  eventLogPath,
-  observationLogPath,
   promptHistoryPath,
   readRunnerConfig,
   SYSTEM_PROMPT,
@@ -25,117 +18,38 @@ import {
 
 export async function runTui(): Promise<void> {
   const config = readRunnerConfig();
+  const modelClient = createRunnerModelClient(config);
   const eventStream = new TuiEventStream();
-  const runtimeSession = new RuntimeSession(
-    new CompositeEventSink([
-      new JsonlEventLog(eventLogPath(config.workspaceRoot, config.sessionId)),
-      new ObservationTextLog(
-        observationLogPath(config.workspaceRoot, config.sessionId),
-      ),
-      eventStream,
-    ]),
-    { sessionId: config.sessionId },
-  );
-
-  await runtimeSession.append({
-    type: "session.started",
-    sessionId: runtimeSession.sessionId,
-    data: {
-      workspaceRoot: config.workspaceRoot,
-      model: config.modelName,
-      maxIterations: config.maxIterations,
-      includeReasoningContent: config.includeReasoningContent,
-    },
-  });
-
-  let tooling: DefaultTooling | undefined;
-  let mcpManager: McpManager | undefined;
+  let session: RuntimeSession | undefined;
+  let instance: ReturnType<typeof render> | undefined;
+  let disposeReason: SessionDisposeReason = { type: "tui_exit" };
+  let primaryError: unknown;
   let quitRequested = false;
 
   try {
-    tooling = createDefaultTooling({
+    session = await createRuntimeSession({
+      sessionId: config.sessionId,
       workspaceRoot: config.workspaceRoot,
-      runtimeSession,
+      modelName: config.modelName,
+      maxIterations: config.maxIterations,
+      includeReasoningContent: config.includeReasoningContent,
+      systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
+      modelClient,
+      presentationSinks: [eventStream],
       webFetchRefiner: createWebFetchRefinerFromEnv(config.modelName),
     });
-
-    const mcpConfig = await loadMcpConfig(config.workspaceRoot);
-    if (mcpConfig !== undefined) {
-      mcpManager = await createMcpManager({ config: mcpConfig, runtimeSession });
-      for (const executor of mcpManager.executors) {
-        tooling.registry.register(executor);
-      }
-    }
-
     const promptHistory = await PromptHistory.load(
       promptHistoryPath(config.workspaceRoot),
     );
-    let sessionMessages: AgentMessage[] | undefined;
+    const runtimeSession = session;
 
-    const run = async (userPrompt: string, signal: AbortSignal) => {
-      const turn = runtimeSession.createTurn(userPrompt);
-      await runtimeSession.append({
-        type: "turn.started",
-        ...turn,
-        data: { userPrompt },
-      });
-
-      try {
-        const result = await runAgent({
-          systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
-          userPrompt,
-          initialMessages: sessionMessages,
-          maxIterations: config.maxIterations,
-          model: createModelClientFromEnv(config.modelName, {
-            includeReasoningContent: config.includeReasoningContent,
-          }),
-          tools: tooling!.registry,
-          toolRuntime: tooling!.runtime,
-          observationBuilder: new ObservationBuilder(),
-          runtimeSession,
-          turn,
-          signal,
-        });
-
-        if (result.status === "completed") {
-          await runtimeSession.append({
-            type: "turn.finished",
-            ...turn,
-            data: { result },
-          });
-        } else if (result.status === "cancelled") {
-          await runtimeSession.append({
-            type: "turn.cancelled",
-            ...result.lastIteration,
-            data: { cancellation: result.cancellation },
-          });
-        } else {
-          await runtimeSession.append({
-            type: "turn.failed",
-            ...result.lastIteration,
-            data: { error: result.error },
-          });
-        }
-
-        sessionMessages = result.messages;
-        return result;
-      } catch (error) {
-        await runtimeSession.append({
-          type: "turn.failed",
-          ...turn,
-          data: { error: error instanceof Error ? error.message : String(error) },
-        });
-        throw error;
-      }
-    };
-
-    const instance = render(
+    instance = render(
       <App
         modelName={config.modelName}
         workspaceRoot={config.workspaceRoot}
-        sessionId={config.sessionId}
+        sessionId={runtimeSession.sessionId}
         eventStream={eventStream}
-        run={run}
+        run={(userPrompt, signal) => runtimeSession.executeTurn({ userPrompt, signal })}
         readGitBranch={readCurrentGitBranch}
         history={promptHistory}
         onQuit={() => {
@@ -143,25 +57,31 @@ export async function runTui(): Promise<void> {
         }}
       />,
     );
-
-    try {
-      await instance.waitUntilExit();
-    } finally {
-      restoreStdin();
-    }
+    await instance.waitUntilExit();
+  } catch (error) {
+    primaryError = error;
+    disposeReason = { type: "runner_failed", error: errorMessage(error) };
   } finally {
-    try {
-      await tooling?.dispose("tui_exit");
-    } finally {
-      await mcpManager?.dispose();
-      await runtimeSession.append({
-        type: "session.finished",
-        sessionId: runtimeSession.sessionId,
-        data: { reason: "tui_exit" },
-      });
+    instance?.unmount();
+    restoreStdin();
+    if (session !== undefined) {
+      try {
+        await session.dispose(disposeReason);
+      } catch (error) {
+        primaryError =
+          primaryError === undefined
+            ? error
+            : new AggregateError(
+                [primaryError, error],
+                "TUI runtime and cleanup failed.",
+              );
+      }
     }
   }
 
+  if (primaryError !== undefined) {
+    throw asError(primaryError);
+  }
   if (quitRequested) {
     process.exit(0);
   }
@@ -172,4 +92,12 @@ function restoreStdin(): void {
     process.stdin.setRawMode(false);
   }
   process.stdin.pause();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

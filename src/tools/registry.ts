@@ -13,7 +13,10 @@ import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
-import { RuntimeSession } from "../agent/runtime-session";
+import type {
+  RuntimeSessionContext,
+  SessionDisposeReason,
+} from "../agent/runtime-session";
 import type {
   ReadSnapshotStore,
   ToolDefinition,
@@ -88,7 +91,7 @@ export type DefaultTooling = {
   snapshots: ReadSnapshotStore;
   bashState: BashToolingState;
   taskManager: ShellTaskManager;
-  dispose(reason?: "tui_exit" | "oneshot_complete"): Promise<void>;
+  dispose(reason?: SessionDisposeReason["type"]): Promise<void>;
 };
 
 export type BashToolingState = {
@@ -99,7 +102,7 @@ export type BashToolingState = {
 
 export function createDefaultTooling(options: {
   workspaceRoot: string;
-  runtimeSession?: RuntimeSession;
+  runtimeSession: RuntimeSessionContext;
   maxDisplayedBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
@@ -107,11 +110,7 @@ export function createDefaultTooling(options: {
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
-  const runtimeSession =
-    options.runtimeSession ??
-    new RuntimeSession({
-      async append() {},
-    });
+  const runtimeSession = options.runtimeSession;
   const cwdState = createCwdState(options.workspaceRoot);
   const taskManager = new ShellTaskManager({
     workspaceRoot: options.workspaceRoot,

@@ -1,7 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
-import type { RuntimeSession } from "../agent/runtime-session";
+import type {
+  RuntimeSessionContext,
+  SessionDisposeReason,
+} from "../agent/runtime-session";
 import type { ToolCallIdentity } from "../agent/types";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
@@ -57,7 +60,7 @@ export type StopTaskResult = {
 };
 
 export type ShutdownResult = {
-  reason: "tui_exit" | "oneshot_complete";
+  reason: SessionDisposeReason["type"];
   stoppedTaskIds: string[];
   escalatedTaskIds: string[];
 };
@@ -89,7 +92,7 @@ type ManagedShellTask = {
 export type ShellTaskManagerOptions = {
   workspaceRoot: string;
   cwdState: CwdState;
-  runtimeSession: RuntimeSession;
+  runtimeSession: RuntimeSessionContext;
   stopGraceMs?: number;
 };
 
@@ -263,7 +266,7 @@ export class ShellTaskManager {
     return (await this.beginStop(task, "turn_cancelled")).task;
   }
 
-  shutdown(reason: "tui_exit" | "oneshot_complete"): Promise<ShutdownResult> {
+  shutdown(reason: SessionDisposeReason["type"]): Promise<ShutdownResult> {
     if (this.shutdownPromise !== undefined) {
       return this.shutdownPromise;
     }
@@ -274,7 +277,7 @@ export class ShellTaskManager {
   }
 
   private async performShutdown(
-    reason: "tui_exit" | "oneshot_complete",
+    reason: SessionDisposeReason["type"],
   ): Promise<ShutdownResult> {
     const results = await Promise.all(
       [...this.tasks.values()].map(async (task) => {

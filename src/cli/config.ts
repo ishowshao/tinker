@@ -100,6 +100,18 @@ export function createModelClientFromEnv(
   });
 }
 
+export function createRunnerModelClient(
+  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent">,
+  injected?: ModelClient,
+): ModelClient {
+  return (
+    injected ??
+    createModelClientFromEnv(config.modelName, {
+      includeReasoningContent: config.includeReasoningContent,
+    })
+  );
+}
+
 export function createWebFetchRefinerFromEnv(mainModelName: string): Refiner {
   return createModelRefiner({
     createModelClient: () => {

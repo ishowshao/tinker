@@ -2,8 +2,8 @@ import type { ModelClient } from "../model/model-client";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ContextBuilder } from "./context-builder";
-import type { RuntimeSession } from "./runtime-session";
-import { throwIfTurnCancelled } from "./turn-cancellation";
+import type { RuntimeSessionContext } from "./runtime-session";
+import { throwIfTurnCancelled, turnCancellationSource } from "./turn-cancellation";
 import type {
   AgentMessage,
   IterationIdentity,
@@ -23,7 +23,7 @@ export type RunAgentInput = {
   toolRuntime: ToolRuntime;
   observationBuilder: ObservationBuilder;
   contextBuilder?: ContextBuilder;
-  runtimeSession: RuntimeSession;
+  runtimeSession: RuntimeSessionContext;
   turn: TurnIdentity;
   signal: AbortSignal;
 };
@@ -56,7 +56,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     if (input.signal.aborted) {
       return cancelledResult(
         messages,
-        cancellation(iteration, "agent_boundary"),
+        cancellation(input.signal, iteration, "agent_boundary"),
         iteration,
       );
     }
@@ -88,7 +88,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       if (input.signal.aborted) {
         return cancelledResult(
           messages,
-          cancellation(iteration, "model_request"),
+          cancellation(input.signal, iteration, "model_request"),
           iteration,
         );
       }
@@ -136,7 +136,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         appendCancelledToolMessages(messages, toolCalls, callIndex);
         return cancelledResult(
           messages,
-          cancellation(iteration, "agent_boundary"),
+          cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
         );
       }
@@ -158,7 +158,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         appendCancelledToolMessages(messages, toolCalls, callIndex, call);
         return cancelledResult(
           messages,
-          cancellation(iteration, "tool_execution", call),
+          cancellation(input.signal, iteration, "tool_execution", call),
           iteration,
         );
       }
@@ -193,7 +193,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         appendCancelledToolMessages(messages, toolCalls, callIndex + 1);
         return cancelledResult(
           messages,
-          cancellation(iteration, "agent_boundary"),
+          cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
         );
       }
@@ -266,12 +266,13 @@ function requireCallInIteration(
 }
 
 function cancellation(
+  signal: AbortSignal,
   iteration: IterationIdentity,
   phase: TurnCancellation["phase"],
   call?: ToolCall,
 ): TurnCancellation {
   return {
-    source: "user",
+    source: turnCancellationSource(signal),
     phase,
     iterationId: iteration.iterationId,
     iterationNumber: iteration.iterationNumber,

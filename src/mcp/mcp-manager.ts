@@ -3,7 +3,7 @@ import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { RuntimeSession } from "../agent/runtime-session";
+import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ToolExecutor } from "../tools/types";
 import type { McpConfig, McpServerConfig } from "./mcp-config";
 import { createMcpToolExecutor } from "./mcp-tool-executor";
@@ -27,7 +27,7 @@ export type McpManager = {
 
 export type CreateMcpManagerOptions = {
   config: McpConfig;
-  runtimeSession: RuntimeSession;
+  runtimeSession: RuntimeSessionContext;
   clientFactory?: McpClientFactory;
   timeoutMs?: number;
   maxObservationChars?: number;
@@ -45,75 +45,122 @@ export async function createMcpManager(
   const connections: McpClientConnection[] = [];
   const executors: ToolExecutor[] = [];
 
-  for (const [serverName, serverConfig] of options.config.servers) {
-    let connection: McpClientConnection;
-    let tools;
+  try {
+    for (const [serverName, serverConfig] of options.config.servers) {
+      let connection: McpClientConnection;
+      let tools;
 
-    try {
-      connection = await clientFactory(serverName, serverConfig);
-    } catch (error) {
-      await options.runtimeSession.append({
-        type: "mcp.server.failed",
-        sessionId: options.runtimeSession.sessionId,
-        data: {
-          serverName,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      continue;
-    }
-
-    try {
-      tools = (await connection.client.listTools()).tools;
-    } catch (error) {
-      await connection.close().catch(() => undefined);
-      await options.runtimeSession.append({
-        type: "mcp.server.failed",
-        sessionId: options.runtimeSession.sessionId,
-        data: {
-          serverName,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      continue;
-    }
-
-    connections.push(connection);
-
-    const seenToolNames = new Set<string>();
-
-    for (const tool of tools) {
-      if (seenToolNames.has(tool.name)) {
+      try {
+        connection = await clientFactory(serverName, serverConfig);
+      } catch (error) {
+        await options.runtimeSession.append({
+          type: "mcp.server.failed",
+          sessionId: options.runtimeSession.sessionId,
+          data: {
+            serverName,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
         continue;
       }
 
-      seenToolNames.add(tool.name);
-      executors.push(
-        createMcpToolExecutor({
-          client: connection.client,
-          serverName,
-          tool,
-          timeoutMs,
-          maxObservationChars,
-        }),
-      );
-    }
+      try {
+        tools = (await connection.client.listTools()).tools;
+      } catch (error) {
+        try {
+          await connection.close();
+        } catch (closeError) {
+          throw new AggregateError(
+            [error, closeError],
+            `Failed to inspect and close MCP server ${serverName}.`,
+            { cause: closeError },
+          );
+        }
+        await options.runtimeSession.append({
+          type: "mcp.server.failed",
+          sessionId: options.runtimeSession.sessionId,
+          data: {
+            serverName,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+        continue;
+      }
 
-    await options.runtimeSession.append({
-      type: "mcp.server.connected",
-      sessionId: options.runtimeSession.sessionId,
-      data: { serverName, toolCount: seenToolNames.size },
+      connections.push(connection);
+
+      const seenToolNames = new Set<string>();
+
+      for (const tool of tools) {
+        if (seenToolNames.has(tool.name)) {
+          continue;
+        }
+
+        seenToolNames.add(tool.name);
+        executors.push(
+          createMcpToolExecutor({
+            client: connection.client,
+            serverName,
+            tool,
+            timeoutMs,
+            maxObservationChars,
+          }),
+        );
+      }
+
+      await options.runtimeSession.append({
+        type: "mcp.server.connected",
+        sessionId: options.runtimeSession.sessionId,
+        data: { serverName, toolCount: seenToolNames.size },
+      });
+    }
+  } catch (error) {
+    const errors = [error];
+    await closeConnections(connections, errors);
+    if (errors.length === 1) {
+      throw error;
+    }
+    throw new AggregateError(errors, "MCP manager initialization failed.", {
+      cause: error,
     });
   }
 
+  let disposePromise: Promise<void> | undefined;
   return {
     executors,
-    async dispose(): Promise<void> {
-      await Promise.all(
-        connections.map((connection) => connection.close().catch(() => undefined)),
-      );
+    dispose(): Promise<void> {
+      disposePromise ??= disposeConnections(connections);
+      return disposePromise;
     },
   };
+}
+
+async function disposeConnections(connections: McpClientConnection[]): Promise<void> {
+  const errors: unknown[] = [];
+  await closeConnections(connections, errors);
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Failed to close MCP connections.");
+  }
+}
+
+async function closeConnections(
+  connections: McpClientConnection[],
+  errors: unknown[],
+): Promise<void> {
+  for (let index = connections.length - 1; index >= 0; index -= 1) {
+    const connection = connections[index];
+    if (connection === undefined) {
+      throw new Error(`Missing MCP connection at index ${index}.`);
+    }
+    try {
+      await connection.close();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
 }
 
 function parsePositiveIntegerEnv(name: string): number | undefined {

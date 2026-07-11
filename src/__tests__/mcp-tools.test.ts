@@ -22,7 +22,6 @@ import type { ToolCall } from "../agent/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { McpToolRawResult, ToolExecutionContext } from "../tools/types";
 import { applyAgentEvent, createInitialTuiState } from "../tui/event-store";
-import { RuntimeSession } from "../agent/runtime-session";
 import type { SessionId } from "../ids/runtime-id";
 import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
 
@@ -146,7 +145,7 @@ describe("mcp tool executor", () => {
       },
       { signal: controller.signal },
     );
-    controller.abort(new TurnCancelledError());
+    controller.abort(new TurnCancelledError("user"));
 
     expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
     await client.close();
@@ -330,7 +329,7 @@ describe("mcp manager", () => {
     });
     let closed = false;
     const sink = collectingEventSink();
-    const runtimeSession = new RuntimeSession(sink);
+    const runtimeSession = createTestRuntime(sink).runtimeSession;
 
     const manager = await createMcpManager({
       config: {
@@ -379,7 +378,7 @@ describe("mcp manager", () => {
     "connects to a real stdio server",
     async () => {
       const sink = collectingEventSink();
-      const runtimeSession = new RuntimeSession(sink);
+      const runtimeSession = createTestRuntime(sink).runtimeSession;
       const fixturePath = path.join(import.meta.dir, "fixtures", "fake-mcp-server.ts");
 
       const manager = await createMcpManager({

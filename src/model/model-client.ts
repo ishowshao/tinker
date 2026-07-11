@@ -1,5 +1,5 @@
 import type { AgentMessage, AssistantMessage, IterationIdentity } from "../agent/types";
-import type { RuntimeSession } from "../agent/runtime-session";
+import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ToolDefinition } from "../tools/types";
 
 export interface ModelClient {
@@ -13,7 +13,7 @@ export type ModelRequestOptions = {
   signal: AbortSignal;
   identity?: {
     iteration: IterationIdentity;
-    runtimeSession: RuntimeSession;
+    runtimeSession: RuntimeSessionContext;
   };
 };
 

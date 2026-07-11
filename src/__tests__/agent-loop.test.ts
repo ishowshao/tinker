@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
-import { RuntimeSession } from "../agent/runtime-session";
+import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
@@ -15,6 +15,7 @@ import type {
 } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
+import { createTestRuntime } from "./test-runtime";
 
 class ScriptedModel implements ModelClient {
   calls = 0;
@@ -89,10 +90,14 @@ describe("runAgent", () => {
     try {
       await writeFile(path.join(workspace, "README.md"), "# Tinker\n", "utf8");
 
-      const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const events = new ArrayEventSink();
-      const runtimeSession = new RuntimeSession(events);
-      const turn = runtimeSession.createTurn("Read README.md");
+      const identity = createTestRuntime(events);
+      const runtimeSession = identity.runtimeSession;
+      const turn = identity.turn;
+      const tooling = createDefaultTooling({
+        workspaceRoot: workspace,
+        runtimeSession,
+      });
       const result = await runAgent({
         systemPrompt: "system",
         userPrompt: "Read README.md",
@@ -127,10 +132,14 @@ describe("runAgent", () => {
   });
 
   test("continues from initial messages when provided", async () => {
-    const tooling = createDefaultTooling({ workspaceRoot: process.cwd() });
     const events = new ArrayEventSink();
-    const runtimeSession = new RuntimeSession(events);
-    const turn = runtimeSession.createTurn("Second prompt");
+    const identity = createTestRuntime(events);
+    const runtimeSession = identity.runtimeSession;
+    const turn = identity.turn;
+    const tooling = createDefaultTooling({
+      workspaceRoot: process.cwd(),
+      runtimeSession,
+    });
     const model = new CapturingModel();
     const initialMessages: AgentMessage[] = [
       { role: "system", content: "system" },
@@ -165,7 +174,7 @@ describe("runAgent", () => {
   });
 });
 
-function requireRuntime(options: ModelRequestOptions): RuntimeSession {
+function requireRuntime(options: ModelRequestOptions): RuntimeSessionContext {
   if (options.identity === undefined) {
     throw new Error("Expected model request identity.");
   }

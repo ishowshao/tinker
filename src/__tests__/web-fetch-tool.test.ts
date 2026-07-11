@@ -651,7 +651,7 @@ describe("WebFetch pipeline", () => {
     const cancelled = tool.execute(call.args, call, {
       signal: controller.signal,
     });
-    controller.abort(new TurnCancelledError());
+    controller.abort(new TurnCancelledError("user"));
     expect(cancelled).rejects.toBeInstanceOf(TurnCancelledError);
 
     const retried = (await tool.execute(
@@ -739,10 +739,12 @@ describe("WebFetch pipeline", () => {
       const withKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "exa-key",
+        runtimeSession: createTestRuntime().runtimeSession,
       });
       const withoutKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "",
+        runtimeSession: createTestRuntime().runtimeSession,
       });
 
       const toolNames = (tooling: typeof withKey) =>

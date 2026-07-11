@@ -19,9 +19,14 @@ export type SessionStartedData = {
   includeReasoningContent: boolean;
 };
 
+export type SessionFinishedData = {
+  reason: "oneshot_complete" | "tui_exit" | "runner_failed" | "initialization_failed";
+  error?: string;
+};
+
 export type AgentEventDataMap = {
   "session.started": SessionStartedData;
-  "session.finished": { reason: "tui_exit" | "oneshot_complete" };
+  "session.finished": SessionFinishedData;
   "turn.started": { userPrompt: string };
   "turn.finished": { result: RunAgentResult };
   "turn.failed": { error: string };

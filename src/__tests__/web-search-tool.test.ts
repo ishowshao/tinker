@@ -107,7 +107,7 @@ describe("WebSearch tool", () => {
       { providerToolCallId: "call_1", name: "WebSearch", args: {} },
       { signal: controller.signal },
     );
-    controller.abort(new TurnCancelledError());
+    controller.abort(new TurnCancelledError("user"));
 
     expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
   });
@@ -272,10 +272,12 @@ describe("WebSearch tool", () => {
       const withKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "exa-key",
+        runtimeSession: createTestRuntime().runtimeSession,
       });
       const withoutKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "",
+        runtimeSession: createTestRuntime().runtimeSession,
       });
 
       const toolNames = (tooling: typeof withKey) =>
