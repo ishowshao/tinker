@@ -184,6 +184,9 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 **状态：待实施；F2 已完成。**
 
+详细设计见
+[`protocol-safe-session-ledger-design.md`](protocol-safe-session-ledger-design.md)。
+
 在写入 SQLite 前，先用内存实现把 canonical history 的数据契约和协议边界验证清楚，
 避免把当前可变消息数组直接固化成长期 schema。
 
