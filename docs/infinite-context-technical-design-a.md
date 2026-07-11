@@ -41,6 +41,8 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 
 - 接受「完整历史是外部状态、上下文只是临时视图」；
 - 接受「确定性换出优先于模型摘要」；
+- 接受在硬规则筛选之后，用当前活动 context 和短控制 prompt 让模型辅助判断候选的
+  当前语义价值；模型建议不覆盖规则，也不成为新的 source of truth；
 - 接受「两次 checkpoint 之间保持 append-only」；
 - 不把当前诊断 event log 直接升级为恢复数据库；
 - 不在第一版引入向量库、AST 图、因果图、置信度分数或跨 session 记忆；
@@ -60,6 +62,8 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 7. compaction 前后保持 OpenAI-compatible Chat Completions 的 tool-call 协议合法。
 8. context revision 的变化频率足够低，避免无意义地破坏 provider 的 prefix cache。
 9. 所有损坏、超预算、协议断裂和不支持的 schema 都在模型请求前 fast-fail。
+10. 自动阈值或手动 `/compact` 触发时，可以选择模型辅助换出策略，但必须保留完全不
+    调用模型的规则路径。
 
 ### 2.2 非目标
 
@@ -71,6 +75,7 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 - 不在第一版做 embedding、reranker、调用图、AST/LSP 索引或因果图。
 - 不在第一版做 session 分支、Git worktree memory namespace 或多 agent capsule。
 - 不为旧的本地实验数据设计复杂迁移；不支持的 schema 直接给出明确错误。
+- 不把模型对“是否值得换出”的回答当作正确性证明；它只是受硬规则约束的策略建议。
 
 ### 2.3 必须长期成立的不变量
 
@@ -79,6 +84,8 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 活动上下文可替换
 summary 不是 source of truth
 完整 tool frame 是最小协议单元
+规则判断硬性允许不允许换，模型只判断语义上现在值不值得换
+模型换出探测不进入 canonical history
 安全边界之间只追加，不改前缀
 历史内容与当前工作区状态必须可区分
 检索空结果只代表当前检索范围没有命中
@@ -182,6 +189,7 @@ Bash 完整输出保存在 `.tinker/bash/<task-id>.log`，普通 observation 只
 |    ContextManager     |<----------------------|     Recall tool      |
 | budget / policy       |     search / get      | append result at tail|
 | swap planner          |                       +----------------------+
+| eviction advisor      |
 | checkpoint compiler   |
 | active revision       |
 +-----------+-----------+
@@ -565,7 +573,9 @@ type ContextUsageSnapshot = {
   -> 不做任何变化
 
 达到 trigger
-  -> 批量确定性换出，目标降到 target
+  -> 用硬规则筛选可换出候选
+  -> 规则路径直接排序，或由模型辅助判断当前语义价值
+  -> 确定性 planner 组合候选并批量换出，目标降到 target
 
 换出后仍高于 target
   -> 结构化 checkpoint，删除已覆盖的完整旧 frame
@@ -574,11 +584,12 @@ type ContextUsageSnapshot = {
   -> 不请求 provider，明确报告必须拆分任务或减少必要输入
 ```
 
-任何阶段失败都不能静默截断 message。
+手动 `/compact` 使用同一条路径，只是触发原因是 `manual`，不要求先超过 trigger。任何
+阶段失败都不能静默截断 message。
 
-## 九、第一层 Compaction：确定性换出
+## 九、第一层 Compaction：规则换出与可选模型辅助
 
-### 9.1 为什么先换出 tool observation
+### 9.1 为什么先支持规则换出 tool observation
 
 Read、Grep、WebFetch、MCP 和 Bash preview 通常体积大，而且都已经有结构化 raw result。
 用规则生成占位符具备以下性质：
@@ -604,9 +615,9 @@ Read、Grep、WebFetch、MCP 和 Bash preview 通常体积大，而且都已经�
 Write/Edit 结果通常很小且直接描述已经发生的副作用，第一版默认保留。错误 observation
 也通常较小并对当前排障重要，默认不优先换出。
 
-### 9.3 完全机械的优先级
+### 9.3 硬规则与默认机械优先级
 
-不要尝试让模型判断「语义重要性」。候选排序只使用可验证事实：
+规则路径是第一版默认值，不调用模型。候选排序只使用可验证事实：
 
 1. 同一路径存在更晚成功 Read/Edit/Write 的旧 Read；
 2. 同一查询或路径的旧 Grep/Glob；
@@ -616,7 +627,108 @@ Write/Edit 结果通常很小且直接描述已经发生的副作用，第一版
 
 「旧」不表示内容不再有价值，只表示它更适合放入冷存储。历史原文仍可精确 Recall。
 
-### 9.4 占位符契约
+无论是否启用模型辅助，9.2 的候选条件和这里的 recent/error/active-task 保护规则都拥有
+最终否决权。模型不能把规则禁止的记录变成可换出记录。
+
+### 9.4 模型辅助换出决策
+
+规则路径便宜、稳定、可重复，但只知道 age、大小、工具类型和是否存在更新版本，不知道
+某个 observation 对当前目标是否仍有独特价值。在达到自动 trigger 或用户手动执行
+`/compact` 时，可以选择增加一层模型辅助策略：
+
+> **规则判断“硬性允许不允许换”；模型判断“语义上现在值不值得换”。**
+
+模型不生成摘要，也不改写 candidate。它只对已经通过硬规则的候选给出 `yes` 或 `no`，
+最终仍由确定性 planner 选择满足 target 的集合，并用既有 swap renderer 生成占位符。
+
+策略必须显式配置并在启动时校验：
+
+```ts
+type SwapSelectionPolicy =
+  | { mode: "rule_only" }
+  | {
+      mode: "model_assisted";
+      shortlistLimit: number;
+      maxConcurrency: number;
+      maxProbeOutputTokens: number;
+      jointAuditRetryLimit: 0 | 1;
+    };
+```
+
+#### 9.4.1 单候选并发探测
+
+假设冻结后的 base revision 渲染为：
+
+```text
+V = [A, B, C, ..., AA, AB, AC]
+```
+
+对 shortlist 中每个候选构造一条共享相同前缀的内部请求：
+
+```text
+probe(B) = [A, B, C, ..., AA, AB, AC, X(B)] -> yes/no
+probe(C) = [A, B, C, ..., AA, AB, AC, X(C)] -> yes/no
+probe(D) = [A, B, C, ..., AA, AB, AC, X(D)] -> yes/no
+```
+
+这些 probe 可以有界并发。`X(candidate)` 是追加在尾部的临时 user control message，至少
+包含：
+
+- base revision ID；
+- candidate 的 source、role、tool name、ordinal 和 content hash；
+- 实际准备使用的确定性占位符；
+- “换出只改变活动视图，原文仍可通过 Recall 取回”的语义；
+- 当前换出指导规则；
+- 只允许返回 `yes` 或 `no` 的输出约束。
+
+`X` 和 probe 的 assistant response 都是内部控制流，不能写入 `messages`、protocol
+frames、FTS 或 canonical history。它们只允许作为聚合诊断数据记录 model、prompt
+version、candidate、decision、usage 和 cache hit/miss。
+
+为了避免模型因为“刚刚看过 B”而误以为未来仍会记得它，prompt 必须要求做反事实判断：
+把 candidate 替换成给定占位符后，其独有信息是否仍会影响当前目标和近期行动；不能把
+本次 probe 内已经读到的内容视为下一次请求仍然存在。
+
+#### 9.4.2 并发结果不能直接取并集
+
+单候选判断彼此独立，但最终换出是集合操作。例如 B 因为 C 含有相同约束而返回 `yes`，
+C 又因为 B 含有该约束而返回 `yes`；直接同时换出 B 和 C 会破坏两次判断各自依赖的
+前提。
+
+因此模型辅助路径必须分为两步：
+
+1. 并发 probe 只生成候选级 advice；`no`、非法输出、超时、取消和 provider 错误一律
+   视为不批准该 candidate。
+2. planner 从获批候选中确定一个能达到 target 的集合后，再用同一个 base revision 加
+   一条 joint audit prompt，列出整个拟换出集合及其占位符，只接受最终 `yes` 或 `no`。
+
+joint audit 未通过时不能提交该集合，也不能把某个 `no` 静默重解释为 `yes`。实现可以
+缩小集合后重试一次；仍失败则保持旧 revision，并回到压力处理阶梯选择其他策略。
+
+对应的联合请求仍然只在相同前缀后追加临时控制消息：
+
+```text
+audit({B, C}) = [A, B, C, ..., AA, AB, AC, X({B, C})] -> yes/no
+```
+
+#### 9.4.3 Revision、成本和安全边界
+
+- 所有 probe 和 joint audit 必须绑定同一个 frozen base revision。运行期间若 active
+  revision 或 canonical tail 已变化，整批 advice 作废。
+- 探测只在 8.3 定义的安全边界运行；取消 compact 时同时取消未完成 probe。
+- 先用机械规则生成有界 shortlist，再探测最有价值的少量候选；不能对完整历史无上限
+  fan-out。
+- 默认使用生成当前活动 context 的同一 provider/model 和相同前缀序列化；改用其他模型
+  是独立策略，不能宣称复用了当前 provider 的 prefix cache。
+- 共享前缀使该策略有机会利用 provider cache，但不能假设整个 V 必然命中。最新尾部
+  可能从未作为输入发送，并发请求也可能竞争尚未建立的 cache；cached input 仍有成本、
+  latency 和 rate-limit 占用，必须以真实 usage 为准。
+- candidate 中可能包含不可信 tool/web/MCP 文本。probe prompt 必须把历史正文标记为
+  data，使用严格二值输出，并保持模型 advice 不能突破硬规则和 protocol validator。
+- 模型辅助模式只优化“保留什么更合适”，不改变原始历史不可变、Recall 可取回、失败
+  不切 revision 和新视图必须严格更小等不变量。
+
+### 9.5 占位符契约
 
 占位符必须短、确定、非空、可测试，并使用 JSON 转义插入路径、命令、URL 等外部字段。
 例如旧 Read：
@@ -662,15 +774,21 @@ fullOutput=Use Read on outputFilePath if the retained log still exists.
 占位符不复制网页正文、MCP 文本或 shell 输出中的自然语言，避免把历史不可信内容升级成
 新的 runtime 指令。
 
-### 9.5 换出算法
+### 9.6 换出算法
 
 ```ts
 async function createSwapRevision(state: ContextState): Promise<ContextRevision> {
   const before = estimator.estimate(state.activeView);
-  const candidates = swapPlanner.rank(state.closedFrames);
+  const eligible = swapPlanner.rankEligible(state.closedFrames);
+  const modelAssisted = state.policy.swapSelection.mode === "model_assisted";
+  const candidates = modelAssisted
+    ? await modelEvictionAdvisor.approve({ state, candidates: eligible })
+    : eligible;
+  const selected: typeof candidates = [];
   const overrides: ContextOverride[] = [];
 
   for (const candidate of candidates) {
+    selected.push(candidate);
     overrides.push(swapRenderer.render(candidate));
     const projected = estimator.estimate(state.withOverrides(overrides));
     if (projected.tokens <= state.policy.targetTokens) {
@@ -682,6 +800,10 @@ async function createSwapRevision(state: ContextState): Promise<ContextRevision>
     throw new Error("No eligible context entries can be swapped.");
   }
 
+  if (modelAssisted) {
+    await modelEvictionAdvisor.audit({ state, candidates: selected, overrides });
+  }
+
   return sessionStore.commitRevision({
     reason: state.reason,
     base: state.activeRevision,
@@ -691,7 +813,9 @@ async function createSwapRevision(state: ContextState): Promise<ContextRevision>
 }
 ```
 
-真实实现必须先构造并校验完整候选 revision，再用一个 transaction 切换 active revision。
+伪代码中的 `approve()` 包含有界并发 probe，`audit()` 审查实际被 planner 选中的联合集合。
+真实实现必须先构造并校验完整候选 revision，再用一个 transaction 切换 active revision；
+advisor 的任何失败都不能留下半个 revision。
 
 ## 十、Recall：历史上下文的 page-in 原语
 
@@ -786,7 +910,7 @@ checkpoint。但 checkpoint 不是一段自由发挥的「临终遗言」。
 
 只有以下条件同时满足才运行 checkpoint：
 
-- 确定性换出后仍无法达到 target；
+- 当前启用的规则或模型辅助换出策略结束后仍无法达到 target；
 - 当前没有 open protocol frame；
 - 待退休前缀可以按完整 frame 切分；
 - summarizer 输入仍在模型预算内；
@@ -1050,6 +1174,8 @@ tool      本地工具、网页、MCP 和 shell 返回的数据
 
 - tool/web/MCP 原文只在普通 tool result 中出现；
 - checkpoint 不复制不可信正文；
+- 模型换出 probe 把候选正文视为 data，只接受严格 `yes`/`no`，且 advice 不能突破硬
+  规则；
 - 文件路径、命令、URL 等元数据使用明确字段和 JSON 转义；
 - Recall observation 标明它是历史数据，不是新的 system/user instruction；
 - 不允许 Recall 跨 workspace 或跨 session 自动搜索。
@@ -1087,16 +1213,23 @@ type ContextRevisionEventData = {
   revisionId?: ContextRevisionId;
   strategy: "swap" | "checkpoint";
   reason: "pressure" | "manual" | "resume" | "runtime_change";
+  selectionMode?: "rule_only" | "model_assisted";
   inputTokensBefore: number;
   inputTokensAfter?: number;
   swappedMessageCount?: number;
+  evictionProbeCount?: number;
+  evictionApprovedCount?: number;
+  evictionAdviceUsage?: ModelUsage;
+  jointAuditDecision?: "yes" | "no" | "not_run";
   retiredFrameCount?: number;
   checkpointId?: CheckpointId;
   error?: string;
 };
 ```
 
-Recall 本身继续使用普通 `tool.*` 事件，不增加第二套调用事件。
+不要为每个 candidate 新增常驻事件。probe 的 model、prompt version 和 decision 写入聚合
+诊断记录，revision event 只保留数量、selection mode、合并后的 usage 和 joint audit
+结果。Recall 本身继续使用普通 `tool.*` 事件，不增加第二套调用事件。
 
 ### 16.2 TUI
 
@@ -1114,6 +1247,7 @@ context 61k / 128k (48%, estimated) · revision 3 · cache hit 42k
 - provider measured 与 local estimated；
 - cache hit/miss；
 - compact 次数和最后原因；
+- 最近一次 swap 的 rule-only/model-assisted 模式及 probe 聚合 usage；
 - 原始 message 数与活动 message 数；
 - 后台任务数。
 
@@ -1138,6 +1272,7 @@ src/context/context-protocol-validator.ts
 src/context/protocol-frame.ts
 src/context/swap-planner.ts
 src/context/swap-renderer.ts
+src/context/model-eviction-advisor.ts
 src/context/checkpoint-compiler.ts
 src/context/types.ts
 
@@ -1160,6 +1295,7 @@ src/tools/recall.ts
   - 增加 MessageId/FrameId 关联；逐步移除 `RunAgentResult.messages`。
 - `src/model/model-client.ts`
   - 扩展 cache hit/miss usage；接收 model context profile。
+  - 允许 advisor 发起带明确 internal purpose、极小输出上限的模型请求。
 - `src/model/openai-chat-mapping.ts`
   - 解析 provider cache usage；在映射前使用协议 validator 的结果。
 - `src/tools/types.ts`
@@ -1171,7 +1307,8 @@ src/tools/recall.ts
 - `src/events/types.ts`
   - 增加 context/session recovery 事件。
 - `src/cli/config.ts`
-  - 加载显式 model context profile 和 compact policy。
+  - 加载显式 model context profile、compact policy、selection mode、shortlist 上限和 probe
+    并发上限。
 - `src/tui/slash-commands.ts`
   - 增加 `/resume`、`/status`、`/compact`。
 - `src/tui/event-store.ts`
@@ -1183,6 +1320,7 @@ src/tools/recall.ts
 - 不做一个同时负责事件、session、TUI 和模型请求的巨型 Context OS 类；
 - 不让 ContextBuilder 直接访问 SQLite；
 - 不让 Recall 获得 SessionStore 写权限；
+- 不让 ModelEvictionAdvisor 直接写 canonical history 或切换 revision；
 - 不把 SessionStore 实现成 EventSink；
 - 不为第一版建立 page relation、confidence、validUntil 等无人能可靠维护的字段。
 
@@ -1225,7 +1363,7 @@ compact。
 验收：中英文、路径、错误字符串和精确 ID 都可检索；历史 Read 与当前 Read 能明确返回
 不同版本。
 
-### 阶段 D：确定性换出
+### 阶段 D：规则换出与可选模型辅助
 
 实施：
 
@@ -1233,10 +1371,14 @@ compact。
 - protocol validator；
 - swap planner/renderer；
 - pressure + hysteresis；
-- `/compact` 先支持 swap-only。
+- `/compact` 先支持 rule-only swap；
+- rule-only 稳定后，ModelEvictionAdvisor 先以 shadow mode 记录 probe 和 joint audit，不影响
+  revision；
+- cache usage、联合安全性和成本评测通过后，再允许显式启用 model-assisted selection。
 
-验收：tool-call 协议始终合法；换出零模型调用；原 observation 可 Recall；revision 之后
-再次请求只追加尾部。
+验收：tool-call 协议始终合法；rule-only 路径保持零模型调用；model-assisted 路径只处理
+硬规则已批准的 candidate，独立 advice 经过 joint audit；原 observation 可 Recall；
+revision 之后再次请求只追加尾部。
 
 ### 阶段 E：结构化 Checkpoint
 
@@ -1257,6 +1399,7 @@ compact。
 
 - 长会话 benchmark；
 - cache hit/miss 和成本/延迟对比；
+- rule-only 与 model-assisted selection 的保留质量、额外成本和任务成功率对比；
 - TUI timeline 窗口和历史分页；
 - 根据真实数据调整阈值和候选优先级。
 
@@ -1280,12 +1423,24 @@ compact。
 - 路径、命令、URL 中的换行和特殊字符不会改变字段结构。
 - 同一输入重复渲染逐字节相同。
 
+#### Model eviction advisor
+
+- rule-only mode 不发起任何 advice 请求，输出与未引入 advisor 时一致。
+- 只有通过硬规则的 candidate 才能进入 shortlist，模型不能批准 protected candidate。
+- 所有并发 probe 绑定同一个 base revision，并遵守 shortlist 和 concurrency 上限。
+- `yes` 才进入获批集合；`no`、非法输出、超时、取消和 provider 错误均 fail-closed。
+- probe 的临时 user/assistant messages 不进入 canonical history、FTS 或下一次模型请求。
+- 两个单独返回 `yes`、但互相依赖的 candidate 不能绕过 joint audit 一起换出。
+- active revision 或 canonical tail 变化后，旧 probe 和 joint audit 结果全部失效。
+- candidate 中伪造的 compact 指令不能突破硬规则、二值解析和 protocol validator。
+
 #### Context revision
 
 - revision 切换 transaction 失败时 active revision 不变。
 - `keepFromOrdinal` 不能落在 tool frame 中间。
 - 新 message 在 revision 后只追加，不改旧序列化前缀。
 - 一次换出必须严格减少估计 token。
+- advisor 或 joint audit 失败时旧 revision 保持活动。
 
 #### Recall
 
@@ -1312,6 +1467,10 @@ compact。
 6. 模拟 open tool frame 后崩溃，resume 只补 interrupted result，不自动重试工具。
 7. 触发阈值后只创建一个批量 revision，直到再次越过 trigger 前不重编译。
 8. checkpoint summarizer 返回非法引用，模型输入仍使用旧 revision。
+9. 并发 probe 分别批准两个互相冗余的 candidate，joint audit 拒绝后不创建 revision。
+10. probe 运行期间追加新 message 或切换 revision，整批 advice 被丢弃并重新测量。
+11. model-assisted selection 成功时，只把 planner 最终选中的集合交给 joint audit 和
+    transaction，而不是换出所有单独返回 `yes` 的 candidate。
 
 ### 19.3 Prefix cache 测试
 
@@ -1331,6 +1490,10 @@ request M+1 的旧长度 prefix hash仍 = H2
 真实 DeepSeek smoke test 再比较 `prompt_cache_hit_tokens` 和
 `prompt_cache_miss_tokens`，确认本地 hash 假设与 provider 观测一致。
 
+模型辅助模式还要验证：所有单候选 probe 的 base prefix hash 相同；最新未预热尾部和并发
+cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache read、延迟和费用符合
+配置的 shortlist/concurrency 上限，而不是假设 cached input 免费。
+
 ### 19.4 长会话亮点评测
 
 构造至少 50 turn、包含多次 Read/Grep/Bash、两次以上 checkpoint 的任务，在早期埋入：
@@ -1349,7 +1512,9 @@ request M+1 的旧长度 prefix hash仍 = H2
 4. 模型能否区分历史 observation 和当前 workspace；
 5. 活动 context 是否稳定低于 target；
 6. 每次 revision 后的 cache miss 是否只发生一次；
-7. 和传统自由文本 summary 基线相比，早期事实回答和任务成功率是否更高。
+7. 和传统自由文本 summary 基线相比，早期事实回答和任务成功率是否更高；
+8. rule-only 与 model-assisted selection 相比，是否以可接受的额外成本减少了仍与当前
+   目标相关内容的误换出。
 
 产品宣传只能使用评测真正支持的表述。「精确 ID 可取回」可以是强保证；「任意自然语言
 都能找回」和「模型永不忘记」不能作为第一版承诺。
@@ -1361,6 +1526,10 @@ request M+1 的旧长度 prefix hash仍 = H2
 | 模型没有意识到要 Recall | 短 system rule、占位符直接给路径、长会话评测；不虚构形式化保证 |
 | checkpoint 摘要漂移 | 结构化 schema、source 校验、确定性 ledger、失败不切 revision |
 | prefix cache 被频繁打断 | append-only revision、批量换出、trigger/target 回差、监测 hit/miss |
+| 并发单候选 advice 各自安全、组合后不安全 | planner 先选集合，再用相同 base revision 做 joint audit；不直接合并所有 `yes` |
+| 模型因刚看过 candidate 而高估移除后的能力 | 反事实 prompt、给出实际占位符、joint audit 和长会话对照评测 |
+| probe 数量使 cache read 成本和 rate limit 放大 | 机械 shortlist、有界并发、聚合 usage；以 provider 实测为准 |
+| 不可信历史诱导模型批准换出 | candidate 只作 data、严格二值输出、硬规则拥有最终否决权 |
 | tool-call 协议被破坏 | ProtocolFrame + 每次请求前 validator |
 | 把旧文件当成当前文件 | 占位符明确区分 Recall historical 与 Read current |
 | FTS 找不到语义改写后的内容 | 第一版承认边界；source ID、路径、trigram 和 checkpoint 补足，embedding 延后 |
@@ -1395,10 +1564,12 @@ request M+1 的旧长度 prefix hash仍 = H2
 4. **两次 revision 之间严格 append-only，并通过 provider cache usage 验证。**
 5. **Recall 在尾部追加 page-in 结果，不把原文恢复到旧位置。**
 6. **历史 observation 和当前 workspace 各有独立读取路径。**
-7. **先做确定性换出，仍不足时才做模型参与的结构化 checkpoint。**
-8. **checkpoint 中系统事实机械生成，模型字段必须带可校验 source。**
-9. **第一版用 FTS5 trigram，不引入向量数据库。**
-10. **任何超预算、协议断裂、数据库损坏或 checkpoint 校验失败都 fast-fail。**
+7. **换出资格由硬规则决定；模型只能辅助判断候选当前是否值得换出。**
+8. **并发 advice 不能直接取并集；planner 选出的实际集合必须再通过 joint audit。**
+9. **rule-only 路径始终保留；模型辅助换出稳定后，仍不足时才做结构化 checkpoint。**
+10. **checkpoint 中系统事实机械生成，模型字段必须带可校验 source。**
+11. **第一版用 FTS5 trigram，不引入向量数据库。**
+12. **任何超预算、协议断裂、数据库损坏或 checkpoint 校验失败都 fast-fail。**
 
 用一句工程定义收束：
 
@@ -1407,6 +1578,7 @@ Tinker Infinite Context
 = Immutable Session History
 + Versioned Active Context View
 + Protocol-Safe Deterministic Swap
++ Rule-Gated Model-Advised Eviction
 + Tail-Appended Recall
 + Source-Checked Checkpoint
 + Cache-Aware Scheduling
