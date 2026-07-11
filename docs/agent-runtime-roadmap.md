@@ -212,6 +212,9 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 **状态：待 F3 完成。**
 
+详细设计见
+[`session-store-resume-design.md`](session-store-resume-design.md)。
+
 第一版只追求“未压缩历史可完整恢复”，不同时实现 Recall、换出或 checkpoint。
 
 实施范围：

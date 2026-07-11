@@ -6,7 +6,7 @@
 - 状态：待实施
 - 前置阶段：F1、F2 已完成
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
-- 后续阶段：F4 `SessionStore v1` 与 `/resume`
+- 后续阶段：F4 [`SessionStore v1` 与 `/resume`](session-store-resume-design.md)
 
 ## 一、结论先行
 
