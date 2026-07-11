@@ -1,9 +1,9 @@
 import path from "node:path";
 import { appendFile, mkdir } from "node:fs/promises";
-import type { RunAgentResult, ToolCall } from "../agent/types";
+import type { ToolCall } from "../agent/types";
 import type { ToolObservation } from "../observation/observation-builder";
 import type { EventSink } from "./event-sink";
-import type { AgentEvent } from "./types";
+import type { AgentEvent, TurnFinishedData } from "./types";
 
 export class ObservationTextLog implements EventSink {
   readonly name = "observation-text-log";
@@ -32,7 +32,7 @@ function renderObservationLogBlock(event: AgentEvent): string | undefined {
     case "tool.observation":
       return renderToolObservation(event);
     case "turn.finished":
-      return renderTurnFinished(event.data.result);
+      return renderTurnFinished(event.data);
     case "turn.cancelled":
       return renderTurnCancelled(event);
     case "turn.failed":
@@ -99,13 +99,11 @@ function renderToolObservation(
   ].join("\n");
 }
 
-function renderTurnFinished(result: RunAgentResult): string {
-  const final = result.status === "completed" ? result.finalText : undefined;
-
+function renderTurnFinished(data: TurnFinishedData): string {
   return [
     "## Final",
     "",
-    final === undefined || final.trim() === "" ? "(no final response)" : final,
+    data.finalText.trim() === "" ? "(no final response)" : data.finalText,
     "",
   ].join("\n");
 }

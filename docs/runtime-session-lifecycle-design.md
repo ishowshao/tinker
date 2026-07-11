@@ -385,6 +385,22 @@ sink 失败时，`session.finished` 可能无法落盘；factory 仍然必须尝
 | `failed` | `turn.failed` |
 | `cancelled` | `turn.cancelled` |
 
+`turn.finished` 只记录不含累计历史的完成摘要，不嵌入含累计消息历史的
+`RunAgentResult`：
+
+```ts
+type TurnFinishedData = {
+  status: "completed";
+  finalText: string;
+  lastIteration: IterationIdentity;
+  messageCount: number;
+};
+```
+
+完整 `RunAgentResult` 仍返回给 `executeTurn()` 调用方，session messages 仍由
+`RuntimeSession` 在内存中提交；未来由 `SessionStore` 负责消息历史持久化。事件流只保存
+展示和诊断所需的数据，避免每个 turn 重复序列化此前的全部消息。
+
 两条 runner 不再发送这些事件，也不再直接调用 `runAgent()`。
 
 ### Session messages 提交规则

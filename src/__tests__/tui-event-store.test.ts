@@ -116,8 +116,13 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...base,
       ...testRuntime.turn,
       type: "turn.finished",
-      data: { result: input.result },
-    } as AgentEvent;
+      data: {
+        status: "completed",
+        finalText: stringValue(input.finalText) ?? "",
+        lastIteration: testRuntime.iteration,
+        messageCount: numberValue(input.messageCount) ?? 0,
+      },
+    };
   }
   if (input.type === "turn.cancelled") {
     const cancellation = recordValue(input.cancellation);
@@ -334,7 +339,8 @@ describe("tui event store", () => {
     state = applyAgentEvent(state, {
       type: "turn.finished",
       finishedAt: "2026-07-06T00:03:27.000Z",
-      result: { status: "completed", finalText: "done", messages: [] },
+      finalText: "done",
+      messageCount: 5,
     });
     expect(state.status).toBe("done");
     expect(state.workedForMs).toBe(207_000);
@@ -369,7 +375,8 @@ describe("tui event store", () => {
     state = applyAgentEvent(state, {
       type: "turn.finished",
       finishedAt: "2026-07-06T00:00:30.000Z",
-      result: { status: "completed", finalText: "first done", messages: [] },
+      finalText: "first done",
+      messageCount: 3,
     });
     state = applyAgentEvent(state, {
       type: "turn.started",

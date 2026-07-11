@@ -1,4 +1,4 @@
-import type { RunAgentResult, ToolCall } from "../agent/types";
+import type { ToolCall } from "../agent/types";
 import { countPatchChanges, parseDiffHunks } from "../tools/file-diff";
 import type { ToolRawResult } from "../tools/types";
 import { bashResultDetail } from "./bash-result-detail";
@@ -94,7 +94,7 @@ export class StdoutEventPrinter implements EventSink {
         );
         break;
       case "turn.finished":
-        this.stdout.write(`turn.finished status=${resultStatus(event.data.result)}\n`);
+        this.stdout.write(`turn.finished status=${event.data.status}\n`);
         break;
       case "turn.cancelled":
         this.stdout.write(
@@ -352,8 +352,4 @@ function stringProperty(
   property: string,
 ): string | undefined {
   return typeof record[property] === "string" ? record[property] : undefined;
-}
-
-function resultStatus(result: RunAgentResult): string {
-  return result.status;
 }

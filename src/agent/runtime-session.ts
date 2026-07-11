@@ -302,7 +302,12 @@ class DefaultRuntimeSession implements RuntimeSession {
       await this.append({
         type: "turn.finished",
         ...turn,
-        data: { result },
+        data: {
+          status: result.status,
+          finalText: result.finalText,
+          lastIteration: result.lastIteration,
+          messageCount: result.messages.length,
+        },
       });
       return;
     }

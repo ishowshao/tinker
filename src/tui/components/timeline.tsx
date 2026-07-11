@@ -69,13 +69,13 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
     }
 
     if (event.type === "turn.finished") {
-      const text = finalText(event.data.result);
+      const text = event.data.finalText;
       return [
         {
           id: `${index}-turn-finished`,
-          text: text === undefined || text.trim() === "" ? "turn finished" : text,
-          label: text === undefined || text.trim() === "" ? undefined : "assistant",
-          status: text === undefined || text.trim() === "" ? "ok" : "text",
+          text: text.trim() === "" ? "turn finished" : text,
+          label: text.trim() === "" ? undefined : "assistant",
+          status: text.trim() === "" ? "ok" : "text",
         },
       ];
     }
@@ -103,21 +103,6 @@ function timelineItemsFromEvents(events: AgentEvent[]): TimelineItem[] {
 
     return [];
   });
-}
-
-function finalText(result: unknown): string | undefined {
-  if (
-    typeof result === "object" &&
-    result !== null &&
-    "status" in result &&
-    result.status === "completed" &&
-    "finalText" in result &&
-    typeof result.finalText === "string"
-  ) {
-    return result.finalText;
-  }
-
-  return undefined;
 }
 
 function toolPath(args: unknown): string | undefined {

@@ -1,6 +1,5 @@
 import type {
   IterationIdentity,
-  RunAgentResult,
   ToolCall,
   ToolCallIdentity,
   TurnCancellation,
@@ -24,11 +23,18 @@ export type SessionFinishedData = {
   error?: string;
 };
 
+export type TurnFinishedData = {
+  status: "completed";
+  finalText: string;
+  lastIteration: IterationIdentity;
+  messageCount: number;
+};
+
 export type AgentEventDataMap = {
   "session.started": SessionStartedData;
   "session.finished": SessionFinishedData;
   "turn.started": { userPrompt: string };
-  "turn.finished": { result: RunAgentResult };
+  "turn.finished": TurnFinishedData;
   "turn.failed": { error: string };
   "turn.cancelled": { cancellation: TurnCancellation };
   "agent.iteration.started": { iterationNumber: number };

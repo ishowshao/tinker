@@ -92,6 +92,22 @@ describe("runOneShot", () => {
       expect(jsonl).toContain('"type":"session.started"');
       expect(jsonl).toContain('"type":"tool.observation"');
       expect(jsonl).toContain('"type":"turn.finished"');
+      const events = jsonl
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const turnFinished = events.find((event) => event.type === "turn.finished");
+      const turnFinishedData = turnFinished?.data as
+        | Record<string, unknown>
+        | undefined;
+      expect(turnFinishedData).toMatchObject({
+        status: "completed",
+        finalText: "Created notes.txt with one line: hello.",
+        messageCount: 5,
+        lastIteration: { iterationNumber: 2 },
+      });
+      expect(turnFinishedData).not.toHaveProperty("result");
+      expect(JSON.stringify(turnFinished)).not.toContain('"messages"');
 
       const observations = await readFile(
         path.join(workspace, ".tinker", "sessions", "test-session", "observations.md"),

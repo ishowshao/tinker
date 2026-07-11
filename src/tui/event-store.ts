@@ -4,7 +4,6 @@ import {
   type BashDisplayDetail,
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
-import type { RunAgentResult } from "../agent/types";
 import type { ModelRequestOutput } from "../model/model-client";
 import type { ShellTaskSnapshot } from "../tools/bash-task";
 import { countPatchChanges } from "../tools/file-diff";
@@ -207,8 +206,8 @@ export function applyAgentEvent(state: TuiState, event: AgentEvent): TuiState {
         ...state,
         status: "done",
         workedForMs: turnDurationMs(state.turnStartedAt, event.timestamp),
-        finalText: finalText(event.data.result),
-        timeline: appendFinalTimelineItem(state, event.data.result),
+        finalText: event.data.finalText,
+        timeline: appendFinalTimelineItem(state, event.data.finalText),
       };
     case "turn.cancelled":
       return {
@@ -312,12 +311,8 @@ function updateLastTimelineItem(
   return timeline;
 }
 
-function appendFinalTimelineItem(
-  state: TuiState,
-  result: RunAgentResult,
-): TimelineItem[] {
-  const text = finalText(result);
-  if (text === undefined || text.trim() === "") {
+function appendFinalTimelineItem(state: TuiState, finalText: string): TimelineItem[] {
+  if (finalText.trim() === "") {
     return state.timeline;
   }
 
@@ -326,7 +321,7 @@ function appendFinalTimelineItem(
     {
       id: timelineId(state, "final"),
       label: "assistant",
-      text,
+      text: finalText,
       status: "text",
     },
   ];
@@ -596,10 +591,6 @@ function stringProperty(
   property: string,
 ): string | undefined {
   return typeof record[property] === "string" ? record[property] : undefined;
-}
-
-function finalText(result: RunAgentResult): string | undefined {
-  return result.status === "completed" ? result.finalText : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
