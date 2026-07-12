@@ -5,7 +5,6 @@ import {
 } from "../events/bash-result-detail";
 import type { AgentEvent } from "../events/types";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
-import type { ModelRequestOutput } from "../model/model-client";
 import type {
   ModelContextBudget,
   ModelContextProfile,
@@ -149,7 +148,13 @@ export function reduceTuiProjection(
       return updateActiveTurn(state, event, policy, (turn) =>
         updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
           ...item,
-          text: `model iteration ${event.iterationNumber}${modelRequestSummary(event.data.output)}`,
+          text: completedModelRequestText(
+            requireEventNumber(
+              event.iterationNumber,
+              "model.request.finished iterationNumber",
+            ),
+            event.data.output.message.toolCalls?.length ?? 0,
+          ),
           status: "ok",
         })),
       );
@@ -167,22 +172,15 @@ export function reduceTuiProjection(
         appendTurnItem(turn, {
           id: `tool-${event.toolCallId}`,
           ref: toolCallRef(event.data.call.toolCallId),
-          text: toolCallSummary(event.data.call),
           status: "running",
-          ...toolStartedBashDetail(event.data.call),
+          ...toolCallStartedProjection(event.data.call),
         }),
       );
     case "tool.raw_result":
       return updateActiveTurn(state, event, policy, (turn) =>
         updateTurnItem(turn, toolCallRef(event.data.call.toolCallId), (item) => ({
           ...item,
-          text: toolRawResultSummary(
-            event.data.call.name,
-            event.data.call.args,
-            event.data.raw,
-          ),
-          ...toolRawResultDiff(event.data.raw),
-          ...toolRawResultBashDetail(event.data.raw),
+          ...toolRawResultProjection(event.data.call, event.data.raw),
         })),
       );
     case "tool.finished":
@@ -563,12 +561,35 @@ function toolCallRef(callId: string): string {
   return `tool-call-${callId}`;
 }
 
-function modelRequestSummary(output: ModelRequestOutput): string {
-  const toolCalls = output.message.toolCalls ?? [];
-  if (toolCalls.length > 0) {
-    return ` -> ${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"}`;
+export function completedModelRequestText(
+  iterationNumber: number,
+  toolCallCount: number,
+): string {
+  if (toolCallCount > 0) {
+    return `model iteration ${iterationNumber} -> ${toolCallCount} tool call${toolCallCount === 1 ? "" : "s"}`;
   }
-  return " -> assistant response";
+  return `model iteration ${iterationNumber} -> assistant response`;
+}
+
+export function toolCallStartedProjection(input: {
+  name: string;
+  args: unknown;
+}): Pick<TimelineItem, "text" | "bash"> {
+  return {
+    text: toolCallSummary(input),
+    ...toolStartedBashDetail(input),
+  };
+}
+
+export function toolRawResultProjection(
+  input: { name: string; args: unknown },
+  raw: ToolRawResult,
+): Pick<TimelineItem, "text" | "bash" | "diff" | "diffTruncated"> {
+  return {
+    text: toolRawResultSummary(input.name, input.args, raw),
+    ...toolRawResultDiff(raw),
+    ...toolRawResultBashDetail(raw),
+  };
 }
 
 function toolCallSummary(input: { name: string; args: unknown }): string {

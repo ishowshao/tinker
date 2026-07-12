@@ -6,10 +6,16 @@ import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
 } from "../agent/runtime-session";
+import type { EventSink } from "../events/event-sink";
 import { runtimeIdFactory } from "../ids/runtime-id";
-import type { ModelRequestOutput, PreparedModelRequest } from "../model/model-client";
+import type {
+  ModelRequestOptions,
+  ModelRequestOutput,
+  PreparedModelRequest,
+} from "../model/model-client";
 import { ResumeProjectionReader } from "../session/resume-projection";
 import { SessionCatalog } from "../session/session-catalog";
+import { type TimelineItem, visibleTimelineItems } from "../tui/event-store";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import {
   collectingEventSink,
@@ -24,6 +30,43 @@ class ProjectionModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: "stored answer",
+    });
+  }
+}
+
+class BashProjectionModel extends TestModelClient {
+  private requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "provider-projection-bash",
+            name: "Bash",
+            args: {
+              command: "printf 'one\\ntwo\\nthree\\nfour\\nfive\\nsix\\n'",
+              description: "Print fixture output",
+            },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "stored answer after Bash",
     });
   }
 }
@@ -70,6 +113,7 @@ describe("session catalog and resume projection", () => {
       expect(projection.recentTurns).toHaveLength(1);
       expect(projection.recentTurns[0]?.items.map((item) => item.text)).toEqual([
         "catalog prompt",
+        "model iteration 1 -> assistant response",
         "stored answer",
       ]);
       expect(projection.backgroundTasks).toEqual([]);
@@ -89,11 +133,64 @@ describe("session catalog and resume projection", () => {
       await rm(workspace, { recursive: true });
     }
   });
+
+  test("reconstructs the same completed timeline presentation as the live TUI", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-projection-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const model = new BashProjectionModel();
+    const liveProjection = new TuiProjectionStore({
+      sessionId,
+      modelName: "test-model",
+      workspaceRoot: workspace,
+    });
+    try {
+      const session = await createRuntimeSession(
+        runtimeInput(workspace, sessionId, model, liveProjection),
+        { loadMcpConfig: async () => undefined },
+      );
+      await session.executeTurn({
+        userPrompt: "run the fixture",
+        signal: new AbortController().signal,
+      });
+      const liveItems = visibleTimelineItems(liveProjection.getSnapshot());
+      await session.dispose({ type: "tui_exit" });
+
+      const resumed = await ResumeProjectionReader.read({
+        workspaceRoot: workspace,
+        sessionId,
+        modelName: "test-model",
+      });
+      const resumedItems = visibleTimelineItems(resumed);
+
+      expect(resumedItems.map(displayShape)).toEqual(liveItems.map(displayShape));
+      expect(resumedItems.map((item) => item.text)).toEqual([
+        "run the fixture",
+        "model iteration 1 -> 1 tool call",
+        "Bash Print fixture output -> exit 0",
+        "model iteration 2 -> assistant response",
+        "stored answer after Bash",
+      ]);
+      expect(resumedItems[2]?.bash).toMatchObject({
+        command: "printf 'one\\ntwo\\nthree\\nfour\\nfive\\nsix\\n'",
+        outputPreview: ["two", "three", "four", "five", "six"],
+        omittedOutputLines: 1,
+      });
+      expect(resumedItems[2]?.bash?.outputFilePath).toContain(".tinker/bash/");
+      expect(resumedItems.some((item) => item.label === "Bash")).toBe(false);
+      expect(resumedItems.some((item) => item.text.includes("outputFilePath="))).toBe(
+        false,
+      );
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
 });
 
 function runtimeInput(
   workspaceRoot: string,
   sessionId: ReturnType<typeof runtimeIdFactory.createSessionId>,
+  modelClient: TestModelClient = new ProjectionModel(),
+  presentationSink: EventSink = collectingEventSink(),
 ): CreateRuntimeSessionInput {
   return {
     selection: { mode: "new", sessionId },
@@ -104,8 +201,19 @@ function runtimeInput(
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
     systemPrompt: "system",
-    modelClient: new ProjectionModel(),
-    presentationSinks: [collectingEventSink()],
+    modelClient,
+    presentationSinks: [presentationSink],
     persistence: false,
+  };
+}
+
+function displayShape(item: TimelineItem) {
+  return {
+    label: item.label,
+    text: item.text,
+    status: item.status,
+    bash: item.bash,
+    diff: item.diff,
+    diffTruncated: item.diffTruncated,
   };
 }

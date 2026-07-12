@@ -1417,7 +1417,9 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
       const toolCalls =
         row.tool_calls_json === null
           ? undefined
-          : decodeToolCalls(stringFromSql(row.tool_calls_json, "tool_calls_json"));
+          : decodeStoredToolCalls(
+              stringFromSql(row.tool_calls_json, "tool_calls_json"),
+            );
       return immutableRecord({
         ...base,
         role,
@@ -1467,7 +1469,7 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
   if (kind === "returned") {
     completion = immutableRecord({
       kind,
-      raw: decodeToolRawResult(
+      raw: decodeStoredToolRawResult(
         parseJson(stringFromSql(row.raw_json, "raw_json"), "raw_json"),
       ),
       rawSha256: stringFromSql(row.raw_sha256, "raw_sha256"),
@@ -1511,7 +1513,7 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
   });
 }
 
-function decodeToolCalls(json: string): readonly ToolCall[] {
+export function decodeStoredToolCalls(json: string): readonly ToolCall[] {
   const value = parseJson(json, "tool_calls_json");
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("tool_calls_json must contain a non-empty array.");
@@ -1573,7 +1575,7 @@ function decodeToolCalls(json: string): readonly ToolCall[] {
   return Object.freeze(calls);
 }
 
-function decodeToolRawResult(value: unknown): ToolRawResult {
+export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   const raw = recordFromSql(value, "tool raw result");
   enumFromSql(
     raw.kind,

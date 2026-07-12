@@ -1,6 +1,7 @@
 import path from "node:path";
 import { realpath } from "node:fs/promises";
 import { Database } from "bun:sqlite";
+import type { ToolCall } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
 import {
   assertMatchingContextBudget,
@@ -8,10 +9,13 @@ import {
   type ModelContextBudget,
   type ModelContextProfile,
 } from "../model/model-context-profile";
-import type {
-  TimelineItem,
-  TuiProjectionState,
-  TuiTurnProjection,
+import {
+  completedModelRequestText,
+  toolCallStartedProjection,
+  toolRawResultProjection,
+  type TimelineItem,
+  type TuiProjectionState,
+  type TuiTurnProjection,
 } from "../tui/event-store";
 import {
   defaultTuiProjectionPolicy,
@@ -20,6 +24,7 @@ import {
 } from "../tui/tui-projection-policy";
 import { SessionError } from "./session-errors";
 import { verifySessionSchema } from "./session-schema";
+import { decodeStoredToolCalls, decodeStoredToolRawResult } from "./session-store";
 
 export class ResumeProjectionReader {
   static async read(input: {
@@ -163,41 +168,83 @@ function projectTurn(
   const messages = database
     .query("SELECT * FROM messages WHERE turn_id = ? ORDER BY ordinal")
     .all(turnId) as Array<Record<string, unknown>>;
-  const allItems: TimelineItem[] = [];
+  const promptRows = messages.filter((message) => message.role === "user");
+  if (promptRows.length !== 1) {
+    throw new Error(
+      `Turn ${turnId} must contain exactly one user message; found ${promptRows.length}.`,
+    );
+  }
+  const prompt = promptRows[0];
+  if (prompt === undefined) {
+    throw new Error(`Turn ${turnId} user message disappeared.`);
+  }
+  const allItems: TimelineItem[] = [
+    {
+      id: `resume-${requireString(prompt.message_id, "message_id")}`,
+      label: "prompt",
+      text: boundedText(requireString(prompt.content, "user content")),
+      status: "text",
+    },
+  ];
+  const assistantsByIteration = new Map<string, Record<string, unknown>>();
   for (const message of messages) {
     const role = requireString(message.role, "message role");
-    const ordinal = safeNumber(message.ordinal, "ordinal");
-    const messageId = requireString(message.message_id, "message_id");
-    const content = typeof message.content === "string" ? message.content : "";
-    if (role === "user") {
-      allItems.push({
-        id: `resume-${messageId}`,
-        label: "prompt",
-        text: boundedText(content),
-        status: "text",
-      });
-    } else if (role === "assistant" && content.trim() !== "") {
-      allItems.push({
-        id: `resume-${messageId}`,
-        label: "assistant",
-        text: boundedText(content),
-        status: "text",
-      });
-    } else if (role === "tool") {
-      const origin = requireString(message.origin, "tool origin");
-      allItems.push({
-        id: `resume-${messageId}`,
-        label: requireString(message.name, "tool name"),
-        text: boundedText(content),
-        status:
-          origin === "runtime" && content.toLowerCase().includes("failed")
-            ? "failed"
-            : origin === "runtime"
-              ? "cancelled"
-              : "ok",
-        ref: `ordinal-${ordinal}`,
-      });
+    if (role !== "assistant") {
+      continue;
     }
+    const iterationId = requireString(message.iteration_id, "iteration_id");
+    if (assistantsByIteration.has(iterationId)) {
+      throw new Error(`Iteration ${iterationId} has multiple assistant messages.`);
+    }
+    assistantsByIteration.set(iterationId, message);
+  }
+
+  const toolResultsByCall = new Map<string, Record<string, unknown>>();
+  const resultRows = database
+    .query(
+      `SELECT tool_results.*,
+              messages.tool_call_id AS message_tool_call_id,
+              messages.iteration_id AS message_iteration_id,
+              messages.name AS message_tool_name
+       FROM tool_results
+       JOIN messages ON messages.message_id = tool_results.tool_message_id
+       WHERE messages.turn_id = ?`,
+    )
+    .all(turnId) as Array<Record<string, unknown>>;
+  for (const result of resultRows) {
+    const toolCallId = requireString(result.tool_call_id, "tool result call ID");
+    if (
+      requireString(result.message_tool_call_id, "tool message call ID") !== toolCallId
+    ) {
+      throw new Error(`Tool result ${toolCallId} does not match its tool message.`);
+    }
+    if (toolResultsByCall.has(toolCallId)) {
+      throw new Error(`Tool call ${toolCallId} has multiple stored results.`);
+    }
+    toolResultsByCall.set(toolCallId, result);
+  }
+
+  const iterations = database
+    .query("SELECT * FROM iterations WHERE turn_id = ? ORDER BY iteration_number")
+    .all(turnId) as Array<Record<string, unknown>>;
+  for (const iteration of iterations) {
+    allItems.push(
+      ...projectIteration(
+        iteration,
+        turnId,
+        turnNumber,
+        assistantsByIteration,
+        toolResultsByCall,
+      ),
+    );
+  }
+  if (assistantsByIteration.size > 0) {
+    throw new Error(
+      `Turn ${turnId} has assistant messages without matching iterations.`,
+    );
+  }
+  if (toolResultsByCall.size > 0) {
+    throw new Error(`Turn ${turnId} has tool results without matching calls.`);
   }
 
   if (status === "failed" || status === "interrupted") {
@@ -207,13 +254,6 @@ function projectTurn(
       label: status === "interrupted" ? "interrupted" : "error",
       text: detail,
       status: "failed",
-    });
-  } else if (status === "cancelled") {
-    allItems.push({
-      id: `resume-${turnId}-terminal`,
-      label: "cancelled",
-      text: "Turn was cancelled.",
-      status: "cancelled",
     });
   }
 
@@ -227,6 +267,221 @@ function projectTurn(
     items: limited.items,
     omittedItemCount: limited.omitted,
   };
+}
+
+function projectIteration(
+  row: Record<string, unknown>,
+  turnId: string,
+  turnNumber: number,
+  assistantsByIteration: Map<string, Record<string, unknown>>,
+  toolResultsByCall: Map<string, Record<string, unknown>>,
+): TimelineItem[] {
+  const iterationId = requireString(row.iteration_id, "iteration_id");
+  const iterationNumber = safeNumber(row.iteration_number, "iteration_number");
+  const outcome = enumValue(
+    row.outcome,
+    ["open", "continue", "completed", "failed", "cancelled", "interrupted"] as const,
+    "iteration outcome",
+  );
+  const assistant = assistantsByIteration.get(iterationId);
+  if (assistant === undefined) {
+    return [projectUnansweredIteration(iterationId, iterationNumber, outcome)];
+  }
+  assistantsByIteration.delete(iterationId);
+
+  const assistantMessageId = requireString(assistant.message_id, "message_id");
+  const content = nullableText(assistant.content, "assistant content") ?? "";
+  const toolCalls =
+    assistant.tool_calls_json === null
+      ? []
+      : decodeStoredToolCalls(
+          requireString(assistant.tool_calls_json, "tool_calls_json"),
+        );
+  const items: TimelineItem[] = [
+    {
+      id: `model-${iterationId}`,
+      ref: `model-request-${iterationId}`,
+      text: completedModelRequestText(iterationNumber, toolCalls.length),
+      status: "ok",
+    },
+  ];
+
+  if (toolCalls.length === 0) {
+    if (content.trim() !== "") {
+      items.push({
+        id: `resume-final-${assistantMessageId}`,
+        label: "assistant",
+        text: boundedText(content),
+        status: "text",
+      });
+    }
+    return items;
+  }
+
+  if (content.trim() !== "") {
+    items.push({
+      id: `resume-progress-${assistantMessageId}`,
+      label: "assistant",
+      text: boundedText(content.trim()),
+      status: "text",
+    });
+  }
+  for (const call of toolCalls) {
+    assertToolCallIdentity(call, turnId, turnNumber, iterationId, iterationNumber);
+    const result = toolResultsByCall.get(call.toolCallId);
+    if (result === undefined) {
+      throw new Error(`Tool call ${call.toolCallId} is missing its stored result.`);
+    }
+    toolResultsByCall.delete(call.toolCallId);
+    items.push(projectToolCall(call, result));
+  }
+  return items;
+}
+
+function projectUnansweredIteration(
+  iterationId: string,
+  iterationNumber: number,
+  outcome: "open" | "continue" | "completed" | "failed" | "cancelled" | "interrupted",
+): TimelineItem {
+  const base = {
+    id: `model-${iterationId}`,
+    ref: `model-request-${iterationId}`,
+  };
+  if (outcome === "failed") {
+    return {
+      ...base,
+      text: `model iteration ${iterationNumber} -> failed`,
+      status: "failed",
+    };
+  }
+  if (outcome === "cancelled") {
+    return {
+      ...base,
+      text: `model iteration ${iterationNumber} -> cancelled`,
+      status: "cancelled",
+    };
+  }
+  if (outcome === "interrupted") {
+    return {
+      ...base,
+      text: `model iteration ${iterationNumber} -> interrupted`,
+      status: "cancelled",
+    };
+  }
+  throw new Error(
+    `Iteration ${iterationId} has outcome ${outcome} without an assistant message.`,
+  );
+}
+
+function projectToolCall(
+  call: ToolCall,
+  result: Record<string, unknown>,
+): TimelineItem {
+  if (
+    requireString(result.message_iteration_id, "tool message iteration ID") !==
+    call.iterationId
+  ) {
+    throw new Error(`Tool result ${call.toolCallId} belongs to another iteration.`);
+  }
+  if (requireString(result.message_tool_name, "tool message name") !== call.name) {
+    throw new Error(`Tool result ${call.toolCallId} has a mismatched tool name.`);
+  }
+
+  const base = {
+    id: `tool-${call.toolCallId}`,
+    ref: `tool-call-${call.toolCallId}`,
+  };
+  const completionKind = enumValue(
+    result.completion_kind,
+    ["returned", "synthetic"] as const,
+    "tool completion kind",
+  );
+  if (completionKind === "returned") {
+    const raw = decodeStoredToolRawResult(
+      parseStoredJson(requireString(result.raw_json, "tool raw JSON"), "tool raw JSON"),
+    );
+    return {
+      ...base,
+      status: raw.ok ? "ok" : "failed",
+      ...toolRawResultProjection(call, raw),
+    };
+  }
+
+  const started = toolCallStartedProjection(call);
+  const reason = enumValue(
+    result.synthetic_reason,
+    [
+      "cancelled_active",
+      "skipped_after_cancel",
+      "failed_active",
+      "skipped_after_failure",
+      "interrupted_active",
+      "skipped_after_interruption",
+    ] as const,
+    "synthetic tool result reason",
+  );
+  const detail = nullableText(result.synthetic_detail, "synthetic detail");
+  switch (reason) {
+    case "cancelled_active":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> cancelled`,
+        status: "cancelled",
+      };
+    case "skipped_after_cancel":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> skipped after cancellation`,
+        status: "cancelled",
+      };
+    case "failed_active":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> failed${detail === null ? "" : `: ${boundedText(detail)}`}`,
+        status: "failed",
+      };
+    case "skipped_after_failure":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> skipped after earlier tool failure`,
+        status: "cancelled",
+      };
+    case "interrupted_active":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> interrupted`,
+        status: "cancelled",
+      };
+    case "skipped_after_interruption":
+      return {
+        ...base,
+        ...started,
+        text: `${started.text} -> skipped after interruption`,
+        status: "cancelled",
+      };
+  }
+}
+
+function assertToolCallIdentity(
+  call: ToolCall,
+  turnId: string,
+  turnNumber: number,
+  iterationId: string,
+  iterationNumber: number,
+): void {
+  if (
+    call.turnId !== turnId ||
+    call.turnNumber !== turnNumber ||
+    call.iterationId !== iterationId ||
+    call.iterationNumber !== iterationNumber
+  ) {
+    throw new Error(`Tool call ${call.toolCallId} has mismatched stored identity.`);
+  }
 }
 
 function limitItems(
@@ -303,6 +558,24 @@ function requireString(value: unknown, name: string): string {
     throw new Error(`${name} must be a non-empty string.`);
   }
   return value;
+}
+
+function nullableText(value: unknown, name: string): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${name} must be text or null.`);
+  }
+  return value;
+}
+
+function parseStoredJson(value: string, name: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch (error) {
+    throw new Error(`${name} must be valid JSON.`, { cause: error });
+  }
 }
 
 function objectValue(value: unknown, name: string): Record<string, unknown> {
