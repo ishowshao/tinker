@@ -147,6 +147,7 @@ export class ShellTaskManager {
       detached: true,
       env: {
         ...process.env,
+        NO_COLOR: "1",
         TINKER_BASH_COMMAND: input.command,
         TINKER_BASH_CWD_FILE: cwdFilePath,
       },

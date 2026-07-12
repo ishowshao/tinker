@@ -119,6 +119,27 @@ describe("Bash tool", () => {
     }
   });
 
+  test("disables color output by default for Bash child processes", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_1",
+          name: "Bash",
+          args: { command: 'printf "%s" "$NO_COLOR"' },
+        }),
+      );
+
+      expect(raw.ok).toBe(true);
+      expect(raw.status).toBe("completed");
+      expect(raw.preview).toBe("1");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("interprets informational exit codes as successful results", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
 
