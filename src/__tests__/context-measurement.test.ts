@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ContextMeter } from "../agent/context-meter";
+import { ContextMeter, type MeasuredContextAnchor } from "../agent/context-meter";
 import type {
   ModelRequestInput,
   ModelRequestOutput,
@@ -159,6 +159,80 @@ describe("token estimator", () => {
 });
 
 describe("ContextMeter", () => {
+  test("restores an exact measured anchor with zero delta", () => {
+    let persistedAnchor: MeasuredContextAnchor | undefined;
+    const original = new ContextMeter(TEST_CONTEXT_BUDGET, {
+      onMeasuredAnchor: (anchor) => {
+        persistedAnchor = anchor;
+      },
+    });
+    const firstInput: ModelRequestInput = {
+      messages: [
+        { role: "system", content: "kernel" },
+        { role: "user", content: "first" },
+      ],
+      tools: [],
+    };
+    const first = prepareTestModelRequest(firstInput);
+    original.measure(first);
+    const assistant = { role: "assistant" as const, content: "answer" };
+    const output = testModelOutput(first, assistant);
+    original.recordProviderUsage(first, output);
+    if (persistedAnchor === undefined) {
+      throw new Error("Expected a measured context anchor.");
+    }
+
+    const restoredRequest = prepareTestModelRequest({
+      messages: [...firstInput.messages, assistant],
+      tools: [],
+    });
+    const restored = new ContextMeter(TEST_CONTEXT_BUDGET);
+    expect(restored.restoreExactMeasuredAnchor(restoredRequest, persistedAnchor)).toBe(
+      true,
+    );
+    const snapshot = restored.measure(restoredRequest);
+    expect(snapshot).toMatchObject({
+      source: "measured_plus_estimated_delta",
+      usedInputTokens: output.usage.totalTokens,
+      rawDeltaTokens: 0,
+      guardedDeltaTokens: 0,
+      calibrationSampleCount: 0,
+      lastProviderUsage: output.usage,
+    });
+  });
+
+  test("rejects a restored anchor when the full prefix does not match", () => {
+    let persistedAnchor: MeasuredContextAnchor | undefined;
+    const original = new ContextMeter(TEST_CONTEXT_BUDGET, {
+      onMeasuredAnchor: (anchor) => {
+        persistedAnchor = anchor;
+      },
+    });
+    const first = prepareTestModelRequest({
+      messages: [{ role: "user", content: "original" }],
+      tools: [],
+    });
+    original.measure(first);
+    original.recordProviderUsage(
+      first,
+      testModelOutput(first, { role: "assistant", content: "answer" }),
+    );
+    if (persistedAnchor === undefined) {
+      throw new Error("Expected a measured context anchor.");
+    }
+
+    const changed = prepareTestModelRequest({
+      messages: [
+        { role: "user", content: "changed" },
+        { role: "assistant", content: "answer" },
+      ],
+      tools: [],
+    });
+    const restored = new ContextMeter(TEST_CONTEXT_BUDGET);
+    expect(restored.restoreExactMeasuredAnchor(changed, persistedAnchor)).toBe(false);
+    expect(restored.measure(changed).source).toBe("estimated_full");
+  });
+
   test("uses provider total as an append-only anchor and estimates only delta", () => {
     const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
     const firstInput: ModelRequestInput = {

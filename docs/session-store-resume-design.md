@@ -837,7 +837,8 @@ parse SessionId
   -> reload and full-validate closed canonical history
   -> restore identity counters
   -> build bounded TUI projection
-  -> F2 measure current full request
+  -> restore exact persisted measured anchor when the full request matches
+  -> otherwise F2 measure current full request
   -> append session.resumed + context usage events
   -> RuntimeSession ready
 ```

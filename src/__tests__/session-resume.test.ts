@@ -57,8 +57,18 @@ describe("RuntimeSession resume", () => {
         userPrompt: "second",
         signal: new AbortController().signal,
       });
+      const lastMeasured = [...sink.events]
+        .reverse()
+        .find(
+          (event) =>
+            event.type === "context.usage.updated" && event.data.phase === "measured",
+        );
+      if (lastMeasured?.type !== "context.usage.updated") {
+        throw new Error("Expected measured context usage before resume.");
+      }
       await session.dispose({ type: "tui_exit" });
 
+      const resumeEventStart = sink.events.length;
       session = await createRuntimeSession(
         sessionInput(workspace, sessionId, model, sink, "resume"),
         { loadMcpConfig: async () => undefined },
@@ -66,6 +76,22 @@ describe("RuntimeSession resume", () => {
       expect(session.resumed).toBe(true);
       expect(session.recovery.syntheticCompletionCount).toBe(0);
       expect(session.recovery.recallIndexRebuilt).toBe(false);
+      const resumedInitial = sink.events
+        .slice(resumeEventStart)
+        .find(
+          (event) =>
+            event.type === "context.usage.updated" && event.data.phase === "initial",
+        );
+      if (resumedInitial?.type !== "context.usage.updated") {
+        throw new Error("Expected initial context usage after resume.");
+      }
+      expect(resumedInitial.data.snapshot).toMatchObject({
+        source: "measured_plus_estimated_delta",
+        usedInputTokens: lastMeasured.data.snapshot.usedInputTokens,
+        rawDeltaTokens: 0,
+        guardedDeltaTokens: 0,
+        calibrationSampleCount: 0,
+      });
       await session.executeTurn({
         userPrompt: "third",
         signal: new AbortController().signal,

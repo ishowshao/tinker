@@ -8,7 +8,7 @@ import type { IterationIdentity, TurnIdentity } from "../agent/types";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
-  SESSION_SCHEMA_V2_FINGERPRINT,
+  SESSION_SCHEMA_V3_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   verifySessionSchema,
 } from "../session/session-schema";
@@ -34,7 +34,7 @@ describe("session schema identity", () => {
             schema_fingerprint: string;
           }
         ).schema_fingerprint,
-      ).toBe(SESSION_SCHEMA_V2_FINGERPRINT);
+      ).toBe(SESSION_SCHEMA_V3_FINGERPRINT);
       expect(
         database
           .query(
@@ -113,17 +113,19 @@ describe("session schema identity", () => {
     }
   });
 
-  test("rejects schema v1 without migration", () => {
-    const sessionId = runtimeIdFactory.createSessionId();
-    const database = new Database(":memory:");
-    try {
-      database.exec(`PRAGMA application_id = ${SESSION_APPLICATION_ID}`);
-      database.exec("PRAGMA user_version = 1");
-      const error = catchError(() => verifySessionSchema(database, sessionId));
-      expect(error).toBeInstanceOf(SessionError);
-      expect((error as SessionError).code).toBe("SESSION_SCHEMA_UNSUPPORTED");
-    } finally {
-      database.close();
+  test("rejects older schemas without migration", () => {
+    for (const version of [1, 2]) {
+      const sessionId = runtimeIdFactory.createSessionId();
+      const database = new Database(":memory:");
+      try {
+        database.exec(`PRAGMA application_id = ${SESSION_APPLICATION_ID}`);
+        database.exec(`PRAGMA user_version = ${version}`);
+        const error = catchError(() => verifySessionSchema(database, sessionId));
+        expect(error).toBeInstanceOf(SessionError);
+        expect((error as SessionError).code).toBe("SESSION_SCHEMA_UNSUPPORTED");
+      } finally {
+        database.close();
+      }
     }
   });
 

@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 2;
+export const SESSION_SCHEMA_VERSION = 3;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 3),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -205,6 +205,26 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     ) STRICT`,
   },
   {
+    type: "table",
+    name: "context_measurement_state",
+    sql: `CREATE TABLE context_measurement_state (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      session_id TEXT NOT NULL UNIQUE,
+      revision_id TEXT NOT NULL,
+      total_tokens INTEGER NOT NULL CHECK (total_tokens >= 0),
+      prompt_tokens INTEGER NOT NULL CHECK (prompt_tokens >= 0),
+      completion_tokens INTEGER NOT NULL CHECK (completion_tokens >= 0),
+      segment_count INTEGER NOT NULL CHECK (segment_count >= 0),
+      prefix_hash TEXT NOT NULL CHECK (length(prefix_hash) = 64),
+      request_config_hash TEXT NOT NULL CHECK (length(request_config_hash) = 64),
+      tool_schema_hash TEXT NOT NULL CHECK (length(tool_schema_hash) = 64),
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
+      FOREIGN KEY (revision_id) REFERENCES context_revisions(revision_id),
+      CHECK (total_tokens = prompt_tokens + completion_tokens)
+    ) STRICT`,
+  },
+  {
     type: "index",
     name: "idx_frames_session_ordinal",
     sql: "CREATE INDEX idx_frames_session_ordinal ON protocol_frames(session_id, first_ordinal)",
@@ -356,7 +376,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V2_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V3_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,

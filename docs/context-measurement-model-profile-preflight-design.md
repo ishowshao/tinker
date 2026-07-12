@@ -687,6 +687,9 @@ assistant 作为下一请求 input 时新增的 role/end framing，归入下一�
 `segmentCount` 与 `prefixHash`。不能直接把“本次请求输入末尾”的 hash 当作“下一请求
 measured base”的 hash。
 
+最新 measured anchor 在成功响应后立即写入 SessionStore 的
+`context_measurement_state`。只持久化 anchor，不持久化 rolling calibration samples。
+
 ### 10.2 Append-only 判定
 
 只有同时满足以下条件，才能使用 measured anchor：
@@ -714,7 +717,8 @@ projectedInputTokens
 - prefix 校验失败；
 - tool schema 或 request config 变化；
 - context 被重排、删除、替换或压缩；
-- 后续 `/resume`；
+- `/resume` 时没有持久化 anchor，或恢复后的完整 prepared request 与 anchor 的
+  `segmentCount`、`prefixHash`、request config、tool schema、active revision 任一不匹配；
 - 无法证明 anchor segments 是下一请求的完整前缀。
 
 公式：
@@ -724,6 +728,18 @@ projectedInputTokens = guardedFullRequestEstimate
 ```
 
 任何无法证明 append-only 的情况都走完整估值，不猜测 delta。
+
+`/resume` 只恢复完整请求精确匹配的 anchor。匹配成功时：
+
+```text
+currentSegmentCount = anchor.segmentCount
+currentPrefixHash = anchor.prefixHash
+guardedEstimatedDeltaTokens = 0
+projectedInputTokens = anchor.totalTokens
+```
+
+此时 source 仍为 `measured_plus_estimated_delta`，不伪装成当前进程刚收到的
+`provider_measured`。
 
 ### 10.4 ContextMeter 所有权
 

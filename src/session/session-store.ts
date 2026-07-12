@@ -46,6 +46,7 @@ import {
   type ToolResultRecord,
 } from "../context/protocol-frame";
 import type { IterationIdentity, ToolCall } from "../agent/types";
+import type { MeasuredContextAnchor } from "../agent/context-meter";
 import {
   InMemorySessionLedger,
   type LedgerMutation,
@@ -58,7 +59,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V2_FINGERPRINT,
+  SESSION_SCHEMA_V3_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -80,8 +81,8 @@ export type RuntimeContractV1 = {
   observationFormat: typeof TOOL_OBSERVATION_FORMAT;
 };
 
-export type StoredSessionMetaV2 = {
-  schemaVersion: 2;
+export type StoredSessionMetaV3 = {
+  schemaVersion: 3;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -108,13 +109,18 @@ export type StoredSessionMetaV2 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV2["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV3["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
   recoveredFrameId?: ProtocolFrameId;
   syntheticCompletionCount: number;
   recallIndexRebuilt: boolean;
+};
+
+type StoredMeasuredContextState = {
+  revisionId: ContextRevisionId;
+  anchor: MeasuredContextAnchor;
 };
 
 export type CreateNewSessionStoreInput = {
@@ -218,7 +224,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V2_FINGERPRINT,
+            SESSION_SCHEMA_V3_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -519,6 +525,68 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
+  writeMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {
+    this.requireOpen();
+    assertMeasuredContextAnchor(anchor);
+    const revisionId = this.readMeta().activeRevisionId;
+    const now = this.clock();
+    try {
+      runTransaction(this.database, () => {
+        const written = this.database
+          .query(
+            `INSERT INTO context_measurement_state (
+              singleton, session_id, revision_id, total_tokens, prompt_tokens,
+              completion_tokens, segment_count, prefix_hash, request_config_hash,
+              tool_schema_hash, updated_at
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(singleton) DO UPDATE SET
+              revision_id = excluded.revision_id,
+              total_tokens = excluded.total_tokens,
+              prompt_tokens = excluded.prompt_tokens,
+              completion_tokens = excluded.completion_tokens,
+              segment_count = excluded.segment_count,
+              prefix_hash = excluded.prefix_hash,
+              request_config_hash = excluded.request_config_hash,
+              tool_schema_hash = excluded.tool_schema_hash,
+              updated_at = excluded.updated_at
+            WHERE context_measurement_state.session_id = excluded.session_id`,
+          )
+          .run(
+            this.sessionId,
+            revisionId,
+            anchor.totalTokens,
+            anchor.promptTokens,
+            anchor.completionTokens,
+            anchor.segmentCount,
+            anchor.prefixHash,
+            anchor.requestConfigHash,
+            anchor.toolSchemaHash,
+            now,
+          );
+        requireSingleChange(
+          this.database,
+          written.changes,
+          "write measured context anchor",
+        );
+        this.touch(now);
+      });
+    } catch (error) {
+      throw sessionWriteError("write_context_measurement", this.sessionId, error);
+    }
+  }
+
+  readActiveMeasuredContextAnchor(): MeasuredContextAnchor | undefined {
+    this.requireOpen();
+    const state = this.loadMeasuredContextState();
+    if (state === undefined) {
+      return undefined;
+    }
+    if (state.revisionId !== this.readMeta().activeRevisionId) {
+      return undefined;
+    }
+    return state.anchor;
+  }
+
   markResumed(): number {
     this.requireOpen();
     const now = this.clock();
@@ -747,7 +815,7 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  readMeta(): StoredSessionMetaV2 {
+  readMeta(): StoredSessionMetaV3 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -769,7 +837,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V2_FINGERPRINT
+      meta.schemaFingerprint !== SESSION_SCHEMA_V3_FINGERPRINT
     ) {
       throw new SessionError(
         "SESSION_SCHEMA_INVALID",
@@ -785,6 +853,7 @@ export class SessionStore implements SessionLedgerCommitter {
         fullIntegrity: true,
       });
       this.validateInitialRevision(meta);
+      this.loadMeasuredContextState();
       this.validateCounters(meta, view);
     } catch (error) {
       if (error instanceof SessionError) {
@@ -1107,7 +1176,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateInitialRevision(meta: StoredSessionMetaV2): void {
+  private validateInitialRevision(meta: StoredSessionMetaV3): void {
     const rows = this.database.query("SELECT * FROM context_revisions").all() as Array<
       Record<string, unknown>
     >;
@@ -1126,7 +1195,20 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateCounters(meta: StoredSessionMetaV2, view: ProtocolContextView): void {
+  private loadMeasuredContextState(): StoredMeasuredContextState | undefined {
+    const rows = this.database.query("SELECT * FROM context_measurement_state").all();
+    if (rows.length > 1) {
+      throw new Error(
+        `Expected at most one context measurement row; found ${rows.length}.`,
+      );
+    }
+    const row = rows[0];
+    return row === undefined
+      ? undefined
+      : decodeMeasuredContextState(row, this.sessionId);
+  }
+
+  private validateCounters(meta: StoredSessionMetaV3, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -1675,14 +1757,54 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   return immutableCanonicalClone(raw) as ToolRawResult;
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV2 {
+function decodeMeasuredContextState(
+  value: unknown,
+  expectedSessionId: SessionId,
+): StoredMeasuredContextState {
+  const row = recordFromSql(value, "context measurement state");
+  const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
+  if (sessionId !== expectedSessionId) {
+    throw new Error(
+      `Context measurement session ID ${sessionId} does not match store.`,
+    );
+  }
+  const promptTokens = numberFromSql(row.prompt_tokens, "prompt_tokens");
+  const completionTokens = numberFromSql(row.completion_tokens, "completion_tokens");
+  const totalTokens = numberFromSql(row.total_tokens, "total_tokens");
+  if (totalTokens !== promptTokens + completionTokens) {
+    throw new Error(
+      "Context measurement total_tokens must equal prompt_tokens + completion_tokens.",
+    );
+  }
+  timestampFromSql(row.updated_at, "updated_at");
+  return Object.freeze({
+    revisionId: stringFromSql(row.revision_id, "revision_id") as ContextRevisionId,
+    anchor: Object.freeze({
+      totalTokens,
+      promptTokens,
+      completionTokens,
+      segmentCount: numberFromSql(row.segment_count, "segment_count"),
+      prefixHash: sha256FromSql(row.prefix_hash, "prefix_hash"),
+      requestConfigHash: sha256FromSql(row.request_config_hash, "request_config_hash"),
+      toolSchemaHash: sha256FromSql(row.tool_schema_hash, "tool_schema_hash"),
+    }),
+  });
+}
+
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV3 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
+  const schemaVersion = numberFromSql(row.schema_version, "schema_version");
+  if (schemaVersion !== 3) {
+    throw new Error(
+      `Session metadata schema version must be 3; received ${schemaVersion}.`,
+    );
+  }
   return {
-    schemaVersion: numberFromSql(row.schema_version, "schema_version") as 2,
+    schemaVersion,
     schemaFingerprint: stringFromSql(row.schema_fingerprint, "schema_fingerprint"),
     initializationState: enumFromSql(
       row.initialization_state,
@@ -2034,6 +2156,43 @@ function stringFromSql(value: unknown, name: string): string {
     throw new Error(`${name} must be a non-empty string.`);
   }
   return value;
+}
+
+function sha256FromSql(value: unknown, name: string): string {
+  const hash = stringFromSql(value, name);
+  if (!/^[0-9a-f]{64}$/.test(hash)) {
+    throw new Error(`${name} must be a lowercase SHA-256 digest.`);
+  }
+  return hash;
+}
+
+function assertMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {
+  for (const [name, value] of [
+    ["promptTokens", anchor.promptTokens],
+    ["completionTokens", anchor.completionTokens],
+    ["totalTokens", anchor.totalTokens],
+    ["segmentCount", anchor.segmentCount],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(
+        `Measured context anchor ${name} must be a non-negative safe integer; received ${value}.`,
+      );
+    }
+  }
+  if (anchor.totalTokens !== anchor.promptTokens + anchor.completionTokens) {
+    throw new Error(
+      "Measured context anchor totalTokens must equal promptTokens + completionTokens.",
+    );
+  }
+  for (const [name, value] of [
+    ["prefixHash", anchor.prefixHash],
+    ["requestConfigHash", anchor.requestConfigHash],
+    ["toolSchemaHash", anchor.toolSchemaHash],
+  ] as const) {
+    if (!/^[0-9a-f]{64}$/.test(value)) {
+      throw new Error(`Measured context anchor ${name} must be a SHA-256 digest.`);
+    }
+  }
 }
 
 function nullableStringFromSql(value: unknown, name: string): string | null {

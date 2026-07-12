@@ -190,7 +190,9 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.sessionId = input.selection.sessionId;
     this.resumed = input.selection.mode === "resume";
     this.nextTurnNumber = store.nextTurnNumber();
-    this.contextMeter = new ContextMeter(input.contextBudget);
+    this.contextMeter = new ContextMeter(input.contextBudget, {
+      onMeasuredAnchor: (anchor) => store.writeMeasuredContextAnchor(anchor),
+    });
     this.context = {
       sessionId: this.sessionId,
       createIteration: (turn, iterationNumber) =>
@@ -313,6 +315,15 @@ class DefaultRuntimeSession implements RuntimeSession {
       const initialPrepared = input.modelClient.prepare(
         session.requireLedger().buildCommittedModelRequest(definitions),
       );
+      if (input.selection.mode === "resume") {
+        const storedAnchor = store.readActiveMeasuredContextAnchor();
+        if (storedAnchor !== undefined) {
+          session.contextMeter.restoreExactMeasuredAnchor(
+            initialPrepared,
+            storedAnchor,
+          );
+        }
+      }
       const initialSnapshot = session.contextMeter.measure(initialPrepared);
       await session.append({
         type: "context.usage.updated",

@@ -389,6 +389,9 @@ page cache 已经提供底层缓存；再做对象缓存会增加长 session 常
 
 ## 七、Schema v2 与 FTS 派生索引
 
+> 本节记录 F5 当时从 v1 到 v2 的切换。后续 measured anchor 持久化已将当前实现一次性
+> 切换到 schema v3，并增加 `context_measurement_state`；v2 仍不迁移。
+
 ### 7.1 一次性 schema 切换
 
 F5 修改：

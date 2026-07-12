@@ -19,13 +19,13 @@ import {
 } from "../model/token-estimator";
 
 export type MeasuredContextAnchor = {
-  totalTokens: number;
-  promptTokens: number;
-  completionTokens: number;
-  segmentCount: number;
-  prefixHash: string;
-  requestConfigHash: string;
-  toolSchemaHash: string;
+  readonly totalTokens: number;
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly segmentCount: number;
+  readonly prefixHash: string;
+  readonly requestConfigHash: string;
+  readonly toolSchemaHash: string;
 };
 
 export type ContextUsageSnapshot = {
@@ -67,8 +67,43 @@ export class ContextMeter {
 
   constructor(
     private readonly budget: ModelContextBudget,
-    private readonly options: { enableAnchor?: boolean } = {},
+    private readonly options: {
+      enableAnchor?: boolean;
+      onMeasuredAnchor?: (anchor: MeasuredContextAnchor) => void;
+    } = {},
   ) {}
+
+  restoreExactMeasuredAnchor(
+    prepared: PreparedModelRequest,
+    anchor: MeasuredContextAnchor,
+  ): boolean {
+    this.requireMatchingOutputLimit(prepared);
+    this.refreshCalibrationIdentity(prepared);
+    assertMeasuredContextAnchor(anchor);
+
+    const prefixHashes = promptPrefixHashes(
+      prepared.requestConfigHash,
+      prepared.promptSegments,
+    );
+    if (
+      anchor.requestConfigHash !== prepared.requestConfigHash ||
+      anchor.toolSchemaHash !== prepared.toolSchemaHash ||
+      anchor.segmentCount !== prepared.promptSegments.length ||
+      anchor.prefixHash !== lastPrefixHash(prefixHashes)
+    ) {
+      this.anchor = undefined;
+      this.lastProviderUsage = undefined;
+      return false;
+    }
+
+    this.anchor = Object.freeze({ ...anchor });
+    this.lastProviderUsage = {
+      promptTokens: anchor.promptTokens,
+      completionTokens: anchor.completionTokens,
+      totalTokens: anchor.totalTokens,
+    };
+    return true;
+  }
 
   measure(prepared: PreparedModelRequest): ContextUsageSnapshot {
     this.requireMatchingOutputLimit(prepared);
@@ -143,7 +178,7 @@ export class ContextMeter {
       promptPrefixHashes(prepared.requestConfigHash, anchoredSegments),
     );
     if (this.options.enableAnchor !== false) {
-      this.anchor = {
+      const anchor = Object.freeze({
         totalTokens: output.usage.totalTokens,
         promptTokens: output.usage.promptTokens,
         completionTokens: output.usage.completionTokens,
@@ -151,7 +186,9 @@ export class ContextMeter {
         prefixHash,
         requestConfigHash: prepared.requestConfigHash,
         toolSchemaHash: prepared.toolSchemaHash,
-      };
+      });
+      this.anchor = anchor;
+      this.options.onMeasuredAnchor?.(anchor);
     }
 
     const usedInputTokens = output.usage.totalTokens;
@@ -249,4 +286,24 @@ function lastPrefixHash(hashes: readonly string[]): string {
     throw new Error("Prompt prefix hash chain is empty.");
   }
   return value;
+}
+
+function assertMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {
+  for (const [name, value] of [
+    ["promptTokens", anchor.promptTokens],
+    ["completionTokens", anchor.completionTokens],
+    ["totalTokens", anchor.totalTokens],
+    ["segmentCount", anchor.segmentCount],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(
+        `Measured context anchor ${name} must be a non-negative safe integer; received ${value}.`,
+      );
+    }
+  }
+  if (anchor.totalTokens !== anchor.promptTokens + anchor.completionTokens) {
+    throw new Error(
+      "Measured context anchor totalTokens must equal promptTokens + completionTokens.",
+    );
+  }
 }
