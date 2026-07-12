@@ -14,7 +14,7 @@ import type { SessionId } from "../ids/runtime-id";
 
 export const DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_MODEL = "deepseek-v4-flash";
-export const DEFAULT_MAX_ITERATIONS = 100;
+export const DEFAULT_MAX_ITERATIONS = 512;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
 
 export const SYSTEM_PROMPT = (

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readRunnerConfig, SYSTEM_PROMPT } from "../cli/config";
+import { DEFAULT_MAX_ITERATIONS, readRunnerConfig, SYSTEM_PROMPT } from "../cli/config";
 import { TEST_CONTEXT_PROFILE } from "./test-runtime";
 
 describe("runner config", () => {
@@ -116,6 +116,15 @@ describe("runner config", () => {
       expect(
         readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).maxIterations,
       ).toBe(7);
+    });
+  });
+
+  test("allows long-running turns by default", () => {
+    withEnv("TINKER_MAX_ITERATIONS", undefined, () => {
+      expect(DEFAULT_MAX_ITERATIONS).toBe(512);
+      expect(
+        readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).maxIterations,
+      ).toBe(512);
     });
   });
 
