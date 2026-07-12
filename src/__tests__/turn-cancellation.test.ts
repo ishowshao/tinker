@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
-import { InMemorySessionConversation } from "../agent/session-conversation";
+import { InMemorySessionLedger } from "../agent/session-ledger";
 import { cancellationError, TurnCancelledError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
@@ -22,6 +22,7 @@ import type { BashRawResult, ToolExecutor } from "../tools/types";
 import {
   createTestContextMeter,
   createTestRuntime,
+  deterministicIdFactory,
   TEST_CONTEXT_BUDGET,
   TestModelClient,
   testModelOutput,
@@ -159,10 +160,14 @@ describe("turn cancellation", () => {
     });
 
     try {
-      const conversation = new InMemorySessionConversation("system");
-      const pendingConversation = conversation.beginTurn("wait");
+      const ledger = new InMemorySessionLedger({
+        sessionId: runtimeSession.sessionId,
+        systemPrompt: "system",
+        idFactory: deterministicIdFactory("cancel-model"),
+      });
+      const pendingTurn = ledger.beginTurn({ turn, userPrompt: "wait" });
       const pending = runAgent({
-        conversation: pendingConversation.agent,
+        ledger: pendingTurn.agent,
         maxIterations: 2,
         model,
         contextMeter: createTestContextMeter(),
@@ -182,9 +187,9 @@ describe("turn cancellation", () => {
       expect(result.status === "cancelled" ? result.cancellation.phase : "").toBe(
         "model_request",
       );
-      expect(pendingConversation.projectedMessageCount()).toBe(2);
-      pendingConversation.commit();
-      expect(conversation.snapshot().at(-1)).toEqual({
+      expect(pendingTurn.projectedMessageCount()).toBe(2);
+      pendingTurn.finish(result);
+      expect(ledger.buildCommittedModelRequest([]).messages.at(-1)).toEqual({
         role: "user",
         content: "wait",
       });
@@ -262,10 +267,14 @@ describe("turn cancellation", () => {
     const identity = createTestRuntime(events);
     const runtimeSession = identity.runtimeSession;
     const turn = identity.turn;
-    const conversation = new InMemorySessionConversation("system");
-    const pendingConversation = conversation.beginTurn("run tools");
+    const ledger = new InMemorySessionLedger({
+      sessionId: runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("cancel-tools"),
+    });
+    const pendingTurn = ledger.beginTurn({ turn, userPrompt: "run tools" });
     const result = await runAgent({
-      conversation: pendingConversation.agent,
+      ledger: pendingTurn.agent,
       maxIterations: 2,
       model: new ToolBatchModel(),
       contextMeter: createTestContextMeter(),
@@ -279,8 +288,8 @@ describe("turn cancellation", () => {
 
     expect(result.status).toBe("cancelled");
     expect(thirdToolCalls).toBe(0);
-    pendingConversation.commit();
-    const messages = conversation.snapshot();
+    pendingTurn.finish(result);
+    const messages = ledger.buildCommittedModelRequest([]).messages;
     const toolMessages = messages.filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(3);
     expect(toolMessages[0]?.content).toContain("Read succeeded");

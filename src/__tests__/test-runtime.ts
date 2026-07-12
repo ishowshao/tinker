@@ -25,6 +25,9 @@ import type { AssistantMessage } from "../agent/types";
 import { ContextMeter } from "../agent/context-meter";
 import type {
   IterationId,
+  MessageId,
+  ProtocolFrameId,
+  ContextRevisionId,
   RuntimeIdFactory,
   SessionId,
   ToolCallId,
@@ -183,6 +186,13 @@ export function createTestRuntime(eventSink: EventSink = collectingEventSink()) 
         toolCallNumber,
       };
     },
+    finishIterationForContinuation(inputIteration) {
+      if (!knownIterations.has(inputIteration.iterationId)) {
+        throw new Error(
+          `Unknown or mismatched iteration identity: ${inputIteration.iterationId}.`,
+        );
+      }
+    },
     async append(input) {
       eventSequence += 1;
       await eventSink.append({
@@ -235,11 +245,18 @@ export function deterministicIdFactory(prefix = "test"): RuntimeIdFactory {
   let turn = 0;
   let iteration = 0;
   let toolCall = 0;
+  let message = 0;
+  let frame = 0;
+  let revision = 0;
   return {
     createSessionId: () => `${prefix}-session-${++session}` as SessionId,
     createTurnId: () => `${prefix}-turn-${++turn}` as TurnId,
     createIterationId: () => `${prefix}-iteration-${++iteration}` as IterationId,
     createToolCallId: () => `${prefix}-tool-call-${++toolCall}` as ToolCallId,
+    createMessageId: () => `${prefix}-message-${++message}` as MessageId,
+    createProtocolFrameId: () => `${prefix}-frame-${++frame}` as ProtocolFrameId,
+    createContextRevisionId: () =>
+      `${prefix}-revision-${++revision}` as ContextRevisionId,
   };
 }
 

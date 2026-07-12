@@ -11,9 +11,9 @@
 
 现在不应直接实施完整的「无限上下文」方案。
 
-Tinker 已经解决了后台任务管理、turn cancellation、运行身份和资源生命周期等问题，
-但长 session 的核心状态仍是内存中的 `AgentMessage[]`；TUI 仍保存无界事件和 timeline；
-context 还没有可靠的下一请求预算；持久化、协议帧、历史寻址和恢复也都尚未建立。
+Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
+preflight、协议安全账本和可恢复 SessionStore。当前未完成的关键地基是稳定历史来源与
+`Recall`；在它完成前仍不应直接开发自动 compaction。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -74,6 +74,8 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 工具结果契约 | 已完成 | `ToolRawResult` 已判别化，raw result 与模型 observation 分离 |
 | Provider 输出边界 | 已完成 | assistant message、tool call 和基础 token usage 会在 adapter 层校验与规范化 |
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
+| 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
+| SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -86,18 +88,12 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 | 能力 | 已有部分 | 仍缺少 |
 | --- | --- | --- |
-| 跨 turn 对话状态 | `RuntimeSession` 已拥有 `sessionMessages` | 仍只在内存；`RunAgentResult` 每轮返回完整消息数组 |
-| Context 构建边界 | 所有正常请求经过 `ContextBuilder` | 当前只是透传，没有预算、分项、revision 或 validator |
-| Token usage | `ModelUsage` 有 prompt/completion/total | 没有 cache hit/miss、model profile、下一请求估值和安全余量 |
-| Session 文件目录 | 已有 event log 和 observation log | 二者是诊断记录，不是可恢复 canonical history |
-| Tool-call 合法性 | 受控失败和取消会补齐 tool message | 没有显式 `ProtocolFrame`，也没有请求前全量 validator |
-| TUI 历史 | event 可投影成 timeline | `TuiEventStream.events` 和 timeline 都会随 session 无界增长 |
+| 稳定历史来源 | message 已有稳定 ID、正文和 hash | 还没有 `ctx://` source、精确 page-in 或用户可调用的 `Recall` |
+| Context revision | F4 有且仅有 `initial_full` revision | 尚未建立多 revision 编译、影子规划或 active view 切换 |
+| 历史检索 | canonical history 可从 SessionStore 严格读取 | 尚未建立 FTS、substring fallback 或 source-scoped reader |
 
 ### 3.3 尚未开始
 
-- 稳定 `MessageId`、不可变 canonical history 和 context revision。
-- `SessionStore`、single-writer lock、崩溃恢复和 `/resume`。
-- `/status`、Prompt Input context 状态栏和严格的请求 preflight。
 - `Recall`、session 内搜索和精确历史 page-in。
 - 确定性换出、结构化 checkpoint、`/compact` 和自动 compaction。
 
@@ -182,7 +178,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F3：建立协议安全的会话账本
 
-**状态：待实施；F2 已完成。**
+**状态：已完成（2026-07-12）。**
 
 详细设计见
 [`protocol-safe-session-ledger-design.md`](protocol-safe-session-ledger-design.md)。
@@ -210,7 +206,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F4：SessionStore v1 与 `/resume`
 
-**状态：待 F3 完成。**
+**状态：已完成（2026-07-12）。**
 
 详细设计见
 [`session-store-resume-design.md`](session-store-resume-design.md)。
@@ -243,7 +239,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F5：稳定来源与 `Recall`
 
-**状态：待 F4 完成。**
+**状态：待实施；F4 已完成。**
 
 任何历史被换出前，必须先证明原文能够被确定性找回。
 
@@ -348,6 +344,5 @@ swap-only。
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **F3：建立协议安全的会话账本**。F1、F2 已完成；在 F3
-完成 canonical history 与 protocol frame 契约前，不启动 SessionStore 或 compaction
-的实现。
+当前明确的下一项是 **F5：稳定来源与 `Recall`**。F1 至 F4 已完成；在 F5 证明历史可以
+按稳定 source 精确找回前，不启动 active revision 切换或 compaction。

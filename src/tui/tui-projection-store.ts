@@ -16,6 +16,7 @@ export type TuiProjectionStoreInput = {
   modelName: string;
   workspaceRoot: string;
   policy?: TuiProjectionPolicy;
+  initialSnapshot?: TuiProjectionState;
 };
 
 export class TuiProjectionStore implements EventSink {
@@ -28,7 +29,10 @@ export class TuiProjectionStore implements EventSink {
     this.policy = validateTuiProjectionPolicy(
       input.policy ?? defaultTuiProjectionPolicy,
     );
-    this.snapshot = createInitialTuiProjectionState(input);
+    this.snapshot =
+      input.initialSnapshot === undefined
+        ? createInitialTuiProjectionState(input)
+        : validateInitialSnapshot(input, input.initialSnapshot, this.policy);
   }
 
   readonly getSnapshot = (): TuiProjectionState => this.snapshot;
@@ -51,4 +55,69 @@ export class TuiProjectionStore implements EventSink {
       listener();
     }
   }
+
+  hydrate(snapshot: TuiProjectionState): void {
+    if (
+      this.snapshot.activeTurn !== undefined ||
+      this.snapshot.recentTurns.length !== 0 ||
+      this.snapshot.notices.length !== 0
+    ) {
+      throw new Error("TUI projection can only be hydrated before live events.");
+    }
+    this.snapshot = validateInitialSnapshot(
+      {
+        sessionId: this.snapshot.sessionId,
+        modelName: this.snapshot.modelName,
+        workspaceRoot: this.snapshot.workspaceRoot,
+      },
+      snapshot,
+      this.policy,
+    );
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+}
+
+function validateInitialSnapshot(
+  input: Pick<TuiProjectionStoreInput, "sessionId" | "modelName" | "workspaceRoot">,
+  snapshot: TuiProjectionState,
+  policy: TuiProjectionPolicy,
+): TuiProjectionState {
+  if (
+    snapshot.sessionId !== input.sessionId ||
+    snapshot.modelName !== input.modelName ||
+    snapshot.workspaceRoot !== input.workspaceRoot
+  ) {
+    throw new Error("Hydrated TUI projection identity does not match its store.");
+  }
+  if (
+    snapshot.activeTurn !== undefined ||
+    snapshot.status === "running" ||
+    snapshot.backgroundTasks.length !== 0
+  ) {
+    throw new Error("Hydrated TUI projection must be terminal and have no tasks.");
+  }
+  if (
+    snapshot.recentTurns.length > policy.recentTurnLimit ||
+    snapshot.notices.length > policy.sessionNoticeLimit ||
+    snapshot.recentTurns.some(
+      (turn) =>
+        turn.status === "running" || turn.items.length > policy.itemLimitPerTurn,
+    )
+  ) {
+    throw new Error("Hydrated TUI projection exceeds its bounded policy.");
+  }
+  return Object.freeze({
+    ...snapshot,
+    recentTurns: Object.freeze(
+      snapshot.recentTurns.map((turn) =>
+        Object.freeze({ ...turn, items: Object.freeze([...turn.items]) }),
+      ),
+    ) as unknown as TuiProjectionState["recentTurns"],
+    notices: Object.freeze([
+      ...snapshot.notices,
+    ]) as unknown as TuiProjectionState["notices"],
+    backgroundTasks: [],
+  });
 }

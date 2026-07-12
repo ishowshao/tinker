@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   findSlashCommand,
   matchSlashCommands,
+  parseSlashCommand,
   SLASH_COMMANDS,
   type SlashCommand,
 } from "../tui/slash-commands";
+import { runtimeIdFactory } from "../ids/runtime-id";
 
 const commands: readonly SlashCommand[] = [
   { name: "quit", description: "Exit the TUI" },
@@ -59,5 +61,28 @@ describe("findSlashCommand", () => {
   test("returns undefined without a leading slash or for a bare slash", () => {
     expect(findSlashCommand("quit", commands)).toBeUndefined();
     expect(findSlashCommand("/", commands)).toBeUndefined();
+  });
+});
+
+describe("parseSlashCommand", () => {
+  test("parses resume list, resume target, and confirmed deletion", () => {
+    const sessionId = runtimeIdFactory.createSessionId();
+    expect(parseSlashCommand("/resume")).toEqual({ type: "resume_list" });
+    expect(parseSlashCommand(`/resume ${sessionId}`)).toEqual({
+      type: "resume",
+      sessionId,
+    });
+    expect(parseSlashCommand(`/session delete ${sessionId} --confirm`)).toEqual({
+      type: "session_delete",
+      sessionId,
+    });
+  });
+
+  test("rejects invalid IDs, extra arguments, and missing confirmation", () => {
+    expect(() => parseSlashCommand("/resume not-an-id")).toThrow("Invalid session ID");
+    expect(() => parseSlashCommand("/resume a b")).toThrow("Usage: /resume");
+    expect(() => parseSlashCommand("/session delete x")).toThrow(
+      "Usage: /session delete",
+    );
   });
 });

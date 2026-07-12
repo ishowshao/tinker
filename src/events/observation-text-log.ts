@@ -1,9 +1,8 @@
-import path from "node:path";
-import { appendFile, mkdir } from "node:fs/promises";
 import type { ToolCall } from "../agent/types";
 import type { ToolObservation } from "../observation/observation-builder";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent, TurnFinishedData } from "./types";
+import { appendPrivateFile } from "./append-private-file";
 
 export class ObservationTextLog implements EventSink {
   readonly name = "observation-text-log";
@@ -16,8 +15,7 @@ export class ObservationTextLog implements EventSink {
       return;
     }
 
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await appendFile(this.filePath, text, "utf8");
+    await appendPrivateFile(this.filePath, text);
   }
 }
 
@@ -25,6 +23,15 @@ function renderObservationLogBlock(event: AgentEvent): string | undefined {
   switch (event.type) {
     case "session.started":
       return renderSessionStarted(event);
+    case "session.resumed":
+      return [
+        "---",
+        "",
+        `Resumed: ${event.timestamp}`,
+        `Open count: ${event.data.openCount}`,
+        `Recovered synthetic completions: ${event.data.syntheticCompletionCount}`,
+        "",
+      ].join("\n");
     case "turn.started":
       return renderTurnStarted(event);
     case "assistant.progress":

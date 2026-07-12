@@ -3,11 +3,39 @@
 ## 文档状态
 
 - 日期：2026-07-12
-- 状态：待 F3 完成后实施
-- 前置阶段：F1、F2 已完成；F3
-  [协议安全的会话账本](protocol-safe-session-ledger-design.md) 已完成设计、待实施
+- 状态：已实施（2026-07-12，与 F3 同批完成）
+- 前置阶段：F1、F2、F3 已完成
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
 - 后续阶段：F5 稳定来源与 `Recall`
+
+## 实施结果（2026-07-12）
+
+F4 已按本文完成，生产 `RuntimeSession` 只绑定每 session 一个
+`SqliteSessionLedger`，SQLite 写失败时不会回退到内存或 JSONL。
+
+主要落点：
+
+- `src/session/session-schema.ts`：STRICT schema v1、application ID、user version、schema
+  fingerprint、immutable/monotonic triggers 与 integrity check；
+- `src/session/session-store.ts`：store-first new/resume、短 `BEGIN IMMEDIATE`
+  transaction、持久化 counters、runtime contract、open turn/frame recovery、权限与 dispose；
+- `src/session/session-lock.ts`：exclusive lease、active owner 检查、stale reclaim 和
+  compare-before-release；
+- `src/session/sqlite-session-ledger.ts`：把 F3 mutation 原样映射到 SQLite transaction；
+- `src/session/session-catalog.ts`、`src/session/resume-projection.ts`：只读摘要、安全删除与
+  有界 TUI hydration，不 replay event log；
+- `src/tui/tui-session-controller.ts`、`src/tui/slash-commands.ts`：`/resume`、
+  `/resume <session-id>`、`/session delete <session-id> --confirm` 与 target-first switch。
+
+当前实现只在 active turn 生命周期内保留 transaction 成功后才更新的不可变 staging
+core；turn terminal 后立即释放，空闲 session 不长期缓存完整 history。每次新 turn 从
+`session.sqlite` 严格加载，数据库仍是唯一 durable source of truth；这不是 SQLite 与内存
+双写，也没有 memory fallback。
+
+验证覆盖 schema/fingerprint/permission corruption、canonical round-trip、持久化 counters、
+runtime mismatch、open-frame deterministic recovery、catalog/projection/delete、真实子进程
+lock conflict 与 `SIGKILL` stale reclaim。真实 PTY 还验证了 one-shot session 可由 TUI
+列出、切换、恢复 timeline/context、继续下一 turn，再次正常退出。
 
 ## 一、结论先行
 

@@ -33,7 +33,7 @@ export type TimelineItem = {
 export type TuiTurnProjection = {
   turnId: string;
   turnNumber: number;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "completed" | "failed" | "cancelled" | "interrupted";
   startedAt: string;
   workedForMs?: number;
   items: TimelineItem[];
@@ -96,6 +96,9 @@ export function reduceTuiProjection(
         contextProfile: event.data.contextProfile,
         contextBudget: event.data.contextBudget,
       };
+    case "session.resumed":
+    case "session.interrupted_frame_recovered":
+      return state;
     case "context.usage.updated":
       return { ...state, contextUsage: event.data.snapshot };
     case "turn.started": {

@@ -18,13 +18,18 @@ import {
   type ModelContextProfile,
 } from "../model/model-context-profile";
 import { ObservationBuilder } from "../observation/observation-builder";
+import { ContextProtocolError } from "../context/context-protocol-validator";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
-import { runAgent } from "./loop";
 import {
-  InMemorySessionConversation,
-  type SessionConversation,
-} from "./session-conversation";
+  SessionStore,
+  createRuntimeContract,
+  type SessionRecoveryResult,
+} from "../session/session-store";
+import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
+import { SessionError } from "../session/session-errors";
+import { runAgent } from "./loop";
+import { SessionLedgerWriteError, type SessionLedger } from "./session-ledger";
 import { TurnCancelledError } from "./turn-cancellation";
 import type {
   IterationIdentity,
@@ -42,12 +47,16 @@ export type ExecuteTurnInput = {
 export type SessionDisposeReason =
   | { type: "oneshot_complete" }
   | { type: "tui_exit" }
+  | { type: "session_switch" }
   | { type: "runner_failed"; error: string }
   | { type: "initialization_failed"; error: string };
 
 export type RuntimeSession = {
   readonly sessionId: SessionId;
+  readonly resumed: boolean;
+  readonly recovery: SessionRecoveryResult;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
+  canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
 
@@ -58,11 +67,12 @@ export type RuntimeSessionContext = {
     iteration: IterationIdentity,
     toolCallNumber: number,
   ): ToolCallIdentity;
+  finishIterationForContinuation(iteration: IterationIdentity): void;
   append(input: AgentEventInput): Promise<void>;
 };
 
 export type CreateRuntimeSessionInput = {
-  sessionId: SessionId;
+  selection: RuntimeSessionSelection;
   workspaceRoot: string;
   modelName: string;
   maxIterations: number;
@@ -81,13 +91,21 @@ export type CreateRuntimeSessionInput = {
   webFetchRefiner?: Refiner;
 };
 
+export type RuntimeSessionSelection =
+  | { mode: "new"; sessionId: SessionId }
+  | { mode: "resume"; sessionId: SessionId };
+
 export type RuntimeSessionFactoryDependencies = {
   idFactory: RuntimeIdFactory;
   createTooling: typeof createDefaultTooling;
   loadMcpConfig: typeof loadMcpConfig;
   createMcpManager: typeof createMcpManager;
   createObservationBuilder: () => ObservationBuilder;
-  createConversation: (systemPrompt: string) => SessionConversation;
+  openStore: (
+    input: CreateRuntimeSessionInput,
+    idFactory: RuntimeIdFactory,
+  ) => Promise<SessionStore>;
+  createLedger: (store: SessionStore, idFactory: RuntimeIdFactory) => SessionLedger;
   createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
 };
 
@@ -120,15 +138,29 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   loadMcpConfig,
   createMcpManager,
   createObservationBuilder: () => new ObservationBuilder(),
-  createConversation: (systemPrompt) => new InMemorySessionConversation(systemPrompt),
+  openStore: (input, idFactory) =>
+    input.selection.mode === "new"
+      ? SessionStore.createNew({
+          workspaceRoot: input.workspaceRoot,
+          sessionId: input.selection.sessionId,
+          modelName: input.modelName,
+          systemPrompt: input.systemPrompt,
+          idFactory,
+        })
+      : SessionStore.openExisting({
+          workspaceRoot: input.workspaceRoot,
+          sessionId: input.selection.sessionId,
+        }),
+  createLedger: (store, idFactory) => new SqliteSessionLedger(store, idFactory),
   createEventSink,
 };
 
 class DefaultRuntimeSession implements RuntimeSession {
   readonly sessionId: SessionId;
+  readonly resumed: boolean;
+  recovery: SessionRecoveryResult = { syntheticCompletionCount: 0 };
   private state: RuntimeSessionState = "initializing";
-  private eventSequence = 0;
-  private nextTurnNumber = 1;
+  private nextTurnNumber: number;
   private readonly turns = new Map<string, TurnIdentity>();
   private readonly iterations = new Map<string, IterationIdentity>();
   private readonly toolCalls = new Map<string, ToolCallIdentity>();
@@ -137,9 +169,10 @@ class DefaultRuntimeSession implements RuntimeSession {
   private eventTail: Promise<void> = Promise.resolve();
   private tooling?: DefaultTooling;
   private mcpManager?: McpManager;
+  private ledger?: SessionLedger;
   private activeTurn?: ActiveTurn;
   private disposePromise?: Promise<void>;
-  private faultCause?: RuntimeEventAppendError;
+  private faultCause?: unknown;
   private readonly contextMeter: ContextMeter;
 
   private readonly context: RuntimeSessionContext;
@@ -149,9 +182,11 @@ class DefaultRuntimeSession implements RuntimeSession {
     private readonly dependencies: RuntimeSessionFactoryDependencies,
     private readonly eventSink: EventSink,
     private readonly observationBuilder: ObservationBuilder,
-    private readonly conversation: SessionConversation,
+    private readonly store: SessionStore,
   ) {
-    this.sessionId = input.sessionId;
+    this.sessionId = input.selection.sessionId;
+    this.resumed = input.selection.mode === "resume";
+    this.nextTurnNumber = store.nextTurnNumber();
     this.contextMeter = new ContextMeter(input.contextBudget);
     this.context = {
       sessionId: this.sessionId,
@@ -159,6 +194,8 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.createIteration(turn, iterationNumber),
       createToolCall: (iteration, toolCallNumber) =>
         this.createToolCall(iteration, toolCallNumber),
+      finishIterationForContinuation: (iteration) =>
+        this.finishIterationForContinuation(iteration),
       append: (event) => this.append(event),
     };
   }
@@ -168,29 +205,44 @@ class DefaultRuntimeSession implements RuntimeSession {
     dependencies: RuntimeSessionFactoryDependencies,
   ): Promise<RuntimeSession> {
     validateCreateInput(input);
-    const session = new DefaultRuntimeSession(
-      input,
-      dependencies,
-      dependencies.createEventSink(input),
-      dependencies.createObservationBuilder(),
-      dependencies.createConversation(input.systemPrompt),
-    );
+    const store = await dependencies.openStore(input, dependencies.idFactory);
+    let session: DefaultRuntimeSession;
+    try {
+      session = new DefaultRuntimeSession(
+        input,
+        dependencies,
+        dependencies.createEventSink(input),
+        dependencies.createObservationBuilder(),
+        store,
+      );
+    } catch (error) {
+      if (input.selection.mode === "new") {
+        await store
+          .deleteFromDisk()
+          .catch(() => store.abandon().catch(() => undefined));
+      } else {
+        await store.abandon().catch(() => undefined);
+      }
+      throw error;
+    }
     let started = false;
 
     try {
-      await session.append({
-        type: "session.started",
-        sessionId: session.sessionId,
-        data: {
-          workspaceRoot: input.workspaceRoot,
-          model: input.modelName,
-          maxIterations: input.maxIterations,
-          includeReasoningContent: input.includeReasoningContent,
-          contextProfile: input.contextProfile,
-          contextBudget: input.contextBudget,
-        },
-      });
-      started = true;
+      if (input.selection.mode === "new") {
+        await session.append({
+          type: "session.started",
+          sessionId: session.sessionId,
+          data: {
+            workspaceRoot: store.workspaceRoot,
+            model: input.modelName,
+            maxIterations: input.maxIterations,
+            includeReasoningContent: input.includeReasoningContent,
+            contextProfile: input.contextProfile,
+            contextBudget: input.contextBudget,
+          },
+        });
+        started = true;
+      }
 
       session.tooling = dependencies.createTooling({
         workspaceRoot: input.workspaceRoot,
@@ -209,10 +261,53 @@ class DefaultRuntimeSession implements RuntimeSession {
         }
       }
 
+      const definitions = session.requireTooling().registry.definitions();
+      const contractPrepared = input.modelClient.prepare({
+        messages: [{ role: "system", content: input.systemPrompt }],
+        tools: definitions,
+      });
+      const runtimeContract = createRuntimeContract({
+        modelName: input.modelName,
+        includeReasoningContent: input.includeReasoningContent,
+        contextProfile: input.contextProfile,
+        contextBudget: input.contextBudget,
+        systemPrompt: input.systemPrompt,
+        toolSchemaSha256: contractPrepared.toolSchemaHash,
+        requestConfigSha256: contractPrepared.requestConfigHash,
+      });
+      if (input.selection.mode === "new") {
+        store.finalizeRuntimeContract(runtimeContract);
+      } else {
+        store.assertRuntimeContract(runtimeContract);
+        session.recovery = store.recoverInterruptedState(dependencies.idFactory);
+        const openCount = store.markResumed();
+        if (
+          session.recovery.recoveredTurnId !== undefined &&
+          session.recovery.recoveredFrameId !== undefined
+        ) {
+          await session.append({
+            type: "session.interrupted_frame_recovered",
+            sessionId: session.sessionId,
+            data: {
+              turnId: session.recovery.recoveredTurnId,
+              frameId: session.recovery.recoveredFrameId,
+              syntheticCompletionCount: session.recovery.syntheticCompletionCount,
+            },
+          });
+        }
+        await session.append({
+          type: "session.resumed",
+          sessionId: session.sessionId,
+          data: {
+            openCount,
+            ...session.recovery,
+          },
+        });
+      }
+
+      session.ledger = dependencies.createLedger(store, dependencies.idFactory);
       const initialPrepared = input.modelClient.prepare(
-        session.conversation.buildCommittedModelRequest(
-          session.requireTooling().registry.definitions(),
-        ),
+        session.requireLedger().buildCommittedModelRequest(definitions),
       );
       const initialSnapshot = session.contextMeter.measure(initialPrepared);
       await session.append({
@@ -239,24 +334,42 @@ class DefaultRuntimeSession implements RuntimeSession {
       throw new Error("Cannot execute concurrent turns in one RuntimeSession.");
     }
 
-    const admissionPrepared = this.input.modelClient.prepare(
-      this.conversation.buildCandidateModelRequest(
-        input.userPrompt,
-        this.requireTooling().registry.definitions(),
-      ),
-    );
+    let admissionPrepared;
+    try {
+      admissionPrepared = this.input.modelClient.prepare(
+        this.requireLedger().buildCandidateModelRequest(
+          input.userPrompt,
+          this.requireTooling().registry.definitions(),
+        ),
+      );
+    } catch (error) {
+      if (isCanonicalRuntimeFault(error)) {
+        this.fault(error);
+      }
+      throw error;
+    }
     const admissionSnapshot = this.contextMeter.measure(admissionPrepared);
     this.contextMeter.assertWithinBudget(admissionSnapshot);
 
     const controller = new AbortController();
     const removeExternalAbortListener = forwardExternalAbort(input.signal, controller);
-    const turn = this.createTurn(input.userPrompt);
-    const pendingConversation = this.conversation.beginTurn(input.userPrompt);
+    const turn = this.stageTurn(input.userPrompt);
+    let pendingLedgerTurn;
+    try {
+      pendingLedgerTurn = this.requireLedger().beginTurn({
+        turn,
+        userPrompt: input.userPrompt,
+      });
+      this.registerTurn(turn);
+    } catch (error) {
+      this.fault(error);
+      throw error;
+    }
     this.state = "executing";
     const completion = this.performExecuteTurn(
       input.userPrompt,
       turn,
-      pendingConversation,
+      pendingLedgerTurn,
       controller.signal,
       removeExternalAbortListener,
     );
@@ -269,14 +382,25 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.disposePromise;
   }
 
+  canSwitchSession(): boolean {
+    return (
+      this.state === "ready" &&
+      this.activeTurn === undefined &&
+      (this.tooling?.taskManager
+        .listBackgroundTasks()
+        .every((task) => task.status !== "running" && task.status !== "stopping") ??
+        true)
+    );
+  }
+
   private async performExecuteTurn(
     userPrompt: string,
     turn: TurnIdentity,
-    pendingConversation: ReturnType<SessionConversation["beginTurn"]>,
+    pendingLedgerTurn: ReturnType<SessionLedger["beginTurn"]>,
     signal: AbortSignal,
     removeExternalAbortListener: () => void,
   ): Promise<RunAgentResult> {
-    let terminalAttempted = false;
+    let settled = false;
 
     try {
       await this.append({
@@ -288,7 +412,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       let result: RunAgentResult;
       try {
         result = await runAgent({
-          conversation: pendingConversation.agent,
+          ledger: pendingLedgerTurn.agent,
           maxIterations: this.input.maxIterations,
           model: this.input.modelClient,
           contextMeter: this.contextMeter,
@@ -304,7 +428,6 @@ class DefaultRuntimeSession implements RuntimeSession {
           throw error;
         }
 
-        terminalAttempted = true;
         await this.append({
           type: "turn.failed",
           ...turn,
@@ -313,22 +436,16 @@ class DefaultRuntimeSession implements RuntimeSession {
         throw error;
       }
 
-      const projectedMessageCount = pendingConversation.projectedMessageCount();
-      terminalAttempted = true;
+      const projectedMessageCount = pendingLedgerTurn.projectedMessageCount();
       await this.appendTerminalEvent(turn, result, projectedMessageCount);
-      pendingConversation.commit();
+      pendingLedgerTurn.finish(result);
+      settled = true;
       return result;
     } catch (error) {
-      pendingConversation.discard();
-      if (error instanceof RuntimeEventAppendError || terminalAttempted) {
-        throw error;
+      if (!settled) {
+        pendingLedgerTurn.fault(error);
       }
-
-      await this.append({
-        type: "turn.failed",
-        ...turn,
-        data: { error: errorMessage(error) },
-      });
+      this.fault(error);
       throw error;
     } finally {
       removeExternalAbortListener();
@@ -407,6 +524,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         },
       }),
     );
+    await collectError(errors, () => this.store.close(reason.type));
 
     this.state = "disposed";
     throwCollectedErrors(errors, "RuntimeSession disposal failed.");
@@ -437,13 +555,31 @@ class DefaultRuntimeSession implements RuntimeSession {
         }),
       );
     }
+    await collectError(errors, async () => {
+      let meta;
+      try {
+        meta = this.store.readMeta();
+      } catch (error) {
+        await this.store.abandon().catch(() => undefined);
+        throw error;
+      }
+      if (
+        this.input.selection.mode === "new" &&
+        meta.initializationState === "creating" &&
+        meta.nextTurnNumber === 1
+      ) {
+        await this.store.deleteFromDisk();
+        return;
+      }
+      await this.store.close("initialization_failed");
+    });
 
     this.state = "disposed";
     throwCollectedErrors(errors, "RuntimeSession initialization failed.");
     throw new Error("Initialization error collection unexpectedly returned.");
   }
 
-  private createTurn(userPrompt: string): TurnIdentity {
+  private stageTurn(userPrompt: string): TurnIdentity {
     if (userPrompt.trim() === "") {
       throw new Error("Cannot create an AgentTurn for an empty prompt.");
     }
@@ -453,10 +589,18 @@ class DefaultRuntimeSession implements RuntimeSession {
       turnId: this.dependencies.idFactory.createTurnId(),
       turnNumber: this.nextTurnNumber,
     };
+    return identity;
+  }
+
+  private registerTurn(identity: TurnIdentity): void {
+    if (identity.turnNumber !== this.nextTurnNumber) {
+      throw new Error(
+        `turnNumber must be ${this.nextTurnNumber}; received ${identity.turnNumber}.`,
+      );
+    }
     this.nextTurnNumber += 1;
     this.turns.set(identity.turnId, identity);
     this.nextIterationNumberByTurn.set(identity.turnId, 1);
-    return identity;
   }
 
   private createIteration(
@@ -477,6 +621,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       iterationId: this.dependencies.idFactory.createIterationId(),
       iterationNumber,
     };
+    this.store.beginIteration(identity);
     this.iterations.set(identity.iterationId, identity);
     this.nextIterationNumberByTurn.set(turn.turnId, iterationNumber + 1);
     this.nextToolCallNumberByIteration.set(identity.iterationId, 1);
@@ -506,18 +651,29 @@ class DefaultRuntimeSession implements RuntimeSession {
     return identity;
   }
 
+  private finishIterationForContinuation(iteration: IterationIdentity): void {
+    this.requireIteration(iteration);
+    this.store.finishIterationForContinuation(iteration);
+  }
+
   private append(input: AgentEventInput): Promise<void> {
     if (this.state === "disposed") {
       throw new Error("Cannot append events after RuntimeSession is disposed.");
     }
 
     this.validateEventIdentity(input);
+    let eventSequence: number;
+    try {
+      eventSequence = this.store.allocateEventSequence();
+    } catch (error) {
+      this.fault(error);
+      throw error;
+    }
     const event: AgentEvent = {
       ...input,
-      eventSequence: this.eventSequence + 1,
+      eventSequence,
       timestamp: new Date().toISOString(),
     } as AgentEvent;
-    this.eventSequence += 1;
 
     const write = this.eventTail
       .then(async () => {
@@ -535,10 +691,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           error instanceof RuntimeEventAppendError
             ? error
             : new RuntimeEventAppendError(input.type, { cause: error });
-        this.faultCause ??= appendError;
-        if (this.state !== "disposing") {
-          this.state = "faulted";
-        }
+        this.fault(appendError);
         throw appendError;
       });
     this.eventTail = write.catch(() => undefined);
@@ -642,6 +795,20 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
     return this.tooling;
   }
+
+  private requireLedger(): SessionLedger {
+    if (this.ledger === undefined) {
+      throw new Error("RuntimeSession ledger is not initialized.");
+    }
+    return this.ledger;
+  }
+
+  private fault(error: unknown): void {
+    this.faultCause ??= error;
+    if (this.state !== "disposing" && this.state !== "disposed") {
+      this.state = "faulted";
+    }
+  }
 }
 
 export async function createRuntimeSession(
@@ -661,7 +828,7 @@ function createEventSink(input: CreateRuntimeSessionInput): EventSink {
       input.workspaceRoot,
       ".tinker",
       "sessions",
-      input.sessionId,
+      input.selection.sessionId,
     );
     requiredSinks.push(
       new JsonlEventLog(
@@ -679,7 +846,7 @@ function createEventSink(input: CreateRuntimeSessionInput): EventSink {
 }
 
 function validateCreateInput(input: CreateRuntimeSessionInput): void {
-  if (input.sessionId.trim() === "") {
+  if (input.selection.sessionId.trim() === "") {
     throw new Error("RuntimeSession sessionId must not be empty.");
   }
   if (!path.isAbsolute(input.workspaceRoot)) {
@@ -757,4 +924,12 @@ function requirePositiveNumber(value: number, name: string): void {
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer; received ${value}.`);
   }
+}
+
+function isCanonicalRuntimeFault(error: unknown): boolean {
+  return (
+    error instanceof ContextProtocolError ||
+    error instanceof SessionLedgerWriteError ||
+    error instanceof SessionError
+  );
 }

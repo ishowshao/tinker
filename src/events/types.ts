@@ -5,7 +5,13 @@ import type {
   TurnCancellation,
   TurnIdentity,
 } from "../agent/types";
-import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-id";
+import type {
+  IterationId,
+  ProtocolFrameId,
+  SessionId,
+  ToolCallId,
+  TurnId,
+} from "../ids/runtime-id";
 import type { ModelRequestOutput } from "../model/model-client";
 import type {
   ModelContextBudget,
@@ -31,8 +37,26 @@ export type ContextUsageUpdatedData = {
 };
 
 export type SessionFinishedData = {
-  reason: "oneshot_complete" | "tui_exit" | "runner_failed" | "initialization_failed";
+  reason:
+    | "oneshot_complete"
+    | "tui_exit"
+    | "session_switch"
+    | "runner_failed"
+    | "initialization_failed";
   error?: string;
+};
+
+export type SessionResumedData = {
+  openCount: number;
+  recoveredTurnId?: TurnId;
+  recoveredFrameId?: ProtocolFrameId;
+  syntheticCompletionCount: number;
+};
+
+export type InterruptedFrameRecoveredData = {
+  turnId: TurnId;
+  frameId: ProtocolFrameId;
+  syntheticCompletionCount: number;
 };
 
 export type TurnFinishedData = {
@@ -44,6 +68,8 @@ export type TurnFinishedData = {
 
 export type AgentEventDataMap = {
   "session.started": SessionStartedData;
+  "session.resumed": SessionResumedData;
+  "session.interrupted_frame_recovered": InterruptedFrameRecoveredData;
   "session.finished": SessionFinishedData;
   "turn.started": { userPrompt: string };
   "turn.finished": TurnFinishedData;
@@ -116,7 +142,13 @@ type ToolEventInput<TType extends AgentEventType> = ToolCallIdentity & {
 };
 
 export type AgentEventInput =
-  | SessionEventInput<"session.started" | "session.finished" | "context.usage.updated">
+  | SessionEventInput<
+      | "session.started"
+      | "session.resumed"
+      | "session.interrupted_frame_recovered"
+      | "session.finished"
+      | "context.usage.updated"
+    >
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">
   | TurnEventInput<"turn.started" | "turn.finished">

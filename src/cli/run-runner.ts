@@ -12,6 +12,7 @@ import {
   SYSTEM_PROMPT,
   type RunnerConfigOverrides,
 } from "./config";
+import { realpath } from "node:fs/promises";
 
 export type RunOneShotOptions = RunnerConfigOverrides & {
   modelClient?: ModelClient;
@@ -33,16 +34,17 @@ export async function runOneShot(
 
   try {
     const config = readRunnerConfig(options);
+    const workspaceRoot = await realpath(config.workspaceRoot);
     const modelClient = createRunnerModelClient(config, options.modelClient);
     session = await createRuntimeSession({
-      sessionId: config.sessionId,
-      workspaceRoot: config.workspaceRoot,
+      selection: { mode: "new", sessionId: config.sessionId },
+      workspaceRoot,
       modelName: config.modelName,
       maxIterations: config.maxIterations,
       includeReasoningContent: config.includeReasoningContent,
       contextProfile: config.contextProfile,
       contextBudget: config.contextBudget,
-      systemPrompt: SYSTEM_PROMPT(config.workspaceRoot),
+      systemPrompt: SYSTEM_PROMPT(workspaceRoot),
       modelClient,
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:

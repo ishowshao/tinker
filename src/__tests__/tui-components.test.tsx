@@ -12,6 +12,8 @@ import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
 import type { SessionId } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
+import type { RunAgentResult } from "../agent/types";
+import type { TuiSessionController } from "../tui/tui-session-controller";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import {
   createTestRuntime,
@@ -35,6 +37,30 @@ function createProjectionStore(): TuiProjectionStore {
     modelName: "model",
     workspaceRoot: "/tmp/tinker",
   });
+}
+
+function createSessionController(
+  projectionStore: TuiProjectionStore,
+  run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>,
+): TuiSessionController {
+  const binding = {
+    sessionId: "session-1" as SessionId,
+    modelName: "model",
+    workspaceRoot: "/tmp/tinker",
+    projectionStore,
+    executeTurn: run,
+  };
+  return {
+    getBinding: () => binding,
+    subscribe: () => () => undefined,
+    listSessions: async () => [],
+    resume: async () => {
+      throw new Error("not used");
+    },
+    delete: async () => {
+      throw new Error("not used");
+    },
+  };
 }
 
 async function submitInput(stdin: { write: (data: string) => void }, value: string) {
@@ -169,14 +195,10 @@ describe("tui components", () => {
     let runCalls = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={projectionStore}
-        run={async () => {
+        sessionController={createSessionController(projectionStore, async () => {
           runCalls += 1;
           return completedResult();
-        }}
+        })}
       />,
     );
 
@@ -196,11 +218,7 @@ describe("tui components", () => {
   test("shows an admission budget error thrown before a run promise exists", async () => {
     const { stdin, lastFrame, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={createProjectionStore()}
-        run={() => {
+        sessionController={createSessionController(createProjectionStore(), () => {
           throw new ContextBudgetExceededError({
             projectedInputTokens: 220_000,
             source: "estimated_full",
@@ -209,7 +227,7 @@ describe("tui components", () => {
             requestMaxOutputTokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
             triggerTokens: TEST_CONTEXT_BUDGET.triggerTokens,
           });
-        }}
+        })}
       />,
     );
 
@@ -225,11 +243,9 @@ describe("tui components", () => {
     let branchReads = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={createProjectionStore()}
-        run={async () => completedResult()}
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
         readGitBranch={async () => branches[branchReads++]}
       />,
     );
@@ -250,65 +266,64 @@ describe("tui components", () => {
     let abortCount = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={projectionStore}
-        run={async (prompt, signal) => {
-          await projectionStore.append({
-            type: "turn.started",
-            ...testRuntime.turn,
-            eventSequence: 1,
-            timestamp: "2026-07-10T00:00:00.000Z",
-            data: { userPrompt: prompt },
-          });
-          await projectionStore.append({
-            type: "model.request.started",
-            ...testRuntime.iteration,
-            eventSequence: 2,
-            timestamp: "2026-07-10T00:00:00.100Z",
-            data: {},
-          });
+        sessionController={createSessionController(
+          projectionStore,
+          async (prompt, signal) => {
+            await projectionStore.append({
+              type: "turn.started",
+              ...testRuntime.turn,
+              eventSequence: 1,
+              timestamp: "2026-07-10T00:00:00.000Z",
+              data: { userPrompt: prompt },
+            });
+            await projectionStore.append({
+              type: "model.request.started",
+              ...testRuntime.iteration,
+              eventSequence: 2,
+              timestamp: "2026-07-10T00:00:00.100Z",
+              data: {},
+            });
 
-          return await new Promise((resolve) => {
-            signal.addEventListener(
-              "abort",
-              () => {
-                abortCount += 1;
-                setTimeout(() => {
-                  void projectionStore
-                    .append({
-                      type: "turn.cancelled",
-                      ...testRuntime.iteration,
-                      eventSequence: 3,
-                      timestamp: "2026-07-10T00:00:01.000Z",
-                      data: {
-                        cancellation: {
-                          source: "user",
-                          phase: "model_request",
-                          iterationId: testRuntime.iteration.iterationId,
-                          iterationNumber: 1,
+            return await new Promise((resolve) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  abortCount += 1;
+                  setTimeout(() => {
+                    void projectionStore
+                      .append({
+                        type: "turn.cancelled",
+                        ...testRuntime.iteration,
+                        eventSequence: 3,
+                        timestamp: "2026-07-10T00:00:01.000Z",
+                        data: {
+                          cancellation: {
+                            source: "user",
+                            phase: "model_request",
+                            iterationId: testRuntime.iteration.iterationId,
+                            iterationNumber: 1,
+                          },
                         },
-                      },
-                    })
-                    .then(() =>
-                      resolve({
-                        status: "cancelled" as const,
-                        cancellation: {
-                          source: "user" as const,
-                          phase: "model_request" as const,
-                          iterationId: testRuntime.iteration.iterationId,
-                          iterationNumber: 1,
-                        },
-                        lastIteration: testRuntime.iteration,
-                      }),
-                    );
-                }, 40);
-              },
-              { once: true },
-            );
-          });
-        }}
+                      })
+                      .then(() =>
+                        resolve({
+                          status: "cancelled" as const,
+                          cancellation: {
+                            source: "user" as const,
+                            phase: "model_request" as const,
+                            iterationId: testRuntime.iteration.iterationId,
+                            iterationNumber: 1,
+                          },
+                          lastIteration: testRuntime.iteration,
+                        }),
+                      );
+                  }, 40);
+                },
+                { once: true },
+              );
+            });
+          },
+        )}
       />,
     );
 
@@ -449,14 +464,13 @@ describe("tui components", () => {
     let runCount = 0;
     const { stdin, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={createProjectionStore()}
-        run={async () => {
-          runCount += 1;
-          return completedResult();
-        }}
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCount += 1;
+            return completedResult();
+          },
+        )}
         onQuit={() => {
           quitCount += 1;
         }}
@@ -477,14 +491,13 @@ describe("tui components", () => {
     let runCount = 0;
     const { stdin, lastFrame, cleanup } = render(
       <App
-        modelName="model"
-        workspaceRoot="/tmp/tinker"
-        sessionId={"session-1" as SessionId}
-        projectionStore={createProjectionStore()}
-        run={async () => {
-          runCount += 1;
-          return completedResult();
-        }}
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCount += 1;
+            return completedResult();
+          },
+        )}
         onQuit={() => undefined}
       />,
     );

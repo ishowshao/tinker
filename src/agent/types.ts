@@ -31,7 +31,7 @@ export type AssistantMessage = {
   role: "assistant";
   content?: string | null;
   reasoningContent?: string | null;
-  toolCalls?: ToolCall[];
+  toolCalls?: readonly ToolCall[];
 };
 
 export type ToolMessage = {

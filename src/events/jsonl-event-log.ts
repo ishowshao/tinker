@@ -1,7 +1,6 @@
-import path from "node:path";
-import { appendFile, mkdir } from "node:fs/promises";
 import type { EventSink } from "./event-sink";
 import type { AgentEvent } from "./types";
+import { appendPrivateFile } from "./append-private-file";
 
 export class JsonlEventLog implements EventSink {
   readonly name = "jsonl-event-log";
@@ -9,7 +8,6 @@ export class JsonlEventLog implements EventSink {
   constructor(private readonly filePath: string) {}
 
   async append(event: AgentEvent): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await appendFile(this.filePath, `${JSON.stringify(event)}\n`, "utf8");
+    await appendPrivateFile(this.filePath, `${JSON.stringify(event)}\n`);
   }
 }

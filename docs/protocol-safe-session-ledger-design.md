@@ -3,10 +3,35 @@
 ## 文档状态
 
 - 日期：2026-07-11
-- 状态：待实施
+- 状态：已实施（2026-07-12，与 F4 同批完成）
 - 前置阶段：F1、F2 已完成
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
 - 后续阶段：F4 [`SessionStore v1` 与 `/resume`](session-store-resume-design.md)
+
+## 实施结果（2026-07-12）
+
+F3 已按本文完成一次性切换：生产代码已删除
+`src/agent/session-conversation.ts`，不再保留 conversation alias 或第二套 message
+source of truth。
+
+实际落点如下：
+
+- `src/context/protocol-frame.ts` 定义 canonical message、protocol frame、tool result、hash、
+  synthetic completion 和 interrupted completion helper；
+- `src/context/context-protocol-validator.ts` 实现 normal/full-integrity 两种线性校验；
+- `src/agent/session-ledger.ts` 实现 `SessionLedger`、staged mutation、不可变 snapshot 与
+  `InMemorySessionLedger` 测试实现；
+- `src/agent/context-builder.ts` 只接受 `ProtocolContextView`，所有 initial、admission 和
+  iteration 请求都在 adapter 前经过 validator；
+- `src/agent/loop.ts` 已把 returned/cancelled/failed completion 统一到同一原子写屏障，
+  completion commit 失败时不会执行 batch 中的下一个工具；
+- `src/agent/runtime-session.ts` 已取消整 turn message rollback，terminal 只结束 turn，
+  required event sink 失败不会删除已接受的 canonical facts。
+
+F3 与 F4 同批落地，因此生产实现直接使用 `SqliteSessionLedger`；
+`InMemorySessionLedger` 只保留为共享领域核心与纯单元测试 fixture，不存在运行时配置回退。
+专项测试覆盖 canonical immutability、single/multi-tool、open frame、缺失/重复/错序/错配、
+hash corruption、cancel/failure/interruption，以及 completion 写失败后的 side-effect barrier。
 
 ## 一、结论先行
 

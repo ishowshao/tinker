@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runOneShot } from "../cli/run-runner";
@@ -119,6 +119,20 @@ describe("runOneShot", () => {
       });
       expect(turnFinishedData).not.toHaveProperty("result");
       expect(JSON.stringify(turnFinished)).not.toContain('"messages"');
+
+      const sessionDirectory = path.join(
+        workspace,
+        ".tinker",
+        "sessions",
+        "test-session",
+      );
+      expect((await stat(sessionDirectory)).mode & 0o777).toBe(0o700);
+      expect(
+        (await stat(path.join(sessionDirectory, "session.sqlite"))).mode & 0o777,
+      ).toBe(0o600);
+      expect(
+        (await stat(path.join(sessionDirectory, "events.jsonl"))).mode & 0o777,
+      ).toBe(0o600);
 
       const observations = await readFile(
         path.join(workspace, ".tinker", "sessions", "test-session", "observations.md"),

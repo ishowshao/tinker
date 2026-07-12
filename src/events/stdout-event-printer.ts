@@ -22,6 +22,16 @@ export class StdoutEventPrinter implements EventSink {
       case "session.started":
         this.stdout.write(`session.started sessionId=${event.sessionId}\n`);
         break;
+      case "session.resumed":
+        this.stdout.write(
+          `session.resumed sessionId=${event.sessionId} openCount=${event.data.openCount}\n`,
+        );
+        break;
+      case "session.interrupted_frame_recovered":
+        this.stdout.write(
+          `session.interrupted_frame_recovered frameId=${event.data.frameId} completions=${event.data.syntheticCompletionCount}\n`,
+        );
+        break;
       case "turn.started":
         this.stdout.write(
           `turn.started turn=${event.turnNumber} turnId=${event.turnId}\n`,

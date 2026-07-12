@@ -18,7 +18,7 @@ export type OpenAIChatMessageMappingOptions = {
 };
 
 export function toOpenAIChatMessages(
-  messages: AgentMessage[],
+  messages: readonly AgentMessage[],
   options: OpenAIChatMessageMappingOptions = {},
 ): ChatCompletionMessageParam[] {
   return messages.map((message): ChatCompletionMessageParam => {
@@ -51,7 +51,9 @@ export function toOpenAIChatMessages(
   });
 }
 
-export function toOpenAIChatTools(tools: ToolDefinition[]): ChatCompletionTool[] {
+export function toOpenAIChatTools(
+  tools: readonly ToolDefinition[],
+): ChatCompletionTool[] {
   return tools.map((tool) => ({
     type: "function",
     function: {

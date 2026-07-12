@@ -2,13 +2,15 @@ import { describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
   RuntimeEventAppendError,
   type RuntimeSession,
 } from "../agent/runtime-session";
-import { InMemorySessionConversation } from "../agent/session-conversation";
+import { InMemorySessionLedger } from "../agent/session-ledger";
+import { materializeAgentMessages } from "../context/protocol-frame";
 import { cancellationError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import type {
@@ -282,7 +284,7 @@ describe("RuntimeSession lifecycle", () => {
     const sink = collectingEventSink();
     const model = new FailingToolCallModel();
     const input = createInput(model, sink, "tool-failure");
-    let conversation: InMemorySessionConversation | undefined;
+    let ledger: InMemorySessionLedger | undefined;
     const session = await createRuntimeSession(input, {
       idFactory: deterministicIdFactory("tool-failure"),
       loadMcpConfig: async () => undefined,
@@ -293,9 +295,14 @@ describe("RuntimeSession lifecycle", () => {
         };
         return tooling;
       },
-      createConversation: (systemPrompt) => {
-        conversation = new InMemorySessionConversation(systemPrompt);
-        return conversation;
+      createLedger: (store, idFactory) => {
+        ledger = new InMemorySessionLedger({
+          sessionId: store.sessionId,
+          idFactory,
+          initialView: store.loadProtocolView(),
+          committer: store,
+        });
+        return ledger;
       },
     });
 
@@ -303,7 +310,9 @@ describe("RuntimeSession lifecycle", () => {
       userPrompt: "use tools",
       signal: new AbortController().signal,
     });
-    const failedMessages = requireConversation(conversation).snapshot();
+    const failedMessages = requireLedger(ledger).buildCommittedModelRequest(
+      [],
+    ).messages;
     const recovered = await session.executeTurn({
       userPrompt: "continue",
       signal: new AbortController().signal,
@@ -325,6 +334,65 @@ describe("RuntimeSession lifecycle", () => {
       ...failedMessages,
       { role: "user", content: "continue" },
     ]);
+  });
+
+  test("faults without executing a second tool when ledger completion commit fails", async () => {
+    const sink = collectingEventSink();
+    const model = new FailingToolCallModel();
+    let toolExecutions = 0;
+    const session = await createRuntimeSession(
+      createInput(model, sink, "completion-write-failure"),
+      {
+        idFactory: deterministicIdFactory("completion-write-failure"),
+        loadMcpConfig: async () => undefined,
+        createLedger: (store, idFactory) =>
+          new InMemorySessionLedger({
+            sessionId: store.sessionId,
+            idFactory,
+            initialView: store.loadProtocolView(),
+            committer: {
+              commit(mutation) {
+                if (mutation.kind === "commit_tool_completions") {
+                  throw new Error("simulated sqlite write failure");
+                }
+                store.commit(mutation);
+              },
+            },
+          }),
+        createTooling: (options) => {
+          const tooling = createDefaultTooling(options);
+          tooling.runtime.execute = async (call) => {
+            toolExecutions += 1;
+            return {
+              kind: "generic",
+              ok: false,
+              toolName: call.name,
+              error: "fixture",
+            };
+          };
+          return tooling;
+        },
+      },
+    );
+
+    const error = await session
+      .executeTurn({
+        userPrompt: "use tools",
+        signal: new AbortController().signal,
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("commit failed");
+    expect(toolExecutions).toBe(1);
+    expect(() =>
+      session.executeTurn({
+        userPrompt: "after fault",
+        signal: new AbortController().signal,
+      }),
+    ).toThrow("faulted");
+    await session
+      .dispose({ type: "runner_failed", error: "expected test fault" })
+      .catch(() => undefined);
   });
 
   test("commits user-only deltas after structured model failure", async () => {
@@ -379,32 +447,38 @@ describe("RuntimeSession lifecycle", () => {
     ]);
   });
 
-  test("discards the entire turn delta after an unexpected agent reject", async () => {
+  test("keeps the accepted user fact after an invalid assistant candidate", async () => {
     const sink = collectingEventSink();
     const model = new RejectsInvariantThenCompletesModel();
-    let conversation: InMemorySessionConversation | undefined;
+    let ledger: InMemorySessionLedger | undefined;
     const session = await createRuntimeSession(
       createInput(model, sink, "unexpected-reject"),
       {
         idFactory: deterministicIdFactory("unexpected-reject"),
         loadMcpConfig: async () => undefined,
-        createConversation: (systemPrompt) => {
-          conversation = new InMemorySessionConversation(systemPrompt);
-          return conversation;
+        createLedger: (store, idFactory) => {
+          ledger = new InMemorySessionLedger({
+            sessionId: store.sessionId,
+            idFactory,
+            initialView: store.loadProtocolView(),
+            committer: store,
+          });
+          return ledger;
         },
       },
     );
 
-    const error = await session
-      .executeTurn({
-        userPrompt: "bad turn",
-        signal: new AbortController().signal,
-      })
-      .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("invalid identity");
-    expect(requireConversation(conversation).snapshot()).toEqual([
+    const invalid = await session.executeTurn({
+      userPrompt: "bad turn",
+      signal: new AbortController().signal,
+    });
+    expect(invalid).toMatchObject({ status: "failed" });
+    expect(invalid.status === "failed" ? invalid.error : "").toContain(
+      "invalid frame identity",
+    );
+    expect(requireLedger(ledger).buildCommittedModelRequest([]).messages).toEqual([
       { role: "system", content: "system" },
+      { role: "user", content: "bad turn" },
     ]);
 
     const recovered = await session.executeTurn({
@@ -416,22 +490,28 @@ describe("RuntimeSession lifecycle", () => {
     expect(recovered.status).toBe("completed");
     expect(model.inputs[1]?.messages).toEqual([
       { role: "system", content: "system" },
+      { role: "user", content: "bad turn" },
       { role: "user", content: "clean turn" },
     ]);
     expect(sink.events.some((event) => event.type === "turn.failed")).toBe(true);
   });
 
-  test("discards terminal delta and faults the session when a required sink fails", async () => {
+  test("keeps canonical facts and faults the session when a terminal sink fails", async () => {
     const events = collectingEventSink();
-    let conversation: InMemorySessionConversation | undefined;
+    let ledger: InMemorySessionLedger | undefined;
     const session = await createRuntimeSession(
       createInput(new CapturingModel(), events, "terminal-sink-failure"),
       {
         idFactory: deterministicIdFactory("terminal-sink-failure"),
         loadMcpConfig: async () => undefined,
-        createConversation: (systemPrompt) => {
-          conversation = new InMemorySessionConversation(systemPrompt);
-          return conversation;
+        createLedger: (store, idFactory) => {
+          ledger = new InMemorySessionLedger({
+            sessionId: store.sessionId,
+            idFactory,
+            initialView: store.loadProtocolView(),
+            committer: store,
+          });
+          return ledger;
         },
         createEventSink: () => ({
           name: "terminal-failure",
@@ -453,8 +533,14 @@ describe("RuntimeSession lifecycle", () => {
       .catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(RuntimeEventAppendError);
-    expect(requireConversation(conversation).snapshot()).toEqual([
+    expect(
+      materializeAgentMessages(
+        requireLedger(ledger).snapshot({ allowFaulted: true }).messages,
+      ),
+    ).toEqual([
       { role: "system", content: "system" },
+      { role: "user", content: "do not commit" },
+      { role: "assistant", content: "answer-1" },
     ]);
     expect(() =>
       session.executeTurn({
@@ -544,15 +630,20 @@ describe("RuntimeSession lifecycle", () => {
   test("keeps tool protocol delta when the next iteration is blocked", async () => {
     const sink = collectingEventSink();
     const model = new HugeObservationModel();
-    let conversation: InMemorySessionConversation | undefined;
+    let ledger: InMemorySessionLedger | undefined;
     const session = await createRuntimeSession(
       createInput(model, sink, "tool-budget"),
       {
         idFactory: deterministicIdFactory("tool-budget"),
         loadMcpConfig: async () => undefined,
-        createConversation: (systemPrompt) => {
-          conversation = new InMemorySessionConversation(systemPrompt);
-          return conversation;
+        createLedger: (store, idFactory) => {
+          ledger = new InMemorySessionLedger({
+            sessionId: store.sessionId,
+            idFactory,
+            initialView: store.loadProtocolView(),
+            committer: store,
+          });
+          return ledger;
         },
         createTooling: (options) => {
           const tooling = createDefaultTooling(options);
@@ -588,9 +679,9 @@ describe("RuntimeSession lifecycle", () => {
       sink.events.filter((event) => event.type === "model.request.started"),
     ).toHaveLength(1);
     expect(
-      requireConversation(conversation)
-        .snapshot()
-        .filter((message) => message.role === "tool"),
+      materializeAgentMessages(requireLedger(ledger).snapshot().messages).filter(
+        (message) => message.role === "tool",
+      ),
     ).toHaveLength(1);
   });
 
@@ -723,13 +814,13 @@ async function createTestSession(
   });
 }
 
-function requireConversation(
-  conversation: InMemorySessionConversation | undefined,
-): InMemorySessionConversation {
-  if (conversation === undefined) {
-    throw new Error("Expected an in-memory conversation fixture.");
+function requireLedger(
+  ledger: InMemorySessionLedger | undefined,
+): InMemorySessionLedger {
+  if (ledger === undefined) {
+    throw new Error("Expected an in-memory ledger fixture.");
   }
-  return conversation;
+  return ledger;
 }
 
 function createInput(
@@ -738,8 +829,11 @@ function createInput(
   prefix: string,
 ): CreateRuntimeSessionInput {
   return {
-    sessionId: `${prefix}-session` as SessionId,
-    workspaceRoot: process.cwd(),
+    selection: {
+      mode: "new",
+      sessionId: `${prefix}-${crypto.randomUUID()}` as SessionId,
+    },
+    workspaceRoot: mkdtempSync(path.join(os.tmpdir(), "tinker-runtime-test-")),
     modelName: "test-model",
     maxIterations: 2,
     includeReasoningContent: false,

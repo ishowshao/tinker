@@ -3,19 +3,23 @@ import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
 import type { ContextMeter } from "./context-meter";
 import type { RuntimeSessionContext } from "./runtime-session";
-import type { AgentTurnConversation } from "./session-conversation";
+import type { AgentTurnLedger } from "./session-ledger";
+import { ContextProtocolError } from "../context/context-protocol-validator";
+import {
+  normalizeSyntheticDetail,
+  type SyntheticToolCompletionInput,
+} from "../context/protocol-frame";
 import { throwIfTurnCancelled, turnCancellationSource } from "./turn-cancellation";
 import type {
   IterationIdentity,
   RunAgentResult,
   ToolCall,
-  ToolMessage,
   TurnCancellation,
   TurnIdentity,
 } from "./types";
 
 export type RunAgentInput = {
-  conversation: AgentTurnConversation;
+  ledger: AgentTurnLedger;
   maxIterations: number;
   model: ModelClient;
   contextMeter: ContextMeter;
@@ -55,7 +59,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     try {
       throwIfTurnCancelled(input.signal);
       prepared = input.model.prepare(
-        input.conversation.buildModelRequest(input.tools.definitions()),
+        input.ledger.buildModelRequest(input.tools.definitions()),
       );
       preflight = input.contextMeter.measure(prepared);
     } catch (error) {
@@ -106,7 +110,19 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       return failedResult(error, iteration);
     }
 
-    input.conversation.appendAssistant(modelOutput.message);
+    try {
+      input.ledger.appendAssistant({
+        iteration,
+        message: modelOutput.message,
+        provider: prepared.provider,
+        model: prepared.model,
+      });
+    } catch (error) {
+      if (error instanceof ContextProtocolError) {
+        return failedResult(error, iteration);
+      }
+      throw error;
+    }
 
     await input.runtimeSession.append({
       type: "model.request.finished",
@@ -148,12 +164,16 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       requireCallInIteration(call, iteration, callIndex + 1);
 
       if (input.signal.aborted) {
-        appendCancelledToolMessages(input.conversation, toolCalls, callIndex);
+        input.ledger.commitToolCompletions(
+          cancelledToolCompletions(toolCalls, callIndex),
+        );
         return cancelledResult(
           cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
         );
       }
+
+      input.ledger.assertCanExecuteTool(call);
 
       await input.runtimeSession.append({
         type: "tool.started",
@@ -166,16 +186,30 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         raw = await input.toolRuntime.execute(call, { signal: input.signal });
       } catch (error) {
         if (!input.signal.aborted) {
-          appendFailedToolMessages(input.conversation, toolCalls, callIndex, error);
+          input.ledger.commitToolCompletions(
+            failedToolCompletions(toolCalls, callIndex, error),
+          );
           return failedResult(error, iteration);
         }
 
-        appendCancelledToolMessages(input.conversation, toolCalls, callIndex, call);
+        input.ledger.commitToolCompletions(
+          cancelledToolCompletions(toolCalls, callIndex, call),
+        );
         return cancelledResult(
           cancellation(input.signal, iteration, "tool_execution", call),
           iteration,
         );
       }
+
+      const observation = input.observationBuilder.build({ call, raw });
+      input.ledger.commitToolCompletions([
+        {
+          call,
+          kind: "returned",
+          raw,
+          observation: observation.content,
+        },
+      ]);
 
       await input.runtimeSession.append({
         type: "tool.raw_result",
@@ -188,15 +222,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         data: { call, ok: raw.ok },
       });
 
-      const observation = input.observationBuilder.build({ call, raw });
-      input.conversation.appendTool({
-        role: "tool",
-        toolCallId: call.toolCallId,
-        providerToolCallId: call.providerToolCallId,
-        name: call.name,
-        content: observation.content,
-      });
-
       await input.runtimeSession.append({
         type: "tool.observation",
         ...call,
@@ -204,7 +229,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       });
 
       if (input.signal.aborted) {
-        appendCancelledToolMessages(input.conversation, toolCalls, callIndex + 1);
+        if (callIndex + 1 < toolCalls.length) {
+          input.ledger.commitToolCompletions(
+            cancelledToolCompletions(toolCalls, callIndex + 1),
+          );
+        }
         return cancelledResult(
           cancellation(input.signal, iteration, "agent_boundary"),
           iteration,
@@ -217,6 +246,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ...iteration,
       data: { outcome: "continue", toolCallCount: toolCalls.length },
     });
+    input.runtimeSession.finishIterationForContinuation(iteration);
   }
 
   if (lastIteration === undefined) {
@@ -230,53 +260,46 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   };
 }
 
-const cancelledToolContent =
-  "Tool execution was cancelled by the user. Side effects may have partially completed; inspect current state before retrying.";
-const skippedToolContent = "Tool call was skipped because the user cancelled the turn.";
-const skippedAfterFailureToolContent =
-  "Tool call was skipped because an earlier tool call failed.";
-
-function appendCancelledToolMessages(
-  conversation: AgentTurnConversation,
-  toolCalls: ToolCall[],
+function cancelledToolCompletions(
+  toolCalls: readonly ToolCall[],
   startIndex: number,
   activeCall?: ToolCall,
-): void {
+): SyntheticToolCompletionInput[] {
+  const completions: SyntheticToolCompletionInput[] = [];
   for (let index = startIndex; index < toolCalls.length; index += 1) {
     const call = requireToolCall(toolCalls, index);
-    conversation.appendTool({
-      role: "tool",
-      toolCallId: call.toolCallId,
-      providerToolCallId: call.providerToolCallId,
-      name: call.name,
-      content: call === activeCall ? cancelledToolContent : skippedToolContent,
+    completions.push({
+      call,
+      kind: "synthetic",
+      reason: call === activeCall ? "cancelled_active" : "skipped_after_cancel",
     });
   }
+  return completions;
 }
 
-function appendFailedToolMessages(
-  conversation: AgentTurnConversation,
-  toolCalls: ToolCall[],
+function failedToolCompletions(
+  toolCalls: readonly ToolCall[],
   startIndex: number,
   error: unknown,
-): void {
+): SyntheticToolCompletionInput[] {
+  const completions: SyntheticToolCompletionInput[] = [];
   for (let index = startIndex; index < toolCalls.length; index += 1) {
     const call = requireToolCall(toolCalls, index);
-    const message: ToolMessage = {
-      role: "tool",
-      toolCallId: call.toolCallId,
-      providerToolCallId: call.providerToolCallId,
-      name: call.name,
-      content:
-        index === startIndex
-          ? `Tool execution failed: ${errorMessage(error)}. Side effects may have partially completed; inspect current state before retrying.`
-          : skippedAfterFailureToolContent,
-    };
-    conversation.appendTool(message);
+    completions.push(
+      index === startIndex
+        ? {
+            call,
+            kind: "synthetic",
+            reason: "failed_active",
+            detail: normalizeSyntheticDetail(error),
+          }
+        : { call, kind: "synthetic", reason: "skipped_after_failure" },
+    );
   }
+  return completions;
 }
 
-function requireToolCall(toolCalls: ToolCall[], index: number): ToolCall {
+function requireToolCall(toolCalls: readonly ToolCall[], index: number): ToolCall {
   const call = toolCalls[index];
   if (call === undefined) {
     throw new Error(`Missing tool call at index ${index}.`);

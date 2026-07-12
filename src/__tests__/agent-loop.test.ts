@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
-import { InMemorySessionConversation } from "../agent/session-conversation";
+import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
@@ -16,9 +16,12 @@ import type {
 } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "../tools/registry";
+import { ToolRegistry, ToolRuntime } from "../tools/registry";
+import type { ToolExecutor } from "../tools/types";
 import {
   createTestContextMeter,
   createTestRuntime,
+  deterministicIdFactory,
   TestModelClient,
   testModelOutput,
   testModelRequestInput,
@@ -78,6 +81,33 @@ class CapturingModel extends TestModelClient {
   }
 }
 
+class TwoToolModel extends TestModelClient {
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    const runtime = requireRuntime(options);
+    const iteration = requireIteration(options);
+    return testModelOutput(prepared, {
+      role: "assistant",
+      toolCalls: [
+        {
+          ...runtime.createToolCall(iteration, 1),
+          providerToolCallId: "provider-first",
+          name: "First",
+          args: {},
+        },
+        {
+          ...runtime.createToolCall(iteration, 2),
+          providerToolCallId: "provider-second",
+          name: "Second",
+          args: {},
+        },
+      ],
+    });
+  }
+}
+
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];
 
@@ -101,10 +131,17 @@ describe("runAgent", () => {
         workspaceRoot: workspace,
         runtimeSession,
       });
-      const conversation = new InMemorySessionConversation("system");
-      const pendingConversation = conversation.beginTurn("Read README.md");
+      const ledger = new InMemorySessionLedger({
+        sessionId: runtimeSession.sessionId,
+        systemPrompt: "system",
+        idFactory: deterministicIdFactory("agent-loop"),
+      });
+      const pendingTurn = ledger.beginTurn({
+        turn,
+        userPrompt: "Read README.md",
+      });
       const result = await runAgent({
-        conversation: pendingConversation.agent,
+        ledger: pendingTurn.agent,
         maxIterations: 4,
         model: new ScriptedModel(),
         contextMeter: createTestContextMeter(),
@@ -131,7 +168,7 @@ describe("runAgent", () => {
       expect(events.events.map((event) => event.type)).toContain(
         "model.request.finished",
       );
-      pendingConversation.commit();
+      pendingTurn.finish(result);
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
@@ -147,18 +184,47 @@ describe("runAgent", () => {
       runtimeSession,
     });
     const model = new CapturingModel();
-    const conversation = new InMemorySessionConversation("system");
-    const firstTurn = conversation.beginTurn("First prompt");
-    firstTurn.agent.appendAssistant({
-      role: "assistant",
-      content: "First prompt answered.",
+    const idFactory = deterministicIdFactory("initial-history");
+    const ledger = new InMemorySessionLedger({
+      sessionId: runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory,
     });
-    firstTurn.commit();
-    const initialMessages: AgentMessage[] = conversation.snapshot();
-    const secondTurn = conversation.beginTurn("Second prompt");
+    const previousTurn = {
+      sessionId: runtimeSession.sessionId,
+      turnId: idFactory.createTurnId(),
+      turnNumber: 1,
+    };
+    const previousIteration = {
+      ...previousTurn,
+      iterationId: idFactory.createIterationId(),
+      iterationNumber: 1,
+    };
+    const firstTurn = ledger.beginTurn({
+      turn: previousTurn,
+      userPrompt: "First prompt",
+    });
+    firstTurn.agent.appendAssistant({
+      iteration: previousIteration,
+      message: { role: "assistant", content: "First prompt answered." },
+      provider: "test",
+      model: "test-model",
+    });
+    firstTurn.finish({
+      status: "completed",
+      finalText: "First prompt answered.",
+      lastIteration: previousIteration,
+    });
+    const initialMessages: AgentMessage[] = ledger.buildCommittedModelRequest(
+      [],
+    ).messages;
+    const secondTurn = ledger.beginTurn({
+      turn,
+      userPrompt: "Second prompt",
+    });
 
     const result = await runAgent({
-      conversation: secondTurn.agent,
+      ledger: secondTurn.agent,
       maxIterations: 4,
       model,
       contextMeter: createTestContextMeter(),
@@ -188,15 +254,85 @@ describe("runAgent", () => {
       ...initialMessages,
       { role: "user", content: "Second prompt" },
     ]);
-    secondTurn.commit();
-    expect(conversation.snapshot()).toEqual([
+    secondTurn.finish(result);
+    expect(ledger.buildCommittedModelRequest([]).messages).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },
       { role: "assistant", content: "Second prompt answered." },
     ]);
     expect(result).not.toHaveProperty("messages");
   });
+
+  test("does not start the next tool when the completion write barrier fails", async () => {
+    const identity = createTestRuntime();
+    const calls = { first: 0, second: 0 };
+    const registry = new ToolRegistry();
+    registry.register(
+      testTool("First", () => {
+        calls.first += 1;
+      }),
+    );
+    registry.register(
+      testTool("Second", () => {
+        calls.second += 1;
+      }),
+    );
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("barrier"),
+      committer: {
+        commit(mutation) {
+          if (mutation.kind === "commit_tool_completions") {
+            throw new Error("completion persistence failed");
+          }
+        },
+      },
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userPrompt: "run both",
+    });
+
+    const error = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model: new TwoToolModel(),
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(calls).toEqual({ first: 1, second: 0 });
+    expect(
+      ledger.snapshot({ allowFaulted: true, allowOpenTail: true }).toolResults,
+    ).toHaveLength(0);
+  });
 });
+
+function testTool(name: string, execute: () => void): ToolExecutor {
+  return {
+    definition: {
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+    },
+    async execute() {
+      execute();
+      return {
+        kind: "generic",
+        ok: false,
+        toolName: name,
+        error: "expected fixture result",
+      };
+    },
+  };
+}
 
 function requireRuntime(options: ModelRequestOptions): RuntimeSessionContext {
   if (options.identity === undefined) {
