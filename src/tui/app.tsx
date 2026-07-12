@@ -9,6 +9,10 @@ import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { PromptInput } from "./components/prompt-input";
+import {
+  ResumeSessionPicker,
+  ResumeSessionPickerLoading,
+} from "./components/resume-session-picker";
 import { Timeline } from "./components/timeline";
 import { parseSlashCommand } from "./slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
@@ -20,6 +24,15 @@ export type AppProps = {
   history?: PromptHistory;
   onQuit?: () => void;
 };
+
+type ResumePickerState =
+  | { status: "loading" }
+  | {
+      status: "ready";
+      sessions: readonly SessionSummary[];
+      isResuming: boolean;
+      error?: string;
+    };
 
 export function App(props: AppProps) {
   const { exit } = useApp();
@@ -42,10 +55,14 @@ export function App(props: AppProps) {
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [showStatus, setShowStatus] = useState(false);
+  const [resumePicker, setResumePicker] = useState<ResumePickerState | undefined>(
+    undefined,
+  );
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
   const activeController = useRef<AbortController | undefined>(undefined);
+  const resumePickerRequest = useRef(0);
 
   useEffect(() => {
     if (readGitBranch === undefined) {
@@ -90,6 +107,72 @@ export function App(props: AppProps) {
     { isActive: isRunning },
   );
 
+  const closeResumePicker = () => {
+    resumePickerRequest.current += 1;
+    setResumePicker(undefined);
+    setIsSessionOperation(false);
+    setNotice(undefined);
+  };
+
+  const openResumePicker = () => {
+    const requestId = resumePickerRequest.current + 1;
+    resumePickerRequest.current = requestId;
+    setNotice(undefined);
+    setResumePicker({ status: "loading" });
+    setIsSessionOperation(true);
+    void props.sessionController
+      .listSessions()
+      .then((sessions) => {
+        if (resumePickerRequest.current !== requestId) {
+          return;
+        }
+        if (sessions.length === 0) {
+          setResumePicker(undefined);
+          setNotice("No stored sessions found for this workspace.");
+          return;
+        }
+        setResumePicker({ status: "ready", sessions, isResuming: false });
+      })
+      .catch((error: unknown) => {
+        if (resumePickerRequest.current === requestId) {
+          setResumePicker(undefined);
+          setNotice(`Session operation failed: ${errorMessage(error)}`);
+        }
+      })
+      .finally(() => {
+        if (resumePickerRequest.current === requestId) {
+          setIsSessionOperation(false);
+        }
+      });
+  };
+
+  const resumeSelectedSession = (session: SessionSummary) => {
+    setResumePicker((current) =>
+      current?.status === "ready"
+        ? { ...current, isResuming: true, error: undefined }
+        : current,
+    );
+    setIsSessionOperation(true);
+    void props.sessionController
+      .resume(session.sessionId)
+      .then(() => {
+        setResumePicker(undefined);
+        setNotice(`Resumed session ${session.sessionId}.`);
+      })
+      .catch((error: unknown) => {
+        setResumePicker((current) =>
+          current?.status === "ready"
+            ? {
+                ...current,
+                isResuming: false,
+                error: errorMessage(error),
+              }
+            : current,
+        );
+      })
+      .finally(() => setIsSessionOperation(false));
+  };
+
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
     setShowStatus(false);
@@ -114,19 +197,19 @@ export function App(props: AppProps) {
         exit();
         return;
       }
+      if (command.type === "resume_list") {
+        openResumePicker();
+        return;
+      }
       setIsSessionOperation(true);
       const operation =
-        command.type === "resume_list"
+        command.type === "resume"
           ? props.sessionController
-              .listSessions()
-              .then((sessions) => setNotice(formatSessionList(sessions)))
-          : command.type === "resume"
-            ? props.sessionController
-                .resume(command.sessionId)
-                .then(() => setNotice(`Resumed session ${command.sessionId}.`))
-            : props.sessionController
-                .delete(command.sessionId)
-                .then(() => setNotice(`Deleted session ${command.sessionId}.`));
+              .resume(command.sessionId)
+              .then(() => setNotice(`Resumed session ${command.sessionId}.`))
+          : props.sessionController
+              .delete(command.sessionId)
+              .then(() => setNotice(`Deleted session ${command.sessionId}.`));
       void operation
         .catch((error: unknown) => {
           setNotice(`Session operation failed: ${errorMessage(error)}`);
@@ -171,58 +254,60 @@ export function App(props: AppProps) {
 
   return (
     <Box flexDirection="column">
-      <Header
-        key={binding.sessionId}
-        modelName={binding.modelName}
-        workspaceRoot={binding.workspaceRoot}
-        sessionId={binding.sessionId}
-      />
-      <Box marginTop={1} flexDirection="column">
-        <Timeline items={visibleTimelineItems(state)} />
-      </Box>
-      {state.backgroundTasks.length === 0 ? null : (
-        <Box marginTop={1}>
-          <BackgroundTasks tasks={state.backgroundTasks} />
-        </Box>
+      {resumePicker?.status === "loading" ? (
+        <ResumeSessionPickerLoading onCancel={closeResumePicker} />
+      ) : resumePicker?.status === "ready" ? (
+        <ResumeSessionPicker
+          sessions={resumePicker.sessions}
+          isResuming={resumePicker.isResuming}
+          error={resumePicker.error}
+          onCancel={closeResumePicker}
+          onSelect={resumeSelectedSession}
+        />
+      ) : (
+        <>
+          <Header
+            key={binding.sessionId}
+            modelName={binding.modelName}
+            workspaceRoot={binding.workspaceRoot}
+            sessionId={binding.sessionId}
+          />
+          <Box marginTop={1} flexDirection="column">
+            <Timeline items={visibleTimelineItems(state)} />
+          </Box>
+          {state.backgroundTasks.length === 0 ? null : (
+            <Box marginTop={1}>
+              <BackgroundTasks tasks={state.backgroundTasks} />
+            </Box>
+          )}
+          {showStatus ? (
+            <Box marginTop={1}>
+              <ContextStatus state={state} />
+            </Box>
+          ) : null}
+          <Box marginTop={1}>
+            <Footer
+              status={isCancelling ? "cancelling" : state.status}
+              workedForMs={state.workedForMs}
+            />
+          </Box>
+          <Box marginTop={1} flexDirection="column">
+            <PromptInput
+              modelName={binding.modelName}
+              workspaceRoot={binding.workspaceRoot}
+              gitBranch={gitBranch}
+              contextUsage={state.contextUsage}
+              isDisabled={isRunning || isSessionOperation}
+              history={props.history}
+              onSubmit={onSubmit}
+              placeholder='Enter a coding request, or "/" for commands'
+            />
+            {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
+          </Box>
+        </>
       )}
-      {showStatus ? (
-        <Box marginTop={1}>
-          <ContextStatus state={state} />
-        </Box>
-      ) : null}
-      <Box marginTop={1}>
-        <Footer
-          status={isCancelling ? "cancelling" : state.status}
-          workedForMs={state.workedForMs}
-        />
-      </Box>
-      <Box marginTop={1} flexDirection="column">
-        <PromptInput
-          modelName={binding.modelName}
-          workspaceRoot={binding.workspaceRoot}
-          gitBranch={gitBranch}
-          contextUsage={state.contextUsage}
-          isDisabled={isRunning || isSessionOperation}
-          history={props.history}
-          onSubmit={onSubmit}
-          placeholder='Enter a coding request, or "/" for commands'
-        />
-        {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
-      </Box>
     </Box>
   );
-}
-
-function formatSessionList(sessions: readonly SessionSummary[]): string {
-  if (sessions.length === 0) {
-    return "No stored sessions found for this workspace.";
-  }
-  return sessions
-    .map((session) => {
-      const preview = session.firstUserPromptPreview ?? "(no prompt)";
-      return `${session.status}  ${session.updatedAt}  turns=${session.turnCount}  ${preview}\n${session.sessionId}`;
-    })
-    .join("\n\n");
 }
 
 function errorMessage(error: unknown): string {

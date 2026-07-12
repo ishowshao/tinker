@@ -14,6 +14,7 @@ import type { SessionId } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiSessionController } from "../tui/tui-session-controller";
+import type { SessionSummary } from "../session/session-catalog";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import {
   createTestRuntime,
@@ -507,6 +508,73 @@ describe("tui components", () => {
 
     expect(runCount).toBe(0);
     expect(lastFrame()).toContain("Unknown command: /nope");
+    cleanup();
+  });
+
+  test("opens /resume as a picker and preserves full-ID direct resume", async () => {
+    const projectionStore = createProjectionStore();
+    const targetId = "019f53d7-0000-7000-8000-000000000001" as SessionId;
+    const directTargetId = "019f53d8-0000-7000-8000-000000000002" as SessionId;
+    const sessions: readonly SessionSummary[] = [
+      {
+        sessionId: "session-1" as SessionId,
+        modelName: "model",
+        createdAt: "2026-07-12T00:00:00.000Z",
+        updatedAt: "2026-07-12T01:00:00.000Z",
+        turnCount: 1,
+        firstUserPromptPreview: "current prompt",
+        status: "current",
+        databaseBytes: 1_024,
+      },
+      {
+        sessionId: targetId,
+        modelName: "deepseek-v4-flash",
+        createdAt: "2026-07-12T00:00:00.000Z",
+        updatedAt: "2026-07-12T01:00:00.000Z",
+        turnCount: 3,
+        firstUserPromptPreview: "帮我提交推送",
+        status: "resumable",
+        databaseBytes: 2_048,
+      },
+    ];
+    const resumed: SessionId[] = [];
+    const baseController = createSessionController(projectionStore, async () =>
+      completedResult(),
+    );
+    const controller: TuiSessionController = {
+      ...baseController,
+      listSessions: async () => sessions,
+      resume: async (sessionId) => {
+        resumed.push(sessionId);
+      },
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={controller} />,
+    );
+
+    await submitInput(stdin, "/resume");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain("Resume session");
+    expect(lastFrame()).toContain(
+      "↑/↓ or j/k to move · Enter to resume · Esc to cancel",
+    );
+    expect(lastFrame()).toContain("帮我提交推送");
+
+    stdin.write("\u001b");
+    await Bun.sleep(25);
+    expect(lastFrame()).not.toContain("Resume session");
+    expect(resumed).toEqual([]);
+
+    await submitInput(stdin, "/resume");
+    await Bun.sleep(25);
+    stdin.write("\r");
+    await Bun.sleep(25);
+    expect(resumed).toEqual([targetId]);
+    expect(lastFrame()).toContain(`Resumed session ${targetId}.`);
+
+    await submitInput(stdin, `/resume ${directTargetId}`);
+    await Bun.sleep(25);
+    expect(resumed).toEqual([targetId, directTargetId]);
     cleanup();
   });
 });
