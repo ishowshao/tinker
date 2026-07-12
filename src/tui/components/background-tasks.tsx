@@ -20,16 +20,12 @@ export function BackgroundTasks(props: BackgroundTasksProps) {
         Background tasks · {runningCount} running / {props.tasks.length} total
       </Text>
       {props.tasks.map((task) => (
-        <Box key={task.taskId} flexDirection="column" marginTop={1} paddingLeft={1}>
+        <Box key={task.taskId} flexDirection="column">
           <Text color={colorForStatus(task.status)}>
-            {symbolForStatus(task.status)} {task.status}
+            {symbolForStatus(task.status)} {task.status} {taskDescription(task)}
+            {taskResult(task) === undefined ? "" : ` ${taskResult(task)}`}
           </Text>
-          <Text dimColor>id={task.taskId}</Text>
-          <Text wrap="truncate-end">{taskDescription(task)}</Text>
-          <Text dimColor>started={task.startedAt}</Text>
-          {taskResult(task) === undefined ? null : (
-            <Text dimColor>{taskResult(task)}</Text>
-          )}
+          <Text dimColor>{taskTiming(task)}</Text>
         </Box>
       ))}
     </Box>
@@ -42,17 +38,25 @@ function taskDescription(task: ShellTaskSnapshot): string {
 }
 
 function taskResult(task: ShellTaskSnapshot): string | undefined {
-  if (task.endedAt === undefined) {
-    return undefined;
+  if (task.signal !== undefined) {
+    return `signal=${task.signal}`;
   }
 
-  const result =
-    task.signal === undefined
-      ? task.exitCode === undefined
-        ? task.error
-        : `exit=${task.exitCode}`
-      : `signal=${task.signal}`;
-  return `ended=${task.endedAt}${result === undefined ? "" : ` ${result}`}`;
+  if (task.exitCode !== undefined) {
+    return `exit=${task.exitCode}`;
+  }
+
+  return task.error;
+}
+
+function taskTiming(task: ShellTaskSnapshot): string {
+  const timing = [`id=${task.taskId}`, `started=${task.startedAt}`];
+  if (task.endedAt === undefined) {
+    return timing.join(" · ");
+  }
+
+  timing.push(`ended=${task.endedAt}`);
+  return timing.join(" · ");
 }
 
 function colorForStatus(status: ShellTaskStatus): string {

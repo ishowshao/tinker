@@ -361,7 +361,7 @@ describe("tui components", () => {
             }),
             command: "bun run dev",
             description: "Start development server",
-            status: "killed",
+            status: "completed",
             startedAt: "2026-07-10T10:00:00.000Z",
             endedAt: "2026-07-10T10:01:00.000Z",
             backgroundedAt: "2026-07-10T10:00:00.010Z",
@@ -370,7 +370,7 @@ describe("tui components", () => {
             outputBytes: 20,
             outputLines: 2,
             cwd: "/tmp/workspace",
-            signal: "SIGTERM",
+            exitCode: 0,
           },
         ]}
       />,
@@ -378,10 +378,10 @@ describe("tui components", () => {
 
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Background tasks");
-    expect(frame).toContain("task-019f");
-    expect(frame).toContain("Start development server");
-    expect(frame).toContain("killed");
-    expect(frame).toContain("signal=SIGTERM");
+    expect(frame).toContain("✔ completed Start development server exit=0");
+    expect(frame).toContain(
+      "id=task-019f · started=2026-07-10T10:00:00.000Z · ended=2026-07-10T10:01:00.000Z",
+    );
     cleanup();
   });
 
