@@ -9,7 +9,7 @@ import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
 
 describe("SessionStore and SqliteSessionLedger", () => {
-  test("round-trips canonical history and resumes counters", async () => {
+  test("round-trips empty assistant tool-call text across turns and resume", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-store-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -44,7 +44,12 @@ describe("SessionStore and SqliteSessionLedger", () => {
       store.beginIteration(firstIteration);
       pending.agent.appendAssistant({
         iteration: firstIteration,
-        message: { role: "assistant", content: "checking", toolCalls: [call] },
+        message: {
+          role: "assistant",
+          content: "",
+          reasoningContent: "",
+          toolCalls: [call],
+        },
         provider: "test",
         model: "test-model",
       });
@@ -79,18 +84,52 @@ describe("SessionStore and SqliteSessionLedger", () => {
         finalText: "done",
         lastIteration: finalIteration,
       });
+
+      const secondTurn: TurnIdentity = {
+        sessionId,
+        turnId: runtimeIdFactory.createTurnId(),
+        turnNumber: 2,
+      };
+      const secondIteration: IterationIdentity = {
+        ...secondTurn,
+        iterationId: runtimeIdFactory.createIterationId(),
+        iterationNumber: 1,
+      };
+      const secondPending = ledger.beginTurn({
+        turn: secondTurn,
+        userPrompt: "continue",
+      });
+      store.beginIteration(secondIteration);
+      secondPending.agent.appendAssistant({
+        iteration: secondIteration,
+        message: { role: "assistant", content: "continued" },
+        provider: "test",
+        model: "test-model",
+      });
+      secondPending.finish({
+        status: "completed",
+        finalText: "continued",
+        lastIteration: secondIteration,
+      });
+
       const before = ledger.buildCommittedModelRequest([]);
+      expect(before.messages[2]).toEqual({
+        role: "assistant",
+        content: "",
+        reasoningContent: "",
+        toolCalls: [call],
+      });
       const lastEventSequence = store.allocateEventSequence();
       expect(lastEventSequence).toBe(1);
       await store.close("tui_exit");
 
       store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
       expect(store.readMeta()).toMatchObject({
-        nextTurnNumber: 2,
+        nextTurnNumber: 3,
         nextEventSequence: 2,
         initializationState: "ready",
       });
-      expect(store.validateAll({ allowOpenTail: false }).messages).toHaveLength(5);
+      expect(store.validateAll({ allowOpenTail: false }).messages).toHaveLength(7);
       const reopened = new SqliteSessionLedger(store, runtimeIdFactory);
       expect(reopened.buildCommittedModelRequest([])).toEqual(before);
       expect(store.allocateEventSequence()).toBe(2);

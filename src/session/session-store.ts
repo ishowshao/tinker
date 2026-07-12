@@ -1406,7 +1406,7 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
         origin: "user",
       });
     case "assistant": {
-      const content = nullableStringFromSql(row.content, "content");
+      const content = nullableTextFromSql(row.content, "content");
       const reasoningPresent = numberFromSql(
         row.reasoning_content_present,
         "reasoning_content_present",
@@ -1427,7 +1427,7 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
         ...(reasoningPresent === 0
           ? {}
           : {
-              reasoningContent: nullableStringFromSql(
+              reasoningContent: nullableTextFromSql(
                 row.reasoning_content,
                 "reasoning_content",
               ),
@@ -1954,6 +1954,16 @@ function stringFromSql(value: unknown, name: string): string {
 
 function nullableStringFromSql(value: unknown, name: string): string | null {
   return value === null ? null : stringFromSql(value, name);
+}
+
+function nullableTextFromSql(value: unknown, name: string): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`${name} must be a string or null.`);
+  }
+  return value;
 }
 
 function numberFromSql(value: unknown, name: string): number {
