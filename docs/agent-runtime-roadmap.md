@@ -241,6 +241,9 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 **状态：待实施；F4 已完成。**
 
+落地前技术方案见
+[`stable-source-recall-design.md`](stable-source-recall-design.md)。
+
 任何历史被换出前，必须先证明原文能够被确定性找回。
 
 实施范围：
