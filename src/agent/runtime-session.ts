@@ -28,7 +28,7 @@ import {
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { SessionError } from "../session/session-errors";
-import { runAgent } from "./loop";
+import { FatalAgentTurnError, runAgent } from "./loop";
 import { SessionLedgerWriteError, type SessionLedger } from "./session-ledger";
 import { TurnCancelledError } from "./turn-cancellation";
 import type {
@@ -158,7 +158,10 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
 class DefaultRuntimeSession implements RuntimeSession {
   readonly sessionId: SessionId;
   readonly resumed: boolean;
-  recovery: SessionRecoveryResult = { syntheticCompletionCount: 0 };
+  recovery: SessionRecoveryResult = {
+    syntheticCompletionCount: 0,
+    recallIndexRebuilt: false,
+  };
   private state: RuntimeSessionState = "initializing";
   private nextTurnNumber: number;
   private readonly turns = new Map<string, TurnIdentity>();
@@ -247,6 +250,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       session.tooling = dependencies.createTooling({
         workspaceRoot: input.workspaceRoot,
         runtimeSession: session.context,
+        historyReader: store.historyReader(),
         webFetchRefiner: input.webFetchRefiner,
       });
 
@@ -425,6 +429,17 @@ class DefaultRuntimeSession implements RuntimeSession {
         });
       } catch (error) {
         if (error instanceof RuntimeEventAppendError) {
+          throw error;
+        }
+
+        if (error instanceof FatalAgentTurnError) {
+          await this.appendTerminalEvent(
+            turn,
+            error.result,
+            pendingLedgerTurn.projectedMessageCount(),
+          );
+          pendingLedgerTurn.finish(error.result);
+          settled = true;
           throw error;
         }
 

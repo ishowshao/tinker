@@ -33,6 +33,10 @@ import type {
   ToolCallId,
   TurnId,
 } from "../ids/runtime-id";
+import {
+  RecallHistoryError,
+  type SessionHistoryReader,
+} from "../session/session-history-reader";
 
 export const TEST_CONTEXT_PROFILE: ModelContextProfile = {
   contextWindowTokens: 256 * 1_024,
@@ -40,6 +44,24 @@ export const TEST_CONTEXT_PROFILE: ModelContextProfile = {
 };
 
 export const TEST_CONTEXT_BUDGET = deriveModelContextBudget(TEST_CONTEXT_PROFILE);
+
+export function createTestHistoryReader(sessionId: SessionId): SessionHistoryReader {
+  return Object.freeze({
+    sessionId,
+    search() {
+      throw new RecallHistoryError(
+        "RECALL_SOURCE_NOT_FOUND",
+        "Test history reader has no messages.",
+      );
+    },
+    get() {
+      throw new RecallHistoryError(
+        "RECALL_SOURCE_NOT_FOUND",
+        "Test history reader has no messages.",
+      );
+    },
+  });
+}
 
 const preparedInputs = new WeakMap<object, ModelRequestInput>();
 

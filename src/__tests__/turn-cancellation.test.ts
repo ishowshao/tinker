@@ -21,6 +21,7 @@ import { ripGrep } from "../tools/ripgrep";
 import type { BashRawResult, ToolExecutor } from "../tools/types";
 import {
   createTestContextMeter,
+  createTestHistoryReader,
   createTestRuntime,
   deterministicIdFactory,
   TEST_CONTEXT_BUDGET,
@@ -157,6 +158,7 @@ describe("turn cancellation", () => {
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
       runtimeSession,
+      historyReader: createTestHistoryReader(runtimeSession.sessionId),
     });
 
     try {
@@ -314,6 +316,7 @@ describe("turn cancellation", () => {
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
       runtimeSession: testRuntime.runtimeSession,
+      historyReader: createTestHistoryReader(testRuntime.runtimeSession.sessionId),
       taskStopGraceMs: 50,
     });
     const controller = new AbortController();
@@ -359,6 +362,7 @@ describe("turn cancellation", () => {
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
       runtimeSession: testRuntime.runtimeSession,
+      historyReader: createTestHistoryReader(testRuntime.runtimeSession.sessionId),
       taskStopGraceMs: 50,
     });
     const controller = new AbortController();
@@ -404,6 +408,7 @@ describe("turn cancellation", () => {
     const tooling = createDefaultTooling({
       workspaceRoot: workspace,
       runtimeSession,
+      historyReader: createTestHistoryReader(runtimeSession.sessionId),
       taskStopGraceMs: 50,
     });
 

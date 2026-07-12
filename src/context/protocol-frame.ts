@@ -9,7 +9,7 @@ import type {
   TurnIdentity,
 } from "../agent/types";
 
-export const TOOL_OBSERVATION_FORMAT = "tool-observation-v1" as const;
+export const TOOL_OBSERVATION_FORMAT = "tool-observation-v2" as const;
 
 export type CanonicalMessageBase = {
   readonly messageId: MessageId;

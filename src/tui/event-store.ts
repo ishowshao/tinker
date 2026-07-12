@@ -674,6 +674,13 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       return raw.route === undefined
         ? base
         : `${base} -> ok (${raw.route}${raw.refined === true ? ", refined" : ""})`;
+    case "recall":
+      if (!raw.ok) {
+        return base;
+      }
+      return raw.mode === "search"
+        ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}`
+        : `${base} -> ${raw.page.returnedBytes} historical bytes`;
     case "task_list":
       return `${base} -> ${raw.tasks.length} task${raw.tasks.length === 1 ? "" : "s"}, ${raw.runningCount} running`;
     case "task_output":
@@ -735,6 +742,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "task_stop":
     case "web_search":
     case "web_fetch":
+    case "recall":
     case "mcp":
     case "generic":
       return {};
@@ -767,6 +775,7 @@ function toolRawResultDiff(
     case "task_stop":
     case "web_search":
     case "web_fetch":
+    case "recall":
     case "mcp":
     case "generic":
       return {};

@@ -7,6 +7,7 @@ import type {
   GrepRawResult,
   McpToolRawResult,
   ReadFileRawResult,
+  RecallRawResult,
   TaskListRawResult,
   TaskOutputRawResult,
   TaskStopRawResult,
@@ -29,6 +30,8 @@ export class ObservationBuilder {
         return { content: renderGrepObservation(input.raw) };
       case "read":
         return { content: renderReadObservation(input.raw) };
+      case "recall":
+        return { content: renderRecallObservation(input.raw) };
       case "write":
         return { content: renderWriteObservation(input.raw) };
       case "edit":
@@ -159,6 +162,68 @@ function renderReadObservation(raw: ReadFileRawResult): string {
     "content:",
     raw.content ?? "",
   ].join("\n");
+}
+
+function renderRecallObservation(raw: RecallRawResult): string {
+  if (!raw.ok) {
+    return `Recall ${raw.mode} failed (${raw.errorCode}): ${raw.error}`;
+  }
+  if (raw.mode === "get") {
+    const page = raw.page;
+    return [
+      "Recall retrieved historical session data.",
+      "historical=true",
+      `source=${page.source}`,
+      `role=${page.role}`,
+      page.toolName === undefined ? undefined : `toolName=${page.toolName}`,
+      `turnNumber=${page.turnNumber}`,
+      `ordinal=${page.ordinal}`,
+      `createdAt=${page.createdAt}`,
+      `contentSha256=${page.contentSha256}`,
+      `totalBytes=${page.totalBytes}`,
+      `byteOffset=${page.byteOffset}`,
+      `returnedBytes=${page.returnedBytes}`,
+      `nextByteOffset=${page.nextByteOffset ?? "null"}`,
+      "currentWorkspaceGuidance=Use Read/Grep to verify current files; this content is historical.",
+      "content:",
+      page.content,
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n");
+  }
+
+  const page = raw.page;
+  const header = [
+    "Recall searched historical session data.",
+    "historical=true",
+    `query=${JSON.stringify(raw.query)}`,
+    `strategy=${page.strategy}`,
+    `snapshotThroughOrdinal=${page.snapshotThroughOrdinal}`,
+    `offset=${page.offset}`,
+    `limit=${page.limit}`,
+    `nextOffset=${page.nextOffset ?? "null"}`,
+    `matchesReturned=${page.hits.length}`,
+  ].join("\n");
+  if (page.hits.length === 0) {
+    return `${header}\n\nNo matches were found in the current session for the supplied query, filters, and search snapshot. This does not prove that the information does not exist.`;
+  }
+  const hits = page.hits.map((hit, index) =>
+    [
+      `[${index + 1}]`,
+      `source=${hit.source}`,
+      `role=${hit.role}`,
+      hit.toolName === undefined ? undefined : `toolName=${hit.toolName}`,
+      `turnNumber=${hit.turnNumber}`,
+      `ordinal=${hit.ordinal}`,
+      `createdAt=${hit.createdAt}`,
+      `contentSha256=${hit.contentSha256}`,
+      "excerpt:",
+      hit.excerpt,
+    ]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+  );
+  return [header, ...hits].join("\n\n");
 }
 
 function renderWriteObservation(raw: WriteFileRawResult): string {

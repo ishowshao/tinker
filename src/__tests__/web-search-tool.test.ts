@@ -8,7 +8,11 @@ import { createWebSearchToolExecutor as createWebSearchToolExecutorBase } from "
 import type { ToolExecutionContext, WebSearchRawResult } from "../tools/types";
 import type { ToolCall } from "../agent/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
-import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
+import {
+  createTestHistoryReader,
+  createTestRuntime,
+  type TestToolCallInput,
+} from "./test-runtime";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -269,15 +273,19 @@ describe("WebSearch tool", () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-websearch-"));
 
     try {
+      const withKeyRuntime = createTestRuntime().runtimeSession;
       const withKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "exa-key",
-        runtimeSession: createTestRuntime().runtimeSession,
+        runtimeSession: withKeyRuntime,
+        historyReader: createTestHistoryReader(withKeyRuntime.sessionId),
       });
+      const withoutKeyRuntime = createTestRuntime().runtimeSession;
       const withoutKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "",
-        runtimeSession: createTestRuntime().runtimeSession,
+        runtimeSession: withoutKeyRuntime,
+        historyReader: createTestHistoryReader(withoutKeyRuntime.sessionId),
       });
 
       const toolNames = (tooling: typeof withKey) =>

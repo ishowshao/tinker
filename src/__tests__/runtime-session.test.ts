@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { FatalAgentTurnError } from "../agent/loop";
 import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
@@ -22,6 +24,10 @@ import type {
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import type { SessionId } from "../ids/runtime-id";
+import { SessionError } from "../session/session-errors";
+import type { SessionHistoryReader } from "../session/session-history-reader";
+import type { SessionStore } from "../session/session-store";
+import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { createDefaultTooling } from "../tools/registry";
 import {
   collectingEventSink,
@@ -110,6 +116,35 @@ class FailingToolCallModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: "recovered",
+    });
+  }
+}
+
+class FatalRecallModel extends TestModelClient {
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    if (options.identity === undefined) {
+      throw new Error("Expected model request identity.");
+    }
+    const { iteration, runtimeSession } = options.identity;
+    return testModelOutput(prepared, {
+      role: "assistant",
+      toolCalls: [
+        {
+          ...runtimeSession.createToolCall(iteration, 1),
+          providerToolCallId: "provider-recall",
+          name: "Recall",
+          args: { mode: "search", query: "history" },
+        },
+        {
+          ...runtimeSession.createToolCall(iteration, 2),
+          providerToolCallId: "provider-write",
+          name: "Write",
+          args: { file_path: "should-not-exist.txt", content: "unsafe" },
+        },
+      ],
     });
   }
 }
@@ -392,6 +427,89 @@ describe("RuntimeSession lifecycle", () => {
     ).toThrow("faulted");
     await session
       .dispose({ type: "runner_failed", error: "expected test fault" })
+      .catch(() => undefined);
+  });
+
+  test("persists a terminal failed turn before faulting on required Recall storage", async () => {
+    const sink = collectingEventSink();
+    let store: SessionStore | undefined;
+    const executedTools: string[] = [];
+    const session = await createRuntimeSession(
+      createInput(new FatalRecallModel(), sink, "fatal-recall"),
+      {
+        idFactory: deterministicIdFactory("fatal-recall"),
+        loadMcpConfig: async () => undefined,
+        createLedger: (openedStore, idFactory) => {
+          store = openedStore;
+          return new SqliteSessionLedger(openedStore, idFactory);
+        },
+        createTooling: (options) => {
+          const fatalReader: SessionHistoryReader = {
+            sessionId: options.runtimeSession.sessionId,
+            search() {
+              throw new SessionError(
+                "SESSION_READ_FAILED",
+                "recall_search",
+                "simulated history I/O failure",
+              );
+            },
+            get() {
+              throw new Error("Unexpected Recall get.");
+            },
+          };
+          const tooling = createDefaultTooling({
+            ...options,
+            historyReader: fatalReader,
+          });
+          const execute = tooling.runtime.execute.bind(tooling.runtime);
+          tooling.runtime.execute = async (call, context) => {
+            executedTools.push(call.name);
+            return execute(call, context);
+          };
+          return tooling;
+        },
+      },
+    );
+
+    const error = await session
+      .executeTurn({
+        userPrompt: "recall then write",
+        signal: new AbortController().signal,
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(FatalAgentTurnError);
+    expect(executedTools).toEqual(["Recall"]);
+    expect(() =>
+      session.executeTurn({
+        userPrompt: "after fault",
+        signal: new AbortController().signal,
+      }),
+    ).toThrow("faulted");
+
+    const database = new Database(requireStore(store).databasePath, { readonly: true });
+    expect(database.query("SELECT status FROM turns").get()).toEqual({
+      status: "failed",
+    });
+    expect(database.query("SELECT outcome FROM iterations").get()).toEqual({
+      outcome: "failed",
+    });
+    expect(
+      database
+        .query(
+          `SELECT tr.synthetic_reason
+           FROM tool_results tr
+           JOIN messages m ON m.message_id = tr.tool_message_id
+           ORDER BY m.ordinal`,
+        )
+        .all(),
+    ).toEqual([
+      { synthetic_reason: "failed_active" },
+      { synthetic_reason: "skipped_after_failure" },
+    ]);
+    database.close();
+    expect(sink.events.filter((event) => event.type === "turn.failed")).toHaveLength(1);
+    await session
+      .dispose({ type: "runner_failed", error: "expected fatal Recall failure" })
       .catch(() => undefined);
   });
 
@@ -821,6 +939,13 @@ function requireLedger(
     throw new Error("Expected an in-memory ledger fixture.");
   }
   return ledger;
+}
+
+function requireStore(store: SessionStore | undefined): SessionStore {
+  if (store === undefined) {
+    throw new Error("Expected a SessionStore fixture.");
+  }
+  return store;
 }
 
 function createInput(

@@ -55,7 +55,7 @@ function fakeRuntime(sessionId: SessionId): {
   const runtime: RuntimeSession = {
     sessionId,
     resumed: false,
-    recovery: { syntheticCompletionCount: 0 },
+    recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

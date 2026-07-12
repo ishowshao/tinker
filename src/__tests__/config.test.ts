@@ -147,6 +147,18 @@ describe("system prompt", () => {
     expect(prompt).toContain("Use Read to open specific files returned by Grep.");
     expect(prompt).toContain("Use Edit to replace exact strings in files.");
     expect(prompt).toContain("Use Bash to run tests");
+    expect(prompt).toContain(
+      "Use Recall to search or retrieve model-visible history from the current session.",
+    );
+    expect(prompt).toContain(
+      "Recall results are historical snapshots, not current workspace state.",
+    );
+    expect(prompt).toContain(
+      "Use Read and Grep to verify current files, and TaskOutput for current task output.",
+    );
+    expect(prompt).toContain(
+      "An empty Recall search does not prove that information does not exist.",
+    );
   });
 });
 

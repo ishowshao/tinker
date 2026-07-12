@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
-import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
+import {
+  createTestHistoryReader,
+  createTestRuntime,
+  type TestToolCallInput,
+} from "./test-runtime";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import { ObservationBuilder } from "../observation/observation-builder";
@@ -22,7 +26,10 @@ const testToolContext: ToolExecutionContext = {
 };
 
 function createDefaultTooling(
-  options: Omit<Parameters<typeof createDefaultToolingBase>[0], "runtimeSession"> & {
+  options: Omit<
+    Parameters<typeof createDefaultToolingBase>[0],
+    "runtimeSession" | "historyReader"
+  > & {
     eventSink?: EventSink;
   },
 ) {
@@ -31,6 +38,7 @@ function createDefaultTooling(
   const tooling = createDefaultToolingBase({
     ...toolingOptions,
     runtimeSession: testRuntime.runtimeSession,
+    historyReader: createTestHistoryReader(testRuntime.runtimeSession.sessionId),
   });
   return {
     ...tooling,

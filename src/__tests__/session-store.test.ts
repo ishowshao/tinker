@@ -251,6 +251,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
       expect(store.recoverInterruptedState(runtimeIdFactory)).toEqual({
         recoveredTurnId: turn.turnId,
         syntheticCompletionCount: 0,
+        recallIndexRebuilt: false,
       });
       expect(store.validateAll({ allowOpenTail: false }).messages.at(-1)).toMatchObject(
         { role: "user", content: "persisted user fact" },

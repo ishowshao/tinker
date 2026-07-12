@@ -51,6 +51,7 @@ export type SessionResumedData = {
   recoveredTurnId?: TurnId;
   recoveredFrameId?: ProtocolFrameId;
   syntheticCompletionCount: number;
+  recallIndexRebuilt: boolean;
 };
 
 export type InterruptedFrameRecoveredData = {

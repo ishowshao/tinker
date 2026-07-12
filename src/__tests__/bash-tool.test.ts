@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
-import { createTestRuntime, type TestToolCallInput } from "./test-runtime";
+import {
+  createTestHistoryReader,
+  createTestRuntime,
+  type TestToolCallInput,
+} from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
@@ -13,12 +17,16 @@ const testToolContext: ToolExecutionContext = {
 };
 
 function createDefaultTooling(
-  options: Omit<Parameters<typeof createDefaultToolingBase>[0], "runtimeSession">,
+  options: Omit<
+    Parameters<typeof createDefaultToolingBase>[0],
+    "runtimeSession" | "historyReader"
+  >,
 ) {
   const testRuntime = createTestRuntime();
   const tooling = createDefaultToolingBase({
     ...options,
     runtimeSession: testRuntime.runtimeSession,
+    historyReader: createTestHistoryReader(testRuntime.runtimeSession.sessionId),
   });
   return {
     ...tooling,

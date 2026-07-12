@@ -44,9 +44,25 @@ export class SessionIdParseError extends Error {
   }
 }
 
+export class MessageIdParseError extends Error {
+  readonly code = "MESSAGE_ID_INVALID" as const;
+
+  constructor(value: string) {
+    super(`Invalid message ID: ${JSON.stringify(value)}.`);
+    this.name = "MessageIdParseError";
+  }
+}
+
 export function parseSessionId(value: string): SessionId {
   if (!canonicalUuidV7Pattern.test(value)) {
     throw new SessionIdParseError(value);
   }
   return value as SessionId;
+}
+
+export function parseMessageId(value: string): MessageId {
+  if (!canonicalUuidV7Pattern.test(value)) {
+    throw new MessageIdParseError(value);
+  }
+  return value as MessageId;
 }

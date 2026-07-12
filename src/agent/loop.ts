@@ -1,6 +1,7 @@
 import type { ModelClient, PreparedModelRequest } from "../model/model-client";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
+import { ToolExecutionFatalError } from "../tools/types";
 import type { ContextMeter } from "./context-meter";
 import type { RuntimeSessionContext } from "./runtime-session";
 import type { AgentTurnLedger } from "./session-ledger";
@@ -30,6 +31,16 @@ export type RunAgentInput = {
   turn: TurnIdentity;
   signal: AbortSignal;
 };
+
+export class FatalAgentTurnError extends Error {
+  constructor(
+    readonly result: Extract<RunAgentResult, { status: "failed" }>,
+    options?: ErrorOptions,
+  ) {
+    super(result.error, options);
+    this.name = "FatalAgentTurnError";
+  }
+}
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastIteration: IterationIdentity | undefined;
@@ -189,7 +200,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           input.ledger.commitToolCompletions(
             failedToolCompletions(toolCalls, callIndex, error),
           );
-          return failedResult(error, iteration);
+          const result = failedResult(error, iteration);
+          if (error instanceof ToolExecutionFatalError) {
+            throw new FatalAgentTurnError(result, { cause: error });
+          }
+          return result;
         }
 
         input.ledger.commitToolCompletions(
@@ -354,7 +369,7 @@ function cancelledResult(
 function failedResult(
   error: unknown,
   lastIteration: IterationIdentity,
-): RunAgentResult {
+): Extract<RunAgentResult, { status: "failed" }> {
   return {
     status: "failed",
     error: errorMessage(error),

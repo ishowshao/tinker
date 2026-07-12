@@ -4,13 +4,22 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 1;
+export const SESSION_SCHEMA_VERSION = 2;
 
 type SchemaDefinition = {
-  type: "table" | "index" | "trigger";
+  type: "table" | "index" | "trigger" | "view";
   name: string;
   sql: string;
 };
+
+const RECALL_FTS_SHADOW_OBJECTS = [
+  { type: "table", name: "message_fts_config" },
+  { type: "table", name: "message_fts_data" },
+  { type: "table", name: "message_fts_docsize" },
+  { type: "table", name: "message_fts_idx" },
+] as const;
+
+const RECALL_FTS_CONFIG = [{ key: "version", value: 4 }] as const;
 
 const schemaDefinitions: readonly SchemaDefinition[] = [
   {
@@ -18,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 2),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -174,7 +183,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       CHECK (raw_json IS NULL OR json_valid(raw_json)),
       CHECK (
         (completion_kind = 'returned' AND raw_json IS NOT NULL AND raw_sha256 IS NOT NULL AND
-          observation_format = 'tool-observation-v1' AND synthetic_reason IS NULL AND synthetic_detail IS NULL) OR
+          observation_format = 'tool-observation-v2' AND synthetic_reason IS NULL AND synthetic_detail IS NULL) OR
         (completion_kind = 'synthetic' AND raw_json IS NULL AND raw_sha256 IS NULL AND
           observation_format IS NULL AND synthetic_reason IS NOT NULL)
       ),
@@ -209,6 +218,41 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     type: "index",
     name: "idx_turns_session_recent",
     sql: "CREATE INDEX idx_turns_session_recent ON turns(session_id, turn_number DESC)",
+  },
+  {
+    type: "view",
+    name: "recall_documents",
+    sql: `CREATE VIEW recall_documents AS
+      SELECT rowid AS docid, content
+      FROM messages
+      WHERE role IN ('user', 'assistant', 'tool')
+        AND content IS NOT NULL
+        AND length(content) > 0
+        AND NOT (role = 'tool' AND name = 'Recall')`,
+  },
+  {
+    type: "table",
+    name: "message_fts",
+    sql: `CREATE VIRTUAL TABLE message_fts USING fts5(
+      content,
+      content='recall_documents',
+      content_rowid='docid',
+      tokenize='trigram'
+    )`,
+  },
+  {
+    type: "trigger",
+    name: "messages_recall_index",
+    sql: `CREATE TRIGGER messages_recall_index
+      AFTER INSERT ON messages
+      WHEN NEW.role IN ('user', 'assistant', 'tool')
+        AND NEW.content IS NOT NULL
+        AND length(NEW.content) > 0
+        AND NOT (NEW.role = 'tool' AND NEW.name = 'Recall')
+      BEGIN
+        INSERT INTO message_fts(rowid, content)
+        VALUES (NEW.rowid, NEW.content);
+      END`,
   },
   ...immutableTriggers("messages"),
   ...immutableTriggers("tool_results"),
@@ -312,14 +356,18 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V1_FINGERPRINT = sha256(
-  stableJsonStringify(
-    schemaDefinitions.map((definition) => ({
+export const SESSION_SCHEMA_V2_FINGERPRINT = sha256(
+  stableJsonStringify({
+    definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
       name: definition.name,
       sql: normalizeSql(definition.sql),
     })),
-  ),
+    recallFts: {
+      config: RECALL_FTS_CONFIG,
+      shadowObjects: RECALL_FTS_SHADOW_OBJECTS,
+    },
+  }),
 );
 
 export function configureWritableDatabase(database: Database): void {
@@ -379,12 +427,71 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     }
     actualByName.delete(`${expected.type}:${expected.name}`);
   }
+  for (const shadow of RECALL_FTS_SHADOW_OBJECTS) {
+    const key = `${shadow.type}:${shadow.name}`;
+    if (!actualByName.has(key)) {
+      throw new SessionError(
+        "SESSION_SCHEMA_INVALID",
+        "verify_schema",
+        `Session schema is missing FTS shadow object: ${key}.`,
+        { sessionId },
+      );
+    }
+    actualByName.delete(key);
+  }
   if (actualByName.size > 0) {
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
       `Session schema contains unexpected definitions: ${[...actualByName.keys()].join(", ")}.`,
       { sessionId },
+    );
+  }
+
+  const actualFtsConfig = database
+    .query("SELECT k, v FROM message_fts_config ORDER BY k")
+    .all()
+    .map((entry) => {
+      const row = entry as { k: unknown; v: unknown };
+      return { key: String(row.k), value: Number(row.v) };
+    });
+  if (stableJsonStringify(actualFtsConfig) !== stableJsonStringify(RECALL_FTS_CONFIG)) {
+    throw new SessionError(
+      "SESSION_SCHEMA_INVALID",
+      "verify_schema",
+      "Session FTS configuration does not match schema v2.",
+      { sessionId },
+    );
+  }
+}
+
+export function verifyRecallIndex(database: Database, sessionId?: SessionId): void {
+  try {
+    database
+      .query(
+        `INSERT INTO message_fts(message_fts, rank)
+         VALUES ('integrity-check', 1)`,
+      )
+      .run();
+  } catch (error) {
+    throw new SessionError(
+      "SESSION_RECALL_INDEX_INVALID",
+      "verify_recall_index",
+      "Session Recall index failed its external-content integrity check.",
+      { sessionId, cause: error },
+    );
+  }
+}
+
+export function rebuildRecallIndex(database: Database, sessionId?: SessionId): void {
+  try {
+    database.query("INSERT INTO message_fts(message_fts) VALUES ('rebuild')").run();
+  } catch (error) {
+    throw new SessionError(
+      "SESSION_RECALL_INDEX_INVALID",
+      "rebuild_recall_index",
+      "Session Recall index could not be rebuilt from canonical history.",
+      { sessionId, cause: error },
     );
   }
 }

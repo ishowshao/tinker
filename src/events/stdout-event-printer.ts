@@ -24,7 +24,7 @@ export class StdoutEventPrinter implements EventSink {
         break;
       case "session.resumed":
         this.stdout.write(
-          `session.resumed sessionId=${event.sessionId} openCount=${event.data.openCount}\n`,
+          `session.resumed sessionId=${event.sessionId} openCount=${event.data.openCount} recallIndexRebuilt=${event.data.recallIndexRebuilt}\n`,
         );
         break;
       case "session.interrupted_frame_recovered":
@@ -148,6 +148,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "grep":
     case "web_search":
     case "web_fetch":
+    case "recall":
     case "mcp":
     case "generic":
       return [];

@@ -52,12 +52,18 @@ import {
   type SessionLedgerCommitter,
 } from "../agent/session-ledger";
 import { SessionError, sessionOpenError, sessionWriteError } from "./session-errors";
+import {
+  createSessionHistoryReader,
+  type SessionHistoryReader,
+} from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V1_FINGERPRINT,
+  SESSION_SCHEMA_V2_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
+  rebuildRecallIndex,
+  verifyRecallIndex,
   verifySessionSchema,
   verifySqliteIntegrity,
 } from "./session-schema";
@@ -74,8 +80,8 @@ export type RuntimeContractV1 = {
   observationFormat: typeof TOOL_OBSERVATION_FORMAT;
 };
 
-export type StoredSessionMetaV1 = {
-  schemaVersion: 1;
+export type StoredSessionMetaV2 = {
+  schemaVersion: 2;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -102,12 +108,13 @@ export type StoredSessionMetaV1 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV1["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV2["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
   recoveredFrameId?: ProtocolFrameId;
   syntheticCompletionCount: number;
+  recallIndexRebuilt: boolean;
 };
 
 export type CreateNewSessionStoreInput = {
@@ -132,6 +139,7 @@ export class SessionStore implements SessionLedgerCommitter {
   readonly sessionDirectory: string;
   readonly databasePath: string;
   private closed = false;
+  private recallIndexRebuilt = false;
   private readonly validator = new ContextProtocolValidator();
 
   private constructor(
@@ -210,7 +218,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V1_FINGERPRINT,
+            SESSION_SCHEMA_V2_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -243,6 +251,7 @@ export class SessionStore implements SessionLedgerCommitter {
       });
       await store.correctDatabaseModes();
       store.validateAll({ allowOpenTail: false });
+      verifyRecallIndex(database, input.sessionId);
       return store;
     } catch (error) {
       database?.close();
@@ -306,6 +315,36 @@ export class SessionStore implements SessionLedgerCommitter {
         );
       }
       store.validateAll({ allowOpenTail: true });
+      try {
+        verifyRecallIndex(database, input.sessionId);
+      } catch (error) {
+        if (
+          !(error instanceof SessionError) ||
+          error.code !== "SESSION_RECALL_INDEX_INVALID"
+        ) {
+          throw error;
+        }
+        try {
+          runTransaction(database, () =>
+            rebuildRecallIndex(database!, input.sessionId),
+          );
+          verifyRecallIndex(database, input.sessionId);
+        } catch (rebuildError) {
+          if (
+            rebuildError instanceof SessionError &&
+            rebuildError.code === "SESSION_RECALL_INDEX_INVALID"
+          ) {
+            throw rebuildError;
+          }
+          throw new SessionError(
+            "SESSION_RECALL_INDEX_INVALID",
+            "rebuild_recall_index",
+            "Session Recall index rebuild transaction failed.",
+            { sessionId: input.sessionId, cause: rebuildError },
+          );
+        }
+        store.recallIndexRebuilt = true;
+      }
       await store.correctDatabaseModes();
       return store;
     } catch (error) {
@@ -380,7 +419,11 @@ export class SessionStore implements SessionLedgerCommitter {
             iteration.turnId,
             iteration.iterationNumber,
           );
-        requireSingleChange(updated.changes, "advance iteration counter");
+        requireSingleChange(
+          this.database,
+          updated.changes,
+          "advance iteration counter",
+        );
       });
     } catch (error) {
       throw sessionWriteError("begin_iteration", this.sessionId, error);
@@ -398,7 +441,11 @@ export class SessionStore implements SessionLedgerCommitter {
            WHERE iteration_id = ? AND turn_id = ? AND outcome = 'open'`,
           )
           .run(now, iteration.iterationId, iteration.turnId);
-        requireSingleChange(updated.changes, "finish continuing iteration");
+        requireSingleChange(
+          this.database,
+          updated.changes,
+          "finish continuing iteration",
+        );
         this.touch(now);
       });
     } catch (error) {
@@ -419,7 +466,7 @@ export class SessionStore implements SessionLedgerCommitter {
            WHERE singleton = 1 AND next_event_sequence = ?`,
           )
           .run(sequence + 1, now, sequence);
-        requireSingleChange(updated.changes, "advance event sequence");
+        requireSingleChange(this.database, updated.changes, "advance event sequence");
         return sequence;
       });
     } catch (error) {
@@ -443,7 +490,11 @@ export class SessionStore implements SessionLedgerCommitter {
              AND runtime_contract_json IS NULL`,
           )
           .run(contract.toolSchemaSha256, json, contractSha256, now);
-        requireSingleChange(updated.changes, "finalize runtime contract");
+        requireSingleChange(
+          this.database,
+          updated.changes,
+          "finalize runtime contract",
+        );
       });
     } catch (error) {
       throw sessionWriteError("finalize_runtime_contract", this.sessionId, error);
@@ -483,7 +534,7 @@ export class SessionStore implements SessionLedgerCommitter {
            WHERE singleton = 1 AND open_count = ?`,
           )
           .run(next, now, now, meta.openCount);
-        requireSingleChange(updated.changes, "increment open count");
+        requireSingleChange(this.database, updated.changes, "increment open count");
         return next;
       });
     } catch (error) {
@@ -499,7 +550,10 @@ export class SessionStore implements SessionLedgerCommitter {
       .all() as Array<{ turn_id: string }>;
     const openFrames = view.frames.filter((frame) => frame.state === "open");
     if (openTurns.length === 0 && openFrames.length === 0) {
-      return { syntheticCompletionCount: 0 };
+      return {
+        syntheticCompletionCount: 0,
+        recallIndexRebuilt: this.recallIndexRebuilt,
+      };
     }
     if (openTurns.length !== 1 || openFrames.length > 1) {
       throw this.recoveryError(
@@ -523,7 +577,11 @@ export class SessionStore implements SessionLedgerCommitter {
         openIterations[0]?.iteration_id as IterationId | undefined,
       );
       this.validateAll({ allowOpenTail: false });
-      return { recoveredTurnId: turnId, syntheticCompletionCount: 0 };
+      return {
+        recoveredTurnId: turnId,
+        syntheticCompletionCount: 0,
+        recallIndexRebuilt: this.recallIndexRebuilt,
+      };
     }
     if (
       frame.turnId !== turnId ||
@@ -621,7 +679,11 @@ export class SessionStore implements SessionLedgerCommitter {
            WHERE frame_id = ? AND state = 'open' AND last_ordinal IS NULL`,
           )
           .run(closedFrame.lastOrdinal!, closedAt, frame.frameId);
-        requireSingleChange(frameUpdate.changes, "close recovered frame");
+        requireSingleChange(
+          this.database,
+          frameUpdate.changes,
+          "close recovered frame",
+        );
         this.markTerminalRows(
           turnId,
           frame.iterationId!,
@@ -645,7 +707,17 @@ export class SessionStore implements SessionLedgerCommitter {
       recoveredTurnId: turnId,
       recoveredFrameId: frame.frameId,
       syntheticCompletionCount: messages.length,
+      recallIndexRebuilt: this.recallIndexRebuilt,
     };
+  }
+
+  historyReader(): SessionHistoryReader {
+    this.requireOpen();
+    return createSessionHistoryReader({
+      database: this.database,
+      sessionId: this.sessionId,
+      requireOpen: () => this.requireOpen(),
+    });
   }
 
   loadProtocolView(): ProtocolContextView {
@@ -675,7 +747,7 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  readMeta(): StoredSessionMetaV1 {
+  readMeta(): StoredSessionMetaV2 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -697,7 +769,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V1_FINGERPRINT
+      meta.schemaFingerprint !== SESSION_SCHEMA_V2_FINGERPRINT
     ) {
       throw new SessionError(
         "SESSION_SCHEMA_INVALID",
@@ -756,7 +828,7 @@ export class SessionStore implements SessionLedgerCommitter {
            WHERE singleton = 1`,
           )
           .run(now, reason, now);
-        requireSingleChange(updated.changes, "close session activation");
+        requireSingleChange(this.database, updated.changes, "close session activation");
       });
     } catch (error) {
       primaryError = sessionWriteError("close_session", this.sessionId, error);
@@ -868,7 +940,7 @@ export class SessionStore implements SessionLedgerCommitter {
        WHERE singleton = 1 AND next_turn_number = ?`,
       )
       .run(mutation.turn.turnNumber + 1, now, mutation.turn.turnNumber);
-    requireSingleChange(updated.changes, "advance turn counter");
+    requireSingleChange(this.database, updated.changes, "advance turn counter");
   }
 
   private commitAssistant(
@@ -900,7 +972,7 @@ export class SessionStore implements SessionLedgerCommitter {
          WHERE iteration_id = ? AND outcome = 'open' AND next_tool_call_number = 1`,
         )
         .run(mutation.message.toolCalls.length + 1, mutation.iteration.iterationId);
-      requireSingleChange(updated.changes, "advance tool call counter");
+      requireSingleChange(this.database, updated.changes, "advance tool call counter");
     }
     this.touch(now);
   }
@@ -939,7 +1011,7 @@ export class SessionStore implements SessionLedgerCommitter {
           mutation.frameAfter.closedAt!,
           mutation.frameAfter.frameId,
         );
-      requireSingleChange(updated.changes, "close tool exchange frame");
+      requireSingleChange(this.database, updated.changes, "close tool exchange frame");
     }
     this.touch(now);
   }
@@ -983,7 +1055,7 @@ export class SessionStore implements SessionLedgerCommitter {
        WHERE iteration_id = ? AND turn_id = ? AND outcome = 'open'`,
       )
       .run(iterationOutcome, now, iterationId, turnId);
-    requireSingleChange(iteration.changes, "finish iteration");
+    requireSingleChange(this.database, iteration.changes, "finish iteration");
     const turn = this.database
       .query(
         `UPDATE turns SET status = ?, last_iteration_id = ?, final_message_id = ?,
@@ -991,7 +1063,7 @@ export class SessionStore implements SessionLedgerCommitter {
        WHERE turn_id = ? AND status = 'open'`,
       )
       .run(turnStatus, iterationId, finalMessageId, terminalDetailJson, now, turnId);
-    requireSingleChange(turn.changes, "finish turn");
+    requireSingleChange(this.database, turn.changes, "finish turn");
     this.touch(now);
   }
 
@@ -1009,7 +1081,7 @@ export class SessionStore implements SessionLedgerCommitter {
              WHERE iteration_id = ? AND outcome = 'open'`,
             )
             .run(now, iterationId);
-          requireSingleChange(iteration.changes, "interrupt iteration");
+          requireSingleChange(this.database, iteration.changes, "interrupt iteration");
         }
         const turn = this.database
           .query(
@@ -1022,7 +1094,7 @@ export class SessionStore implements SessionLedgerCommitter {
             stableJsonStringify({ version: 1, reason: "process_interrupted" }),
             turnId,
           );
-        requireSingleChange(turn.changes, "interrupt turn");
+        requireSingleChange(this.database, turn.changes, "interrupt turn");
         this.touch(now);
       });
     } catch (error) {
@@ -1035,7 +1107,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateInitialRevision(meta: StoredSessionMetaV1): void {
+  private validateInitialRevision(meta: StoredSessionMetaV2): void {
     const rows = this.database.query("SELECT * FROM context_revisions").all() as Array<
       Record<string, unknown>
     >;
@@ -1054,7 +1126,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateCounters(meta: StoredSessionMetaV1, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV2, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -1203,7 +1275,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const updated = this.database
       .query("UPDATE session_meta SET updated_at = ? WHERE singleton = 1")
       .run(timestamp);
-    requireSingleChange(updated.changes, "touch session");
+    requireSingleChange(this.database, updated.changes, "touch session");
   }
 
   private recoveryError(message: string): SessionError {
@@ -1591,6 +1663,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "task_stop",
       "web_search",
       "web_fetch",
+      "recall",
       "mcp",
       "generic",
     ] as const,
@@ -1602,14 +1675,14 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   return immutableCanonicalClone(raw) as ToolRawResult;
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV1 {
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV2 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   return {
-    schemaVersion: numberFromSql(row.schema_version, "schema_version") as 1,
+    schemaVersion: numberFromSql(row.schema_version, "schema_version") as 2,
     schemaFingerprint: stringFromSql(row.schema_fingerprint, "schema_fingerprint"),
     initializationState: enumFromSql(
       row.initialization_state,
@@ -1918,9 +1991,18 @@ async function unlinkIfExists(filePath: string): Promise<void> {
   }
 }
 
-function requireSingleChange(changes: number | bigint, operation: string): void {
-  if (Number(changes) !== 1) {
-    throw new Error(`${operation} must change exactly one row; changed ${changes}.`);
+function requireSingleChange(
+  database: Database,
+  reportedChanges: number | bigint,
+  operation: string,
+): void {
+  const row = database.query("SELECT changes() AS changes").get() as {
+    changes: number | bigint;
+  };
+  if (Number(row.changes) !== 1) {
+    throw new Error(
+      `${operation} must change exactly one row; changed ${row.changes} (driver reported ${reportedChanges}).`,
+    );
   }
 }
 

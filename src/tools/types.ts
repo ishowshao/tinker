@@ -1,5 +1,10 @@
 import type { ToolCall } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
+import type {
+  RecallGetPage,
+  RecallSearchFilters,
+  RecallSearchPage,
+} from "../session/session-history-reader";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "./bash-task";
 
 export type JsonSchema = Record<string, unknown>;
@@ -201,6 +206,45 @@ export type GenericToolRawResult = {
   error: string;
 };
 
+export type RecallToolErrorCode =
+  | "RECALL_ARGS_INVALID"
+  | "RECALL_SOURCE_INVALID"
+  | "RECALL_SOURCE_NOT_FOUND"
+  | "RECALL_PAGE_INVALID"
+  | "RECALL_SNAPSHOT_INVALID";
+
+export type RecallSearchRawResult =
+  | {
+      ok: true;
+      mode: "search";
+      historical: true;
+      query: string;
+      filters: RecallSearchFilters;
+      page: RecallSearchPage;
+    }
+  | {
+      ok: false;
+      mode: "search";
+      errorCode: RecallToolErrorCode;
+      error: string;
+    };
+
+export type RecallGetRawResult =
+  | {
+      ok: true;
+      mode: "get";
+      historical: true;
+      page: RecallGetPage;
+    }
+  | {
+      ok: false;
+      mode: "get";
+      errorCode: RecallToolErrorCode;
+      error: string;
+    };
+
+export type RecallRawResult = RecallSearchRawResult | RecallGetRawResult;
+
 export type McpToolRawResult = {
   ok: boolean;
   toolName: string;
@@ -225,6 +269,7 @@ export type ToolRawResultByKind = {
   task_stop: TaskStopRawResult;
   web_search: WebSearchRawResult;
   web_fetch: WebFetchRawResult;
+  recall: RecallRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;
 };
@@ -269,6 +314,13 @@ export function defineToolExecutor<TKind extends ToolRawResultKind>(
 export type ToolExecutionContext = {
   signal: AbortSignal;
 };
+
+export class ToolExecutionFatalError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ToolExecutionFatalError";
+  }
+}
 
 export type FileSnapshot = {
   sha256: string;

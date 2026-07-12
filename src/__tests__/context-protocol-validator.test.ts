@@ -102,6 +102,9 @@ describe("ContextProtocolValidator", () => {
     if (returned?.completion.kind !== "returned") {
       throw new Error("Expected returned tool result.");
     }
+    if (returned.completion.raw.kind !== "read") {
+      throw new Error("Expected returned Read result.");
+    }
     rawCorruption.toolResults[0] = {
       ...returned,
       completion: {

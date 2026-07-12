@@ -18,6 +18,8 @@ export type SessionErrorCode =
   | "SESSION_WORKSPACE_MISMATCH"
   | "SESSION_RUNTIME_MISMATCH"
   | "SESSION_PROTOCOL_INVALID"
+  | "SESSION_RECALL_INDEX_INVALID"
+  | "SESSION_READ_FAILED"
   | "SESSION_WRITE_FAILED"
   | "SESSION_RECOVERY_FAILED"
   | "SESSION_DELETE_BLOCKED";
@@ -89,6 +91,23 @@ export function sessionOpenError(
     code,
     operation,
     `Session store open failed during ${operation}${sqliteCode === undefined ? "" : ` (${sqliteCode})`}.`,
+    { sessionId, sqliteCode, cause: error },
+  );
+}
+
+export function sessionReadError(
+  operation: string,
+  sessionId: SessionId,
+  error: unknown,
+): SessionError {
+  if (error instanceof SessionError) {
+    return error;
+  }
+  const sqliteCode = sqliteErrorCode(error);
+  return new SessionError(
+    "SESSION_READ_FAILED",
+    operation,
+    `Session history read failed during ${operation}${sqliteCode === undefined ? "" : ` (${sqliteCode})`}.`,
     { sessionId, sqliteCode, cause: error },
   );
 }

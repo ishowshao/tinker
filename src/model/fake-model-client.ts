@@ -81,6 +81,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "wait-for-cancel") {
       return waitForCancellation(options.signal);
     }
+    if (this.mode === "recall-smoke") {
+      return this.recallSmoke(input, prepared, options);
+    }
 
     return outputWithUsage(
       prepared,
@@ -136,6 +139,81 @@ export class FakeModelClient implements ModelClient {
       "stop",
     );
   }
+
+  private recallSmoke(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    if (options.identity === undefined) {
+      throw new Error("Fake Recall call requires an iteration identity context.");
+    }
+    const lastUserIndex = lastMessageIndex(input.messages, "user");
+    const latestRecallResult = input.messages
+      .slice(lastUserIndex + 1)
+      .reverse()
+      .find(
+        (message): message is Extract<AgentMessage, { role: "tool" }> =>
+          message.role === "tool" && message.name === "Recall",
+      );
+    if (latestRecallResult === undefined) {
+      return outputWithUsage(
+        prepared,
+        {
+          role: "assistant",
+          toolCalls: [
+            {
+              ...options.identity.runtimeSession.createToolCall(
+                options.identity.iteration,
+                1,
+              ),
+              providerToolCallId: "fake-recall-search-1",
+              name: "Recall",
+              args: { mode: "search", query: "recall-smoke-marker" },
+            },
+          ],
+        },
+        "tool_calls",
+      );
+    }
+    if (latestRecallResult.content.startsWith("Recall searched")) {
+      const source = latestRecallResult.content.match(
+        /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
+      )?.[1];
+      if (source === undefined) {
+        throw new Error("Fake Recall search did not return a source.");
+      }
+      return outputWithUsage(
+        prepared,
+        {
+          role: "assistant",
+          toolCalls: [
+            {
+              ...options.identity.runtimeSession.createToolCall(
+                options.identity.iteration,
+                1,
+              ),
+              providerToolCallId: "fake-recall-get-1",
+              name: "Recall",
+              args: { mode: "get", source },
+            },
+          ],
+        },
+        "tool_calls",
+      );
+    }
+    if (!latestRecallResult.content.includes("recall-smoke-marker")) {
+      throw new Error("Fake Recall get did not recover the expected marker.");
+    }
+    return outputWithUsage(
+      prepared,
+      {
+        role: "assistant",
+        content: "Recall search and get completed.",
+      },
+      "stop",
+    );
+  }
 }
 
 function outputWithUsage(
@@ -175,6 +253,18 @@ function lastUserMessage(messages: AgentMessage[]): string {
     (message): message is { role: "user"; content: string } => message.role === "user",
   );
   return users.at(-1)?.content ?? "";
+}
+
+function lastMessageIndex(
+  messages: AgentMessage[],
+  role: AgentMessage["role"],
+): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === role) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 function toPromptSegment(message: AgentMessage): PreparedPromptSegment {

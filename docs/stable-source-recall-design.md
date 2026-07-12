@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-12
-- 状态：落地前技术方案，尚未实施
+- 状态：已实施（2026-07-12）
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F5
 - 前置阶段：F3 协议安全会话账本、F4 SessionStore v1 与 `/resume` 已完成
 - 后继阶段：I1 Context Revision 与影子规划
@@ -12,8 +12,19 @@
   - [`session-store-resume-design.md`](session-store-resume-design.md)
   - [`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)
 
-本文冻结 F5 的实现契约。F5 完成前，不实施 active context revision 切换、确定性换出、
-`/compact` 或自动 compaction。
+本文冻结 F5 的实现契约。F5 已按本文落地；后续仍不在 F5 范围内实施 active context
+revision 切换、确定性换出、`/compact` 或自动 compaction。
+
+实施回填：
+
+- schema v2、external-content trigram FTS、稳定 source、scoped reader、Recall tool、
+  observation v2 与 fatal required-resource barrier 已完成。
+- 自动化测试覆盖 source、allowlist、UTF-8 page、literal search、snapshot、index rebuild、
+  transaction rollback、ordinary/fatal 分流、Read v1/Edit v2 和 resume round-trip。
+- fake-model one-shot、真实 TUI PTY、`/resume` 和真实 DeepSeek search→get smoke 已通过。
+- 10,000-message 本机基线与复跑命令已回填
+  [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F5 实际结果；基准脚本为
+  `bun run bench:recall -- 10000 100`。
 
 ## 一、结论先行
 

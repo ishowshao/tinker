@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 日期：2026-07-11
+- 日期：2026-07-12
 - 性质：实施路线图，不替代阶段技术设计
 - 目标方案：[`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)
 - 当前依据：仓库现有源码、测试与已完成的 runtime 设计
@@ -12,8 +12,9 @@
 现在不应直接实施完整的「无限上下文」方案。
 
 Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
-preflight、协议安全账本和可恢复 SessionStore。当前未完成的关键地基是稳定历史来源与
-`Recall`；在它完成前仍不应直接开发自动 compaction。
+preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
+地基阶段已经完成；下一步是 I1 Context Revision 与影子规划，仍不直接切换活动视图或
+开发自动 compaction。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -76,6 +77,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
+| 稳定来源与 `Recall` | 已完成 | schema v2、`ctx://message/...`、scoped reader、FTS5/substring search 和精确 get 已落地 |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -88,13 +90,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 | 能力 | 已有部分 | 仍缺少 |
 | --- | --- | --- |
-| 稳定历史来源 | message 已有稳定 ID、正文和 hash | 还没有 `ctx://` source、精确 page-in 或用户可调用的 `Recall` |
 | Context revision | F4 有且仅有 `initial_full` revision | 尚未建立多 revision 编译、影子规划或 active view 切换 |
-| 历史检索 | canonical history 可从 SessionStore 严格读取 | 尚未建立 FTS、substring fallback 或 source-scoped reader |
 
 ### 3.3 尚未开始
 
-- `Recall`、session 内搜索和精确历史 page-in。
 - 确定性换出、结构化 checkpoint、`/compact` 和自动 compaction。
 
 ### 3.4 旧路线图如何迁移
@@ -239,7 +238,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### F5：稳定来源与 `Recall`
 
-**状态：待实施；F4 已完成。**
+**状态：已完成（2026-07-12）。**
 
 落地前技术方案见
 [`stable-source-recall-design.md`](stable-source-recall-design.md)。
@@ -250,7 +249,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 - 定义稳定 `ctx://message/<message-id>` 来源和只读 `SessionHistoryReader`。
 - `Recall get` 按 source 精确返回正文、哈希和分页信息。
-- `Recall search` 使用 session 内 FTS5 trigram；短查询使用有界 substring fallback。
+- `Recall search` 使用 session 内 FTS5 trigram；短查询使用显式 substring fallback。
 - 搜索只覆盖允许返回的 user、assistant 和 tool observation，不默认暴露 reasoning 或
   provider raw response。
 - observation 明确标记为历史数据；历史 Read/Grep/Bash 与当前 workspace 的
@@ -263,6 +262,22 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 - 中英文、路径、代码符号和错误字符串都可搜索，并支持稳定分页。
 - 不能跨 session 或 workspace 读取历史。
 - Read 文件 v1、修改为 v2 后，Recall 返回历史 v1，Read 返回当前 v2。
+
+实际结果：
+
+- schema v2 一次性切换完成；v1 fast-fail，FTS-only 损坏可从已验证 canonical history
+  重建，message/FTS trigger 失败会回滚整个 mutation。
+- `Recall` 已作为必选 built-in tool 进入 tool schema；ordinary miss 可继续，required
+  reader 故障会补齐 tool frame、跳过后续副作用、持久化 failed turn 并 fault session。
+- 自动化集成用例验证 Read v1、Edit v2、Recall v1、当前 Read v2，以及退出后恢复同一
+  source/hash 再次 get。
+- fake-model one-shot、真实 TUI PTY、`/resume` 后再次 Recall，以及真实 DeepSeek
+  search→get smoke 均通过。
+- `bun run bench:recall -- 10000 100` 基线：SQLite 总增量 13,082,624 bytes，其中 FTS
+  shadow pages 1,490,944 bytes；打开并完成 schema/SQLite/index 校验 78.35ms，index
+  rebuild+复验 46.78ms；稀疏 trigram p50/p95 0.21/0.23ms，全量命中 trigram 10.79ms，
+  一字 substring p50/p95 9.29/9.51ms；20-hit search + 20,000-byte get 的采样 RSS
+  增量 131,072 bytes。本数据是本机基线，不是 SLA。
 
 ## 五、进入「无限上下文」实施的门禁
 
@@ -347,5 +362,6 @@ swap-only。
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **F5：稳定来源与 `Recall`**。F1 至 F4 已完成；在 F5 证明历史可以
-按稳定 source 精确找回前，不启动 active revision 切换或 compaction。
+当前明确的下一项是 **I1：Context Revision 与影子规划**。F1 至 F5 已完成，但 I1 仍只
+允许 shadow compile/audit，不切换 active revision；在 I2 门槛满足前不启动确定性换出或
+compaction。

@@ -13,7 +13,7 @@ import {
 import type { WebFetchBackend } from "../tools/web-fetch/backend";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ToolCall } from "../agent/types";
-import { createTestRuntime } from "./test-runtime";
+import { createTestHistoryReader, createTestRuntime } from "./test-runtime";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { ToolExecutionContext, WebFetchRawResult } from "../tools/types";
 
@@ -736,15 +736,19 @@ describe("WebFetch pipeline", () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-webfetch-"));
 
     try {
+      const withKeyRuntime = createTestRuntime().runtimeSession;
       const withKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "exa-key",
-        runtimeSession: createTestRuntime().runtimeSession,
+        runtimeSession: withKeyRuntime,
+        historyReader: createTestHistoryReader(withKeyRuntime.sessionId),
       });
+      const withoutKeyRuntime = createTestRuntime().runtimeSession;
       const withoutKey = createDefaultTooling({
         workspaceRoot: workspace,
         exaApiKey: "",
-        runtimeSession: createTestRuntime().runtimeSession,
+        runtimeSession: withoutKeyRuntime,
+        historyReader: createTestHistoryReader(withoutKeyRuntime.sessionId),
       });
 
       const toolNames = (tooling: typeof withKey) =>

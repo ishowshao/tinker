@@ -30,6 +30,7 @@ function renderObservationLogBlock(event: AgentEvent): string | undefined {
         `Resumed: ${event.timestamp}`,
         `Open count: ${event.data.openCount}`,
         `Recovered synthetic completions: ${event.data.syntheticCompletionCount}`,
+        `Recall index rebuilt: ${event.data.recallIndexRebuilt}`,
         "",
       ].join("\n");
     case "turn.started":

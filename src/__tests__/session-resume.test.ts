@@ -65,6 +65,7 @@ describe("RuntimeSession resume", () => {
       );
       expect(session.resumed).toBe(true);
       expect(session.recovery.syntheticCompletionCount).toBe(0);
+      expect(session.recovery.recallIndexRebuilt).toBe(false);
       await session.executeTurn({
         userPrompt: "third",
         signal: new AbortController().signal,
@@ -90,6 +91,9 @@ describe("RuntimeSession resume", () => {
       expect(
         sink.events.filter((event) => event.type === "session.resumed"),
       ).toHaveLength(1);
+      expect(
+        sink.events.find((event) => event.type === "session.resumed")?.data,
+      ).toMatchObject({ recallIndexRebuilt: false });
       const sequences = sink.events.map((event) => event.eventSequence);
       expect(new Set(sequences).size).toBe(sequences.length);
       expect(sequences).toEqual([...sequences].sort((left, right) => left - right));

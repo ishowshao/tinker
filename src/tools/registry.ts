@@ -5,6 +5,7 @@ import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
+import { createRecallToolExecutor } from "./recall";
 import { createTaskListToolExecutor } from "./task-list";
 import { createTaskOutputToolExecutor } from "./task-output-tool";
 import { createTaskStopToolExecutor } from "./task-stop";
@@ -25,6 +26,8 @@ import type {
   ToolRawResult,
 } from "./types";
 import type { ToolCall } from "../agent/types";
+import type { SessionHistoryReader } from "../session/session-history-reader";
+import { ToolExecutionFatalError } from "./types";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
@@ -83,6 +86,9 @@ export class ToolRuntime {
       if (context.signal.aborted) {
         throw cancellationError(context.signal, error);
       }
+      if (error instanceof ToolExecutionFatalError) {
+        throw error;
+      }
 
       return {
         kind: "generic",
@@ -112,6 +118,7 @@ export type BashToolingState = {
 export function createDefaultTooling(options: {
   workspaceRoot: string;
   runtimeSession: RuntimeSessionContext;
+  historyReader: SessionHistoryReader;
   maxDisplayedBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
@@ -146,6 +153,7 @@ export function createDefaultTooling(options: {
       maxDisplayedBytes: options.maxDisplayedBytes,
     }),
   );
+  registry.register(createRecallToolExecutor({ historyReader: options.historyReader }));
   registry.register(
     createWriteToolExecutor({
       workspaceRoot: options.workspaceRoot,
