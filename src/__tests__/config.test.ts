@@ -159,6 +159,7 @@ describe("system prompt", () => {
     expect(prompt).toContain("Use Glob to find files by name or path pattern.");
     expect(prompt).toContain("Use Read to open specific files returned by Grep.");
     expect(prompt).toContain("Use Edit to replace exact strings in files.");
+    expect(prompt).toContain("A successful paginated Read is sufficient.");
     expect(prompt).toContain("Use Bash to run tests");
     expect(prompt).toContain(
       "Use Recall to search or retrieve model-visible history from the current session.",

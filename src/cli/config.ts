@@ -36,7 +36,7 @@ Use Read to open specific files returned by Grep.
 Use Edit to replace exact strings in files.
 Use Read before Write when modifying an existing file.
 Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
-Use Read on the full file before Edit. Edit may fail if the file was not fully read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
+Use Read at least once before Edit. A successful paginated Read is sufficient. Edit may fail if the file was not read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
 Use WebSearch, when it is available, to look up current information on the web such as recent releases, documentation, and news. Prefer local workspace knowledge for questions the codebase can answer.
 Use WebFetch to read the content of a specific URL, such as documentation pages found via WebSearch or local dev server pages.
 Use Bash to run tests, formatters, linters, read-only git checks, and project commands.

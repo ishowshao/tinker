@@ -178,6 +178,7 @@ Grep failed for pattern="foo": ripgrep is required. Install rg and ensure it is 
 Read succeeded for src/app.ts.
 sha256=0123456789abcdef...
 sizeBytes=4210
+contentBytes=612
 totalLines=138
 displayed=lines 21-40
 content:
@@ -186,14 +187,36 @@ export function run() {
 }
 ```
 
-默认最多展示 20,000 bytes。超限时 `displayed` 后追加：
+单次 Read 最多返回 262144 bytes（256 KiB）的正文。成功表示 `content` 包含本次
+实际选中行区间的全部内容，不存在 `truncated=true` 或静默截断。`limit` 表示最多读取
+多少行；请求区间超过 EOF 时，返回到实际文件末尾仍算完整成功。
+
+未传 `limit` 且所选正文超限时，返回普通工具失败，不携带部分正文，也不更新文件
+快照：
 
 ```text
-Content was truncated to 20000 displayed bytes.
+Read failed for src/app.ts: File content (301442 bytes) exceeds maximum allowed size (262144 bytes). Use offset and limit parameters to read specific portions of the file.
 ```
 
-注意：`sizeBytes` 和 `totalLines` 仍描述完整文件，`sha256` 也是完整文件哈希。只有
-读取了完整文件，快照才会标记为 `fullFile`，这会影响后续 Write/Edit 的并发保护。
+显式传入 `limit` 但所选区间仍超限时，错误会报告实际行区间并要求缩小 `limit`：
+
+```text
+Read failed for src/app.ts: Requested lines 100-900 contain 280117 bytes and exceed the 262144-byte Read limit. Reduce limit to request a smaller line range.
+```
+
+如果单行本身就超过上限，行分页无法读取该行，错误会直接说明这个边界：
+
+```text
+Read failed for dist/app.js: Line 1 is 410322 bytes and exceeds the 262144-byte Read limit. This line cannot be read with line-based pagination.
+```
+
+非空文件的 `offset` 超过 `totalLines` 时失败，不能用空分页建立有效 Read。空文件只有
+不带 `offset` / `limit` 的 Read 成功。每次成功 Read（包括分页 Read）都会记录当前
+文件的 sha256、mtime 和 `source=read`；分页覆盖范围不累计，也不要求覆盖全文。
+失败 Read 不写入快照，因此不会凭空解锁 Edit，也不会覆盖同一版本已有的有效状态。
+
+`sizeBytes` 和 `totalLines` 描述完整文件；`contentBytes` 与 `displayed` 描述本次完整
+返回的正文。sha256 仍基于磁盘全文，供 Write 的版本检查使用。
 
 失败示例：
 
@@ -247,15 +270,20 @@ oldSha256=aaaa...
 newSha256=bbbb...
 ```
 
-并发保护失败会明确要求完整 Read：
+目标文件必须至少成功 Read 一次；分页 Read 足以解锁 Edit：
 
 ```text
-Edit failed for src/app.ts: File must be read completely before Edit. Call Read on the full file before trying Edit again.
+Edit failed for src/app.ts: File must be read before Edit. Call Read on this file before trying Edit again.
 ```
 
-文件在上次完整 Read 后变化时，错误本身会要求再次 Read，但不追加固定提示。旧字符
-串找不到、不唯一但未启用 `replace_all`、参数错误或路径错误，也使用
-`Edit failed for <path>: <error>`，但不附加 Read 指引。
+Edit 不依赖 Read 返回的正文快照，而是在执行时重新读取磁盘全文，再检查当前 mtime
+是否晚于上一次成功 Read/Edit 记录的 mtime。文件已变化时要求重新 Read。写入前还会
+再次检查 mtime，减少准备替换期间的并发覆盖窗口。
+
+成功 Edit 更新 sha256、mtime 并记录 `source=edit`，因此连续 Edit 保持授权；成功
+Write 记录 `source=write`，下一次 Edit 必须重新 Read。旧字符串找不到、不唯一但未
+启用 `replace_all`、参数错误或路径错误，也使用 `Edit failed for <path>: <error>`，
+但不附加固定 Read 指引。
 
 ### 4.6 Bash
 

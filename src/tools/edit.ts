@@ -30,7 +30,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
     definition: {
       name: "Edit",
       description:
-        "Replace an exact string in a workspace file. The full file must be read first.",
+        "Replace an exact string in a workspace file. The file must be read first; a successful paginated Read is sufficient.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -126,13 +126,13 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
       }
 
       const snapshot = options.snapshots.get(absolutePath);
-      if (snapshot === undefined || snapshot.source === "write" || !snapshot.fullFile) {
+      if (snapshot === undefined || snapshot.source === "write") {
         return {
           ok: false,
           filePath: input.file_path,
           absolutePath,
           requiredReadBeforeEdit: true,
-          error: "File must be read completely before Edit.",
+          error: "File must be read before Edit.",
         };
       }
 
@@ -142,9 +142,9 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
           filePath: input.file_path,
           absolutePath,
           currentMtimeMs: target.mtimeMs,
-          lastReadMtimeMs: snapshot.mtimeMs,
+          lastObservedMtimeMs: snapshot.mtimeMs,
           error:
-            "File changed after the last complete Read. Read it again before Edit.",
+            "File changed after it was last read or edited. Read it again before Edit.",
         };
       }
 
@@ -181,6 +181,8 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         replacementCount: input.replace_all ? replacementCount : 1,
         replaceAll: input.replace_all,
         created: false,
+        expectedMtimeMs: target.mtimeMs,
+        readRequiredOnChange: true,
         snapshots: options.snapshots,
         signal: context.signal,
       });
@@ -248,6 +250,8 @@ async function writeEmptyTarget(input: {
     replacementCount: 0,
     replaceAll: false,
     created: !input.target.exists,
+    expectedMtimeMs: input.target.exists ? input.target.mtimeMs : undefined,
+    readRequiredOnChange: false,
     snapshots: input.snapshots,
     signal: input.signal,
   });
@@ -262,17 +266,46 @@ async function writeEditedContent(input: {
   replacementCount: number;
   replaceAll: boolean;
   created: boolean;
+  expectedMtimeMs?: number;
+  readRequiredOnChange: boolean;
   snapshots: ReadSnapshotStore;
   signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   throwIfTurnCancelled(input.signal);
+
+  if (input.expectedMtimeMs !== undefined) {
+    const currentState = await fileMtime(input.absolutePath);
+    throwIfTurnCancelled(input.signal);
+
+    if (!currentState.ok) {
+      return {
+        ok: false,
+        filePath: input.filePath,
+        absolutePath: input.absolutePath,
+        error: `File changed while Edit was being prepared: ${currentState.error}`,
+      };
+    }
+
+    if (currentState.mtimeMs > input.expectedMtimeMs) {
+      return {
+        ok: false,
+        filePath: input.filePath,
+        absolutePath: input.absolutePath,
+        currentMtimeMs: currentState.mtimeMs,
+        lastObservedMtimeMs: input.expectedMtimeMs,
+        error: input.readRequiredOnChange
+          ? "File changed while Edit was being prepared. Read it again before Edit."
+          : "File changed while Edit was being prepared. Retry Edit with the current file state.",
+      };
+    }
+  }
+
   await writeFile(input.absolutePath, input.newContent, "utf8");
   const newSha256 = sha256Text(input.newContent);
   const writtenInfo = await stat(input.absolutePath);
   input.snapshots.set(input.absolutePath, {
     sha256: newSha256,
     mtimeMs: writtenInfo.mtimeMs,
-    fullFile: true,
     source: "edit",
   });
 
@@ -310,6 +343,20 @@ async function directoryExists(
   }
 }
 
+async function fileMtime(
+  filePath: string,
+): Promise<{ ok: true; mtimeMs: number } | { ok: false; error: string }> {
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) {
+      return { ok: false, error: "Path is not a file." };
+    }
+    return { ok: true, mtimeMs: info.mtimeMs };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
 type TargetFileState =
   | { ok: true; exists: false }
   | {
@@ -330,12 +377,17 @@ async function targetFileState(
     }
 
     const content = await readFile(absolutePath, "utf8");
+    const currentInfo = await stat(absolutePath);
+    if (currentInfo.mtimeMs > info.mtimeMs) {
+      return { ok: false, error: "File changed while it was being read." };
+    }
+
     return {
       ok: true,
       exists: true,
       content,
       sha256: sha256Text(content),
-      mtimeMs: info.mtimeMs,
+      mtimeMs: currentInfo.mtimeMs,
     };
   } catch (error) {
     if (isNotFound(error)) {

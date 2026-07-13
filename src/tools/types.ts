@@ -28,13 +28,12 @@ export type ReadFileRawResult = {
   filePath: string;
   absolutePath?: string;
   content?: string;
+  contentBytes?: number;
   sizeBytes?: number;
   totalLines?: number;
   startLine?: number;
   endLine?: number;
   sha256?: string;
-  truncated?: boolean;
-  displayedBytes?: number;
   error?: string;
 };
 
@@ -68,7 +67,7 @@ export type EditFileRawResult = {
   patchTruncated?: boolean;
   requiredReadBeforeEdit?: boolean;
   currentMtimeMs?: number;
-  lastReadMtimeMs?: number;
+  lastObservedMtimeMs?: number;
   error?: string;
 };
 
@@ -325,7 +324,6 @@ export class ToolExecutionFatalError extends Error {
 export type FileSnapshot = {
   sha256: string;
   mtimeMs: number;
-  fullFile: boolean;
   source: "read" | "write" | "edit";
 };
 

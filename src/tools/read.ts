@@ -20,13 +20,13 @@ type ReadArgs = {
 export type ReadToolOptions = {
   workspaceRoot: string;
   snapshots: ReadSnapshotStore;
-  maxDisplayedBytes?: number;
+  maxContentBytes?: number;
 };
 
-const defaultMaxDisplayedBytes = 20_000;
+export const DEFAULT_MAX_READ_CONTENT_BYTES = 256 * 1024;
 
 export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
-  const maxDisplayedBytes = options.maxDisplayedBytes ?? defaultMaxDisplayedBytes;
+  const maxContentBytes = options.maxContentBytes ?? DEFAULT_MAX_READ_CONTENT_BYTES;
 
   return defineToolExecutor("read", {
     definition: {
@@ -103,25 +103,92 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
 
         const bytes = await readFile(absolutePath);
         throwIfTurnCancelled(context.signal);
+        const currentInfo = await stat(absolutePath);
+        throwIfTurnCancelled(context.signal);
+
+        if (currentInfo.mtimeMs > info.mtimeMs) {
+          return {
+            ok: false,
+            filePath: input.file_path,
+            absolutePath,
+            error: "File changed while it was being read. Read it again.",
+          };
+        }
+
         const sha256 = sha256Bytes(bytes);
         const text = bytes.toString("utf8");
         const lines = splitLines(text);
         const offset = input.offset ?? 1;
+
+        if (lines.length === 0) {
+          if (input.offset !== undefined || input.limit !== undefined) {
+            return {
+              ok: false,
+              filePath: input.file_path,
+              absolutePath,
+              error: "File is empty. Omit offset and limit to read the empty file.",
+            };
+          }
+
+          options.snapshots.set(absolutePath, {
+            sha256,
+            mtimeMs: currentInfo.mtimeMs,
+            source: "read",
+          });
+
+          return {
+            ok: true,
+            filePath: input.file_path,
+            absolutePath,
+            content: "",
+            contentBytes: 0,
+            sizeBytes: currentInfo.size,
+            totalLines: 0,
+            sha256,
+          };
+        }
+
+        if (offset > lines.length) {
+          return {
+            ok: false,
+            filePath: input.file_path,
+            absolutePath,
+            error: `Read.offset ${offset} exceeds the file's ${lines.length} lines.`,
+          };
+        }
+
         const startIndex = offset - 1;
         const selectedLines = lines.slice(
           startIndex,
           input.limit === undefined ? undefined : startIndex + input.limit,
         );
         const selectedText = selectedLines.join("\n");
-        const displayed = truncateUtf8(selectedText, maxDisplayedBytes);
+        const contentBytes = Buffer.byteLength(selectedText, "utf8");
+        const endLine = offset + selectedLines.length - 1;
+
+        if (contentBytes > maxContentBytes) {
+          return {
+            ok: false,
+            filePath: input.file_path,
+            absolutePath,
+            sizeBytes: currentInfo.size,
+            totalLines: lines.length,
+            startLine: offset,
+            endLine,
+            error: readSizeError({
+              contentBytes,
+              endLine,
+              explicitLimit: input.limit !== undefined,
+              maxContentBytes,
+              selectedLineCount: selectedLines.length,
+              startLine: offset,
+            }),
+          };
+        }
 
         options.snapshots.set(absolutePath, {
           sha256,
-          mtimeMs: info.mtimeMs,
-          fullFile:
-            input.offset === undefined &&
-            input.limit === undefined &&
-            !displayed.truncated,
+          mtimeMs: currentInfo.mtimeMs,
           source: "read",
         });
 
@@ -129,15 +196,13 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
           ok: true,
           filePath: input.file_path,
           absolutePath,
-          content: displayed.content,
-          sizeBytes: info.size,
+          content: selectedText,
+          contentBytes,
+          sizeBytes: currentInfo.size,
           totalLines: lines.length,
           startLine: offset,
-          endLine:
-            selectedLines.length > 0 ? offset + selectedLines.length - 1 : offset - 1,
+          endLine,
           sha256,
-          truncated: displayed.truncated,
-          displayedBytes: displayed.displayedBytes,
         };
       } catch (error) {
         if (context.signal.aborted) {
@@ -214,26 +279,35 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-function truncateUtf8(
-  content: string,
-  maxBytes: number,
-): { content: string; truncated: boolean; displayedBytes: number } {
-  const bytes = Buffer.from(content, "utf8");
-
-  if (bytes.length <= maxBytes) {
-    return {
-      content,
-      truncated: false,
-      displayedBytes: bytes.length,
-    };
+function readSizeError(input: {
+  contentBytes: number;
+  endLine: number;
+  explicitLimit: boolean;
+  maxContentBytes: number;
+  selectedLineCount: number;
+  startLine: number;
+}): string {
+  if (input.selectedLineCount === 1) {
+    return (
+      `Line ${input.startLine} is ${input.contentBytes} bytes and exceeds the ` +
+      `${input.maxContentBytes}-byte Read limit. This line cannot be read with ` +
+      "line-based pagination."
+    );
   }
 
-  const truncated = bytes.subarray(0, maxBytes).toString("utf8");
-  return {
-    content: truncated,
-    truncated: true,
-    displayedBytes: Buffer.byteLength(truncated, "utf8"),
-  };
+  if (input.explicitLimit) {
+    return (
+      `Requested lines ${input.startLine}-${input.endLine} contain ` +
+      `${input.contentBytes} bytes and exceed the ${input.maxContentBytes}-byte ` +
+      "Read limit. Reduce limit to request a smaller line range."
+    );
+  }
+
+  return (
+    `File content (${input.contentBytes} bytes) exceeds maximum allowed size ` +
+    `(${input.maxContentBytes} bytes). Use offset and limit parameters to read ` +
+    "specific portions of the file."
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -119,7 +119,7 @@ export function createDefaultTooling(options: {
   workspaceRoot: string;
   runtimeSession: RuntimeSessionContext;
   historyReader: SessionHistoryReader;
-  maxDisplayedBytes?: number;
+  maxReadContentBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
   taskStopGraceMs?: number;
@@ -150,7 +150,7 @@ export function createDefaultTooling(options: {
     createReadToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
-      maxDisplayedBytes: options.maxDisplayedBytes,
+      maxContentBytes: options.maxReadContentBytes,
     }),
   );
   registry.register(createRecallToolExecutor({ historyReader: options.historyReader }));

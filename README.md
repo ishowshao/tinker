@@ -49,7 +49,6 @@ Tinker is configured via environment variables:
 | `TINKER_API_KEY` | — | API key |
 | `TINKER_WORKSPACE` | `process.cwd()` | Workspace root |
 | `TINKER_MAX_ITERATIONS` | `512` | Max agent loop iterations per turn |
-| `TINKER_MAX_DISPLAYED_BYTES` | `20000` | Max bytes displayed per Read |
 | `EXA_API_KEY` | — | Enables WebSearch tool |
 | `TINKER_MCP_CONFIG` | — | Path to MCP server config JSON |
 | `TINKER_EVENT_LOG` | `$TINKER_DIR/events.jsonl` | Event log path |
@@ -58,6 +57,11 @@ Tinker is configured via environment variables:
 | `TINKER_TASK_STOP_GRACE_MS` | `5000` | Grace period before SIGKILL |
 | `TINKER_MCP_TIMEOUT_MS` | `30000` | MCP tool timeout |
 | `TINKER_CONTEXT_BUDGET_TOKENS` | `128000` | Context budget in tokens |
+
+`Read` has a fixed 262144-byte (256 KiB) content limit per call. A successful
+call always returns the complete requested line range. Use `offset` and `limit`
+to page through larger files; oversized requests fail instead of returning
+truncated content.
 
 ## Commands
 

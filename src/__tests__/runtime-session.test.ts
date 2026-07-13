@@ -775,7 +775,6 @@ describe("RuntimeSession lifecycle", () => {
             totalLines: 1,
             startLine: 1,
             endLine: 1,
-            truncated: false,
           });
           return tooling;
         },

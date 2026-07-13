@@ -148,17 +148,15 @@ function renderReadObservation(raw: ReadFileRawResult): string {
   const range =
     raw.startLine !== undefined && raw.endLine !== undefined
       ? `lines ${raw.startLine}-${raw.endLine}`
-      : "requested range";
-  const truncation = raw.truncated
-    ? `\nContent was truncated to ${raw.displayedBytes ?? 0} displayed bytes.`
-    : "";
+      : "empty file";
 
   return [
     `Read succeeded for ${raw.filePath}.`,
     `sha256=${raw.sha256}`,
     `sizeBytes=${raw.sizeBytes ?? 0}`,
+    `contentBytes=${raw.contentBytes ?? 0}`,
     `totalLines=${raw.totalLines ?? 0}`,
-    `displayed=${range}${truncation}`,
+    `displayed=${range}`,
     "content:",
     raw.content ?? "",
   ].join("\n");
@@ -245,7 +243,7 @@ function renderWriteObservation(raw: WriteFileRawResult): string {
 function renderEditObservation(raw: EditFileRawResult): string {
   if (!raw.ok) {
     const guidance = raw.requiredReadBeforeEdit
-      ? " Call Read on the full file before trying Edit again."
+      ? " Call Read on this file before trying Edit again."
       : "";
     return `Edit failed for ${raw.filePath || "(unknown path)"}: ${raw.error ?? "Unknown error."}${guidance}`;
   }

@@ -360,9 +360,14 @@ runtime 内部可以继续使用 `readFile`、`writeFile`、`ReadFileRawResult` 
 - `offset` 表示从第几行开始读取，第一版使用 1-based line number。
 - `limit` 表示最多读取多少行。
 - 未传 `offset` 时从第 1 行开始。
-- 未传 `limit` 时读取到文件末尾，但仍受最大输出字节数保护。
-- 内容超过最大输出字节数时截断，并在 observation 中说明。
-- 读取成功后，runtime 记录该文件的 read snapshot：`normalized absolute path -> sha256`。`Write` 用它判断是否允许覆盖已有文件。
+- 未传 `limit` 时读取到文件末尾，但所选正文仍受 262144-byte 上限保护。
+- 成功 Read 必须返回实际选中行区间的全部正文，不允许静默截断。
+- 所选正文超限时返回 `ok: false`，不携带部分正文；未传 `limit` 时要求使用
+  `offset` / `limit` 分页，显式 `limit` 仍超限时要求缩小范围。
+- 单行超过 262144 bytes 时明确说明行分页无法读取该行。
+- 非空文件的 `offset > totalLines` 返回失败；空文件只有无分页参数的 Read 成功。
+- 每次成功 Read 都记录 sha256、mtime 和 `source=read`，不累计分页覆盖范围。
+- 任意成功 Read（包括分页 Read）都能解锁 Edit；sha256 供 Write 判断版本是否变化。
 
 raw result：
 
@@ -372,13 +377,12 @@ export type ReadFileRawResult = {
   filePath: string;
   absolutePath?: string;
   content?: string;
+  contentBytes?: number;
   sizeBytes?: number;
   totalLines?: number;
   startLine?: number;
   endLine?: number;
   sha256?: string;
-  truncated?: boolean;
-  displayedBytes?: number;
   error?: string;
 };
 ```
@@ -423,6 +427,21 @@ export type WriteFileRawResult = {
   error?: string;
 };
 ```
+
+### Edit
+
+Edit 是精确字符串替换工具，不消费 Read 返回的正文作为待修改内容。执行时重新读取
+目标文件全文，并按以下顺序 fast-fail：
+
+- 目标文件必须至少有一次成功 Read；分页 Read 即可，不要求读取全文。
+- 最近快照若来自 Write，则必须重新 Read 后才能 Edit。
+- 当前文件 mtime 晚于最近一次成功 Read/Edit 的 mtime 时拒绝修改。
+- `old_string` 必须存在；匹配多处且 `replace_all=false` 时拒绝修改。
+- `replace_all=true` 使用全量精确替换，否则替换唯一匹配。
+- 写入前再次检查 mtime，避免覆盖 Edit 准备期间出现的较新版本。
+
+成功 Edit 更新 sha256、mtime 和 `source=edit`，因此后续 Edit 可以连续执行。分页
+覆盖范围不保存、不合并，也不参与 Edit 授权。
 
 ## EventSink 与 EventLog
 
@@ -761,7 +780,7 @@ OPENAI_BASE_URL = https://api.deepseek.com
 TINKER_MODEL = deepseek-v4-flash
 TINKER_WORKSPACE = process.cwd()
 TINKER_MAX_STEPS = 12
-Read max displayed bytes = 20000
+Read max content bytes = 262144
 ```
 
 测试专用环境变量：

@@ -136,7 +136,6 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
       options.snapshots.set(absolutePath, {
         sha256: newSha256,
         mtimeMs: writtenInfo.mtimeMs,
-        fullFile: true,
         source: "write",
       });
 
