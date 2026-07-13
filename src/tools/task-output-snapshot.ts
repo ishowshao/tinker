@@ -18,12 +18,14 @@ export function buildOutputSnapshotFromText(bytes: Buffer): TaskOutputSnapshot {
   }
 
   const omittedLines = lines.length - maxPreviewLines;
+  const omittedStartLine = previewEdgeLines + 1;
+  const omittedEndLine = lines.length - previewEdgeLines;
   return {
     outputBytes: bytes.byteLength,
     outputLines: lines.length,
     preview: [
       ...lines.slice(0, previewEdgeLines),
-      `... output omitted: ${omittedLines} lines omitted. Full output is available at outputFilePath.`,
+      `... output omitted: lines ${omittedStartLine}-${omittedEndLine} (${omittedLines} ${omittedLines === 1 ? "line" : "lines"}). Full output is available at outputFilePath.`,
       ...lines.slice(-previewEdgeLines),
     ].join("\n"),
     truncated: true,

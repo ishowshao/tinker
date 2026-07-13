@@ -292,7 +292,14 @@ preview 超过 200 行时保留前 100 行和后 100 行，并提供：
 ```text
 truncated=true
 omittedLines=37
+preview:
+<lines 1-100>
+... output omitted: lines 101-137 (37 lines). Full output is available at outputFilePath.
+<lines 138-237>
 ```
+
+省略提示给出完整的 1-based 行范围。模型可以直接用 `Read` 对
+`outputFilePath` 设置 `offset=101, limit=37`，只补读缺失部分。
 
 显式后台运行：
 
@@ -365,7 +372,9 @@ preview:
 server ready
 ```
 
-输出截断时同样提供 `omittedLines`。未知 task ID 或参数错误为：
+输出超过 200 行时同样保留前 100 行和后 100 行，并通过
+`... output omitted: lines <start>-<end> (<count> lines). ...` 明确缺失范围；
+`omittedLines` 保存缺失行数。未知 task ID 或参数错误为：
 
 ```text
 TaskOutput failed for missing-task: Unknown task ID: missing-task

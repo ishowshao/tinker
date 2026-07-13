@@ -80,12 +80,14 @@ export class TaskOutput {
     }
 
     const omittedLines = outputLines - maxPreviewLines;
+    const omittedStartLine = previewEdgeLines + 1;
+    const omittedEndLine = outputLines - previewEdgeLines;
     return {
       outputBytes: this.outputBytes,
       outputLines,
       preview: [
         ...this.firstLines,
-        `... output omitted: ${omittedLines} lines omitted. Full output is available at outputFilePath.`,
+        `... output omitted: lines ${omittedStartLine}-${omittedEndLine} (${omittedLines} ${omittedLines === 1 ? "line" : "lines"}). Full output is available at outputFilePath.`,
         ...this.lastPreviewLines(),
       ].join("\n"),
       truncated: true,

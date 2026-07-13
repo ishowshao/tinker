@@ -312,10 +312,23 @@ describe("Bash tool", () => {
       expect(raw.omittedLines).toBe(5);
       expect(raw.preview).toContain("line-1");
       expect(raw.preview).toContain("line-100");
-      expect(raw.preview).toContain("5 lines omitted");
+      expect(raw.preview).toContain(
+        "... output omitted: lines 101-105 (5 lines). Full output is available at outputFilePath.",
+      );
       expect(raw.preview).toContain("line-106");
       expect(raw.preview).toContain("line-205");
       expect(raw.preview).not.toContain("line-105\n");
+
+      const oneOmitted = asBashRawResult(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_2",
+          name: "Bash",
+          args: { command: "for i in $(seq 1 201); do echo line-$i; done" },
+        }),
+      );
+      expect(oneOmitted.preview).toContain(
+        "... output omitted: lines 101-101 (1 line). Full output is available at outputFilePath.",
+      );
     } finally {
       await rm(workspace, { recursive: true });
     }
