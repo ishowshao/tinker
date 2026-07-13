@@ -135,6 +135,13 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("renders a static active symbol for the running footer status", () => {
+    const { lastFrame, cleanup } = render(<Footer status="running" />);
+
+    expect(lastFrame()).toContain("• Running");
+    cleanup();
+  });
+
   test("renders context usage in the prompt input status bar", () => {
     const normal = render(
       <PromptInput
