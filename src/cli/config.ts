@@ -17,9 +17,10 @@ export const DEFAULT_MODEL = "deepseek-v4-flash";
 export const DEFAULT_MAX_ITERATIONS = 512;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
 
-export const SYSTEM_PROMPT = (
+export const RUNTIME_INSTRUCTIONS = (
   workspaceRoot: string,
 ): string => `You are a coding agent running in a local workspace.
+Your name is Tinker.
 
 Current workspace:
 ${workspaceRoot}

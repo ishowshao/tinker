@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { Database } from "bun:sqlite";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +14,13 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { SessionError } from "../session/session-errors";
+import { sessionDatabasePath } from "../session/session-store";
+import {
+  buildSystemPrompt,
+  loadProjectInstructions,
+  type ProjectInstructionManifest,
+  projectInstructionManifest,
+} from "../instructions/project-instructions";
 import {
   collectingEventSink,
   TEST_CONTEXT_BUDGET,
@@ -39,6 +47,139 @@ class ResumeModel extends TestModelClient {
 }
 
 describe("RuntimeSession resume", () => {
+  test("keeps the project instruction snapshot across turns and resume", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-rules-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const nextSessionId = runtimeIdFactory.createSessionId();
+    const sink = collectingEventSink();
+    const instructionPath = path.join(workspace, "AGENTS.md");
+    try {
+      await writeFile(instructionPath, "rule version one\n");
+      const firstSnapshot = await loadProjectInstructions(workspace);
+      const firstPrompt = buildSystemPrompt({
+        workspaceRoot: firstSnapshot.workspaceRoot,
+        runtimeInstructions: "runtime",
+        projectInstructions: firstSnapshot,
+      });
+      const firstModel = new ResumeModel();
+      let session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, firstModel, sink, "new", {
+          systemPrompt: firstPrompt,
+          projectInstruction: projectInstructionManifest(firstSnapshot),
+        }),
+        { loadMcpConfig: async () => undefined },
+      );
+      await session.executeTurn({
+        userPrompt: "before file change",
+        signal: new AbortController().signal,
+      });
+
+      await writeFile(instructionPath, "rule version two\n");
+      await session.executeTurn({
+        userPrompt: "after file change",
+        signal: new AbortController().signal,
+      });
+      expect(firstModel.inputs[1]?.messages[0]?.content).toContain("rule version one");
+      expect(firstModel.inputs[1]?.messages[0]?.content).not.toContain(
+        "rule version two",
+      );
+      await session.dispose({ type: "tui_exit" });
+
+      const resumedModel = new ResumeModel();
+      session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, resumedModel, sink, "resume"),
+        { loadMcpConfig: async () => undefined },
+      );
+      await session.executeTurn({
+        userPrompt: "after resume",
+        signal: new AbortController().signal,
+      });
+      expect(resumedModel.inputs[0]?.messages[0]?.content).toContain(
+        "rule version one",
+      );
+      expect(resumedModel.inputs[0]?.messages[0]?.content).not.toContain(
+        "rule version two",
+      );
+      expect(
+        sink.events.find((event) => event.type === "session.resumed")?.data,
+      ).toMatchObject({ projectInstructionFile: "AGENTS.md" });
+      await session.dispose({ type: "tui_exit" });
+
+      const nextSnapshot = await loadProjectInstructions(workspace);
+      const nextPrompt = buildSystemPrompt({
+        workspaceRoot: nextSnapshot.workspaceRoot,
+        runtimeInstructions: "runtime",
+        projectInstructions: nextSnapshot,
+      });
+      const nextModel = new ResumeModel();
+      const nextSession = await createRuntimeSession(
+        sessionInput(workspace, nextSessionId, nextModel, sink, "new", {
+          systemPrompt: nextPrompt,
+          projectInstruction: projectInstructionManifest(nextSnapshot),
+        }),
+        { loadMcpConfig: async () => undefined },
+      );
+      await nextSession.executeTurn({
+        userPrompt: "new session",
+        signal: new AbortController().signal,
+      });
+      expect(nextModel.inputs[0]?.messages[0]?.content).toContain("rule version two");
+      await nextSession.dispose({ type: "tui_exit" });
+
+      const startedEvents = sink.events.filter(
+        (event) => event.type === "session.started",
+      );
+      expect(startedEvents[0]?.data.projectInstructions.instruction).toEqual(
+        projectInstructionManifest(firstSnapshot),
+      );
+      expect(startedEvents[1]?.data.projectInstructions.instruction).toEqual(
+        projectInstructionManifest(nextSnapshot),
+      );
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("fast-fails resume when the stored system prompt is corrupted", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-rules-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const sink = collectingEventSink();
+    try {
+      const active = await createRuntimeSession(
+        sessionInput(workspace, sessionId, new ResumeModel(), sink, "new"),
+        { loadMcpConfig: async () => undefined },
+      );
+      await active.dispose({ type: "tui_exit" });
+
+      const database = new Database(sessionDatabasePath(workspace, sessionId));
+      const trigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'messages_no_update'",
+        )
+        .get() as { sql: string };
+      database.exec("DROP TRIGGER messages_no_update");
+      database
+        .query("UPDATE messages SET content = 'tampered' WHERE role = 'system'")
+        .run();
+      database.exec(trigger.sql);
+      database.close();
+
+      const error = await createRuntimeSession(
+        sessionInput(workspace, sessionId, new ResumeModel(), sink, "resume"),
+        { loadMcpConfig: async () => undefined },
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SessionError);
+      expect((error as SessionError).code).toBe("SESSION_RECOVERY_FAILED");
+      expect((error as SessionError).operation).toBe("read_stored_system_prompt");
+      expect(
+        sink.events.filter((event) => event.type === "session.resumed"),
+      ).toHaveLength(0);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("restores history, counters, and event sequence across activations", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-resume-"));
     const sessionId = runtimeIdFactory.createSessionId();
@@ -211,18 +352,28 @@ function sessionInput(
   modelClient: ResumeModel,
   sink: ReturnType<typeof collectingEventSink>,
   mode: "new" | "resume",
+  newSession: {
+    systemPrompt: string;
+    projectInstruction?: ProjectInstructionManifest;
+  } = { systemPrompt: "system" },
 ): CreateRuntimeSessionInput {
-  return {
-    selection: { mode, sessionId },
+  const common = {
     workspaceRoot,
     modelName: "test-model",
     maxIterations: 2,
     includeReasoningContent: false,
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
-    systemPrompt: "system",
     modelClient,
     presentationSinks: [sink],
-    persistence: false,
+    persistence: false as const,
   };
+  return mode === "new"
+    ? {
+        ...common,
+        selection: { mode, sessionId },
+        systemPrompt: newSession.systemPrompt,
+        projectInstruction: newSession.projectInstruction,
+      }
+    : { ...common, selection: { mode, sessionId } };
 }

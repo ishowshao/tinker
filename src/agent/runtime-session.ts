@@ -21,6 +21,7 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import { ContextProtocolError } from "../context/context-protocol-validator";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
+import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import {
   SessionStore,
   createRuntimeContract,
@@ -71,15 +72,13 @@ export type RuntimeSessionContext = {
   append(input: AgentEventInput): Promise<void>;
 };
 
-export type CreateRuntimeSessionInput = {
-  selection: RuntimeSessionSelection;
+type CommonRuntimeSessionInput = {
   workspaceRoot: string;
   modelName: string;
   maxIterations: number;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
-  systemPrompt: string;
   modelClient: ModelClient;
   presentationSinks?: EventSink[];
   persistence?:
@@ -91,9 +90,19 @@ export type CreateRuntimeSessionInput = {
   webFetchRefiner?: Refiner;
 };
 
-export type RuntimeSessionSelection =
-  | { mode: "new"; sessionId: SessionId }
-  | { mode: "resume"; sessionId: SessionId };
+type CreateNewRuntimeSessionInput = CommonRuntimeSessionInput & {
+  selection: { mode: "new"; sessionId: SessionId };
+  systemPrompt: string;
+  projectInstruction?: ProjectInstructionManifest;
+};
+
+type ResumeRuntimeSessionInput = CommonRuntimeSessionInput & {
+  selection: { mode: "resume"; sessionId: SessionId };
+};
+
+export type CreateRuntimeSessionInput =
+  | CreateNewRuntimeSessionInput
+  | ResumeRuntimeSessionInput;
 
 export type RuntimeSessionFactoryDependencies = {
   idFactory: RuntimeIdFactory;
@@ -139,12 +148,13 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   createMcpManager,
   createObservationBuilder: () => new ObservationBuilder(),
   openStore: (input, idFactory) =>
-    input.selection.mode === "new"
+    isNewSessionInput(input)
       ? SessionStore.createNew({
           workspaceRoot: input.workspaceRoot,
           sessionId: input.selection.sessionId,
           modelName: input.modelName,
           systemPrompt: input.systemPrompt,
+          projectInstruction: input.projectInstruction,
           idFactory,
         })
       : SessionStore.openExisting({
@@ -212,7 +222,11 @@ class DefaultRuntimeSession implements RuntimeSession {
     validateCreateInput(input);
     const store = await dependencies.openStore(input, dependencies.idFactory);
     let session: DefaultRuntimeSession;
+    let systemPrompt: string;
     try {
+      systemPrompt = isNewSessionInput(input)
+        ? input.systemPrompt
+        : store.readStoredSystemPrompt();
       session = new DefaultRuntimeSession(
         input,
         dependencies,
@@ -221,7 +235,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         store,
       );
     } catch (error) {
-      if (input.selection.mode === "new") {
+      if (isNewSessionInput(input)) {
         await store
           .deleteFromDisk()
           .catch(() => store.abandon().catch(() => undefined));
@@ -233,7 +247,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     let started = false;
 
     try {
-      if (input.selection.mode === "new") {
+      if (isNewSessionInput(input)) {
         await session.append({
           type: "session.started",
           sessionId: session.sessionId,
@@ -244,6 +258,11 @@ class DefaultRuntimeSession implements RuntimeSession {
             includeReasoningContent: input.includeReasoningContent,
             contextProfile: input.contextProfile,
             contextBudget: input.contextBudget,
+            projectInstructions: {
+              ...(input.projectInstruction === undefined
+                ? {}
+                : { instruction: input.projectInstruction }),
+            },
           },
         });
         started = true;
@@ -269,7 +288,7 @@ class DefaultRuntimeSession implements RuntimeSession {
 
       const definitions = session.requireTooling().registry.definitions();
       const contractPrepared = input.modelClient.prepare({
-        messages: [{ role: "system", content: input.systemPrompt }],
+        messages: [{ role: "system", content: systemPrompt }],
         tools: definitions,
       });
       const runtimeContract = createRuntimeContract({
@@ -277,7 +296,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         includeReasoningContent: input.includeReasoningContent,
         contextProfile: input.contextProfile,
         contextBudget: input.contextBudget,
-        systemPrompt: input.systemPrompt,
+        systemPrompt,
         toolSchemaSha256: contractPrepared.toolSchemaHash,
         requestConfigSha256: contractPrepared.requestConfigHash,
       });
@@ -301,12 +320,18 @@ class DefaultRuntimeSession implements RuntimeSession {
             },
           });
         }
+        const projectInstruction = store.readProjectInstructionManifest();
         await session.append({
           type: "session.resumed",
           sessionId: session.sessionId,
           data: {
             openCount,
             ...session.recovery,
+            ...(projectInstruction === undefined
+              ? {}
+              : {
+                  projectInstructionFile: projectInstruction.path,
+                }),
           },
         });
       }
@@ -882,7 +907,7 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
     throw new Error("RuntimeSession modelName must not be empty.");
   }
   requirePositiveNumber(input.maxIterations, "maxIterations");
-  if (input.systemPrompt.trim() === "") {
+  if (isNewSessionInput(input) && input.systemPrompt.trim() === "") {
     throw new Error("RuntimeSession systemPrompt must not be empty.");
   }
   if (
@@ -896,6 +921,12 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
     );
   }
   assertMatchingContextBudget(input.contextProfile, input.contextBudget);
+}
+
+function isNewSessionInput(
+  input: CreateRuntimeSessionInput,
+): input is CreateNewRuntimeSessionInput {
+  return input.selection.mode === "new";
 }
 
 function forwardExternalAbort(

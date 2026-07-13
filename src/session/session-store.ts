@@ -47,6 +47,7 @@ import {
 } from "../context/protocol-frame";
 import type { IterationIdentity, ToolCall } from "../agent/types";
 import type { MeasuredContextAnchor } from "../agent/context-meter";
+import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import {
   InMemorySessionLedger,
   type LedgerMutation,
@@ -59,7 +60,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V3_FINGERPRINT,
+  SESSION_SCHEMA_V4_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -81,14 +82,15 @@ export type RuntimeContractV1 = {
   observationFormat: typeof TOOL_OBSERVATION_FORMAT;
 };
 
-export type StoredSessionMetaV3 = {
-  schemaVersion: 3;
+export type StoredSessionMetaV4 = {
+  schemaVersion: 4;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
   workspaceRoot: string;
   modelName: string;
   systemPromptSha256: string;
+  projectInstruction?: ProjectInstructionManifest;
   toolSchemaSha256: string | null;
   runtimeContractJson: string | null;
   runtimeContractSha256: string | null;
@@ -109,7 +111,7 @@ export type StoredSessionMetaV3 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV3["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV4["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -128,6 +130,7 @@ export type CreateNewSessionStoreInput = {
   sessionId: SessionId;
   modelName: string;
   systemPrompt: string;
+  projectInstruction?: ProjectInstructionManifest;
   idFactory: RuntimeIdFactory;
   clock?: () => string;
 };
@@ -217,18 +220,23 @@ export class SessionStore implements SessionLedgerCommitter {
             `INSERT INTO session_meta (
             singleton, schema_version, schema_fingerprint, initialization_state,
             session_id, workspace_root, model_name, system_prompt_sha256,
+            project_instruction_file, project_instruction_byte_length,
+            project_instruction_sha256,
             tool_schema_sha256, runtime_contract_json, runtime_contract_sha256,
             active_revision_id, next_turn_number, next_event_sequence, open_count,
             created_at, updated_at, last_opened_at, last_closed_at, last_close_reason
-          ) VALUES (1, ?, ?, 'creating', ?, ?, ?, ?, NULL, NULL, NULL, ?, 1, 1, 1, ?, ?, ?, NULL, NULL)`,
+          ) VALUES (1, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 1, 1, 1, ?, ?, ?, NULL, NULL)`,
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V3_FINGERPRINT,
+            SESSION_SCHEMA_V4_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
             sha256(input.systemPrompt),
+            input.projectInstruction?.path ?? null,
+            input.projectInstruction?.byteLength ?? null,
+            input.projectInstruction?.sha256 ?? null,
             revisionId,
             createdAt,
             createdAt,
@@ -815,7 +823,7 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  readMeta(): StoredSessionMetaV3 {
+  readMeta(): StoredSessionMetaV4 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -829,6 +837,70 @@ export class SessionStore implements SessionLedgerCommitter {
     return decodeMeta(rows[0], this.sessionId);
   }
 
+  readStoredSystemPrompt(): string {
+    this.requireOpen();
+    try {
+      const frames = this.database
+        .query("SELECT * FROM protocol_frames WHERE kind = 'system'")
+        .all();
+      if (frames.length !== 1) {
+        throw new Error(`Expected one stored system frame; found ${frames.length}.`);
+      }
+      const frame = recordFromSql(frames[0], "stored system frame");
+      if (
+        frame.state !== "closed" ||
+        numberFromSql(frame.first_ordinal, "first_ordinal") !== 1 ||
+        numberFromSql(frame.last_ordinal, "last_ordinal") !== 1
+      ) {
+        throw new Error("Stored system frame invariant failed.");
+      }
+      const frameId = stringFromSql(frame.frame_id, "frame_id");
+      const messages = this.database
+        .query("SELECT * FROM messages WHERE frame_id = ?")
+        .all(frameId);
+      if (messages.length !== 1) {
+        throw new Error(
+          `Expected one stored system message; found ${messages.length}.`,
+        );
+      }
+      const row = recordFromSql(messages[0], "stored system message");
+      if (
+        numberFromSql(row.ordinal, "ordinal") !== 1 ||
+        row.role !== "system" ||
+        row.origin !== "runtime"
+      ) {
+        throw new Error("Stored system message invariant failed.");
+      }
+      const content = stringFromSql(row.content, "content");
+      if (content.trim() === "") {
+        throw new Error("Stored system prompt must not be empty.");
+      }
+      if (
+        stringFromSql(row.content_sha256, "content_sha256") !== contentHash(content)
+      ) {
+        throw new Error("Stored system message content hash does not match.");
+      }
+      if (this.readMeta().systemPromptSha256 !== sha256(content)) {
+        throw new Error("Stored system prompt metadata hash does not match.");
+      }
+      return content;
+    } catch (error) {
+      if (error instanceof SessionError && error.code === "SESSION_RECOVERY_FAILED") {
+        throw error;
+      }
+      throw new SessionError(
+        "SESSION_RECOVERY_FAILED",
+        "read_stored_system_prompt",
+        "Stored system prompt is missing or invalid.",
+        { sessionId: this.sessionId, cause: error },
+      );
+    }
+  }
+
+  readProjectInstructionManifest(): ProjectInstructionManifest | undefined {
+    return this.readMeta().projectInstruction;
+  }
+
   nextTurnNumber(): number {
     return this.readMeta().nextTurnNumber;
   }
@@ -837,7 +909,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V3_FINGERPRINT
+      meta.schemaFingerprint !== SESSION_SCHEMA_V4_FINGERPRINT
     ) {
       throw new SessionError(
         "SESSION_SCHEMA_INVALID",
@@ -846,6 +918,7 @@ export class SessionStore implements SessionLedgerCommitter {
         { sessionId: this.sessionId },
       );
     }
+    this.readStoredSystemPrompt();
     const view = this.loadProtocolView();
     try {
       this.validator.validate(view, {
@@ -1176,7 +1249,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateInitialRevision(meta: StoredSessionMetaV3): void {
+  private validateInitialRevision(meta: StoredSessionMetaV4): void {
     const rows = this.database.query("SELECT * FROM context_revisions").all() as Array<
       Record<string, unknown>
     >;
@@ -1208,7 +1281,7 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV3, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV4, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -1791,18 +1864,53 @@ function decodeMeasuredContextState(
   });
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV3 {
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV4 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 3) {
+  if (schemaVersion !== 4) {
     throw new Error(
-      `Session metadata schema version must be 3; received ${schemaVersion}.`,
+      `Session metadata schema version must be 4; received ${schemaVersion}.`,
     );
   }
+  const projectInstructionFile = nullableStringFromSql(
+    row.project_instruction_file,
+    "project_instruction_file",
+  );
+  const projectInstructionByteLength = nullableNumberFromSql(
+    row.project_instruction_byte_length,
+    "project_instruction_byte_length",
+  );
+  const projectInstructionSha256 = nullableStringFromSql(
+    row.project_instruction_sha256,
+    "project_instruction_sha256",
+  );
+  if (
+    (projectInstructionFile === null) !== (projectInstructionByteLength === null) ||
+    (projectInstructionFile === null) !== (projectInstructionSha256 === null)
+  ) {
+    throw new Error("Project instruction metadata must be entirely set or null.");
+  }
+  if (
+    projectInstructionFile !== null &&
+    projectInstructionFile !== "AGENTS.md" &&
+    projectInstructionFile !== "CLAUDE.md"
+  ) {
+    throw new Error(`Invalid project instruction file ${projectInstructionFile}.`);
+  }
+  const projectInstruction: ProjectInstructionManifest | undefined =
+    projectInstructionFile === null ||
+    projectInstructionByteLength === null ||
+    projectInstructionSha256 === null
+      ? undefined
+      : {
+          path: projectInstructionFile === "AGENTS.md" ? "AGENTS.md" : "CLAUDE.md",
+          byteLength: projectInstructionByteLength,
+          sha256: sha256FromSql(projectInstructionSha256, "project_instruction_sha256"),
+        };
   return {
     schemaVersion,
     schemaFingerprint: stringFromSql(row.schema_fingerprint, "schema_fingerprint"),
@@ -1815,6 +1923,7 @@ function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSession
     workspaceRoot: stringFromSql(row.workspace_root, "workspace_root"),
     modelName: stringFromSql(row.model_name, "model_name"),
     systemPromptSha256: stringFromSql(row.system_prompt_sha256, "system_prompt_sha256"),
+    ...(projectInstruction === undefined ? {} : { projectInstruction }),
     toolSchemaSha256: nullableStringFromSql(
       row.tool_schema_sha256,
       "tool_schema_sha256",

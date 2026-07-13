@@ -195,19 +195,24 @@ function runtimeInput(
   modelClient: HistoricalReadModel,
   mode: "new" | "resume",
 ) {
-  return {
-    selection: { mode, sessionId },
+  const common = {
     workspaceRoot,
     modelName: "test-model",
     maxIterations: 8,
     includeReasoningContent: false,
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
-    systemPrompt: "system",
     modelClient,
     presentationSinks: [collectingEventSink()],
     persistence: false as const,
   };
+  return mode === "new"
+    ? {
+        ...common,
+        selection: { mode, sessionId },
+        systemPrompt: "system",
+      }
+    : { ...common, selection: { mode, sessionId } };
 }
 
 function metadata(content: string, name: string): string {

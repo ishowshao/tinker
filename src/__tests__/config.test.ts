@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_MAX_ITERATIONS, readRunnerConfig, SYSTEM_PROMPT } from "../cli/config";
+import {
+  DEFAULT_MAX_ITERATIONS,
+  readRunnerConfig,
+  RUNTIME_INSTRUCTIONS,
+} from "../cli/config";
 import { TEST_CONTEXT_PROFILE } from "./test-runtime";
 
 describe("runner config", () => {
@@ -139,7 +143,7 @@ describe("runner config", () => {
 
 describe("system prompt", () => {
   test("guides content search toward Grep", () => {
-    const prompt = SYSTEM_PROMPT("/tmp/workspace");
+    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
 
     expect(prompt).toContain("Use Grep to search file contents.");
     expect(prompt).toContain(
@@ -150,7 +154,7 @@ describe("system prompt", () => {
   });
 
   test("keeps tool responsibility boundaries", () => {
-    const prompt = SYSTEM_PROMPT("/tmp/workspace");
+    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
 
     expect(prompt).toContain("Use Glob to find files by name or path pattern.");
     expect(prompt).toContain("Use Read to open specific files returned by Grep.");

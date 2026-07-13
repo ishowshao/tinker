@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 3;
+export const SESSION_SCHEMA_VERSION = 4;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,13 +27,16 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 3),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 4),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
       workspace_root TEXT NOT NULL,
       model_name TEXT NOT NULL,
       system_prompt_sha256 TEXT NOT NULL,
+      project_instruction_file TEXT CHECK (project_instruction_file IS NULL OR project_instruction_file IN ('AGENTS.md', 'CLAUDE.md')),
+      project_instruction_byte_length INTEGER CHECK (project_instruction_byte_length IS NULL OR project_instruction_byte_length >= 1),
+      project_instruction_sha256 TEXT CHECK (project_instruction_sha256 IS NULL OR length(project_instruction_sha256) = 64),
       tool_schema_sha256 TEXT,
       runtime_contract_json TEXT,
       runtime_contract_sha256 TEXT,
@@ -49,6 +52,8 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
         'oneshot_complete', 'tui_exit', 'session_switch', 'runner_failed', 'initialization_failed'
       )),
       CHECK ((runtime_contract_json IS NULL) = (runtime_contract_sha256 IS NULL)),
+      CHECK ((project_instruction_file IS NULL) = (project_instruction_byte_length IS NULL)),
+      CHECK ((project_instruction_file IS NULL) = (project_instruction_sha256 IS NULL)),
       CHECK ((initialization_state = 'creating') OR runtime_contract_json IS NOT NULL)
     ) STRICT`,
   },
@@ -362,6 +367,9 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
         OLD.schema_fingerprint = NEW.schema_fingerprint AND OLD.session_id = NEW.session_id AND
         OLD.workspace_root = NEW.workspace_root AND OLD.model_name = NEW.model_name AND
         OLD.system_prompt_sha256 = NEW.system_prompt_sha256 AND
+        OLD.project_instruction_file IS NEW.project_instruction_file AND
+        OLD.project_instruction_byte_length IS NEW.project_instruction_byte_length AND
+        OLD.project_instruction_sha256 IS NEW.project_instruction_sha256 AND
         OLD.active_revision_id = NEW.active_revision_id AND OLD.created_at = NEW.created_at AND
         NEW.next_turn_number >= OLD.next_turn_number AND
         NEW.next_event_sequence >= OLD.next_event_sequence AND
@@ -376,7 +384,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V3_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V4_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,

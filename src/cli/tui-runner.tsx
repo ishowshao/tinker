@@ -8,6 +8,11 @@ import {
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import type { SessionId } from "../ids/runtime-id";
+import {
+  buildSystemPrompt,
+  loadProjectInstructions,
+  projectInstructionManifest,
+} from "../instructions/project-instructions";
 import { ResumeProjectionReader } from "../session/resume-projection";
 import { SessionCatalog } from "../session/session-catalog";
 import { App } from "../tui/app";
@@ -24,7 +29,7 @@ import {
   createWebFetchRefinerFromEnv,
   promptHistoryPath,
   readRunnerConfig,
-  SYSTEM_PROMPT,
+  RUNTIME_INSTRUCTIONS,
 } from "./config";
 
 export async function runTui(): Promise<void> {
@@ -47,20 +52,37 @@ export async function runTui(): Promise<void> {
       mode: "new" | "resume",
       sessionId: SessionId,
       sink: EventSink,
-    ): Promise<RuntimeSession> =>
-      createRuntimeSession({
-        selection: { mode, sessionId },
+    ): Promise<RuntimeSession> => {
+      const common = {
         workspaceRoot,
         modelName: config.modelName,
         maxIterations: config.maxIterations,
         includeReasoningContent: config.includeReasoningContent,
         contextProfile: config.contextProfile,
         contextBudget: config.contextBudget,
-        systemPrompt: SYSTEM_PROMPT(workspaceRoot),
         modelClient,
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefinerFromEnv(config),
+      };
+      if (mode === "resume") {
+        return createRuntimeSession({
+          ...common,
+          selection: { mode, sessionId },
+        });
+      }
+
+      const projectInstructions = await loadProjectInstructions(workspaceRoot);
+      return createRuntimeSession({
+        ...common,
+        selection: { mode, sessionId },
+        systemPrompt: buildSystemPrompt({
+          workspaceRoot,
+          runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
+          projectInstructions,
+        }),
+        projectInstruction: projectInstructionManifest(projectInstructions),
       });
+    };
     const initialSession = await createSession(
       "new",
       config.sessionId,

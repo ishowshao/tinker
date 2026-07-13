@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runOneShot } from "../cli/run-runner";
@@ -8,6 +9,7 @@ import type {
   ModelRequestOptions,
   ModelRequestOutput,
   PreparedModelRequest,
+  ModelRequestInput,
 } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
 import {
@@ -15,7 +17,12 @@ import {
   TEST_CONTEXT_PROFILE,
   TestModelClient,
   testModelOutput,
+  testModelRequestInput,
 } from "./test-runtime";
+import {
+  estimatePromptSegments,
+  INITIAL_CORRECTION_FACTOR,
+} from "../model/token-estimator";
 
 class MemoryWriter {
   output = "";
@@ -64,7 +71,134 @@ class BackgroundTaskModel extends TestModelClient {
   }
 }
 
+class ProjectInstructionModel extends TestModelClient {
+  readonly prepared: PreparedModelRequest[] = [];
+  readonly inputs: ModelRequestInput[] = [];
+
+  prepare(input: ModelRequestInput): PreparedModelRequest {
+    const prepared = super.prepare(input);
+    this.prepared.push(prepared);
+    return prepared;
+  }
+
+  async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
+    this.inputs.push(input);
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "done",
+    });
+  }
+}
+
 describe("runOneShot", () => {
+  test("loads project instructions before session creation and logs only metadata", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-rules-"));
+    const stdout = new MemoryWriter();
+    const stderr = new MemoryWriter();
+    const model = new ProjectInstructionModel();
+    const instructions = "private project rule: use frobnicator\n";
+    try {
+      await writeFile(path.join(workspace, "AGENTS.md"), instructions);
+      const code = await runOneShot("finish", {
+        sessionId: "instruction-session" as SessionId,
+        workspaceRoot: workspace,
+        modelName: "test-model",
+        contextProfile: TEST_CONTEXT_PROFILE,
+        modelClient: model,
+        stdout,
+        stderr,
+      });
+
+      expect(code).toBe(0);
+      expect(stderr.output).toBe("");
+      const messages = model.inputs[0]?.messages ?? [];
+      expect(messages.filter((message) => message.role === "system")).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ role: "system" });
+      expect(messages[0]?.content).toContain(instructions.trim());
+
+      const eventText = await readFile(
+        path.join(
+          workspace,
+          ".tinker",
+          "sessions",
+          "instruction-session",
+          "events.jsonl",
+        ),
+        "utf8",
+      );
+      expect(eventText).not.toContain("use frobnicator");
+      const events = eventText
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const started = events.find((event) => event.type === "session.started");
+      expect(started?.data).toMatchObject({
+        projectInstructions: {
+          instruction: {
+            path: "AGENTS.md",
+            byteLength: Buffer.byteLength(instructions),
+            sha256: createHash("sha256").update(instructions).digest("hex"),
+          },
+        },
+      });
+      const initialUsage = events.find(
+        (event) =>
+          event.type === "context.usage.updated" &&
+          (event.data as { phase?: string }).phase === "initial",
+      );
+      const initialSnapshot = (
+        initialUsage?.data as {
+          snapshot?: {
+            usedInputTokens?: number;
+            rawFullEstimate?: { totalTokens: number };
+          };
+        }
+      ).snapshot;
+      const expectedRawTokens = estimatePromptSegments(
+        model.prepared[1].promptSegments,
+      ).totalTokens;
+      expect(initialSnapshot?.rawFullEstimate?.totalTokens).toBe(expectedRawTokens);
+      expect(initialSnapshot?.usedInputTokens).toBe(
+        Math.ceil(expectedRawTokens * INITIAL_CORRECTION_FACTOR),
+      );
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("fails invalid project instructions before creating a session store", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-rules-"));
+    const stderr = new MemoryWriter();
+    const model = new ProjectInstructionModel();
+    try {
+      await writeFile(path.join(workspace, "AGENTS.md"), " \n");
+      const code = await runOneShot("finish", {
+        sessionId: "invalid-instruction-session" as SessionId,
+        workspaceRoot: workspace,
+        modelName: "test-model",
+        contextProfile: TEST_CONTEXT_PROFILE,
+        modelClient: model,
+        stdout: new MemoryWriter(),
+        stderr,
+      });
+
+      expect(code).toBe(1);
+      expect(stderr.output).toContain("AGENTS.md must not be empty");
+      expect(model.prepared).toHaveLength(0);
+      expect(
+        await access(
+          path.join(workspace, ".tinker", "sessions", "invalid-instruction-session"),
+        ).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("runs without Ink and writes JSONL events", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-"));
     const stdout = new MemoryWriter();

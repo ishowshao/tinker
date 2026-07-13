@@ -184,6 +184,7 @@ describe("tui components", () => {
         includeReasoningContent: false,
         contextProfile: TEST_CONTEXT_PROFILE,
         contextBudget: TEST_CONTEXT_BUDGET,
+        projectInstructions: {},
       },
     });
     await projectionStore.append({

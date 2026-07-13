@@ -63,6 +63,7 @@ function testEvent(input: TestEventInput): AgentEvent {
         includeReasoningContent: false,
         contextProfile: TEST_CONTEXT_PROFILE,
         contextBudget: TEST_CONTEXT_BUDGET,
+        projectInstructions: {},
       },
     };
   }

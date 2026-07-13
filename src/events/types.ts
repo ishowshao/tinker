@@ -21,6 +21,10 @@ import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { ShellTaskSnapshot } from "../tools/bash-task";
 import type { ToolObservation } from "../observation/observation-builder";
 import type { ToolRawResult } from "../tools/types";
+import type {
+  ProjectInstructionFileName,
+  ProjectInstructionManifest,
+} from "../instructions/project-instructions";
 
 export type SessionStartedData = {
   workspaceRoot: string;
@@ -29,6 +33,9 @@ export type SessionStartedData = {
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
+  projectInstructions: {
+    instruction?: ProjectInstructionManifest;
+  };
 };
 
 export type ContextUsageUpdatedData = {
@@ -52,6 +59,7 @@ export type SessionResumedData = {
   recoveredFrameId?: ProtocolFrameId;
   syntheticCompletionCount: number;
   recallIndexRebuilt: boolean;
+  projectInstructionFile?: ProjectInstructionFileName;
 };
 
 export type InterruptedFrameRecoveredData = {

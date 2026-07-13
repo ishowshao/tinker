@@ -6,10 +6,15 @@ import {
 import { StdoutEventPrinter, type WritableLike } from "../events/stdout-event-printer";
 import type { ModelClient } from "../model/model-client";
 import {
+  buildSystemPrompt,
+  loadProjectInstructions,
+  projectInstructionManifest,
+} from "../instructions/project-instructions";
+import {
   createRunnerModelClient,
   createWebFetchRefinerFromEnv,
   readRunnerConfig,
-  SYSTEM_PROMPT,
+  RUNTIME_INSTRUCTIONS,
   type RunnerConfigOverrides,
 } from "./config";
 import { realpath } from "node:fs/promises";
@@ -35,6 +40,12 @@ export async function runOneShot(
   try {
     const config = readRunnerConfig(options);
     const workspaceRoot = await realpath(config.workspaceRoot);
+    const projectInstructions = await loadProjectInstructions(workspaceRoot);
+    const systemPrompt = buildSystemPrompt({
+      workspaceRoot,
+      runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
+      projectInstructions,
+    });
     const modelClient = createRunnerModelClient(config, options.modelClient);
     session = await createRuntimeSession({
       selection: { mode: "new", sessionId: config.sessionId },
@@ -44,7 +55,8 @@ export async function runOneShot(
       includeReasoningContent: config.includeReasoningContent,
       contextProfile: config.contextProfile,
       contextBudget: config.contextBudget,
-      systemPrompt: SYSTEM_PROMPT(workspaceRoot),
+      systemPrompt,
+      projectInstruction: projectInstructionManifest(projectInstructions),
       modelClient,
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:
