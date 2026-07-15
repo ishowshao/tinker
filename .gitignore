@@ -1,4 +1,5 @@
 .env
+.env.deepseek
 node_modules/
 .tinker/
 .data/
