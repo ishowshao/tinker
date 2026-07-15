@@ -44,9 +44,9 @@ Tinker is configured via environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `TINKER_MODEL` | `deepseek-v4-flash` | Model name |
-| `TINKER_BASE_URL` | `https://api.deepseek.com` | API base URL |
-| `TINKER_API_KEY` | — | API key |
+| `TINKER_MODEL` | — | Required model name |
+| `TINKER_BASE_URL` | — | Required API base URL |
+| `TINKER_API_KEY` | — | Required API key |
 | `TINKER_WORKSPACE` | `process.cwd()` | Workspace root |
 | `TINKER_MAX_ITERATIONS` | `512` | Max agent loop iterations per turn |
 | `EXA_API_KEY` | — | Enables WebSearch tool |

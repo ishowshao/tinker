@@ -12,8 +12,6 @@ import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
 
-export const DEFAULT_BASE_URL = "https://api.deepseek.com";
-export const DEFAULT_MODEL = "deepseek-v4-flash";
 export const DEFAULT_MAX_ITERATIONS = 512;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
 
@@ -69,7 +67,7 @@ export type RunnerConfig = {
 export type RunnerConfigOverrides = Partial<Omit<RunnerConfig, "contextBudget">>;
 
 export function readRunnerConfig(overrides: RunnerConfigOverrides = {}): RunnerConfig {
-  const modelName = overrides.modelName ?? process.env.TINKER_MODEL ?? DEFAULT_MODEL;
+  const modelName = overrides.modelName ?? readRequiredEnv("TINKER_MODEL");
   validateWebFetchRefinerModel(modelName);
   const contextProfile = overrides.contextProfile ?? readModelContextProfileFromEnv();
   const contextBudget = deriveModelContextBudget(contextProfile);
@@ -110,14 +108,12 @@ export function createModelClientFromEnv(
     });
   }
 
-  const apiKey = process.env.API_KEY;
-  if (apiKey === undefined || apiKey.trim() === "") {
-    throw new Error("API_KEY is required. Put it in .env or the process environment.");
-  }
+  const apiKey = readRequiredEnv("TINKER_API_KEY");
+  const baseURL = readRequiredEnv("TINKER_BASE_URL");
 
   return new OpenAIChatModelClient({
     apiKey,
-    baseURL: process.env.OPENAI_BASE_URL ?? DEFAULT_BASE_URL,
+    baseURL,
     includeReasoningContent: config.includeReasoningContent,
     model: config.modelName,
     contextBudget: config.contextBudget,
@@ -153,6 +149,14 @@ export function observationLogPath(
 
 export function promptHistoryPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, ".tinker", "prompt-history.jsonl");
+}
+
+function readRequiredEnv(name: string): string {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`${name} is required. Put it in .env or the process environment.`);
+  }
+  return value.trim();
 }
 
 function parsePositiveInteger(

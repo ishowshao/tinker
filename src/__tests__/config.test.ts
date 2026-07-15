@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_MAX_ITERATIONS,
+  createModelClientFromEnv,
   readRunnerConfig,
   RUNTIME_INSTRUCTIONS,
 } from "../cli/config";
 import { TEST_CONTEXT_PROFILE } from "./test-runtime";
 
 describe("runner config", () => {
+  test("requires an explicit model name", () => {
+    withEnv("TINKER_MODEL", undefined, () => {
+      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
+        "TINKER_MODEL is required",
+      );
+    });
+  });
+
   test("requires an explicit model context profile", () => {
     withEnvValues(
       {
@@ -138,6 +147,37 @@ describe("runner config", () => {
         "TINKER_MAX_ITERATIONS must be a positive integer",
       );
     });
+  });
+});
+
+describe("model client config", () => {
+  test("requires the Tinker API key and base URL variables", () => {
+    const config = {
+      modelName: "test-model",
+      includeReasoningContent: false,
+      contextBudget: readRunnerConfig({
+        modelName: "test-model",
+        contextProfile: TEST_CONTEXT_PROFILE,
+      }).contextBudget,
+    };
+
+    withEnv("TINKER_API_KEY", undefined, () => {
+      expect(() => createModelClientFromEnv(config)).toThrow(
+        "TINKER_API_KEY is required",
+      );
+    });
+
+    withEnvValues(
+      {
+        TINKER_API_KEY: "test-key",
+        TINKER_BASE_URL: undefined,
+      },
+      () => {
+        expect(() => createModelClientFromEnv(config)).toThrow(
+          "TINKER_BASE_URL is required",
+        );
+      },
+    );
   });
 });
 
