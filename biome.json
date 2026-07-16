@@ -3,6 +3,7 @@
   "files": {
     "includes": [
       "src/**",
+      "scripts/**",
       "package.json",
       "tsconfig.json",
       "eslint.config.js",

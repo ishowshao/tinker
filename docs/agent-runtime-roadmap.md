@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 日期：2026-07-12
+- 日期：2026-07-16
 - 性质：实施路线图，不替代阶段技术设计
 - 目标方案：[`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)
 - 当前依据：仓库现有源码、测试与已完成的 runtime 设计
@@ -13,8 +13,8 @@
 
 Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
 preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
-地基阶段已经完成；下一步是 I1 Context Revision 与影子规划，仍不直接切换活动视图或
-开发自动 compaction。
+地基阶段和 G0 基准门禁已经完成；下一步是 I1 Context Revision 与影子规划，仍不直接
+切换活动视图或开发自动 compaction。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -77,7 +77,9 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
-| 稳定来源与 `Recall` | 已完成 | schema v2、`ctx://message/...`、scoped reader、FTS5/substring search 和精确 get 已落地 |
+| 稳定来源与 `Recall` | 已完成 | 当前 schema v4 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
+| 模型 profile 与 runtime contract | 已完成 | profile 身份、显式预算、request/tool schema hash 已持久化并在 resume 时校验 |
+| 项目指令快照 | 已完成 | 新 session 加载单一 AGENTS.md/CLAUDE.md，resume 使用已存 system prompt，不读取当前文件重建历史 |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -265,8 +267,9 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 实际结果：
 
-- schema v2 一次性切换完成；v1 fast-fail，FTS-only 损坏可从已验证 canonical history
-  重建，message/FTS trigger 失败会回滚整个 mutation。
+- Recall 最初随 schema v2 一次性切换落地；后续 measured anchor 与项目指令快照使当前
+  schema 演进到 v4。旧 schema 继续 fast-fail；FTS-only 损坏可从已验证 canonical
+  history 重建，message/FTS trigger 失败会回滚整个 mutation。
 - `Recall` 已作为必选 built-in tool 进入 tool schema；ordinary miss 可继续，required
   reader 故障会补齐 tool frame、跳过后续副作用、持久化 failed turn 并 fault session。
 - 自动化集成用例验证 Read v1、Edit v2、Recall v1、当前 Read v2，以及退出后恢复同一
@@ -299,6 +302,28 @@ F1 至 F5 完成不等于「无限上下文」完成，只表示已经具备安�
 这一部分遵循
 [`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)，但仍按
 可回滚的小阶段实施。
+
+### G0：重新建立长会话基准门禁
+
+**状态：已完成（2026-07-16）。**
+
+详细契约与本机基线见
+[`context-revision-g0-baseline.md`](context-revision-g0-baseline.md)。
+
+G0 不改变 runtime 行为，只恢复可重复的工程门禁：
+
+- 长会话 benchmark 已改用真实 RuntimeSession、SessionStore、默认工具、ContextMeter 与
+  TUI projection，默认覆盖 50 个 workload turns、中点 resume、受控取消和 Recall
+  search -> get。
+- Recall benchmark 通过当前 SessionStore 创建 schema/runtime contract，再生成 10,000
+  条确定性 canonical messages，不再复制历史 schema SQL。
+- `scripts/**/*.ts` 已进入 TypeScript、ESLint 与 Biome；低成本 `bench:smoke` 已进入
+  `bun run check`。
+- 50-turn 基线最终为 207-message request、194,579 measured tokens，request build p95
+  9.44ms；TUI 仍稳定保留 8 个近期 turns，但采样 RSS 增量约 193MB，证明完整历史热路径
+  仍需由 I1 拆分。
+- 本地 44 个历史 SessionStore 的匿名聚合显示 tool observation 占正文 88.4%，支持 I1
+  优先对大体积 tool observation 做确定性 shadow planning。
 
 ### I1：Context Revision 与影子规划
 
@@ -362,6 +387,6 @@ swap-only。
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **I1：Context Revision 与影子规划**。F1 至 F5 已完成，但 I1 仍只
-允许 shadow compile/audit，不切换 active revision；在 I2 门槛满足前不启动确定性换出或
-compaction。
+当前明确的下一项是 **I1：Context Revision 与影子规划**。F1 至 F5 与 G0 已完成，但 I1
+仍只允许 shadow compile/audit，不切换 active revision；在 I2 门槛满足前不启动确定性
+换出或 compaction。

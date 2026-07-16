@@ -4,12 +4,13 @@
   "scripts": {
     "bench:long-session": "bun scripts/bench-long-session-memory.ts",
     "bench:recall": "bun scripts/bench-recall.ts",
+    "bench:smoke": "bun scripts/bench-smoke.ts",
     "tinker": "bun src/cli/index.ts",
-    "check": "bun run typecheck && bun run format:check && bun run lint && bun test",
+    "check": "bun run typecheck && bun run format:check && bun run lint && bun test && bun run bench:smoke",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "lint": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=0",
-    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" --max-warnings=0",
+    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" --fix",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

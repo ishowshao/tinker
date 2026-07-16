@@ -1,231 +1,228 @@
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Database } from "bun:sqlite";
 import { formatMessageSource } from "../src/context/context-source";
 import { contentHash } from "../src/context/protocol-frame";
 import { runtimeIdFactory, type MessageId } from "../src/ids/runtime-id";
-import { createSessionHistoryReader } from "../src/session/session-history-reader";
 import {
-  SESSION_SCHEMA_V2_FINGERPRINT,
-  SESSION_SCHEMA_VERSION,
+  deriveModelContextBudget,
+  type ModelContextProfile,
+} from "../src/model/model-context-profile";
+import { sha256 } from "../src/model/model-request-preflight";
+import {
   configureWritableDatabase,
-  createSessionSchema,
   rebuildRecallIndex,
+  SESSION_SCHEMA_VERSION,
   verifyRecallIndex,
   verifySessionSchema,
   verifySqliteIntegrity,
 } from "../src/session/session-schema";
+import { createRuntimeContract, SessionStore } from "../src/session/session-store";
 
-const messageCount = positiveInteger(Bun.argv[2], 10_000, "message count");
-const sampleCount = positiveInteger(Bun.argv[3], 100, "sample count");
-const directory = await mkdtemp(path.join(os.tmpdir(), "tinker-recall-bench-"));
-const databasePath = path.join(directory, "session.sqlite");
-let database: Database | undefined;
+const benchmarkSystemPrompt = "Recall benchmark system prompt";
+const benchmarkModelName = "g0-recall-benchmark-model";
+const benchmarkContextProfile: ModelContextProfile = {
+  contextWindowTokens: 1_024 * 1_024,
+  maxSupportedOutputTokens: 128 * 1_024,
+};
+const benchmarkContextBudget = deriveModelContextBudget(benchmarkContextProfile);
 
-try {
-  database = new Database(databasePath, { create: true, strict: true, safeIntegers: true });
-  configureWritableDatabase(database);
-  createSessionSchema(database);
+export type RecallBenchmarkResult = {
+  schemaVersion: number;
+  messageCount: number;
+  sampleCount: number;
+  databaseBytes: {
+    baseline: number;
+    populated: number;
+    increment: number;
+    recallFts: number | null;
+    file: number;
+  };
+  timingMs: {
+    insert: number;
+    openSchemaSqliteAndIndexValidation: number;
+    openSessionStoreValidation: number;
+    rebuildAndVerify: number;
+    firstSearchAfterOpen: number;
+    trigramSearch: Percentiles;
+    denseTrigramSearch: Percentiles & { sampleCount: number };
+    oneCodePointSubstringSearch: Percentiles;
+  };
+  sampledMemoryBytes: {
+    rssBeforePages: number;
+    rssAfterSearch: number;
+    rssAfterGet: number;
+    sampledPeakDelta: number;
+  };
+};
+
+export async function runRecallBenchmark(
+  messageCount = 10_000,
+  sampleCount = 100,
+): Promise<RecallBenchmarkResult> {
+  requirePositiveInteger(messageCount, "message count");
+  requirePositiveInteger(sampleCount, "sample count");
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-recall-bench-"));
   const sessionId = runtimeIdFactory.createSessionId();
-  const revisionId = runtimeIdFactory.createContextRevisionId();
-  const timestamp = "2026-07-12T00:00:00.000Z";
-  database
-    .query(
-      `INSERT INTO session_meta (
-         singleton, schema_version, schema_fingerprint, initialization_state,
-         session_id, workspace_root, model_name, system_prompt_sha256,
-         tool_schema_sha256, runtime_contract_json, runtime_contract_sha256,
-         active_revision_id, next_turn_number, next_event_sequence, open_count,
-         created_at, updated_at, last_opened_at, last_closed_at, last_close_reason
-       ) VALUES (1, ?, ?, 'creating', ?, ?, 'benchmark-model', ?, NULL, NULL, NULL,
-         ?, ?, 1, 1, ?, ?, ?, NULL, NULL)`,
-    )
-    .run(
-      SESSION_SCHEMA_VERSION,
-      SESSION_SCHEMA_V2_FINGERPRINT,
-      sessionId,
-      directory,
-      contentHash("benchmark system prompt"),
-      revisionId,
-      messageCount + 1,
-      timestamp,
-      timestamp,
-      timestamp,
-    );
-  database
-    .query(
-      `INSERT INTO context_revisions (
-         revision_id, session_id, revision_number, kind, keep_from_ordinal, created_at
-       ) VALUES (?, ?, 1, 'initial_full', 1, ?)`,
-    )
-    .run(revisionId, sessionId, timestamp);
-  insertSystemMessage(database, sessionId, timestamp);
-  const baselineBytes = sqliteAllocatedBytes(database);
+  let database: Database | undefined;
+  let store: SessionStore | undefined;
 
-  let largeMessageId: MessageId | undefined;
-  const insertStartedAt = performance.now();
-  database.exec("BEGIN IMMEDIATE");
   try {
-    for (let index = 1; index <= messageCount; index += 1) {
-      const messageId = insertBenchmarkMessage(
-        database,
-        sessionId,
-        index,
-        timestamp,
-        index === messageCount,
-      );
-      if (index === messageCount) {
-        largeMessageId = messageId;
-      }
-    }
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-  const insertMs = performance.now() - insertStartedAt;
-  database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  const populatedBytes = sqliteAllocatedBytes(database);
-  const ftsBytes = recallFtsBytes(database);
-  database.close();
-  database = undefined;
-
-  const openStartedAt = performance.now();
-  database = new Database(databasePath, {
-    readwrite: true,
-    strict: true,
-    safeIntegers: true,
-  });
-  configureWritableDatabase(database);
-  verifySessionSchema(database, sessionId);
-  verifySqliteIntegrity(database, sessionId);
-  verifyRecallIndex(database, sessionId);
-  const openValidationMs = performance.now() - openStartedAt;
-
-  let open = true;
-  const reader = createSessionHistoryReader({
-    database,
-    sessionId,
-    requireOpen: () => {
-      if (!open) {
-        throw new Error("benchmark database is closed");
-      }
-    },
-  });
-  const sparseQuery = `message-${Math.ceil(messageCount / 2)
-    .toString()
-    .padStart(5, "0")}`;
-  const firstSearchStartedAt = performance.now();
-  reader.search({ query: sparseQuery, limit: 20, offset: 0 });
-  const firstSearchMs = performance.now() - firstSearchStartedAt;
-  const trigramSamples = sample(sampleCount, () =>
-    reader.search({ query: sparseQuery, limit: 20, offset: 0 }),
-  );
-  const denseTrigramSampleCount = Math.min(sampleCount, 3);
-  const denseTrigramSamples = sample(denseTrigramSampleCount, () =>
-    reader.search({ query: "benchmark-keyword", limit: 20, offset: 0 }),
-  );
-  const substringSamples = sample(sampleCount, () =>
-    reader.search({ query: "中", limit: 20, offset: 0 }),
-  );
-
-  Bun.gc(true);
-  const rssBeforePages = process.memoryUsage().rss;
-  reader.search({ query: "group-00000", limit: 20, offset: 0 });
-  const rssAfterSearch = process.memoryUsage().rss;
-  if (largeMessageId === undefined) {
-    throw new Error("Benchmark did not create its large message.");
-  }
-  reader.get({
-    source: formatMessageSource(largeMessageId),
-    byteOffset: 0,
-    byteLimit: 20_000,
-  });
-  const rssAfterGet = process.memoryUsage().rss;
-
-  const rebuildStartedAt = performance.now();
-  rebuildRecallIndex(database, sessionId);
-  verifyRecallIndex(database, sessionId);
-  const rebuildMs = performance.now() - rebuildStartedAt;
-  open = false;
-  database.close();
-  database = undefined;
-
-  console.log(
-    JSON.stringify(
-      {
-        messageCount,
-        sampleCount,
-        databaseBytes: {
-          baseline: baselineBytes,
-          populated: populatedBytes,
-          increment: populatedBytes - baselineBytes,
-          recallFts: ftsBytes,
-          file: (await stat(databasePath)).size,
-        },
-        timingMs: {
-          insert: round(insertMs),
-          openSchemaSqliteAndIndexValidation: round(openValidationMs),
-          rebuildAndVerify: round(rebuildMs),
-          firstSearchAfterOpen: round(firstSearchMs),
-          trigramSearch: percentiles(trigramSamples),
-          denseTrigramSearch: {
-            sampleCount: denseTrigramSampleCount,
-            ...percentiles(denseTrigramSamples),
-          },
-          oneCodePointSubstringSearch: percentiles(substringSamples),
-        },
-        sampledMemoryBytes: {
-          rssBeforePages,
-          rssAfterSearch,
-          rssAfterGet,
-          sampledPeakDelta:
-            Math.max(rssAfterSearch, rssAfterGet) - rssBeforePages,
-        },
-      },
-      null,
-      2,
-    ),
-  );
-} finally {
-  database?.close();
-  await rm(directory, { recursive: true });
-}
-
-function insertSystemMessage(
-  database: Database,
-  sessionId: string,
-  timestamp: string,
-): void {
-  const frameId = runtimeIdFactory.createProtocolFrameId();
-  const content = "benchmark system prompt";
-  database
-    .query(
-      `INSERT INTO protocol_frames (
-         frame_id, session_id, turn_id, iteration_id, kind, state,
-         first_ordinal, last_ordinal, created_at, closed_at
-       ) VALUES (?, ?, NULL, NULL, 'system', 'closed', 1, 1, ?, ?)`,
-    )
-    .run(frameId, sessionId, timestamp, timestamp);
-  database
-    .query(
-      `INSERT INTO messages (
-         message_id, session_id, frame_id, ordinal, role, turn_id, iteration_id,
-         content, content_sha256, reasoning_content, reasoning_content_present,
-         tool_calls_json, provider, model, tool_call_id, provider_tool_call_id,
-         name, origin, created_at
-       ) VALUES (?, ?, ?, 1, 'system', NULL, NULL, ?, ?, NULL, 0,
-         NULL, NULL, NULL, NULL, NULL, NULL, 'runtime', ?)`,
-    )
-    .run(
-      runtimeIdFactory.createMessageId(),
+    const bootstrap = await SessionStore.createNew({
+      workspaceRoot: workspace,
       sessionId,
-      frameId,
-      content,
-      contentHash(content),
-      timestamp,
+      modelName: benchmarkModelName,
+      systemPrompt: benchmarkSystemPrompt,
+      idFactory: runtimeIdFactory,
+    });
+    bootstrap.finalizeRuntimeContract(
+      createRuntimeContract({
+        modelName: benchmarkModelName,
+        profileName: "g0-recall-benchmark",
+        includeReasoningContent: false,
+        contextProfile: benchmarkContextProfile,
+        contextBudget: benchmarkContextBudget,
+        systemPrompt: benchmarkSystemPrompt,
+        toolSchemaSha256: sha256("g0-recall-benchmark-tools"),
+        requestConfigSha256: sha256("g0-recall-benchmark-request"),
+      }),
     );
+    const databasePath = bootstrap.databasePath;
+    await bootstrap.close("tui_exit");
+
+    database = openWritableDatabase(databasePath);
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    const baselineBytes = sqliteAllocatedBytes(database);
+    let largeMessageId: MessageId | undefined;
+    const timestamp = "2026-07-16T00:00:00.000Z";
+    const insertStartedAt = performance.now();
+    database.exec("BEGIN IMMEDIATE");
+    try {
+      for (let index = 1; index <= messageCount; index += 1) {
+        const messageId = insertBenchmarkMessage(
+          database,
+          sessionId,
+          index,
+          timestamp,
+          index === messageCount,
+        );
+        if (index === messageCount) {
+          largeMessageId = messageId;
+        }
+      }
+      database
+        .query(
+          `UPDATE session_meta
+           SET next_turn_number = ?, updated_at = ?
+           WHERE singleton = 1`,
+        )
+        .run(messageCount + 1, timestamp);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    const insertMs = performance.now() - insertStartedAt;
+    database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    const populatedBytes = sqliteAllocatedBytes(database);
+    const ftsBytes = recallFtsBytes(database);
+    database.close();
+    database = undefined;
+
+    const lowLevelOpenStartedAt = performance.now();
+    database = openWritableDatabase(databasePath);
+    verifySessionSchema(database, sessionId);
+    verifySqliteIntegrity(database, sessionId);
+    verifyRecallIndex(database, sessionId);
+    const lowLevelOpenValidationMs = performance.now() - lowLevelOpenStartedAt;
+    database.close();
+    database = undefined;
+
+    const sessionStoreOpenStartedAt = performance.now();
+    store = await SessionStore.openExisting({
+      workspaceRoot: workspace,
+      sessionId,
+    });
+    const sessionStoreOpenValidationMs = performance.now() - sessionStoreOpenStartedAt;
+    const reader = store.historyReader();
+    const sparseQuery = `message-${Math.ceil(messageCount / 2)
+      .toString()
+      .padStart(5, "0")}`;
+    const firstSearchStartedAt = performance.now();
+    reader.search({ query: sparseQuery, limit: 20, offset: 0 });
+    const firstSearchMs = performance.now() - firstSearchStartedAt;
+    const trigramSamples = sample(sampleCount, () =>
+      reader.search({ query: sparseQuery, limit: 20, offset: 0 }),
+    );
+    const denseTrigramSampleCount = Math.min(sampleCount, 3);
+    const denseTrigramSamples = sample(denseTrigramSampleCount, () =>
+      reader.search({ query: "benchmark-keyword", limit: 20, offset: 0 }),
+    );
+    const substringSamples = sample(sampleCount, () =>
+      reader.search({ query: "中", limit: 20, offset: 0 }),
+    );
+
+    Bun.gc(true);
+    const rssBeforePages = process.memoryUsage().rss;
+    reader.search({ query: "group-00000", limit: 20, offset: 0 });
+    const rssAfterSearch = process.memoryUsage().rss;
+    if (largeMessageId === undefined) {
+      throw new Error("Recall benchmark did not create its large message.");
+    }
+    reader.get({
+      source: formatMessageSource(largeMessageId),
+      byteOffset: 0,
+      byteLimit: 20_000,
+    });
+    const rssAfterGet = process.memoryUsage().rss;
+    await store.close("tui_exit");
+    store = undefined;
+
+    database = openWritableDatabase(databasePath);
+    const rebuildStartedAt = performance.now();
+    rebuildRecallIndex(database, sessionId);
+    verifyRecallIndex(database, sessionId);
+    const rebuildMs = performance.now() - rebuildStartedAt;
+    database.close();
+    database = undefined;
+
+    return {
+      schemaVersion: SESSION_SCHEMA_VERSION,
+      messageCount,
+      sampleCount,
+      databaseBytes: {
+        baseline: baselineBytes,
+        populated: populatedBytes,
+        increment: populatedBytes - baselineBytes,
+        recallFts: ftsBytes,
+        file: (await stat(databasePath)).size,
+      },
+      timingMs: {
+        insert: round(insertMs),
+        openSchemaSqliteAndIndexValidation: round(lowLevelOpenValidationMs),
+        openSessionStoreValidation: round(sessionStoreOpenValidationMs),
+        rebuildAndVerify: round(rebuildMs),
+        firstSearchAfterOpen: round(firstSearchMs),
+        trigramSearch: percentiles(trigramSamples),
+        denseTrigramSearch: {
+          sampleCount: denseTrigramSampleCount,
+          ...percentiles(denseTrigramSamples),
+        },
+        oneCodePointSubstringSearch: percentiles(substringSamples),
+      },
+      sampledMemoryBytes: {
+        rssBeforePages,
+        rssAfterSearch,
+        rssAfterGet,
+        sampledPeakDelta: Math.max(rssAfterSearch, rssAfterGet) - rssBeforePages,
+      },
+    };
+  } finally {
+    database?.close();
+    await store?.abandon().catch(() => undefined);
+    await rm(workspace, { recursive: true });
+  }
 }
 
 function insertBenchmarkMessage(
@@ -286,6 +283,16 @@ function insertBenchmarkMessage(
   return messageId;
 }
 
+function openWritableDatabase(databasePath: string): Database {
+  const database = new Database(databasePath, {
+    readwrite: true,
+    strict: true,
+    safeIntegers: true,
+  });
+  configureWritableDatabase(database);
+  return database;
+}
+
 function sqliteAllocatedBytes(database: Database): number {
   const pageCount = pragmaNumber(database, "page_count");
   const pageSize = pragmaNumber(database, "page_size");
@@ -324,7 +331,7 @@ function sample(count: number, operation: () => unknown): number[] {
   return durations;
 }
 
-function percentiles(values: number[]): { p50: number; p95: number } {
+function percentiles(values: number[]): Percentiles {
   const sorted = [...values].sort((left, right) => left - right);
   return {
     p50: round(sorted[Math.floor((sorted.length - 1) * 0.5)] ?? 0),
@@ -332,18 +339,32 @@ function percentiles(values: number[]): { p50: number; p95: number } {
   };
 }
 
-function positiveInteger(
+function requirePositiveInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Recall benchmark ${name} must be a positive safe integer.`);
+  }
+}
+
+function parsePositiveInteger(
   value: string | undefined,
   fallback: number,
   name: string,
 ): number {
   const parsed = value === undefined ? fallback : Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Recall benchmark ${name} must be a positive safe integer.`);
-  }
+  requirePositiveInteger(parsed, name);
   return parsed;
 }
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+type Percentiles = { p50: number; p95: number };
+
+if (import.meta.main) {
+  const messageCount = parsePositiveInteger(Bun.argv[2], 10_000, "message count");
+  const sampleCount = parsePositiveInteger(Bun.argv[3], 100, "sample count");
+  console.log(
+    JSON.stringify(await runRecallBenchmark(messageCount, sampleCount), null, 2),
+  );
 }
