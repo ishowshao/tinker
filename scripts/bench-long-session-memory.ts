@@ -31,7 +31,12 @@ import {
 import { OpenAIChatModelClient } from "../src/model/openai-chat-model-client";
 import { estimatePromptSegments } from "../src/model/token-estimator";
 import type { ProtocolContextView } from "../src/context/protocol-frame";
+import type { BuiltContextRequest } from "../src/context/context-revision";
+import type { ShadowPlanningResult } from "../src/context/context-shadow-planner";
+import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
+import type { SessionHistoryReader } from "../src/session/session-history-reader";
+import { SESSION_SCHEMA_V4_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -44,6 +49,7 @@ const benchmarkSystemPrompt =
   "You are running the deterministic Tinker G0 long-session benchmark.";
 const benchmarkDataFile = "benchmark-data.txt";
 const historicalMarker = "historical-marker-turn-0001";
+const forcedShadowMinimumTurnCount = 12;
 
 const benchmarkContextProfile: ModelContextProfile = {
   contextWindowTokens: 1_024 * 1_024,
@@ -58,12 +64,38 @@ export type LongSessionBenchmarkResult = {
   cancelledTurnVerified: boolean;
   resumeVerified: boolean;
   recallVerified: boolean;
+  shadow: {
+    forcedVerified: boolean;
+    recallVerified: boolean;
+    eventCount: number;
+    outcome: "target_reached" | "insufficient_candidates";
+    eligibleCandidateCount: number;
+    selectedCandidateCount: number;
+    excludedByReason: Readonly<Record<string, number>>;
+    selectedByRawKind: Readonly<Record<string, number>>;
+    originalObservationBytes: number;
+    projectedObservationBytes: number;
+    targetTokens: number;
+    rawTokensBefore: number;
+    rawTokensAfter: number;
+    guardedTokensBefore: number;
+    guardedTokensAfter: number;
+    durationMs: number;
+    planHash: string;
+  };
   database: {
     schemaVersion: number;
+    schemaFingerprintMatches: boolean;
     turnCount: number;
     messageCount: number;
     frameCount: number;
     toolResultCount: number;
+    contextRevisionCount: number;
+    revisionNumber: number;
+    revisionKind: string;
+    keepFromOrdinal: number;
+    activeRevisionMatches: boolean;
+    measuredRevisionMatches: boolean;
     contentBytesByRole: Record<string, { count: number; bytes: number }>;
     toolObservationBytes: Distribution;
     measuredContextTokens?: number;
@@ -79,6 +111,7 @@ export type LongSessionBenchmarkResult = {
   };
   requests: {
     buildCount: number;
+    providerRequestCount: number;
     maxMessageCount: number;
     lastMessageCount: number;
     promptSegmentCount: number;
@@ -111,6 +144,11 @@ export async function runLongSessionBenchmark(
   workloadTurnCount = 50,
 ): Promise<LongSessionBenchmarkResult> {
   requirePositiveInteger(workloadTurnCount, "workload turn count");
+  if (workloadTurnCount < forcedShadowMinimumTurnCount) {
+    throw new Error(
+      `Long-session benchmark requires at least ${forcedShadowMinimumTurnCount} workload turns to exercise forced shadow planning.`,
+    );
+  }
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-g0-long-session-"));
   const sessionId = runtimeIdFactory.createSessionId();
   const sessionDirectory = path.join(workspace, ".tinker", "sessions", sessionId);
@@ -121,6 +159,7 @@ export async function runLongSessionBenchmark(
     sessionId,
     workspaceRoot: workspace,
   });
+  const shadow = new BenchmarkShadowController();
   const turnDurations: number[] = [];
   const samples: LongSessionSample[] = [];
   let session: RuntimeSession | undefined;
@@ -138,6 +177,7 @@ export async function runLongSessionBenchmark(
       model,
       projection,
       ledgerMetrics,
+      shadow,
     });
 
     const resumeAfterTurn = Math.max(1, Math.floor(workloadTurnCount / 2));
@@ -180,6 +220,7 @@ export async function runLongSessionBenchmark(
           model,
           projection,
           ledgerMetrics,
+          shadow,
         });
         resumeMs = performance.now() - resumeStartedAt;
         if (!session.resumed || session.recovery.syntheticCompletionCount !== 0) {
@@ -220,8 +261,27 @@ export async function runLongSessionBenchmark(
     Bun.gc(true);
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
+    if (
+      database.schemaVersion !== 4 ||
+      !database.schemaFingerprintMatches ||
+      database.contextRevisionCount !== 1 ||
+      database.revisionNumber !== 1 ||
+      database.revisionKind !== "initial_full" ||
+      database.keepFromOrdinal !== 1 ||
+      !database.activeRevisionMatches ||
+      !database.measuredRevisionMatches
+    ) {
+      throw new Error("Long-session shadow planning changed schema v4 revision state.");
+    }
     const finalSnapshot = projection.store.getSnapshot();
     assertBoundedProjection(finalSnapshot);
+    const shadowSummary = shadow.summary(projection);
+    const expectedProviderRequests = workloadTurnCount * 2 + 4;
+    if (model.requestCount !== expectedProviderRequests) {
+      throw new Error(
+        `Long-session provider request count changed: expected ${expectedProviderRequests}, received ${model.requestCount}.`,
+      );
+    }
 
     return {
       workloadTurnCount,
@@ -230,6 +290,7 @@ export async function runLongSessionBenchmark(
       cancelledTurnVerified: true,
       resumeVerified: true,
       recallVerified: true,
+      shadow: shadowSummary,
       database,
       projection: {
         policy: defaultTuiProjectionPolicy,
@@ -242,6 +303,7 @@ export async function runLongSessionBenchmark(
       },
       requests: {
         buildCount: ledgerMetrics.buildDurations.length,
+        providerRequestCount: model.requestCount,
         maxMessageCount: ledgerMetrics.maxMessageCount,
         lastMessageCount: ledgerMetrics.lastMessageCount,
         promptSegmentCount: model.maxPromptSegmentCount,
@@ -292,6 +354,7 @@ export async function runLongSessionBenchmark(
 class BenchmarkModelClient implements ModelClient {
   readonly prepareDurations: number[] = [];
   maxPromptSegmentCount = 0;
+  requestCount = 0;
   private readonly inputs = new WeakMap<object, ModelRequestInput>();
   private readonly serializer = new OpenAIChatModelClient({
     apiKey: "g0-benchmark-no-network",
@@ -325,6 +388,7 @@ class BenchmarkModelClient implements ModelClient {
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
     const input = this.inputs.get(prepared);
     if (input === undefined) {
       throw new Error("Benchmark model request was not prepared by this client.");
@@ -453,10 +517,13 @@ class LedgerMetrics {
   maxMessageCount = 0;
   lastMessageCount = 0;
 
-  record<T extends ModelRequestInput>(startedAt: number, request: T): T {
+  record<T extends BuiltContextRequest>(startedAt: number, request: T): T {
     this.buildDurations.push(performance.now() - startedAt);
-    this.lastMessageCount = request.messages.length;
-    this.maxMessageCount = Math.max(this.maxMessageCount, request.messages.length);
+    this.lastMessageCount = request.request.messages.length;
+    this.maxMessageCount = Math.max(
+      this.maxMessageCount,
+      request.request.messages.length,
+    );
     return request;
   }
 }
@@ -471,7 +538,7 @@ class TimedSessionLedger implements SessionLedger {
     return new TimedPendingLedgerTurn(this.inner.beginTurn(input), this.metrics);
   }
 
-  buildCommittedModelRequest(tools: readonly ToolDefinition[]): ModelRequestInput {
+  buildCommittedModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest {
     const startedAt = performance.now();
     return this.metrics.record(startedAt, this.inner.buildCommittedModelRequest(tools));
   }
@@ -479,7 +546,7 @@ class TimedSessionLedger implements SessionLedger {
   buildCandidateModelRequest(
     userPrompt: string,
     tools: readonly ToolDefinition[],
-  ): ModelRequestInput {
+  ): BuiltContextRequest {
     const startedAt = performance.now();
     return this.metrics.record(
       startedAt,
@@ -544,6 +611,7 @@ class BenchmarkProjectionSink implements EventSink {
   readonly visibleDurations: number[] = [];
   processedEventCount = 0;
   maxVisibleItemCount = 0;
+  lastShadowPlan?: Extract<AgentEvent, { type: "context.shadow.planned" }>["data"];
 
   constructor(input: { sessionId: SessionId; workspaceRoot: string }) {
     this.store = new TuiProjectionStore({
@@ -559,11 +627,119 @@ class BenchmarkProjectionSink implements EventSink {
     this.appendDurations.push(performance.now() - appendStartedAt);
     this.processedEventCount += 1;
     this.eventCounts.set(event.type, (this.eventCounts.get(event.type) ?? 0) + 1);
+    if (event.type === "context.shadow.planned") {
+      this.lastShadowPlan = { ...event.data };
+    }
 
     const visibleStartedAt = performance.now();
     const visible = visibleTimelineItems(this.store.getSnapshot());
     this.visibleDurations.push(performance.now() - visibleStartedAt);
     this.maxVisibleItemCount = Math.max(this.maxVisibleItemCount, visible.length);
+  }
+}
+
+class BenchmarkShadowController {
+  private requested = false;
+  private historyReader?: SessionHistoryReader;
+  private result?: ShadowPlanningResult;
+  private recallVerified = false;
+
+  bindHistoryReader(reader: SessionHistoryReader): void {
+    this.historyReader = reader;
+  }
+
+  select(input: {
+    built: BuiltContextRequest;
+  }): { trigger: "benchmark_forced"; forcedTargetTokens: number } | undefined {
+    if (this.requested) {
+      return undefined;
+    }
+    const turnIds = new Set(
+      input.built.canonical.messages.flatMap((message) =>
+        message.role === "system" ? [] : [message.turnId],
+      ),
+    );
+    if (turnIds.size < forcedShadowMinimumTurnCount) {
+      return undefined;
+    }
+    this.requested = true;
+    return { trigger: "benchmark_forced", forcedTargetTokens: 0 };
+  }
+
+  observe(result: ShadowPlanningResult, built: BuiltContextRequest): void {
+    if (this.result !== undefined) {
+      throw new Error("Long-session benchmark produced multiple forced shadow plans.");
+    }
+    const plan = result.plan;
+    const reader = this.historyReader;
+    if (plan === undefined || plan.selected.length === 0 || reader === undefined) {
+      throw new Error("Long-session forced shadow plan selected no Recall source.");
+    }
+    for (const selected of plan.selected) {
+      const canonical = built.canonical.messages.find(
+        (message) => message.messageId === selected.messageId,
+      );
+      if (canonical?.role !== "tool") {
+        throw new Error(
+          "Shadow selection did not resolve to a canonical tool message.",
+        );
+      }
+      const page = reader.get({
+        source: selected.source,
+        byteOffset: 0,
+        byteLimit: selected.originalBytes,
+      });
+      if (
+        page.returnedBytes !== page.totalBytes ||
+        page.contentSha256 !== selected.originalContentSha256 ||
+        contentHash(page.content) !== selected.originalContentSha256 ||
+        page.content !== canonical.content
+      ) {
+        throw new Error("Shadow selection did not round-trip through Recall get.");
+      }
+    }
+    this.recallVerified = true;
+    this.result = result;
+  }
+
+  summary(projection: BenchmarkProjectionSink): LongSessionBenchmarkResult["shadow"] {
+    const result = this.result;
+    const plan = result?.plan;
+    const shadowEvents = projection.eventCounts.get("context.shadow.planned") ?? 0;
+    if (
+      !this.requested ||
+      result === undefined ||
+      plan === undefined ||
+      !this.recallVerified ||
+      shadowEvents !== 1 ||
+      (result.outcome !== "target_reached" &&
+        result.outcome !== "insufficient_candidates")
+    ) {
+      throw new Error("Long-session forced shadow planning was not verified.");
+    }
+    const event = projection.lastShadowPlan;
+    if (event === undefined || event.planHash !== plan.planHash) {
+      throw new Error("Long-session shadow diagnostic event did not match its plan.");
+    }
+    return {
+      forcedVerified: true,
+      recallVerified: true,
+      eventCount: shadowEvents,
+      outcome: result.outcome,
+      eligibleCandidateCount: result.eligibleCandidateCount,
+      selectedCandidateCount: plan.selected.length,
+      excludedByReason: result.excludedByReason,
+      selectedByRawKind: result.selectedByRawKind,
+      originalObservationBytes: result.originalObservationBytes,
+      projectedObservationBytes: result.projectedObservationBytes,
+      targetTokens: result.targetTokens,
+      rawTokensBefore: plan.rawTokensBefore,
+      rawTokensAfter: plan.rawTokensAfter,
+      guardedTokensBefore: plan.guardedTokensBefore,
+      guardedTokensAfter: plan.guardedTokensAfter,
+      durationMs: event.durationMs,
+      planHash: plan.planHash,
+    };
   }
 }
 
@@ -574,6 +750,7 @@ async function createBenchmarkSession(input: {
   model: BenchmarkModelClient;
   projection: BenchmarkProjectionSink;
   ledgerMetrics: LedgerMetrics;
+  shadow: BenchmarkShadowController;
 }): Promise<RuntimeSession> {
   const common = {
     workspaceRoot: input.workspace,
@@ -600,11 +777,15 @@ async function createBenchmarkSession(input: {
   const dependencies: Partial<RuntimeSessionFactoryDependencies> = {
     loadMcpConfig: async () => undefined,
     createTooling: (options) => createDefaultTooling({ ...options, exaApiKey: "" }),
-    createLedger: (store, idFactory) =>
-      new TimedSessionLedger(
+    createLedger: (store, idFactory) => {
+      input.shadow.bindHistoryReader(store.historyReader());
+      return new TimedSessionLedger(
         new SqliteSessionLedger(store, idFactory),
         input.ledgerMetrics,
-      ),
+      );
+    },
+    selectShadowPlanning: (planningInput) => input.shadow.select(planningInput),
+    onShadowPlanningResult: (result, built) => input.shadow.observe(result, built),
   };
   return createRuntimeSession(sessionInput, dependencies);
 }
@@ -749,8 +930,11 @@ function readDatabaseSummary(
     safeIntegers: true,
   });
   try {
-    const meta = database.query("SELECT schema_version FROM session_meta").get() as {
+    const meta = database
+      .query("SELECT schema_version, schema_fingerprint FROM session_meta")
+      .get() as {
       schema_version: number | bigint;
+      schema_fingerprint: string;
     };
     const counts = database
       .query(
@@ -758,9 +942,20 @@ function readDatabaseSummary(
           (SELECT COUNT(*) FROM turns) AS turn_count,
           (SELECT COUNT(*) FROM messages) AS message_count,
           (SELECT COUNT(*) FROM protocol_frames) AS frame_count,
-          (SELECT COUNT(*) FROM tool_results) AS tool_result_count`,
+          (SELECT COUNT(*) FROM tool_results) AS tool_result_count,
+          (SELECT COUNT(*) FROM context_revisions) AS context_revision_count`,
       )
       .get() as Record<string, number | bigint>;
+    const revision = database
+      .query(
+        `SELECT cr.revision_number, cr.kind, cr.keep_from_ordinal,
+                sm.active_revision_id = cr.revision_id AS active_matches,
+                cms.revision_id = cr.revision_id AS measured_matches
+         FROM session_meta sm
+         JOIN context_revisions cr ON cr.session_id = sm.session_id
+         LEFT JOIN context_measurement_state cms ON cms.session_id = sm.session_id`,
+      )
+      .get() as Record<string, string | number | bigint>;
     const roleRows = database
       .query(
         `SELECT role, COUNT(*) AS count, COALESCE(SUM(length(content)), 0) AS bytes
@@ -783,10 +978,22 @@ function readDatabaseSummary(
       .get() as { total_tokens: number | bigint } | null;
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
+      schemaFingerprintMatches:
+        meta.schema_fingerprint === SESSION_SCHEMA_V4_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),
       toolResultCount: numberFromDatabase(counts.tool_result_count),
+      contextRevisionCount: numberFromDatabase(counts.context_revision_count),
+      revisionNumber: numberFromDatabase(revision.revision_number as number | bigint),
+      revisionKind: String(revision.kind),
+      keepFromOrdinal: numberFromDatabase(
+        revision.keep_from_ordinal as number | bigint,
+      ),
+      activeRevisionMatches:
+        numberFromDatabase(revision.active_matches as number | bigint) === 1,
+      measuredRevisionMatches:
+        numberFromDatabase(revision.measured_matches as number | bigint) === 1,
       contentBytesByRole: Object.fromEntries(
         roleRows.map((row) => [
           row.role,

@@ -345,9 +345,8 @@ describe("RuntimeSession lifecycle", () => {
       userPrompt: "use tools",
       signal: new AbortController().signal,
     });
-    const failedMessages = requireLedger(ledger).buildCommittedModelRequest(
-      [],
-    ).messages;
+    const failedMessages = requireLedger(ledger).buildCommittedModelRequest([]).request
+      .messages;
     const recovered = await session.executeTurn({
       userPrompt: "continue",
       signal: new AbortController().signal,
@@ -594,7 +593,9 @@ describe("RuntimeSession lifecycle", () => {
     expect(invalid.status === "failed" ? invalid.error : "").toContain(
       "invalid frame identity",
     );
-    expect(requireLedger(ledger).buildCommittedModelRequest([]).messages).toEqual([
+    expect(
+      requireLedger(ledger).buildCommittedModelRequest([]).request.messages,
+    ).toEqual([
       { role: "system", content: "system" },
       { role: "user", content: "bad turn" },
     ]);

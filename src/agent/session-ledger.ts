@@ -1,6 +1,11 @@
 import type { RuntimeIdFactory, SessionId } from "../ids/runtime-id";
-import type { ModelRequestInput } from "../model/model-client";
 import type { ToolDefinition } from "../tools/types";
+import type {
+  BuiltContextRequest,
+  StoredContextSnapshotV4,
+  StoredInitialContextRevisionV4,
+} from "../context/context-revision";
+import { ContextRevisionCompiler } from "../context/context-revision-compiler";
 import {
   ContextProtocolError,
   ContextProtocolValidator,
@@ -30,11 +35,11 @@ import type {
 
 export type SessionLedger = {
   beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn;
-  buildCommittedModelRequest(tools: readonly ToolDefinition[]): ModelRequestInput;
+  buildCommittedModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
   buildCandidateModelRequest(
     userPrompt: string,
     tools: readonly ToolDefinition[],
-  ): ModelRequestInput;
+  ): BuiltContextRequest;
   committedMessageCount(): number;
   snapshot(options?: {
     fullIntegrity?: boolean;
@@ -60,7 +65,7 @@ export type AgentTurnLedger = {
   }): void;
   assertCanExecuteTool(call: ToolCall): void;
   commitToolCompletions(completions: readonly ToolCompletionInput[]): void;
-  buildModelRequest(tools: readonly ToolDefinition[]): ModelRequestInput;
+  buildModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
 };
 
 export type LedgerMutation =
@@ -113,7 +118,10 @@ export type CreateInMemorySessionLedgerInput = {
   idFactory: RuntimeIdFactory;
   systemPrompt?: string;
   initialView?: ProtocolContextView;
+  initialSnapshot?: StoredContextSnapshotV4;
+  initialRevisionId?: StoredInitialContextRevisionV4["revisionId"];
   contextBuilder?: ContextBuilder;
+  revisionCompiler?: ContextRevisionCompiler;
   clock?: () => string;
   committer?: SessionLedgerCommitter;
 };
@@ -125,29 +133,62 @@ export class InMemorySessionLedger implements SessionLedger {
   private pending?: InMemoryPendingLedgerTurn;
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
+  private readonly revisionCompiler: ContextRevisionCompiler;
+  private readonly revision: StoredInitialContextRevisionV4;
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
-    this.contextBuilder = input.contextBuilder ?? new ContextBuilder(this.validator);
+    this.contextBuilder = input.contextBuilder ?? new ContextBuilder();
+    this.revisionCompiler = input.revisionCompiler ?? new ContextRevisionCompiler();
     this.clock = input.clock ?? (() => new Date().toISOString());
-    if ((input.systemPrompt === undefined) === (input.initialView === undefined)) {
-      throw new Error(
-        "Session ledger requires exactly one of systemPrompt or initialView.",
-      );
+    const sourceCount = [
+      input.systemPrompt,
+      input.initialView,
+      input.initialSnapshot,
+    ].filter((value) => value !== undefined).length;
+    if (sourceCount !== 1) {
+      throw new Error("Session ledger requires exactly one canonical history source.");
     }
-    this.view =
-      input.initialView === undefined
-        ? createInitialView(
-            input.sessionId,
-            input.systemPrompt!,
-            input.idFactory,
-            this.clock,
-          )
-        : immutableView(input.initialView);
-    this.validator.validate(this.view, {
-      allowOpenTail: true,
-      fullIntegrity: true,
-    });
+    if (input.initialSnapshot !== undefined) {
+      if (input.initialRevisionId !== undefined) {
+        throw new Error(
+          "Session ledger cannot override the revision in an initial snapshot.",
+        );
+      }
+      this.view = immutableView(input.initialSnapshot.canonical);
+      this.revision = input.initialSnapshot.revision;
+    } else {
+      this.view =
+        input.initialView === undefined
+          ? createInitialView(
+              input.sessionId,
+              input.systemPrompt!,
+              input.idFactory,
+              this.clock,
+            )
+          : immutableView(input.initialView);
+      this.revision = Object.freeze({
+        revisionId:
+          input.initialRevisionId ?? input.idFactory.createContextRevisionId(),
+        sessionId: input.sessionId,
+        revisionNumber: 1,
+        kind: "initial_full",
+        keepFromOrdinal: 1,
+        createdAt: this.view.frames[0]?.createdAt ?? this.clock(),
+      });
+    }
+    if (
+      this.view.sessionId !== input.sessionId ||
+      this.revision.sessionId !== input.sessionId
+    ) {
+      throw new Error("Session ledger history or revision belongs to another session.");
+    }
+    if (input.initialSnapshot === undefined) {
+      this.validator.validate(this.view, {
+        allowOpenTail: true,
+        fullIntegrity: true,
+      });
+    }
   }
 
   beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn {
@@ -198,7 +239,7 @@ export class InMemorySessionLedger implements SessionLedger {
     return pending;
   }
 
-  buildCommittedModelRequest(tools: readonly ToolDefinition[]): ModelRequestInput {
+  buildCommittedModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest {
     this.requireHealthy("build committed context");
     if (this.pending !== undefined) {
       throw new Error("Cannot build committed context while a turn is open.");
@@ -209,7 +250,7 @@ export class InMemorySessionLedger implements SessionLedger {
   buildCandidateModelRequest(
     userPrompt: string,
     tools: readonly ToolDefinition[],
-  ): ModelRequestInput {
+  ): BuiltContextRequest {
     this.requireHealthy("build candidate context");
     if (this.pending !== undefined) {
       throw new Error("Cannot build candidate context while a turn is open.");
@@ -419,7 +460,7 @@ export class InMemorySessionLedger implements SessionLedger {
   buildTurnModelRequest(
     pending: InMemoryPendingLedgerTurn,
     tools: readonly ToolDefinition[],
-  ): ModelRequestInput {
+  ): BuiltContextRequest {
     this.requirePending(pending, "build a model request");
     return this.buildRequest(tools);
   }
@@ -464,10 +505,15 @@ export class InMemorySessionLedger implements SessionLedger {
   private buildRequest(
     tools: readonly ToolDefinition[],
     candidateUserPrompt?: string,
-  ): ModelRequestInput {
+  ): BuiltContextRequest {
     try {
+      const canonical = this.view;
+      const compiled = this.revisionCompiler.compileActive(
+        snapshotFor(canonical, this.revision),
+      );
       return this.contextBuilder.build({
-        view: this.view,
+        canonical,
+        compiled,
         tools,
         ...(candidateUserPrompt === undefined ? {} : { candidateUserPrompt }),
       });
@@ -542,6 +588,20 @@ export class InMemorySessionLedger implements SessionLedger {
     const assistant = this.assistantForFrame(frame);
     return assistant.toolCalls?.[this.messagesForFrame(frame).length - 1];
   }
+}
+
+function snapshotFor(
+  canonical: ProtocolContextView,
+  revision: StoredInitialContextRevisionV4,
+): StoredContextSnapshotV4 {
+  return Object.freeze({
+    meta: Object.freeze({
+      sessionId: canonical.sessionId,
+      activeRevisionId: revision.revisionId,
+    }),
+    revision,
+    canonical,
+  });
 }
 
 class InMemoryPendingLedgerTurn implements PendingLedgerTurn {

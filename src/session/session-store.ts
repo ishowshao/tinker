@@ -45,6 +45,10 @@ import {
   type ToolCompletion,
   type ToolResultRecord,
 } from "../context/protocol-frame";
+import type {
+  StoredContextSnapshotV4,
+  StoredInitialContextRevisionV4,
+} from "../context/context-revision";
 import type { IterationIdentity, ToolCall } from "../agent/types";
 import type { MeasuredContextAnchor } from "../agent/context-meter";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
@@ -206,15 +210,16 @@ export class SessionStore implements SessionLedgerCommitter {
       createSessionSchema(database);
       verifySessionSchema(database, input.sessionId);
 
+      const revisionId = input.idFactory.createContextRevisionId();
       const initialLedger = new InMemorySessionLedger({
         sessionId: input.sessionId,
         systemPrompt: input.systemPrompt,
         idFactory: input.idFactory,
+        initialRevisionId: revisionId,
         clock,
       });
       const initialView = initialLedger.snapshot({ fullIntegrity: true });
       const createdAt = clock();
-      const revisionId = input.idFactory.createContextRevisionId();
       runTransaction(database, () => {
         database!
           .query(
@@ -824,6 +829,66 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
+  loadContextSnapshot(): StoredContextSnapshotV4 {
+    this.requireOpen();
+    const meta = this.readMeta();
+    try {
+      if (
+        meta.sessionId !== this.sessionId ||
+        meta.schemaFingerprint !== SESSION_SCHEMA_V4_FINGERPRINT
+      ) {
+        throw new Error("Session metadata identity or schema fingerprint changed.");
+      }
+      const revision = this.loadInitialRevision(meta);
+      const canonical = this.loadProtocolView();
+      this.validator.validate(canonical, { fullIntegrity: true });
+      const systemFrame = canonical.frames[0];
+      const systemMessage = canonical.messages[0];
+      if (
+        systemFrame?.kind !== "system" ||
+        systemFrame.firstOrdinal !== 1 ||
+        systemMessage?.role !== "system" ||
+        systemMessage.ordinal !== 1 ||
+        sha256(systemMessage.content) !== meta.systemPromptSha256 ||
+        canonical.messages.at(-1)?.ordinal !== canonical.messages.length
+      ) {
+        throw new Error("Stored context snapshot ordinal or system invariant failed.");
+      }
+      return Object.freeze({
+        meta: Object.freeze({
+          sessionId: meta.sessionId,
+          activeRevisionId: meta.activeRevisionId,
+        }),
+        revision,
+        canonical,
+      });
+    } catch (error) {
+      if (error instanceof SessionError) {
+        throw error;
+      }
+      if (error instanceof ContextProtocolError) {
+        throw new SessionError(
+          "SESSION_PROTOCOL_INVALID",
+          "load_context_snapshot",
+          error.message,
+          {
+            sessionId: this.sessionId,
+            frameId: error.frameId,
+            messageId: error.messageId,
+            toolCallId: error.toolCallId,
+            cause: error,
+          },
+        );
+      }
+      throw new SessionError(
+        "SESSION_INTEGRITY_FAILED",
+        "load_context_snapshot",
+        `Session context snapshot validation failed: ${errorMessage(error)}.`,
+        { sessionId: this.sessionId, cause: error },
+      );
+    }
+  }
+
   readMeta(): StoredSessionMetaV4 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
@@ -926,7 +991,7 @@ export class SessionStore implements SessionLedgerCommitter {
         allowOpenTail: options.allowOpenTail,
         fullIntegrity: true,
       });
-      this.validateInitialRevision(meta);
+      this.loadInitialRevision(meta);
       this.loadMeasuredContextState();
       this.validateCounters(meta, view);
     } catch (error) {
@@ -1250,7 +1315,9 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private validateInitialRevision(meta: StoredSessionMetaV4): void {
+  private loadInitialRevision(
+    meta: StoredSessionMetaV4,
+  ): StoredInitialContextRevisionV4 {
     const rows = this.database.query("SELECT * FROM context_revisions").all() as Array<
       Record<string, unknown>
     >;
@@ -1258,15 +1325,30 @@ export class SessionStore implements SessionLedgerCommitter {
       throw new Error(`Expected one initial context revision; found ${rows.length}.`);
     }
     const row = rows[0];
+    const revisionId = stringFromSql(
+      row.revision_id,
+      "revision_id",
+    ) as ContextRevisionId;
+    const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
+    const revisionNumber = numberFromSql(row.revision_number, "revision_number");
+    const keepFromOrdinal = numberFromSql(row.keep_from_ordinal, "keep_from_ordinal");
     if (
-      stringFromSql(row.revision_id, "revision_id") !== meta.activeRevisionId ||
-      numberFromSql(row.revision_number, "revision_number") !== 1 ||
+      revisionId !== meta.activeRevisionId ||
+      revisionNumber !== 1 ||
       row.kind !== "initial_full" ||
-      numberFromSql(row.keep_from_ordinal, "keep_from_ordinal") !== 1 ||
-      row.session_id !== this.sessionId
+      keepFromOrdinal !== 1 ||
+      sessionId !== this.sessionId
     ) {
       throw new Error("Initial context revision invariant failed.");
     }
+    return Object.freeze({
+      revisionId,
+      sessionId,
+      revisionNumber: 1,
+      kind: "initial_full",
+      keepFromOrdinal: 1,
+      createdAt: timestampFromSql(row.created_at, "created_at"),
+    });
   }
 
   private loadMeasuredContextState(): StoredMeasuredContextState | undefined {

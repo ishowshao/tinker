@@ -1,7 +1,7 @@
 import type { RuntimeIdFactory } from "../ids/runtime-id";
-import type { ModelRequestInput } from "../model/model-client";
 import type { ToolDefinition } from "../tools/types";
 import type { ProtocolContextView } from "../context/protocol-frame";
+import type { BuiltContextRequest } from "../context/context-revision";
 import {
   InMemorySessionLedger,
   type AgentTurnLedger,
@@ -38,7 +38,7 @@ export class SqliteSessionLedger implements SessionLedger {
     return pending;
   }
 
-  buildCommittedModelRequest(tools: readonly ToolDefinition[]): ModelRequestInput {
+  buildCommittedModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest {
     this.requireAvailable("build committed context");
     if (this.active !== undefined) {
       throw new Error("Cannot build committed context while a turn is open.");
@@ -49,7 +49,7 @@ export class SqliteSessionLedger implements SessionLedger {
   buildCandidateModelRequest(
     userPrompt: string,
     tools: readonly ToolDefinition[],
-  ): ModelRequestInput {
+  ): BuiltContextRequest {
     this.requireAvailable("build candidate context");
     if (this.active !== undefined) {
       throw new Error("Cannot build candidate context while a turn is open.");
@@ -89,7 +89,7 @@ export class SqliteSessionLedger implements SessionLedger {
     return new InMemorySessionLedger({
       sessionId: this.store.sessionId,
       idFactory: this.idFactory,
-      initialView: this.store.loadProtocolView(),
+      initialSnapshot: this.store.loadContextSnapshot(),
       committer: this.store,
     });
   }

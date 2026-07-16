@@ -62,12 +62,14 @@ describe("InMemorySessionLedger", () => {
       ["assistant_text", "closed"],
     ]);
     expect(snapshot.messages[1]?.contentSha256).toBe(contentHash("hello"));
-    const rebuilt = fixture.ledger.buildCommittedModelRequest([]).messages;
+    const rebuilt = fixture.ledger.buildCommittedModelRequest([]).request.messages;
     expect(
       rebuilt.find((message) => message.role === "assistant")?.toolCalls?.[0]?.args,
     ).toEqual({ file_path: "README.md", nested: { value: 1 } });
     rebuilt.push({ role: "user", content: "mutated" });
-    expect(fixture.ledger.buildCommittedModelRequest([]).messages).toHaveLength(5);
+    expect(fixture.ledger.buildCommittedModelRequest([]).request.messages).toHaveLength(
+      5,
+    );
     expect(Object.isFrozen(snapshot.messages)).toBe(true);
     expect(Object.isFrozen(snapshot.messages[2])).toBe(true);
   });

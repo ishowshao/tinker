@@ -191,7 +191,7 @@ describe("turn cancellation", () => {
       );
       expect(pendingTurn.projectedMessageCount()).toBe(2);
       pendingTurn.finish(result);
-      expect(ledger.buildCommittedModelRequest([]).messages.at(-1)).toEqual({
+      expect(ledger.buildCommittedModelRequest([]).request.messages.at(-1)).toEqual({
         role: "user",
         content: "wait",
       });
@@ -291,7 +291,7 @@ describe("turn cancellation", () => {
     expect(result.status).toBe("cancelled");
     expect(thirdToolCalls).toBe(0);
     pendingTurn.finish(result);
-    const messages = ledger.buildCommittedModelRequest([]).messages;
+    const messages = ledger.buildCommittedModelRequest([]).request.messages;
     const toolMessages = messages.filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(3);
     expect(toolMessages[0]?.content).toContain("Read succeeded");

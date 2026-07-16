@@ -12,6 +12,8 @@ import {
 import { loadMcpConfig } from "../mcp/mcp-config";
 import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
+import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
+import { ShadowSwapPlanner } from "../context/context-shadow-planner";
 import {
   assertMatchingContextBudget,
   type ModelContextBudget,
@@ -19,6 +21,8 @@ import {
 } from "../model/model-context-profile";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { ContextProtocolError } from "../context/context-protocol-validator";
+import { CompiledContextError } from "../context/compiled-context-validator";
+import { ContextRevisionError } from "../context/context-revision-compiler";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
@@ -29,7 +33,7 @@ import {
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { SessionError } from "../session/session-errors";
-import { FatalAgentTurnError, runAgent } from "./loop";
+import { FatalAgentTurnError, runAgent, type RunAgentInput } from "./loop";
 import { SessionLedgerWriteError, type SessionLedger } from "./session-ledger";
 import { TurnCancelledError } from "./turn-cancellation";
 import type {
@@ -117,6 +121,8 @@ export type RuntimeSessionFactoryDependencies = {
   ) => Promise<SessionStore>;
   createLedger: (store: SessionStore, idFactory: RuntimeIdFactory) => SessionLedger;
   createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
+  selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
+  onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
 };
 
 export class RuntimeEventAppendError extends Error {
@@ -164,6 +170,8 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
         }),
   createLedger: (store, idFactory) => new SqliteSessionLedger(store, idFactory),
   createEventSink,
+  selectShadowPlanning: ({ preflight }) =>
+    preflight.pressure === "normal" ? undefined : { trigger: "runtime_pressure" },
 };
 
 class DefaultRuntimeSession implements RuntimeSession {
@@ -188,6 +196,8 @@ class DefaultRuntimeSession implements RuntimeSession {
   private disposePromise?: Promise<void>;
   private faultCause?: unknown;
   private readonly contextMeter: ContextMeter;
+  private readonly committedPrefixAuditor = new CommittedPrefixAuditor();
+  private readonly shadowPlanner: ShadowSwapPlanner;
 
   private readonly context: RuntimeSessionContext;
 
@@ -204,6 +214,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.contextMeter = new ContextMeter(input.contextBudget, {
       onMeasuredAnchor: (anchor) => store.writeMeasuredContextAnchor(anchor),
     });
+    this.shadowPlanner = new ShadowSwapPlanner(input.modelClient);
     this.context = {
       sessionId: this.sessionId,
       createIteration: (turn, iterationNumber) =>
@@ -342,8 +353,13 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
 
       session.ledger = dependencies.createLedger(store, dependencies.idFactory);
-      const initialPrepared = input.modelClient.prepare(
-        session.requireLedger().buildCommittedModelRequest(definitions),
+      const initialBuilt = session
+        .requireLedger()
+        .buildCommittedModelRequest(definitions);
+      const initialPrepared = input.modelClient.prepare(initialBuilt.request);
+      session.committedPrefixAuditor.audit(
+        initialBuilt.compiled.revisionId,
+        initialPrepared,
       );
       if (input.selection.mode === "resume") {
         const storedAnchor = store.readActiveMeasuredContextAnchor();
@@ -385,7 +401,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.requireLedger().buildCandidateModelRequest(
           input.userPrompt,
           this.requireTooling().registry.definitions(),
-        ),
+        ).request,
       );
     } catch (error) {
       if (isCanonicalRuntimeFault(error)) {
@@ -461,6 +477,14 @@ class DefaultRuntimeSession implements RuntimeSession {
           maxIterations: this.input.maxIterations,
           model: this.input.modelClient,
           contextMeter: this.contextMeter,
+          committedPrefixAuditor: this.committedPrefixAuditor,
+          shadowPlanning: {
+            planner: this.shadowPlanner,
+            select: this.dependencies.selectShadowPlanning,
+            ...(this.dependencies.onShadowPlanningResult === undefined
+              ? {}
+              : { onResult: this.dependencies.onShadowPlanningResult }),
+          },
           tools: this.requireTooling().registry,
           toolRuntime: this.requireTooling().runtime,
           observationBuilder: this.observationBuilder,
@@ -991,6 +1015,8 @@ function requirePositiveNumber(value: number, name: string): void {
 function isCanonicalRuntimeFault(error: unknown): boolean {
   return (
     error instanceof ContextProtocolError ||
+    error instanceof ContextRevisionError ||
+    error instanceof CompiledContextError ||
     error instanceof SessionLedgerWriteError ||
     error instanceof SessionError
   );

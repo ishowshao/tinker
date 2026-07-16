@@ -260,9 +260,8 @@ describe("runAgent", () => {
       finalText: "First prompt answered.",
       lastIteration: previousIteration,
     });
-    const initialMessages: AgentMessage[] = ledger.buildCommittedModelRequest(
-      [],
-    ).messages;
+    const initialMessages: AgentMessage[] = ledger.buildCommittedModelRequest([])
+      .request.messages;
     const secondTurn = ledger.beginTurn({
       turn,
       userPrompt: "Second prompt",
@@ -300,7 +299,7 @@ describe("runAgent", () => {
       { role: "user", content: "Second prompt" },
     ]);
     secondTurn.finish(result);
-    expect(ledger.buildCommittedModelRequest([]).messages).toEqual([
+    expect(ledger.buildCommittedModelRequest([]).request.messages).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },
       { role: "assistant", content: "Second prompt answered." },

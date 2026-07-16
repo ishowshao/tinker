@@ -44,6 +44,37 @@ export type ContextUsageUpdatedData = {
   snapshot: ContextUsageSnapshot;
 };
 
+export type ContextShadowPlannedData = {
+  policyVersion: "shadow-swap-v1";
+  trigger: "runtime_pressure" | "benchmark_forced";
+  outcome:
+    | "below_trigger"
+    | "no_eligible_candidates"
+    | "target_reached"
+    | "insufficient_candidates";
+  canonicalMessageCount: number;
+  eligibleCandidateCount: number;
+  selectedCandidateCount: number;
+  excludedByReason: Record<string, number>;
+  selectedByRawKind: Record<string, number>;
+  originalObservationBytes: number;
+  projectedObservationBytes: number;
+  rawTokensBefore: number;
+  rawTokensAfter?: number;
+  guardedTokensBefore: number;
+  guardedTokensAfter?: number;
+  targetTokens: number;
+  planHash?: string;
+  durationMs: number;
+};
+
+export type ContextShadowFailedData = {
+  policyVersion: "shadow-swap-v1";
+  stage: "candidate" | "render" | "prepare" | "validate";
+  errorCode: string;
+  error: string;
+};
+
 export type SessionFinishedData = {
   reason:
     | "oneshot_complete"
@@ -89,6 +120,8 @@ export type AgentEventDataMap = {
   "model.request.started": Record<string, never>;
   "model.request.finished": { output: ModelRequestOutput };
   "context.usage.updated": ContextUsageUpdatedData;
+  "context.shadow.planned": ContextShadowPlannedData;
+  "context.shadow.failed": ContextShadowFailedData;
   "assistant.progress": { content: string };
   "tool.started": { call: ToolCall };
   "tool.raw_result": { call: ToolCall; raw: ToolRawResult };
@@ -171,6 +204,8 @@ export type AgentEventInput =
       | "model.request.started"
       | "model.request.finished"
       | "context.usage.updated"
+      | "context.shadow.planned"
+      | "context.shadow.failed"
       | "assistant.progress"
       | "agent.iteration.finished"
     >

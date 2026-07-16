@@ -113,7 +113,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
       });
 
       const before = ledger.buildCommittedModelRequest([]);
-      expect(before.messages[2]).toEqual({
+      expect(before.request.messages[2]).toEqual({
         role: "assistant",
         content: "",
         reasoningContent: "",

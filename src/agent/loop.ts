@@ -1,4 +1,8 @@
 import type { ModelClient, PreparedModelRequest } from "../model/model-client";
+import {
+  CommittedPrefixAuditError,
+  CommittedPrefixAuditor,
+} from "../model/committed-prefix-auditor";
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ToolExecutionFatalError } from "../tools/types";
@@ -6,6 +10,17 @@ import type { ContextMeter } from "./context-meter";
 import type { RuntimeSessionContext } from "./runtime-session";
 import type { AgentTurnLedger } from "./session-ledger";
 import { ContextProtocolError } from "../context/context-protocol-validator";
+import { CompiledContextError } from "../context/compiled-context-validator";
+import { ContextRevisionError } from "../context/context-revision-compiler";
+import type { BuiltContextRequest } from "../context/context-revision";
+import {
+  shadowSwapPolicyV1,
+  ShadowPlanningDiagnosticError,
+  type ShadowPlanningResult,
+  type ShadowPlanningTrigger,
+  type ShadowSwapPlanner,
+} from "../context/context-shadow-planner";
+import { SessionError } from "../session/session-errors";
 import {
   normalizeSyntheticDetail,
   type SyntheticToolCompletionInput,
@@ -24,6 +39,20 @@ export type RunAgentInput = {
   maxIterations: number;
   model: ModelClient;
   contextMeter: ContextMeter;
+  committedPrefixAuditor?: CommittedPrefixAuditor;
+  shadowPlanning?: {
+    planner: ShadowSwapPlanner;
+    select(input: {
+      built: BuiltContextRequest;
+      preflight: ReturnType<ContextMeter["measure"]>;
+    }):
+      | {
+          trigger: ShadowPlanningTrigger;
+          forcedTargetTokens?: number;
+        }
+      | undefined;
+    onResult?(result: ShadowPlanningResult, built: BuiltContextRequest): void;
+  };
   tools: ToolRegistry;
   toolRuntime: ToolRuntime;
   observationBuilder: ObservationBuilder;
@@ -44,6 +73,8 @@ export class FatalAgentTurnError extends Error {
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastIteration: IterationIdentity | undefined;
+  const committedPrefixAuditor =
+    input.committedPrefixAuditor ?? new CommittedPrefixAuditor();
 
   for (
     let iterationNumber = 1;
@@ -66,12 +97,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
 
     let prepared: PreparedModelRequest;
+    let built: BuiltContextRequest;
     let preflight;
     try {
       throwIfTurnCancelled(input.signal);
-      prepared = input.model.prepare(
-        input.ledger.buildModelRequest(input.tools.definitions()),
-      );
+      built = input.ledger.buildModelRequest(input.tools.definitions());
+      prepared = input.model.prepare(built.request);
+      committedPrefixAuditor.audit(built.compiled.revisionId, prepared);
       preflight = input.contextMeter.measure(prepared);
     } catch (error) {
       if (input.signal.aborted) {
@@ -80,12 +112,22 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           iteration,
         );
       }
+      if (isCanonicalContextFailure(error)) {
+        throw error;
+      }
       return failedResult(error, iteration);
     }
     await input.runtimeSession.append({
       type: "context.usage.updated",
       ...iteration,
       data: { phase: "preflight", snapshot: preflight },
+    });
+    await runShadowPlanning({
+      input,
+      iteration,
+      built,
+      prepared,
+      preflight,
     });
     try {
       input.contextMeter.assertWithinBudget(preflight);
@@ -273,6 +315,105 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     error: `Agent turn ${input.turn.turnId} stopped after maxIterations=${input.maxIterations}; last iteration=${lastIteration.iterationId}`,
     lastIteration,
   };
+}
+
+async function runShadowPlanning(input: {
+  input: RunAgentInput;
+  iteration: IterationIdentity;
+  built: BuiltContextRequest;
+  prepared: PreparedModelRequest;
+  preflight: ReturnType<ContextMeter["measure"]>;
+}): Promise<void> {
+  const shadowPlanning = input.input.shadowPlanning;
+  if (shadowPlanning === undefined) {
+    return;
+  }
+  const decision = shadowPlanning.select({
+    built: input.built,
+    preflight: input.preflight,
+  });
+  if (decision === undefined) {
+    return;
+  }
+
+  const startedAt = performance.now();
+  let result: ShadowPlanningResult;
+  try {
+    result = shadowPlanning.planner.plan({
+      active: input.built.compiled,
+      canonical: input.built.canonical,
+      activePrepared: input.prepared,
+      activeUsage: input.preflight,
+      tools: input.input.tools.definitions(),
+      policy: shadowSwapPolicyV1,
+      trigger: decision.trigger,
+      ...(decision.forcedTargetTokens === undefined
+        ? {}
+        : { forcedTargetTokens: decision.forcedTargetTokens }),
+    });
+  } catch (error) {
+    if (isCanonicalContextFailure(error)) {
+      throw error;
+    }
+    const failure =
+      error instanceof ShadowPlanningDiagnosticError
+        ? error
+        : new ShadowPlanningDiagnosticError(
+            "validate",
+            "unexpected_shadow_failure",
+            "Shadow planning failed without changing the active request.",
+          );
+    await input.input.runtimeSession.append({
+      type: "context.shadow.failed",
+      ...input.iteration,
+      data: {
+        policyVersion: "shadow-swap-v1",
+        stage: failure.stage,
+        errorCode: failure.code,
+        error: failure.message,
+      },
+    });
+    return;
+  }
+  shadowPlanning.onResult?.(result, input.built);
+
+  await input.input.runtimeSession.append({
+    type: "context.shadow.planned",
+    ...input.iteration,
+    data: {
+      policyVersion: "shadow-swap-v1",
+      trigger: decision.trigger,
+      outcome: result.outcome,
+      canonicalMessageCount: result.canonicalMessageCount,
+      eligibleCandidateCount: result.eligibleCandidateCount,
+      selectedCandidateCount: result.plan?.selected.length ?? 0,
+      excludedByReason: { ...result.excludedByReason },
+      selectedByRawKind: { ...result.selectedByRawKind },
+      originalObservationBytes: result.originalObservationBytes,
+      projectedObservationBytes: result.projectedObservationBytes,
+      rawTokensBefore: result.rawTokensBefore,
+      ...(result.plan === undefined
+        ? {}
+        : {
+            rawTokensAfter: result.plan.rawTokensAfter,
+            guardedTokensAfter: result.plan.guardedTokensAfter,
+            planHash: result.plan.planHash,
+          }),
+      guardedTokensBefore: result.guardedTokensBefore,
+      targetTokens: result.targetTokens,
+      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+    },
+  });
+}
+
+function isCanonicalContextFailure(error: unknown): boolean {
+  return (
+    error instanceof ContextProtocolError ||
+    error instanceof ContextRevisionError ||
+    error instanceof CompiledContextError ||
+    error instanceof CommittedPrefixAuditError ||
+    error instanceof SessionError
+  );
 }
 
 function cancelledToolCompletions(

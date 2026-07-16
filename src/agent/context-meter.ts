@@ -3,15 +3,14 @@ import type {
   ModelRequestOutput,
   ModelUsage,
   PreparedModelRequest,
-  PreparedPromptSegment,
 } from "../model/model-client";
 import {
   assertContextBudget,
   contextPressure,
-  sha256,
   type ContextPressure,
   type ContextUsageSource,
 } from "../model/model-request-preflight";
+import { lastPromptPrefixHash, promptPrefixHashes } from "../model/prompt-prefix-hash";
 import {
   estimatePromptSegments,
   RollingTokenCalibration,
@@ -89,7 +88,7 @@ export class ContextMeter {
       anchor.requestConfigHash !== prepared.requestConfigHash ||
       anchor.toolSchemaHash !== prepared.toolSchemaHash ||
       anchor.segmentCount !== prepared.promptSegments.length ||
-      anchor.prefixHash !== lastPrefixHash(prefixHashes)
+      anchor.prefixHash !== lastPromptPrefixHash(prefixHashes)
     ) {
       this.anchor = undefined;
       this.lastProviderUsage = undefined;
@@ -115,7 +114,7 @@ export class ContextMeter {
       prepared.requestConfigHash,
       prepared.promptSegments,
     );
-    const prefixHash = lastPrefixHash(prefixHashes);
+    const prefixHash = lastPromptPrefixHash(prefixHashes);
     const anchor = this.usableAnchor(prepared, prefixHashes);
 
     let source: ContextUsageSource;
@@ -174,7 +173,7 @@ export class ContextMeter {
     this.lastProviderUsage = { ...output.usage };
     const replaySegments = prepared.assistantReplaySegments(output.message);
     const anchoredSegments = [...prepared.promptSegments, ...replaySegments];
-    const prefixHash = lastPrefixHash(
+    const prefixHash = lastPromptPrefixHash(
       promptPrefixHashes(prepared.requestConfigHash, anchoredSegments),
     );
     if (this.options.enableAnchor !== false) {
@@ -261,31 +260,6 @@ export class ContextMeter {
     }
     this.calibrationIdentity = next;
   }
-}
-
-function promptPrefixHashes(
-  requestConfigHash: string,
-  segments: readonly PreparedPromptSegment[],
-): string[] {
-  const hashes = [sha256(`request-config:${requestConfigHash}`)];
-  for (const segment of segments) {
-    const previous = hashes.at(-1);
-    if (previous === undefined) {
-      throw new Error("Prompt prefix hash chain has no seed.");
-    }
-    hashes.push(
-      sha256(`${previous}\u0000${segment.kind}\u0000${segment.normalizedText}`),
-    );
-  }
-  return hashes;
-}
-
-function lastPrefixHash(hashes: readonly string[]): string {
-  const value = hashes.at(-1);
-  if (value === undefined) {
-    throw new Error("Prompt prefix hash chain is empty.");
-  }
-  return value;
 }
 
 function assertMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {

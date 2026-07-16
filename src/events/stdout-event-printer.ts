@@ -55,6 +55,16 @@ export class StdoutEventPrinter implements EventSink {
           `context.usage.updated phase=${event.data.phase} used=${event.data.snapshot.usedInputTokens} budget=${event.data.snapshot.inputBudgetTokens} source=${event.data.snapshot.source} pressure=${event.data.snapshot.pressure}\n`,
         );
         break;
+      case "context.shadow.planned":
+        this.stdout.write(
+          `context.shadow.planned outcome=${event.data.outcome} eligible=${event.data.eligibleCandidateCount} selected=${event.data.selectedCandidateCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
+        );
+        break;
+      case "context.shadow.failed":
+        this.stderr.write(
+          `context.shadow.failed stage=${event.data.stage} code=${event.data.errorCode}\n`,
+        );
+        break;
       case "assistant.progress":
         this.stdout.write(
           `assistant.progress iteration=${event.iterationNumber}\n${event.data.content}\n`,

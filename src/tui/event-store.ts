@@ -298,6 +298,8 @@ export function reduceTuiProjection(
     case "session.finished":
     case "agent.iteration.started":
     case "agent.iteration.finished":
+    case "context.shadow.planned":
+    case "context.shadow.failed":
     case "tool.observation":
       return state;
     default:

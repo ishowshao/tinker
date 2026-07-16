@@ -13,8 +13,8 @@
 
 Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
 preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
-地基阶段和 G0 基准门禁已经完成；下一步是 I1 Context Revision 与影子规划，仍不直接
-切换活动视图或开发自动 compaction。
+地基阶段、G0 基准门禁和 I1 Context Revision 影子规划已经完成；I1 仍未切换活动视图，
+下一步只能在独立设计和门禁下进入 I2 温层确定性换出与手动 `/compact`。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -334,6 +334,8 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 ### I1：Context Revision 与影子规划
 
+**状态：已完成（2026-07-16）。**
+
 详细设计见
 [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)。
 
@@ -349,6 +351,21 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 验收门槛：shadow planner 对模型行为零影响；相同 revision 的旧前缀逐字节稳定；任何计划
 都不会切开 protocol frame，且预计的新视图严格小于旧视图。
+
+实际结果：
+
+- schema 保持 v4，durable revision 仍恰好一条
+  `1 / initial_full / keep_from_ordinal=1`；active 与 measured revision 均未改变。
+- 50-turn formal benchmark 在第 12 回合强制规划一次：11 条已结束 observation 中 7 条
+  受最近 8 turns 保护、1 条小于 8KiB，入选 Read 2 条、Bash 1 条。
+- 3 条入选 observation 从 42,762 bytes 降到 1,665 bytes；完整请求 raw/guarded token
+  分别从 43,964/48,361 降到 31,577/34,735，均下降 28.2%。零 token 强制目标得到
+  `insufficient_candidates`，明确记录了 swap-only 的 guarded floor。
+- forced shadow 为 6.56ms；request build p50/p95 为 1.89/8.97ms，对比 G0 的
+  1.33/9.44ms；RSS 增量为 221,315,072 bytes，heap 增量为 26,342,774 bytes。
+- provider request 保持精确的 104 次；resume、取消、Recall、active payload 与 tool side
+  effect 均未被 shadow 改变。`bun run check`、50-turn formal benchmark 和 Recall
+  benchmark 全部通过。
 
 ### I2：温层确定性换出与手动 `/compact`
 
@@ -432,6 +449,6 @@ Recall-only 显著改善主动恢复和任务成功率，否则不进入默认�
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前明确的下一项是 **I1：Context Revision 与影子规划**。F1 至 F5 与 G0 已完成，但 I1
-仍只允许 shadow compile/audit，不切换 active revision；在 I2 门槛满足前不启动确定性
-换出或 compaction。
+当前已完成 **I1：Context Revision 与影子规划**。下一项是 **I2：温层确定性换出与手动
+`/compact`**，但必须先独立定稿 schema、transaction、失效和失败语义；在 I2 门槛满足前
+不切换 active revision，也不启用确定性换出或 compaction。

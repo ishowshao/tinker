@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-16
-- 状态：设计定稿，待实施
+- 状态：已实施并通过验收
 - 前置阶段：[`context-revision-g0-baseline.md`](context-revision-g0-baseline.md)
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I1
 - 当前持久化基线：SessionStore schema v4
@@ -924,6 +924,40 @@ I1 只有同时满足以下条件才算完成：
 13. 路线图记录实际候选分布、收益和性能，再决定 I2 policy。
 
 任一门槛未满足时，不得通过隐藏开关启用换出，也不得提前实现 `/compact`。
+
+### 18.1 实施结果（2026-07-16）
+
+I1 已按上述边界落地；活动请求仍使用 schema v4 的唯一 `initial_full` revision，shadow
+只在真实 preflight 后构造并测量 prospective view。正式门禁结果如下：
+
+- `bun run check` 通过：typecheck、Biome、ESLint、447 项测试和包含 forced shadow 的
+  benchmark smoke 全部成功；`bun run bench:recall` 也通过，10,000-message fixture 的
+  schema 仍是 v4，稀疏 trigram p50/p95 为 0.19/0.20ms。
+- 50-turn formal benchmark 仍落库 52 turns、208 messages、156 frames 和 52 tool
+  results；resume、取消与 Recall search -> get 全部通过。provider request 精确为 104
+  次，shadow 没有增加任何 provider request。
+- benchmark-only 的 `targetTokens = 0` 在第 12 回合强制规划一次，结果为
+  `insufficient_candidates`。11 条已结束 observation 中，7 条落在最近 8 turns 保护区，
+  1 条小于 8KiB；剩余 3 条全部入选，按 raw kind 分布为 Read 2、Bash 1。
+- 入选 observation 从 42,762 bytes 降到 1,665 bytes，缩小 96.1%；完整请求 raw token
+  从 43,964 降到 31,577，guarded token 从 48,361 降到 34,735，均下降 28.2%。全选后
+  仍高于强制的零目标，因此该 guarded floor 被如实记录，没有扩大候选范围。
+- forced shadow 用时 6.56ms；本次 plan hash 为
+  `eecc1e541795d94b2b430e223235d62235479f5a48a43d97978516e44b012615`。单元测试同时验证
+  同一 snapshot 内重复规划得到相同 selected set/hash，tail、config 或 schema 漂移会判
+  stale。
+- request build p50/p95 为 1.89/8.97ms，对比 G0 的 1.33/9.44ms：p50 绝对增加
+  0.56ms，p95 下降 0.47ms；总 workload 从 2,386.09ms 降到 2,304.30ms。未观察到
+  active compiler 的尾延迟回退。
+- RSS 增量为 221,315,072 bytes，对比 G0 增加 28,262,400 bytes；heap 增量为
+  26,342,774 bytes，对比 G0 减少 18,596,165 bytes。compiled/prospective view 未进入
+  SessionStore、ContextMeter、event store 或 TUI 的长期状态，诊断 event 也只保留有界
+  聚合字段。
+- 数据库仍只有一条 `1 / initial_full / keep_from_ordinal=1` revision；schema
+  fingerprint、`active_revision_id` 和 measured revision 全部保持一致。
+
+以上结果满足 I1 门槛，可以开始 I2 的独立 schema/policy 设计；本阶段没有实现 revision
+切换、持久化 override 或 `/compact`。
 
 ## 十九、交给 I2 的明确契约
 
