@@ -2,8 +2,9 @@
 
 ## 文档状态
 
-- 状态：设计稿，尚未实施
-- 日期：2026-07-11
+- 状态：目标架构，按 roadmap 分阶段实施
+- 首版日期：2026-07-11
+- 方向修订：2026-07-16，引入 Recall-first 冷前缀退休，checkpoint 改为证据驱动的可选后备
 - 讨论基础：
   - [`context-research.md`](context-research.md)
   - [`context-research-commentary.md`](context-research-commentary.md)
@@ -32,8 +33,8 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 1. **保存保证**：进入 session 的用户、assistant、tool message 及其结构化来源不会因
    compact 被覆盖或删除。
 2. **寻址保证**：每条原始记录都有稳定 ID，可以按 ID 精确取回原文和哈希。
-3. **视图保证**：发给 provider 的上下文不包含断裂的 tool-call 协议帧，且换出占位符
-   明确指向原始记录。
+3. **视图保证**：发给 provider 的上下文不包含断裂的 tool-call 协议帧；温层占位符
+   指向原始记录，冷退休前缀则由常驻 Recall 契约和 canonical 全文索引恢复。
 4. **行为边界**：关键词检索和模型是否主动调用 Recall 只能通过提示和评测改善，不能
    宣称为形式化保证。
 
@@ -41,12 +42,17 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 
 - 接受「完整历史是外部状态、上下文只是临时视图」；
 - 接受「确定性换出优先于模型摘要」；
+- 接受「逐条 placeholder 只是温层表示」；当它与 tool-call 骨架形成线性 token 地板时，
+  先按完整已结束 turn 边界退休连续旧前缀，不为每条历史保留永久标记；
+- 接受「模型的主动 Recall 能力应按 model profile/snapshot 评测」；通过评测的模型可将
+  Recall-only 冷退休作为默认路径；
 - 接受在硬规则筛选之后，用当前活动 context 和短控制 prompt 让模型辅助判断候选的
   当前语义价值；模型建议不覆盖规则，也不成为新的 source of truth；
-- 接受「两次 checkpoint 之间保持 append-only」；
+- 接受「两次 context revision 之间保持 append-only」；
 - 不把当前诊断 event log 直接升级为恢复数据库；
 - 不在第一版引入向量库、AST 图、因果图、置信度分数或跨 session 记忆；
-- 只有在确定性换出仍不足时，才生成带来源校验的结构化 checkpoint。
+- 只有 Recall-only 长会话评测暴露稳定、可重现的连续性缺口时，才生成带来源校验的
+  结构化 checkpoint；checkpoint 是可选导航层，不是达到 token target 的必经路径。
 
 ## 二、目标、非目标与不变量
 
@@ -56,13 +62,15 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 2. 当前模型输入保持在配置预算内，并能说明 token 主要消耗在哪里。
 3. 旧的大体积 tool observation 可以无模型调用地换出。
 4. 模型可以通过一个 `Recall` 工具搜索或精确取回当前 session 的历史。
-5. `/compact` 与自动 compaction 使用同一条实现路径，失败时保留原活动视图。
-6. Tinker 退出后可以 `/resume`，恢复的不是一段自由文本摘要，而是同一份原始历史、
-   当前 context revision 和结构化 checkpoint。
-7. compaction 前后保持 OpenAI-compatible Chat Completions 的 tool-call 协议合法。
-8. context revision 的变化频率足够低，避免无意义地破坏 provider 的 prefix cache。
-9. 所有损坏、超预算、协议断裂和不支持的 schema 都在模型请求前 fast-fail。
-10. 自动阈值或手动 `/compact` 触发时，可以选择模型辅助换出策略，但必须保留完全不
+5. 连续的完整旧前缀可以不留逐条 placeholder 地退出 active context，而 canonical
+   history、FTS 和精确 source 始终保留。
+6. `/compact` 与自动 compaction 使用同一条实现路径，失败时保留原活动视图。
+7. Tinker 退出后可以 `/resume`，恢复的不是一段自由文本摘要，而是同一份原始历史、
+   当前 context revision，以及存在时的可选结构化 checkpoint。
+8. compaction 前后保持 OpenAI-compatible Chat Completions 的 tool-call 协议合法。
+9. context revision 的变化频率足够低，避免无意义地破坏 provider 的 prefix cache。
+10. 所有损坏、超预算、协议断裂和不支持的 schema 都在模型请求前 fast-fail。
+11. 自动阈值或手动 `/compact` 触发时，可以选择模型辅助换出策略，但必须保留完全不
     调用模型的规则路径。
 
 ### 2.2 非目标
@@ -89,14 +97,17 @@ summary 不是 source of truth
 安全边界之间只追加，不改前缀
 历史内容与当前工作区状态必须可区分
 检索空结果只代表当前检索范围没有命中
+活动视图中缺席只代表未加载，不代表 session 历史中不存在
+Recall 检索的是 canonical history，不受 active revision 前缀边界限制
 活动视图无法在预算内合法构造时必须停止请求
 ```
 
-## 三、Tinker 当前状态核对
+## 三、首版设计时的实现基线（2026-07-11）
 
-两份研究文档对方向的判断基本成立，但技术方案必须以当前代码为准。
+本节保留首版方案形成时的代码核对，用来解释后续边界为什么存在，不代表当前交付状态。
+最新完成情况以 [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 为准。
 
-### 3.1 已经存在的地基
+### 3.1 首版时已经存在的地基
 
 #### RuntimeSession 已经拥有稳定身份和串行事件
 
@@ -126,7 +137,7 @@ assistant/tool 消息关系。取消或工具失败时，agent loop 还会补齐
 Bash 完整输出保存在 `.tinker/bash/<task-id>.log`，普通 observation 只放 preview 和
 `outputFilePath`。这已经是一个可工作的「冷存储 + Read page-in」案例。
 
-### 3.2 当前仍缺少的能力
+### 3.2 首版时仍缺少的能力
 
 1. `RuntimeSession.sessionMessages` 只在内存中，进程退出后无法恢复。
 2. `ContextBuilder` 没有预算、统计、revision 或换出概念。
@@ -155,8 +166,8 @@ Bash 完整输出保存在 `.tinker/bash/<task-id>.log`，普通 observation 只
 
 #### 重新 Read 不等于恢复历史 Read
 
-旧的 Read observation 被换出后，当前文件可能已经被 Edit、Write、Git 或用户修改。
-因此占位符必须同时给出两条不同路径：
+旧的 Read observation 被换出或随冷前缀退休后，当前文件可能已经被 Edit、Write、Git
+或用户修改。因此温层占位符、常驻 Recall 契约和工具结果必须共同区分两条路径：
 
 - `Recall(messageId)`：取回当时真正进入模型上下文的历史 observation；
 - `Read(filePath)`：读取当前 workspace 的最新内容。
@@ -179,7 +190,7 @@ Bash 完整输出保存在 `.tinker/bash/<task-id>.log`，普通 observation 只
         | session.sqlite       |                 | events.jsonl       |
         | canonical history    |                 | observations.md    |
         | context revisions    |                 | TUI / stdout       |
-        | checkpoint + FTS     |                 +--------------------+
+        | canonical + FTS      |                 +--------------------+
         +----------+-----------+
                    |
         +----------+--------------------------------------+
@@ -189,8 +200,9 @@ Bash 完整输出保存在 `.tinker/bash/<task-id>.log`，普通 observation 只
 |    ContextManager     |<----------------------|     Recall tool      |
 | budget / policy       |     search / get      | append result at tail|
 | swap planner          |                       +----------------------+
+| prefix retirement     |
 | eviction advisor      |
-| checkpoint compiler   |
+| optional checkpoint   |
 | active revision       |
 +-----------+-----------+
             |
@@ -225,7 +237,11 @@ TUI 或 event log。
 冷路径只在安全边界运行：
 
 ```text
-测量压力 -> 批量确定性换出 -> 必要时生成 checkpoint -> 原子切换 revision
+测量压力
+  -> 批量确定性换出
+  -> 必要时退休完整旧前缀
+  -> 评测证明有必要时才生成 checkpoint
+  -> 原子切换 revision
 ```
 
 两次 revision 切换之间，发给 provider 的旧前缀必须逐字节稳定，新内容只能追加在尾部。
@@ -407,9 +423,10 @@ assistant 同时包含进度文本和 tool calls 时，文本仍属于这个 fra
 
 ### 6.2 合法性规则
 
-- 只有 `closed` frame 可以参与换出或 checkpoint。
+- 只有 `closed` frame 可以参与换出、checkpoint 或成为退休前缀的一部分。
 - 确定性换出只能替换 tool message 的 `content`，assistant tool_calls 骨架不变。
-- 完整 checkpoint 可以从活动视图删除整个旧 frame，不能留下其中一半。
+- 前缀退休或 checkpoint revision 可以从活动视图删除完整旧 frame，不能留下其中一半。
+- 冷前缀退休的切分点还必须位于完整已结束 turn 之后。
 - 每次调用 provider 前运行 `ContextProtocolValidator`。
 - validator 检查 tool call 数量、provider ID 唯一性、顺序和对应 tool message。
 - 任一错误都在 `toOpenAIChatMessages()` 前 fast-fail，并报告 revision 和 frame ID。
@@ -428,13 +445,19 @@ assistant 同时包含进度文本和 tool calls 时，文本仍属于这个 fra
 
 ### 7.1 Revision 不是完整历史副本
 
-每次 checkpoint 都复制全部 message 会让存储呈平方增长。revision 只描述如何从原始
+每次 revision 都复制全部 message 会让存储呈平方增长。revision 只描述如何从原始
 历史投影出活动视图：
 
 ```ts
 type ContextRevision = {
   revisionId: ContextRevisionId;
-  reason: "initial" | "pressure" | "manual" | "resume" | "runtime_change";
+  reason:
+    | "initial"
+    | "pressure"
+    | "manual"
+    | "retirement"
+    | "resume"
+    | "runtime_change";
   checkpointId?: CheckpointId;
   sourceThroughOrdinal: number;
   keepFromOrdinal: number;
@@ -463,8 +486,13 @@ type ContextOverride = {
 + revision 创建后新追加的原始 messages
 ```
 
-`keepFromOrdinal` 必须位于合法 frame 边界。override 在 revision 创建时一次性渲染并
-存储，不能在每次请求时根据当前时间或 workspace 重新生成。
+`keepFromOrdinal` 必须位于合法 frame 边界；Recall-first retirement 还要求它指向一个
+保留 turn 的起始 user message。override 在 revision 创建时一次性渲染并存储，不能在
+每次请求时根据当前时间或 workspace 重新生成。
+
+`checkpointId` 是可选的。Recall-first retirement revision 可以只前移
+`keepFromOrdinal`，不生成 checkpoint；低于新边界的 canonical messages、swap overrides 和
+placeholder 仍保存在 SessionStore 中，但不再由 active compiler 输出。
 
 ### 7.2 Append-only 的精确定义
 
@@ -499,6 +527,24 @@ type ModelContextProfile = {
 
 没有可信 context window 配置时，不允许自动 compact；TUI 可以展示 usage，但必须标记
 上限未知。不要按 model name 猜一个可能已经变化的值。
+
+自动冷退休还需要一份独立的行为资格，不能仅凭模型名称或 context window 开启：
+
+```ts
+type RecallRetirementQualification = {
+  modelProfileId: string;
+  modelSnapshot: string;
+  systemPromptSha256: string;
+  recallToolSchemaSha256: string;
+  evaluationId: string;
+  passedAt: string;
+};
+```
+
+只有这组身份与当前 runtime 完全一致时，pressure policy 才能自动前移
+`keepFromOrdinal`。模型 snapshot、常驻 Recall 契约或工具 schema 任一变化，资格立即失效并
+回到手动/benchmark 模式；不得按“同系列新模型大概率更会检索”自动继承。provider 只能
+提供可漂移 alias、无法确认 snapshot 时，同样不能开启自动退休。
 
 `maxOutputTokens` 不能只是本地记账值：provider adapter 必须把对应输出上限真正放进
 请求；无法约束输出的 adapter 不能把该 profile 标记为可用于严格 preflight。
@@ -578,14 +624,23 @@ type ContextUsageSnapshot = {
   -> 确定性 planner 组合候选并批量换出，目标降到 target
 
 换出后仍高于 target
-  -> 结构化 checkpoint，删除已覆盖的完整旧 frame
+  -> 从最旧的已完成 turn 开始，退休连续的完整前缀
+  -> 前移 keepFromOrdinal，退休区间不留逐条 placeholder
+  -> 保留固定 system Recall 契约、必选 Recall tool 和近期完整 suffix
+
+Recall-only 长会话评测暴露稳定连续性缺口
+  -> 再考虑结构化 checkpoint 作为可选导航层
 
 最小合法工作集仍超过 inputBudget
   -> 不请求 provider，明确报告必须拆分任务或减少必要输入
 ```
 
 手动 `/compact` 使用同一条路径，只是触发原因是 `manual`，不要求先超过 trigger。任何
-阶段失败都不能静默截断 message。
+阶段失败都不能静默截断 message。自动 prefix retirement 只对通过指定长会话评测的 model
+profile/snapshot 开启；其他模型仍保持手动路径或 swap-only。
+
+自动 swap-only 和自动 prefix retirement 是两个独立门禁。前者验证协议、预算、cache、
+成本和 revision 失败语义；后者还必须验证模型在没有逐条 placeholder 时会主动 Recall。
 
 ## 九、第一层 Compaction：规则换出与可选模型辅助
 
@@ -825,15 +880,17 @@ advisor 的任何失败都不能留下半个 revision。
 session 自己的历史，因此只新增一个 `Recall` 工具，不要求模型输出特殊控制 token，也
 不要求每个事实都带引用。
 
-更重要的是，Recall 结果作为新的 tool message 追加在上下文尾部：
+更重要的是，Recall 结果始终作为新的 tool message 追加在上下文尾部：
 
 ```text
-旧位置仍是短占位符
-                    + 新 assistant Recall tool call
-                    + 新 tool result（取回的历史原文）
+温层：旧位置是短占位符 ─┐
+冷层：旧 frame 不在活动视图 ─┴─> 新 assistant Recall tool call
+                              + 新 tool result（取回的历史原文）
 ```
 
-这比「把原文恢复到旧位置」更适合 prefix cache，因为 page-in 不会再次改写旧前缀。
+Recall 直接查询 canonical history 和 FTS，不依赖旧位置仍有逐条标记。这比「把原文恢复
+到旧位置」更适合 prefix cache，因为 page-in 不会再次改写旧前缀；也使冷退休前缀的
+活动 token 成本不再随历史条目数增长。
 
 ### 10.2 工具接口
 
@@ -898,25 +955,91 @@ ctx://checkpoint/<checkpoint-id> 结构化 checkpoint
 ctx://turn/<turn-id>             turn 范围
 ```
 
-第一版只需要解析 message 和 checkpoint；turn URI 可以先用于搜索过滤。URI 是 Tinker
-内部地址，不暴露 SQLite rowid 或文件布局。
+Recall 第一阶段只需要解析 message；实现可选 checkpoint 后再解析 checkpoint source。
+turn URI 可以先用于搜索过滤。URI 是 Tinker 内部地址，不暴露 SQLite rowid 或文件布局。
 
-## 十一、第二层 Compaction：结构化 Checkpoint
+## 十一、第二层 Compaction：Recall-first 前缀退休与可选 Checkpoint
 
-确定性换出无法解决无限增长的 user/assistant 文本和 tool-call 骨架，所以仍需要真正的
-checkpoint。但 checkpoint 不是一段自由发挥的「临终遗言」。
+确定性换出可以压缩大块 tool observation，却无法消除 user/assistant 文本、tool-call
+骨架和逐条 placeholder 形成的线性 token 地板。第二层的默认解法不是再做摘要，而是把
+连续、完整、足够旧的前缀直接移出 active context；原文、稳定 ID 和全文索引继续留在
+canonical history。
 
-### 11.1 运行条件
+结构化 checkpoint 不再承担“必须把请求压到 target”的职责。它只在 Recall-only 评测
+证明模型存在稳定连续性缺口时，作为带来源的可选导航层加入。
+
+### 11.1 Recall-first 前缀退休
+
+前缀退休是一次确定性 context revision：
+
+1. 从最旧的完整已结束 turn 开始，选择一个连续退休区间；
+2. 将 `keepFromOrdinal` 前移到下一条保留 user message 的边界；
+3. 编译新视图时完全省略退休区间内的原始 frame、swap override 和 placeholder；
+4. 保留固定 system/kernel prompt、必选 `Recall` 工具和近期完整 suffix；
+5. 不调用 summarizer，不生成 capsule，也不改写或删除 canonical history 与 FTS。
+
+退休区间必须是前缀，不能从历史中间挖洞。第一版只在完整已结束 turn 边界切分；一个
+仍在进行中的超长 turn 如果自身超过预算，必须明确 fast-fail，不能静默删除当前 user
+goal 或半个 protocol frame。
+
+### 11.2 常驻 Recall 契约
+
+冷退休不为每条旧消息保留提示，只在不可换出的 system prompt 中保留一段 O(1) 契约：
+
+```text
+Older session content may be intentionally absent from the active context.
+Absence does not mean it never happened or does not exist. Before asserting
+that no prior decision, constraint, evidence, failure, or work exists—or before
+repeating work that may have happened earlier—use Recall search, then Recall get
+for the relevant sources. Use Read/Grep for current workspace state.
+```
+
+这段契约是模型发现“短期上下文可能不完整”的入口；真正的定位信息来自 Recall 对
+canonical history 的全文检索，而不是来自永久 placeholder。它提高主动检索概率，但不
+构成模型行为的形式化保证。
+
+### 11.3 退休边界、预算与失败语义
+
+planner 必须在同一个 base revision 上完成以下检查：
+
+- 边界位于完整已结束 turn 之间，区间内不存在 open protocol frame；
+- 新视图仍包含 system/kernel、工具定义、当前 turn 和策略要求的最小近期 suffix；
+- 新视图通过 protocol validator，低于 target，并严格小于旧视图；
+- canonical tail 或 active revision 在提交前没有变化；
+- SessionStore 和 required event sinks 健康。
+
+新 revision 在一个 transaction 中切换。任一检查失败都保留旧视图；如果即使退休全部
+允许退休的前缀，必要工作集仍超过硬预算，就停止模型请求并报告不可压缩的 token 分项，
+不退化成静默截断。
+
+自动退休不是对所有模型的默认假设。最初只允许 benchmark 和手动 `/compact` 使用；某个
+model profile/snapshot 只有通过第 19.4 节的主动 Recall 门槛后，才可启用 pressure 下的
+自动退休。
+
+### 11.4 Checkpoint 何时才有资格启用
+
+以下条件同时成立时，才值得为某个 model profile 设计或启用 checkpoint：
+
+- Recall-only 冷退休已经稳定控制 token，并保持精确 search/get 能力；
+- 评测仍出现可重复、可归因于缺少工作状态导航的任务失败；
+- checkpoint 相比 Recall-only 基线显著改善任务成功率或检索行为；
+- 改善足以覆盖额外 token、summarizer 调用、漂移和安全成本。
+
+“swap 后仍高于 target”本身不再是 checkpoint 的运行条件；这个问题由前缀退休解决。
+如果上述证据不存在，系统就保持 canonical history + Recall + bounded suffix，不生成摘要。
+
+### 11.5 Checkpoint 运行条件
 
 只有以下条件同时满足才运行 checkpoint：
 
-- 当前启用的规则或模型辅助换出策略结束后仍无法达到 target；
+- 当前 model profile 明确通过评测并启用了 checkpoint policy；
 - 当前没有 open protocol frame；
-- 待退休前缀可以按完整 frame 切分；
+- 待覆盖前缀可以按完整已结束 turn 切分；
 - summarizer 输入仍在模型预算内；
+- 预期 capsule 加入后，活动视图仍低于 target 和 checkpoint token cap；
 - SessionStore 和 event sinks 健康。
 
-### 11.2 增量而不是重总结全历史
+### 11.6 增量而不是重总结全历史
 
 第 N 个 checkpoint 的输入只包含：
 
@@ -928,7 +1051,7 @@ checkpoint。但 checkpoint 不是一段自由发挥的「临终遗言」。
 
 它不重新读取从 session 开始到现在的全部历史。这样 checkpoint 工作集本身也是有界的。
 
-### 11.3 Capsule 结构
+### 11.7 Capsule 结构
 
 ```ts
 type ContextCapsuleV1 = {
@@ -976,7 +1099,7 @@ type SourcedText = {
 };
 ```
 
-### 11.4 哪些字段由谁产生
+### 11.8 哪些字段由谁产生
 
 | 字段 | 来源 | 是否允许模型自由生成 |
 | --- | --- | --- |
@@ -990,7 +1113,7 @@ type SourcedText = {
 这里不声称能够从 Bash 命令名百分之百判断「这是测试」。确定性层只记录 command 和
 outcome；「某项测试验证了什么」属于带来源的 derived working state。
 
-### 11.5 校验与失败语义
+### 11.9 校验与失败语义
 
 summarizer 返回 JSON 后必须执行：
 
@@ -999,7 +1122,8 @@ summarizer 返回 JSON 后必须执行：
 3. 所有 user quote 必须是对应 user message 的精确子串；
 4. artifact、command 和 background task 字段必须与确定性投影一致；
 5. capsule 渲染后必须通过 context protocol validator；
-6. 新 revision 必须低于 input budget，并且严格小于旧 revision。
+6. 新 revision 必须低于 target 和 checkpoint token cap；相对 Recall-only 基线增加的
+   token 必须计入评测。
 
 source 校验只能证明「这条 derived 结论可回查」，不能证明 source 必然蕴含该结论。
 因此 workingState 始终标记为 derived；关键操作仍应 Recall 原文或检查当前 workspace。
@@ -1008,7 +1132,7 @@ source 校验只能证明「这条 derived 结论可回查」，不能证明 sou
 「大概可用」的摘要。手动 `/compact` 直接显示原因；自动 compact 在仍低于硬预算时保留
 旧视图，无法发出下一请求时返回明确终止错误。
 
-### 11.6 权限与角色渲染
+### 11.10 权限与角色渲染
 
 不能把历史 tool/web/MCP 文本复制进 system message，否则会发生权限升级和 prompt
 injection 放大。checkpoint 渲染遵守来源层级：
@@ -1022,15 +1146,15 @@ recent:    未被退休的原始 frame
 
 原始工具正文只通过 Recall 的 tool result 返回，绝不进入高权限 checkpoint 区域。
 
-### 11.7 Checkpoint 边界
+### 11.11 Checkpoint 边界
 
-正常情况从完整旧 turn 之后切分，recent suffix 从一条 user message 开始。单个超长 turn
-也可能需要在 iteration 边界 checkpoint；此时必须：
+checkpoint 与 Recall-first retirement 使用相同的完整已结束 turn 边界，recent suffix 从
+一条原始 user message 开始。它不能借“摘要”之名删除当前 user goal、半个 tool frame 或
+尚未结束的 turn。
 
-- 保留当前 user goal；
-- 只退休已经关闭的旧 tool frames；
-- 重新生成当前 turn 的 working state；
-- 保留尚未完成的 frame 和最近原始结果。
+单个仍在进行中的 turn 自身超过窗口时，本方案保持 fast-fail。若真实 workload 证明必须
+支持它，应另立设计，评估“精确保留 turn 根 user message + 退休已关闭 frame”等协议，
+不能把它悄悄塞进 checkpoint 实现。
 
 ## 十二、RuntimeSession 与 Agent Loop 调整
 
@@ -1139,21 +1263,25 @@ workspace 不一致和 schema 不支持直接失败。model 或 tool schema 发�
 
 ## 十四、系统提示与模型行为
 
-不新增特殊 `NEED_CONTEXT` 输出协议，只在 system prompt 增加短而明确的规则：
+不新增特殊 `NEED_CONTEXT` 输出协议；在不可换出、不可退休的 system prompt 中保留并
+增强既有 Recall rule：
 
 ```text
-Some older session content may be replaced by Tinker context-swapped markers.
-Use Recall to search or retrieve the historical source when it may affect the
-current task. Use Read/Grep for current workspace state. Historical Recall data
-and current workspace data are not interchangeable. Do not infer that something
-does not exist merely because it is absent from the active context.
+Some older session content may be replaced by markers or intentionally omitted
+from the active context. Absence does not mean it never happened or does not
+exist. Before asserting that no prior decision, constraint, evidence, failure,
+or work exists—or before repeating work that may have happened earlier—use
+Recall search, then Recall get for the relevant sources. Use Read/Grep for
+current workspace state. Historical Recall data and current workspace data are
+not interchangeable.
 ```
 
 规则重点是触发现有工具使用能力，不要求模型在普通回答中附加大量引用，也不污染用户
-最终输出格式。
+最终输出格式。它的 token 成本是常数，不随退休 message 数量增长。
 
 在写文件、执行有副作用的命令或给出最终结论前，模型如果依赖被换出的历史约束，应先
-Recall source。第一版通过评测验证这个行为，不增加独立 verifier 状态机。
+Recall source。主动 Recall 能力按 model profile/snapshot 评测；未通过门槛的模型不自动
+使用冷退休。第一版不增加独立 verifier 状态机，也不假装 system rule 能形成形式化保证。
 
 ## 十五、信任、安全与隐私
 
@@ -1211,8 +1339,8 @@ session.interrupted_frame_recovered
 ```ts
 type ContextRevisionEventData = {
   revisionId?: ContextRevisionId;
-  strategy: "swap" | "checkpoint";
-  reason: "pressure" | "manual" | "resume" | "runtime_change";
+  strategy: "swap" | "retire_prefix" | "checkpoint";
+  reason: "pressure" | "manual" | "retirement" | "resume" | "runtime_change";
   selectionMode?: "rule_only" | "model_assisted";
   inputTokensBefore: number;
   inputTokensAfter?: number;
@@ -1242,12 +1370,13 @@ context 61k / 128k (48%, estimated) · revision 3 · cache hit 42k
 `/status` 展示：
 
 - session/model/workspace；
-- active revision/checkpoint；
+- active revision、退休前缀边界和存在时的 checkpoint；
 - context 输入预算和分项；
 - provider measured 与 local estimated；
 - cache hit/miss；
 - compact 次数和最后原因；
 - 最近一次 swap 的 rule-only/model-assisted 模式及 probe 聚合 usage；
+- 最近一次前缀退休的 frame/turn 数及启用它的 model profile；
 - 原始 message 数与活动 message 数；
 - 后台任务数。
 
@@ -1272,11 +1401,14 @@ src/context/context-protocol-validator.ts
 src/context/protocol-frame.ts
 src/context/swap-planner.ts
 src/context/swap-renderer.ts
+src/context/prefix-retirement-planner.ts
 src/context/model-eviction-advisor.ts
-src/context/checkpoint-compiler.ts
 src/context/types.ts
 
 src/tools/recall.ts
+
+# 仅在阶段 G 通过证据门槛后新增
+src/context/checkpoint-compiler.ts
 ```
 
 ### 17.2 修改模块
@@ -1290,7 +1422,7 @@ src/tools/recall.ts
   - 在完整 tool batch 后触发 pressure check。
 - `src/agent/context-builder.ts`
   - 接收 revision view，稳定渲染并产出 token breakdown。
-  - 不包含 swap/checkpoint 决策。
+  - 不包含 swap/retirement/checkpoint 决策。
 - `src/agent/types.ts`
   - 增加 MessageId/FrameId 关联；逐步移除 `RunAgentResult.messages`。
 - `src/model/model-client.ts`
@@ -1308,7 +1440,7 @@ src/tools/recall.ts
   - 增加 context/session recovery 事件。
 - `src/cli/config.ts`
   - 加载显式 model context profile、compact policy、selection mode、shortlist 上限和 probe
-    并发上限。
+    并发上限，以及冷退休自动化评测门槛。
 - `src/tui/slash-commands.ts`
   - 增加 `/resume`、`/status`、`/compact`。
 - `src/tui/event-store.ts`
@@ -1380,28 +1512,50 @@ compact。
 硬规则已批准的 candidate，独立 advice 经过 joint audit；原 observation 可 Recall；
 revision 之后再次请求只追加尾部。
 
-### 阶段 E：结构化 Checkpoint
+### 阶段 E：Recall-first 冷前缀退休
+
+实施：
+
+- prefix retirement planner；
+- 不带 checkpoint 的 `keepFromOrdinal` revision；
+- 常驻 system Recall 契约；
+- 手动 `/compact` 和 benchmark 模式；
+- resume retirement revision。
+
+验收：退休区间只包含连续、完整的已结束 turn；活动视图不再渲染该区间的 message、
+protocol skeleton 或 placeholder；canonical history/FTS 原样保留，Recall search/get 能精确
+取回；任一校验失败不改变活动视图。
+
+### 阶段 F：主动 Recall 评测、自动化门槛与 TUI 有界化
+
+实施：
+
+- 对照 full-context、swap-only 和 Recall-only 冷退休的长会话 benchmark；
+- 覆盖显式历史提示、隐式历史依赖、措辞改写、失败重复和历史/当前版本辨别；
+- 按 model profile/snapshot 记录主动 Recall、search-to-get、来源命中和任务成功率；
+- cache hit/miss 和成本/延迟对比；
+- rule-only 与 model-assisted selection 的保留质量、额外成本和任务成功率对比；
+- 分别决定自动 swap-only 与自动 prefix retirement 是否放行；
+- TUI timeline 窗口和历史分页；
+- 只有通过门槛的 profile 才允许 pressure 自动触发冷退休。
+
+验收：Recall-only 路径在目标 workload 中达到约定的任务质量门槛，退休后的活动 token
+不再随已退休条目数线性增长；未通过或尚未评测的 profile 维持手动模式并明确报告原因。
+
+### 阶段 G：证据驱动的可选结构化 Checkpoint
+
+只有阶段 F 暴露稳定、可重现且可归因的连续性缺口时才进入本阶段。
 
 实施：
 
 - 增量 capsule compiler；
 - 确定性 ledger；
 - derived summary 和来源校验；
-- 自动 checkpoint；
-- resume checkpoint revision。
+- 与 Recall-only 基线对照的显式 feature gate；
+- resume optional checkpoint revision。
 
-验收：摘要失败不改变活动视图；合法 checkpoint 达到 target；早期 user constraint、文件
-修改原因和命令结果都能从 source 下钻取回。
-
-### 阶段 F：长会话评测与 TUI 有界化
-
-实施：
-
-- 长会话 benchmark；
-- cache hit/miss 和成本/延迟对比；
-- rule-only 与 model-assisted selection 的保留质量、额外成本和任务成功率对比；
-- TUI timeline 窗口和历史分页；
-- 根据真实数据调整阈值和候选优先级。
+验收：checkpoint 必须在目标 workload 上显著优于 Recall-only 基线；摘要、引用或预算
+校验失败时不改变活动视图。没有净收益时，不启用 checkpoint，更不自动运行。
 
 阶段之间独立交付。不要在阶段 A 就预埋完整知识图谱，也不要在阶段 D 尚未验证前同时
 实现向量检索。
@@ -1438,6 +1592,7 @@ revision 之后再次请求只追加尾部。
 
 - revision 切换 transaction 失败时 active revision 不变。
 - `keepFromOrdinal` 不能落在 tool frame 中间。
+- 不带 checkpoint 的 revision 可以只前移 `keepFromOrdinal`。
 - 新 message 在 revision 后只追加，不改旧序列化前缀。
 - 一次换出必须严格减少估计 token。
 - advisor 或 joint audit 失败时旧 revision 保持活动。
@@ -1449,20 +1604,31 @@ revision 之后再次请求只追加尾部。
 - pagination 不重复、不跳记录。
 - 空结果明确限定为当前 query/scope。
 - reasoning/raw provider response 不可被默认搜索。
+- message 已退出 active revision 后，search/get 仍查询 canonical history 并返回相同 source。
 
-#### Checkpoint
+#### Recall-first 前缀退休
+
+- planner 只选择连续的最旧完整 turn，不从历史中间挖洞。
+- open frame、当前 turn 和策略要求的最小近期 suffix 不能进入退休区间。
+- compiler 不输出退休区间的原始 frame、swap override 或 placeholder。
+- 常驻 system Recall 契约和 `Recall` tool definition 始终存在且逐字稳定。
+- stale base revision/canonical tail、协议失败或预算无净下降时不切换 revision。
+- resume 后恢复相同 `keepFromOrdinal`，而非重新猜测退休边界。
+
+#### 可选 Checkpoint
 
 - user quote 不是原文子串时拒绝。
 - source 不在覆盖范围时拒绝。
 - artifact/command 与 raw result 不一致时拒绝。
 - schema 非法或 summary 过长时旧 revision 保持活动。
+- 未通过 Recall-only 对照评测的 profile 不能自动启用 checkpoint。
 
 ### 19.2 集成测试
 
 1. Read 文件 v1，Edit 成 v2，换出旧 Read：Recall 返回 v1 observation，Read 返回 v2。
 2. assistant 一次调用多个工具，换出部分 tool content，OpenAI-compatible 映射仍合法。
 3. turn 中途取消，下一 turn 在 compact 后仍能正常请求 provider。
-4. 完成多 turn，退出并 `/resume`，active revision、checkpoint 和计数器一致。
+4. 完成多 turn，退出并 `/resume`，active revision、可选 checkpoint 和计数器一致。
 5. 模拟 SQLite 写失败，确认不会继续下一个工具副作用。
 6. 模拟 open tool frame 后崩溃，resume 只补 interrupted result，不自动重试工具。
 7. 触发阈值后只创建一个批量 revision，直到再次越过 trigger 前不重编译。
@@ -1471,6 +1637,10 @@ revision 之后再次请求只追加尾部。
 10. probe 运行期间追加新 message 或切换 revision，整批 advice 被丢弃并重新测量。
 11. model-assisted selection 成功时，只把 planner 最终选中的集合交给 joint audit 和
     transaction，而不是换出所有单独返回 `yes` 的 candidate。
+12. 将早期完整 turn 冷退休后，provider payload 不再包含该区间的 frame 或 placeholder，
+    但 Recall 仍能按关键词和 source 取回原文。
+13. 冷退休后询问显式和隐式依赖的早期约束，记录模型是否主动执行 search -> get，并确认
+    返回来源属于当前 session。
 
 ### 19.3 Prefix cache 测试
 
@@ -1485,6 +1655,11 @@ create revision R2
 request M 首次出现新 prefix hash = H2
 append new frame
 request M+1 的旧长度 prefix hash仍 = H2
+
+retire prefix into revision R3
+request K 首次出现新 prefix hash = H3
+append new frame
+request K+1 的旧长度 prefix hash仍 = H3
 ```
 
 真实 DeepSeek smoke test 再比较 `prompt_cache_hit_tokens` 和
@@ -1496,7 +1671,8 @@ cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache re
 
 ### 19.4 长会话亮点评测
 
-构造至少 50 turn、包含多次 Read/Grep/Bash、两次以上 checkpoint 的任务，在早期埋入：
+构造至少 50 turn、包含多次 Read/Grep/Bash、两次以上 context revision 和一段冷退休前缀
+的任务，在早期埋入：
 
 - 一条用户硬约束；
 - 一次失败实验及失败原因；
@@ -1504,17 +1680,25 @@ cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache re
 - 一条命令的精确错误；
 - 一个被否决的方案。
 
-在后期分别测试：
+同一任务至少比较四组视图：预算允许时的 full-context、swap-only、Recall-only 冷退休，
+以及只有在前三组暴露缺口后才加入的 optional checkpoint。后期分别测试：
 
 1. 按 source 精确取回是否逐字一致；
 2. 按关键词是否能找到正确 turn；
-3. 模型能否在提示下主动 Recall；
+3. 在显式历史提示和没有 placeholder 提示的隐式依赖下，模型能否主动 Recall；
 4. 模型能否区分历史 observation 和当前 workspace；
 5. 活动 context 是否稳定低于 target；
 6. 每次 revision 后的 cache miss 是否只发生一次；
 7. 和传统自由文本 summary 基线相比，早期事实回答和任务成功率是否更高；
 8. rule-only 与 model-assisted selection 相比，是否以可接受的额外成本减少了仍与当前
    目标相关内容的误换出。
+
+另外记录：Recall 调用率、search-to-get 转化率、正确 source 命中率、无必要 Recall 率、
+重复工作率和端到端任务成功率。测试 query 必须包含原词、同义改写、路径/错误串、早期
+失败原因和历史/当前文件版本，避免只证明关键词完全一致时能命中。
+
+自动冷退休门槛按 model profile/snapshot 独立保存。模型更新、system prompt 改动或 Recall
+schema 改动后，旧评测结果失效，重新回到手动/benchmark 模式。
 
 产品宣传只能使用评测真正支持的表述。「精确 ID 可取回」可以是强保证；「任意自然语言
 都能找回」和「模型永不忘记」不能作为第一版承诺。
@@ -1523,16 +1707,17 @@ cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache re
 
 | 风险 | 处理 |
 | --- | --- |
-| 模型没有意识到要 Recall | 短 system rule、占位符直接给路径、长会话评测；不虚构形式化保证 |
-| checkpoint 摘要漂移 | 结构化 schema、source 校验、确定性 ledger、失败不切 revision |
-| prefix cache 被频繁打断 | append-only revision、批量换出、trigger/target 回差、监测 hit/miss |
+| 模型没有意识到要 Recall | 常驻 system 契约、canonical 全文搜索、按 model profile 评测；未通过门槛不自动冷退休 |
+| 模型过度 Recall，增加延迟和费用 | 评测无必要 Recall 率、search-to-get 和总任务成本；按 profile 调整契约或关闭自动退休 |
+| checkpoint 摘要漂移 | checkpoint 默认不存在；启用时使用结构化 schema、source 校验、确定性 ledger，失败不切 revision |
+| prefix cache 被频繁打断 | append-only revision、批量换出/退休、trigger/target 回差、监测 hit/miss |
 | 并发单候选 advice 各自安全、组合后不安全 | planner 先选集合，再用相同 base revision 做 joint audit；不直接合并所有 `yes` |
 | 模型因刚看过 candidate 而高估移除后的能力 | 反事实 prompt、给出实际占位符、joint audit 和长会话对照评测 |
 | probe 数量使 cache read 成本和 rate limit 放大 | 机械 shortlist、有界并发、聚合 usage；以 provider 实测为准 |
 | 不可信历史诱导模型批准换出 | candidate 只作 data、严格二值输出、硬规则拥有最终否决权 |
 | tool-call 协议被破坏 | ProtocolFrame + 每次请求前 validator |
-| 把旧文件当成当前文件 | 占位符明确区分 Recall historical 与 Read current |
-| FTS 找不到语义改写后的内容 | 第一版承认边界；source ID、路径、trigram 和 checkpoint 补足，embedding 延后 |
+| 把旧文件当成当前文件 | 常驻契约明确区分 Recall historical 与 Read/Grep current，工具结果标注来源 |
+| FTS 找不到语义改写后的内容 | 允许迭代 search、source/path 精确过滤和 trigram；checkpoint 或 embedding 只在评测证明需要后补充 |
 | session.sqlite 持续增长 | 本地显式保留；未来单独设计 list/delete/export，不在 compact 中删原文 |
 | 不可信历史进入高权限 prompt | checkpoint 不复制 tool 正文，来源分层，Recall 作为 tool data |
 | 单个必要工作集本身超过窗口 | preflight fast-fail，要求拆分任务；不静默截断 |
@@ -1553,23 +1738,26 @@ cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache re
 - 完整文件系统快照或所有 Bash 输出的内容寻址 blob 归档；
 - 云同步、多人共享和服务端存储。
 
-只有当 SessionStore、Recall、确定性换出和结构化 checkpoint 的真实评测暴露明确缺口
-时，再选择其中一项补充。
+只有当 SessionStore、Recall、确定性换出、Recall-first 冷退休，以及存在时的可选
+checkpoint 的真实评测暴露明确缺口时，再选择其中一项补充。
 
 ## 二十二、最终设计决策摘要
 
 1. **SessionStore 使用 SQLite，event log 继续只做诊断。**
 2. **原始 message/tool result 不可变，compaction 只创建活动 context revision。**
-3. **完整 protocol frame 是保留和删除的最小单位；确定性换出只替换 tool content。**
+3. **确定性换出只替换完整 frame 内的 tool content；前缀退休只跨越完整已结束 turn。**
 4. **两次 revision 之间严格 append-only，并通过 provider cache usage 验证。**
 5. **Recall 在尾部追加 page-in 结果，不把原文恢复到旧位置。**
 6. **历史 observation 和当前 workspace 各有独立读取路径。**
 7. **换出资格由硬规则决定；模型只能辅助判断候选当前是否值得换出。**
 8. **并发 advice 不能直接取并集；planner 选出的实际集合必须再通过 joint audit。**
-9. **rule-only 路径始终保留；模型辅助换出稳定后，仍不足时才做结构化 checkpoint。**
-10. **checkpoint 中系统事实机械生成，模型字段必须带可校验 source。**
-11. **第一版用 FTS5 trigram，不引入向量数据库。**
-12. **任何超预算、协议断裂、数据库损坏或 checkpoint 校验失败都 fast-fail。**
+9. **逐条 placeholder 只是温层表示；冷前缀不在 active context 中保留永久标记。**
+10. **不可换出的 system prompt 常驻 Recall 契约，Recall 始终搜索完整 canonical history。**
+11. **自动冷退休按 model profile/snapshot 评测放行，未通过时只允许手动或 benchmark。**
+12. **checkpoint 是 Recall-only 暴露稳定缺口后的可选导航层，不负责兜底 token target。**
+13. **checkpoint 中系统事实机械生成，模型字段必须带可校验 source。**
+14. **第一版用 FTS5 trigram，不引入向量数据库。**
+15. **任何超预算、协议断裂、数据库损坏或 revision 校验失败都 fast-fail。**
 
 用一句工程定义收束：
 
@@ -1577,10 +1765,12 @@ cache race 造成的 miss 被如实记录；probe 数量增加时，总 cache re
 Tinker Infinite Context
 = Immutable Session History
 + Versioned Active Context View
-+ Protocol-Safe Deterministic Swap
++ Protocol-Safe Warm Swap
 + Rule-Gated Model-Advised Eviction
++ Recall-First Cold Prefix Retirement
++ Always-On Recall Contract
 + Tail-Appended Recall
-+ Source-Checked Checkpoint
++ Optional Source-Checked Checkpoint
 + Cache-Aware Scheduling
 ```
 

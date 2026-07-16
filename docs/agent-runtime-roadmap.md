@@ -31,11 +31,15 @@ TUI 和检索路径，出现问题时很难判断是计量、存储、协议还�
   -> 「无限上下文」实施门禁
   -> Context revision 影子运行
   -> 确定性换出与手动 /compact
-  -> 结构化 checkpoint 与自动 compaction
+  -> Recall-first 冷前缀退休
+  -> 主动 Recall 评测与自动 compaction 门禁
+  -> 证据驱动的可选 checkpoint
 ```
 
 这条顺序的核心原则是：先证明历史能稳定保存、恢复、计量和找回，再允许任何机制把它
-从活动上下文换出。
+从活动上下文换出。长期上不把每条 placeholder 当成永久索引；早期完整前缀可以
+退出 active context，由不会被换出的 system Recall 契约和 canonical 全文索引提供
+按需恢复。
 
 ## 二、长期目标与本轮边界
 
@@ -49,8 +53,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 1. 原始 user、assistant 和 tool 历史不会因 compaction 被覆盖或删除。
 2. 每条历史可以按稳定 ID 和哈希精确取回。
 3. 所有 provider 请求在发送前通过预算与 tool-call 协议校验。
-4. 换出和 checkpoint 失败时，旧活动视图继续有效。
+4. 换出、前缀退休和 checkpoint 失败时，旧活动视图继续有效。
 5. `/resume` 恢复同一份 canonical history，而不是只恢复一段自由文本摘要。
+6. 退出 active context 的历史仍可由 `Recall search/get` 检索原文；“未出现在当前
+   请求中”不能被解读为“session 中不存在”。
 
 ### 2.2 当前不做
 
@@ -96,7 +102,8 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 ### 3.3 尚未开始
 
-- 确定性换出、结构化 checkpoint、`/compact` 和自动 compaction。
+- 确定性换出、Recall-first 冷前缀退休、可选结构化 checkpoint、`/compact` 和
+  自动 compaction。
 
 ### 3.4 旧路线图如何迁移
 
@@ -106,7 +113,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | `Esc` 中断当前执行 | 标记为已完成，转为回归基线 | 模型、工具和进程取消链路已经落地 |
 | Session 持久化与 `/resume` | 拆成 F3、F4 | 先确定 message/frame 和提交契约，再固化数据库 schema |
 | Context Window 统计 | 扩展为 F2，并前移 | 后续所有存储和换出策略都需要统一预算与真实观测 |
-| 自动 compaction 与 `/compact` | 拆成 F5、门禁、I1、I2、I3 | 先具备精确找回和影子验证，再逐步允许活动视图发生变化 |
+| 自动 compaction 与 `/compact` | 拆成 F5、门禁、I1 至 I5 | 先具备精确找回和影子验证，再逐步允许换出、冷前缀退休与可选 checkpoint |
 
 ## 四、基础阶段
 
@@ -327,17 +334,23 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 ### I1：Context Revision 与影子规划
 
+详细设计见
+[`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)。
+
 先建立活动视图编译器，但不改变真正发给模型的内容：
 
 - 实现 immutable canonical history 到 active view 的稳定渲染。
-- 增加 `ContextRevision`、frame 边界、prefix hash 和 revision 校验。
+- 将 schema v4 的 `initial_full` ContextRevision 接入唯一编译路径，增加 compiled frame
+  manifest、prefix append-only 审计和 revision 校验。
 - swap planner 在 shadow mode 中计算候选、预计释放 token 和目标视图，不提交 revision。
-- 用真实长 session 数据校准保护区、候选阈值、trigger 和 target。
+- 明确记录全部合格候选仍无法达到 target 的 `insufficient_candidates` 结果，作为后续
+  Recall-first 前缀退休的直接输入，不把 placeholder 设计成永久常驻层。
+- 用 G0 确定性长会话和本地历史匿名聚合校准保护区、候选阈值、trigger 和 target。
 
 验收门槛：shadow planner 对模型行为零影响；相同 revision 的旧前缀逐字节稳定；任何计划
 都不会切开 protocol frame，且预计的新视图严格小于旧视图。
 
-### I2：确定性换出与手动 `/compact`
+### I2：温层确定性换出与手动 `/compact`
 
 先只允许用户在空闲状态手动触发 swap-only compaction：
 
@@ -346,34 +359,66 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 - 完整候选 revision 在 transaction 中写入并校验后，才原子切换 active revision。
 - `/compact` 与未来自动路径调用同一个 `ContextManager.compact()`。
 - 原始 message 和 tool result 永不删除；Recall 在尾部 page-in，不改写旧前缀。
+- placeholder 是温层表示，不是永久目录；后续 revision 可以让它所属的完整旧前缀退出
+  active context。
 
 验收门槛：换出零模型调用、tool 协议始终合法、输入 token 严格下降、原文可 Recall、
-revision 失败时旧视图保持活动。手动路径稳定后，才允许基于 F2 压力数据启用自动
-swap-only。
+revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement，也不引入模型摘要。
 
-### I3：结构化 Checkpoint 与自动 Compaction
+### I3：Recall-first 冷前缀退休
 
-只有确定性换出仍无法稳定达到 target 时，才引入模型参与的 checkpoint：
+当 swap-only 的 placeholder 和 tool-call 骨架开始形成线性增长的 token 地板时，先不生成
+摘要，而是允许连续的完整旧前缀退出 active context：
 
-- checkpoint 增量消费上一 capsule 和新退休前缀，不重总结完整历史。
+- `keepFromOrdinal` 只能指向保留 turn 的起始 user message；它之前必须是连续的完整
+  已结束 turn，不能留下半个 tool exchange。
+- active view 只保留固定 system/kernel、必选 Recall tool 和近期完整 suffix；退休区间
+  不留每条 placeholder。
+- canonical message、tool result 和 FTS 索引不变；`Recall search/get` 必须继续命中
+  已退休历史。
+- 在 F5 已有 Recall rule 上增强并长期保留一条常量成本的契约：active context 中缺席
+  只表示未加载，不表示 session 中不存在；在重复旧工作、否定历史证据或依赖早期决策
+  前应先 Recall。
+- 首先只允许 benchmark-forced 和空闲状态手动退休；不在本阶段自动启用。
+
+验收门槛：退休前后 canonical/FTS 不变，provider payload 不含退休 frame 或其旧
+placeholder，协议骨架完整，resume 恢复同一 active revision，并且明确提示的历史
+问题可经 search -> get 找回原文。
+
+### I4：主动 Recall 评测与自动化门禁
+
+- 建立超过 placeholder 保护区的长会话基准，对比 full-history、swap-only 和
+  Recall-only retirement。
+- 分别覆盖显式提示历史、隐式依赖早期约束、词面线索改写、旧失败防重复和
+  历史/当前文件版本区分。
+- 记录模型是否主动调用 Recall、search -> get 成功率、正确 source 命中、任务成功率、
+  无效检索次数、token/延迟和 cache hit/miss。
+- 自动 swap-only 先通过协议、预算、cache 和 revision 失败语义门禁；自动 prefix
+  retirement 在此基础上还必须通过主动 Recall 质量门禁。
+- 自动 prefix retirement 按 model profile/snapshot 分别过门；未达门槛的模型仍只允许
+  手动退休或 swap-only。
+- 资格同时绑定 system prompt hash 和 Recall tool schema hash；任一变化或 provider 只能
+  给出可漂移 alias 时，自动退休资格失效。
+- 只有评测支持后，才对外使用“原文可精确找回”“compaction 不删除 session 历史”等
+  产品表述；不承诺“模型永不忘记”。
+
+验收门槛：自动化必须使用明确的模型评测结果，不因 model name 或主观判断默认开启；
+Recall-only 未达任务质量门槛时，先保持手动路径，再决定是否需要 checkpoint。
+
+### I5：证据驱动的可选结构化 Checkpoint
+
+只有 I4 证明 Recall-only 在重要长会话 workload 中存在稳定、可重现的连续性缺口时，
+才引入模型参与的 checkpoint：
+
+- checkpoint 是有界的导航层，不是历史 source of truth，也不恢复每条 placeholder。
+- 增量消费上一 capsule 和新退休前缀，不重总结完整历史。
 - ID、hash、artifact、command 和后台任务由 runtime 确定性生成。
 - objective、decision、progress 等 derived 字段必须带有效 source。
 - user quote 必须是原始消息的精确子串；tool/web/MCP 正文不提升到 system role。
 - schema、source、协议和预算全部校验通过后才能切换 revision。
-- 自动 compaction 只在 closed frame 的安全边界运行，并使用 trigger/target 回差。
 
-验收门槛：非法或超预算 checkpoint 不改变活动视图；合法 checkpoint 达到 target；早期
-用户约束、失败原因、文件版本和命令结果都可以从 source 下钻到原文。
-
-### I4：长会话评测与稳定化
-
-- 建立至少 50 turn、包含多轮 Read/Grep/Bash、取消、恢复、Recall 和两次 revision 的
-  固定基准。
-- 对比无 compaction、swap-only 和 checkpoint 三种策略的任务成功率、token、延迟、
-  cache hit/miss 和存储增长。
-- 验证模型何时会主动 Recall，并诚实记录关键词检索和模型行为的边界。
-- 只有评测支持后，才对外使用“原文可精确找回”“compaction 不删除 session 历史”等
-  产品表述；不承诺“模型永不忘记”。
+验收门槛：非法或超预算 checkpoint 不改变活动视图；必须在指定失败 workload 上比
+Recall-only 显著改善主动恢复和任务成功率，否则不进入默认路径。
 
 ## 七、统一交付规则
 
