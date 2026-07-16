@@ -10,6 +10,7 @@ import { verifySessionSchema } from "./session-schema";
 export type SessionSummary = {
   sessionId: SessionId;
   modelName: string;
+  profileName?: string;
   createdAt: string;
   updatedAt: string;
   turnCount: number;
@@ -73,6 +74,15 @@ export class SessionCatalog {
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
         .slice(0, this.input.limit ?? 20),
     );
+  }
+
+  async get(
+    sessionId: SessionId,
+    currentSessionId?: SessionId,
+  ): Promise<SessionSummary> {
+    const workspaceRoot = await this.workspaceRootPromise;
+    const directory = path.join(workspaceRoot, ".tinker", "sessions", sessionId);
+    return readSummary(directory, sessionId, workspaceRoot, currentSessionId);
   }
 
   async delete(sessionId: SessionId, currentSessionId?: SessionId): Promise<void> {
@@ -168,6 +178,7 @@ async function readSummary(
     return {
       sessionId,
       modelName: requireString(row.model_name, "model_name"),
+      ...profileNameFromRuntimeContract(row.runtime_contract_json),
       createdAt: requireTimestamp(row.created_at, "created_at"),
       updatedAt: requireTimestamp(row.updated_at, "updated_at"),
       turnCount,
@@ -193,6 +204,24 @@ async function readSummary(
   } finally {
     database?.close();
   }
+}
+
+function profileNameFromRuntimeContract(value: unknown): { profileName?: string } {
+  if (value === null) {
+    return {};
+  }
+  if (typeof value !== "string") {
+    throw new Error("Session runtime contract must be JSON text.");
+  }
+  const parsed = JSON.parse(value) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Session runtime contract must be an object.");
+  }
+  const profileName = (parsed as Record<string, unknown>).profileName;
+  if (profileName === undefined) {
+    return {};
+  }
+  return { profileName: requireString(profileName, "profileName") };
 }
 
 async function sessionDatabaseBytes(databasePath: string): Promise<number> {

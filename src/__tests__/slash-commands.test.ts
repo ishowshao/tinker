@@ -78,6 +78,21 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  test("parses /model with no arguments as model picker", () => {
+    expect(parseSlashCommand("/model")).toEqual({ type: "model" });
+  });
+
+  test("parses /model with a profile name as model switch", () => {
+    expect(parseSlashCommand("/model deepseek")).toEqual({
+      type: "model_switch",
+      profileName: "deepseek",
+    });
+  });
+
+  test("rejects /model with too many arguments", () => {
+    expect(() => parseSlashCommand("/model a b")).toThrow("Usage: /model");
+  });
+
   test("rejects invalid IDs, extra arguments, and missing confirmation", () => {
     expect(() => parseSlashCommand("/resume not-an-id")).toThrow("Invalid session ID");
     expect(() => parseSlashCommand("/resume a b")).toThrow("Usage: /resume");

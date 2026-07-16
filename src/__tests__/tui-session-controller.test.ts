@@ -18,6 +18,9 @@ describe("DefaultTuiSessionController", () => {
       async () => {
         throw new Error("target mismatch");
       },
+      async () => {
+        throw new Error("not used");
+      },
     );
     const error = await controller
       .resume("target-session" as SessionId)
@@ -35,6 +38,9 @@ describe("DefaultTuiSessionController", () => {
       binding(current.runtime),
       emptyCatalog(),
       async () => binding(target.runtime),
+      async () => {
+        throw new Error("not used");
+      },
     );
     controller.subscribe(() => {
       notifications += 1;

@@ -15,6 +15,8 @@ import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiSessionController } from "../tui/tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
+import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
+import { parseModelProfiles } from "../cli/model-profiles";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import {
   createTestRuntime,
@@ -59,6 +61,9 @@ function createSessionController(
       throw new Error("not used");
     },
     delete: async () => {
+      throw new Error("not used");
+    },
+    switchModel: async () => {
       throw new Error("not used");
     },
   };
@@ -885,6 +890,198 @@ describe("diff view", () => {
     expect(frame).toContain("Edit notes.txt -> +1 -1");
     expect(frame).toContain("- beta");
     expect(frame).toContain("+ delta");
+    cleanup();
+  });
+});
+
+const TEST_PROFILES_JSON = JSON.stringify({
+  default: "deepseek",
+  profiles: {
+    deepseek: {
+      model: "deepseek-chat",
+      apiBase: "https://api.deepseek.com/v1",
+      apiKey: "sk-deepseek",
+      contextWindowTokens: 256 * 1024,
+      maxSupportedOutputTokens: 64 * 1024,
+    },
+    gpt4o: {
+      model: "gpt-4o",
+      apiBase: "https://api.openai.com/v1",
+      apiKey: "sk-openai",
+      contextWindowTokens: 256 * 1024,
+      maxSupportedOutputTokens: 64 * 1024,
+    },
+  },
+});
+
+const TEST_PROFILES: ModelProfiles = parseModelProfiles(
+  TEST_PROFILES_JSON,
+  "/test/models.json",
+);
+
+function createSessionControllerWithProfiles(
+  projectionStore: TuiProjectionStore,
+  run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>,
+  switchModel: (profile: ModelProfile) => Promise<void>,
+): TuiSessionController {
+  const base = createSessionController(projectionStore, run);
+  const baseBinding = base.getBinding();
+  const profileBinding = { ...baseBinding, profileName: "deepseek" };
+  return {
+    ...base,
+    switchModel,
+    getBinding: () => profileBinding,
+  };
+}
+
+describe("model switching", () => {
+  test("/model shows the picker on an empty session", async () => {
+    const projectionStore = createProjectionStore();
+    await projectionStore.append({
+      type: "session.started",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: {
+        workspaceRoot: "/tmp/tinker",
+        model: "deepseek-chat",
+        maxIterations: 100,
+        includeReasoningContent: false,
+        contextProfile: TEST_CONTEXT_PROFILE,
+        contextBudget: TEST_CONTEXT_BUDGET,
+        projectInstructions: {},
+      },
+    });
+    await projectionStore.append({
+      type: "context.usage.updated",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:00.001Z",
+      data: { phase: "initial", snapshot: contextSnapshot() },
+    });
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionControllerWithProfiles(
+          projectionStore,
+          async () => completedResult(),
+          async () => undefined,
+        )}
+        profiles={TEST_PROFILES}
+      />,
+    );
+
+    await submitInput(stdin, "/model");
+    await Bun.sleep(25);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Switch model profile");
+    expect(frame).toContain("deepseek");
+    expect(frame).toContain("gpt4o");
+    cleanup();
+  });
+
+  test("/model is hidden after a turn exists", async () => {
+    const projectionStore = createProjectionStore();
+    await projectionStore.append({
+      type: "session.started",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: {
+        workspaceRoot: "/tmp/tinker",
+        model: "deepseek-chat",
+        maxIterations: 100,
+        includeReasoningContent: false,
+        contextProfile: TEST_CONTEXT_PROFILE,
+        contextBudget: TEST_CONTEXT_BUDGET,
+        projectInstructions: {},
+      },
+    });
+    await projectionStore.append({
+      type: "turn.started",
+      ...testRuntime.turn,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:00.002Z",
+      data: { userPrompt: "hello" },
+    });
+    await projectionStore.append({
+      type: "turn.finished",
+      ...testRuntime.turn,
+      eventSequence: 3,
+      timestamp: "2026-07-11T00:00:00.003Z",
+      data: {
+        status: "completed",
+        finalText: "hi",
+        lastIteration: testRuntime.iteration,
+        messageCount: 2,
+      },
+    });
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionControllerWithProfiles(
+          projectionStore,
+          async () => completedResult(),
+          async () => undefined,
+        )}
+        profiles={TEST_PROFILES}
+      />,
+    );
+
+    stdin.write("/");
+    await Bun.sleep(25);
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toContain("/model");
+    expect(frame).toContain("/status");
+    expect(frame).toContain("/resume");
+    cleanup();
+  });
+
+  test("/model gpt4o calls switchModel with the named profile", async () => {
+    const projectionStore = createProjectionStore();
+    await projectionStore.append({
+      type: "session.started",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 1,
+      timestamp: "2026-07-11T00:00:00.000Z",
+      data: {
+        workspaceRoot: "/tmp/tinker",
+        model: "deepseek-chat",
+        maxIterations: 100,
+        includeReasoningContent: false,
+        contextProfile: TEST_CONTEXT_PROFILE,
+        contextBudget: TEST_CONTEXT_BUDGET,
+        projectInstructions: {},
+      },
+    });
+    await projectionStore.append({
+      type: "context.usage.updated",
+      sessionId: testRuntime.runtimeSession.sessionId,
+      eventSequence: 2,
+      timestamp: "2026-07-11T00:00:00.001Z",
+      data: { phase: "initial", snapshot: contextSnapshot() },
+    });
+    const switched: ModelProfile[] = [];
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionControllerWithProfiles(
+          projectionStore,
+          async () => completedResult(),
+          async (profile) => {
+            switched.push(profile);
+          },
+        )}
+        profiles={TEST_PROFILES}
+        persistDefaultProfile={async () => {
+          throw new Error("read-only config");
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/model gpt4o");
+    await Bun.sleep(25);
+    expect(switched).toHaveLength(1);
+    expect(switched[0]?.name).toBe("gpt4o");
+    expect(lastFrame()).toContain("Switched to model profile");
+    expect(lastFrame()).toContain("failed to save it as the default: read-only config");
     cleanup();
   });
 });

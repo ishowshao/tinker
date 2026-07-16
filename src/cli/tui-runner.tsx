@@ -7,6 +7,7 @@ import {
 } from "../agent/runtime-session";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
+import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
 import {
   buildSystemPrompt,
@@ -30,17 +31,22 @@ import {
   promptHistoryPath,
   readRunnerConfig,
   RUNTIME_INSTRUCTIONS,
+  type RunnerConfig,
 } from "./config";
+import {
+  loadModelProfiles,
+  persistDefaultProfile,
+  resolveSessionProfileName,
+  type ModelProfile,
+} from "./model-profiles";
 
-export async function runTui(): Promise<void> {
-  const config = readRunnerConfig();
+export async function runTui(options: { profileName?: string } = {}): Promise<void> {
+  const profiles = await loadModelProfiles();
+  const config = readRunnerConfig(
+    options.profileName !== undefined ? { profileName: options.profileName } : {},
+    profiles,
+  );
   const workspaceRoot = await realpath(config.workspaceRoot);
-  const modelClient = createRunnerModelClient(config);
-  const projectionStore = new TuiProjectionStore({
-    sessionId: config.sessionId,
-    modelName: config.modelName,
-    workspaceRoot,
-  });
   let controller: DefaultTuiSessionController | undefined;
   let instance: ReturnType<typeof render> | undefined;
   let disposeReason: SessionDisposeReason = { type: "tui_exit" };
@@ -48,21 +54,24 @@ export async function runTui(): Promise<void> {
   let quitRequested = false;
 
   try {
-    const createSession = async (
+    const createSessionForConfig = async (
+      sessionConfig: RunnerConfig,
       mode: "new" | "resume",
       sessionId: SessionId,
       sink: EventSink,
     ): Promise<RuntimeSession> => {
+      const modelClient = createRunnerModelClient(sessionConfig);
       const common = {
         workspaceRoot,
-        modelName: config.modelName,
-        maxIterations: config.maxIterations,
-        includeReasoningContent: config.includeReasoningContent,
-        contextProfile: config.contextProfile,
-        contextBudget: config.contextBudget,
+        modelName: sessionConfig.modelName,
+        profileName: sessionConfig.profileName,
+        maxIterations: sessionConfig.maxIterations,
+        includeReasoningContent: sessionConfig.includeReasoningContent,
+        contextProfile: sessionConfig.contextProfile,
+        contextBudget: sessionConfig.contextBudget,
         modelClient,
         presentationSinks: [sink],
-        webFetchRefiner: createWebFetchRefinerFromEnv(config),
+        webFetchRefiner: createWebFetchRefinerFromEnv(sessionConfig),
       };
       if (mode === "resume") {
         return createRuntimeSession({
@@ -83,21 +92,47 @@ export async function runTui(): Promise<void> {
         projectInstruction: projectInstructionManifest(projectInstructions),
       });
     };
-    const initialSession = await createSession(
+
+    const projectionStore = new TuiProjectionStore({
+      sessionId: config.sessionId,
+      modelName: config.modelName,
+      workspaceRoot,
+    });
+    const initialSession = await createSessionForConfig(
+      config,
       "new",
       config.sessionId,
       projectionStore,
     );
     const promptHistory = await PromptHistory.load(promptHistoryPath(workspaceRoot));
     const catalog = new SessionCatalog({ workspaceRoot });
+
     const openStoredSession = async (
       sessionId: SessionId,
     ): Promise<ManagedTuiSessionBinding> => {
       const deferred = new DeferredProjectionSink();
-      const runtimeSession = await createSession("resume", sessionId, deferred);
+      const summary = await catalog.get(sessionId);
+      const resumeConfig =
+        profiles === undefined
+          ? { ...config, sessionId }
+          : readRunnerConfig(
+              {
+                sessionId,
+                profileName: resolveSessionProfileName(profiles, summary),
+                workspaceRoot: config.workspaceRoot,
+                maxIterations: config.maxIterations,
+              },
+              profiles,
+            );
+      const runtimeSession = await createSessionForConfig(
+        resumeConfig,
+        "resume",
+        sessionId,
+        deferred,
+      );
       const targetProjection = new TuiProjectionStore({
         sessionId,
-        modelName: config.modelName,
+        modelName: resumeConfig.modelName,
         workspaceRoot,
       });
       try {
@@ -105,7 +140,7 @@ export async function runTui(): Promise<void> {
           await ResumeProjectionReader.read({
             workspaceRoot,
             sessionId,
-            modelName: config.modelName,
+            modelName: resumeConfig.modelName,
           }),
         );
         await deferred.attach(targetProjection);
@@ -117,20 +152,59 @@ export async function runTui(): Promise<void> {
       }
       return managedTuiBinding({
         runtimeSession,
-        modelName: config.modelName,
+        modelName: resumeConfig.modelName,
         workspaceRoot,
+        profileName: resumeConfig.profileName,
         projectionStore: targetProjection,
       });
     };
+
+    const createSessionWithProfile = async (
+      profile: ModelProfile,
+    ): Promise<ManagedTuiSessionBinding> => {
+      if (profiles === undefined) {
+        throw new Error("Model profiles are not configured.");
+      }
+      const profileConfig = readRunnerConfig(
+        {
+          sessionId: createUuidV7() as SessionId,
+          workspaceRoot: config.workspaceRoot,
+          profileName: profile.name,
+          maxIterations: config.maxIterations,
+        },
+        profiles,
+      );
+      const profileProjectionStore = new TuiProjectionStore({
+        sessionId: profileConfig.sessionId,
+        modelName: profileConfig.modelName,
+        workspaceRoot,
+      });
+      const runtimeSession = await createSessionForConfig(
+        profileConfig,
+        "new",
+        profileConfig.sessionId,
+        profileProjectionStore,
+      );
+      return managedTuiBinding({
+        runtimeSession,
+        modelName: profileConfig.modelName,
+        workspaceRoot,
+        profileName: profile.name,
+        projectionStore: profileProjectionStore,
+      });
+    };
+
     controller = new DefaultTuiSessionController(
       managedTuiBinding({
         runtimeSession: initialSession,
         modelName: config.modelName,
         workspaceRoot,
+        profileName: config.profileName,
         projectionStore,
       }),
       catalog,
       openStoredSession,
+      createSessionWithProfile,
     );
 
     instance = render(
@@ -138,6 +212,8 @@ export async function runTui(): Promise<void> {
         sessionController={controller}
         readGitBranch={readCurrentGitBranch}
         history={promptHistory}
+        profiles={profiles}
+        persistDefaultProfile={persistDefaultProfile}
         onQuit={() => {
           quitRequested = true;
         }}

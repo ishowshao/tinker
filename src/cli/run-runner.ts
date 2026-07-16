@@ -17,6 +17,7 @@ import {
   RUNTIME_INSTRUCTIONS,
   type RunnerConfigOverrides,
 } from "./config";
+import { loadModelProfiles } from "./model-profiles";
 import { realpath } from "node:fs/promises";
 
 export type RunOneShotOptions = RunnerConfigOverrides & {
@@ -38,7 +39,9 @@ export async function runOneShot(
   let exitCode = 1;
 
   try {
-    const config = readRunnerConfig(options);
+    const profiles =
+      options.modelClient === undefined ? await loadModelProfiles() : undefined;
+    const config = readRunnerConfig(options, profiles);
     const workspaceRoot = await realpath(config.workspaceRoot);
     const projectInstructions = await loadProjectInstructions(workspaceRoot);
     const systemPrompt = buildSystemPrompt({
@@ -51,6 +54,7 @@ export async function runOneShot(
       selection: { mode: "new", sessionId: config.sessionId },
       workspaceRoot,
       modelName: config.modelName,
+      profileName: config.profileName,
       maxIterations: config.maxIterations,
       includeReasoningContent: config.includeReasoningContent,
       contextProfile: config.contextProfile,

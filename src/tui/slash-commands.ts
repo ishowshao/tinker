@@ -5,6 +5,7 @@ export type SlashCommand = {
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "status", description: "Show session and context details" },
+  { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
   { name: "session", description: "Manage stored sessions" },
   { name: "quit", description: "Exit the TUI" },
@@ -13,6 +14,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 export type ParsedSlashCommand =
   | { type: "status" }
   | { type: "quit" }
+  | { type: "model" }
+  | { type: "model_switch"; profileName: string }
   | { type: "resume_list" }
   | { type: "resume"; sessionId: SessionId }
   | { type: "session_delete"; sessionId: SessionId };
@@ -32,6 +35,15 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };
+  }
+  if (command === "/model") {
+    if (tokens.length === 1) {
+      return { type: "model" };
+    }
+    if (tokens.length === 2) {
+      return { type: "model_switch", profileName: tokens[1] };
+    }
+    throw new SlashCommandError("Usage: /model [profile-name]");
   }
   if (command === "/resume") {
     if (tokens.length === 1) {

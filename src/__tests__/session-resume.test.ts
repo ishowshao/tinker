@@ -294,16 +294,17 @@ describe("RuntimeSession resume", () => {
     }
   });
 
-  test("rejects a runtime contract change without mutating history", async () => {
+  test("binds a session to its profile without mutating history on mismatch", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-contract-"));
     const sessionId = runtimeIdFactory.createSessionId();
     const sink = collectingEventSink();
     try {
       const firstModel = new ResumeModel();
-      const first = await createRuntimeSession(
-        sessionInput(workspace, sessionId, firstModel, sink, "new"),
-        { loadMcpConfig: async () => undefined },
-      );
+      const firstInput = sessionInput(workspace, sessionId, firstModel, sink, "new");
+      firstInput.profileName = "deepseek";
+      const first = await createRuntimeSession(firstInput, {
+        loadMcpConfig: async () => undefined,
+      });
       await first.executeTurn({
         userPrompt: "persisted",
         signal: new AbortController().signal,
@@ -318,7 +319,7 @@ describe("RuntimeSession resume", () => {
         sink,
         "resume",
       );
-      mismatchInput.modelName = "different-model";
+      mismatchInput.profileName = "gpt";
       const error = await createRuntimeSession(mismatchInput, {
         loadMcpConfig: async () => undefined,
       }).catch((caught: unknown) => caught);
@@ -327,10 +328,17 @@ describe("RuntimeSession resume", () => {
       expect(mismatchedModel.inputs).toHaveLength(0);
 
       const resumedModel = new ResumeModel();
-      const resumed = await createRuntimeSession(
-        sessionInput(workspace, sessionId, resumedModel, sink, "resume"),
-        { loadMcpConfig: async () => undefined },
+      const resumeInput = sessionInput(
+        workspace,
+        sessionId,
+        resumedModel,
+        sink,
+        "resume",
       );
+      resumeInput.profileName = "deepseek";
+      const resumed = await createRuntimeSession(resumeInput, {
+        loadMcpConfig: async () => undefined,
+      });
       await resumed.executeTurn({
         userPrompt: "after mismatch",
         signal: new AbortController().signal,

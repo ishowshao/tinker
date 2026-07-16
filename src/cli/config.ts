@@ -11,6 +11,12 @@ import {
 import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
+import {
+  profileToContextProfile,
+  type ModelProfile,
+  type ModelProfiles,
+  unknownProfileError,
+} from "./model-profiles";
 
 export const DEFAULT_MAX_ITERATIONS = 512;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
@@ -58,15 +64,71 @@ export type RunnerConfig = {
   sessionId: SessionId;
   workspaceRoot: string;
   modelName: string;
+  apiKey?: string;
+  apiBase?: string;
   maxIterations: number;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
+  profileName?: string;
+  profiles?: ModelProfiles;
 };
 
 export type RunnerConfigOverrides = Partial<Omit<RunnerConfig, "contextBudget">>;
 
-export function readRunnerConfig(overrides: RunnerConfigOverrides = {}): RunnerConfig {
+export function readRunnerConfig(
+  overrides: RunnerConfigOverrides = {},
+  profiles?: ModelProfiles,
+): RunnerConfig {
+  if (profiles !== undefined) {
+    const profileName = overrides.profileName ?? profiles.defaultProfile;
+    const profile = profiles.profiles.get(profileName);
+    if (profile === undefined) {
+      throw unknownProfileError(profileName, profiles);
+    }
+    return runnerConfigFromProfile(profile, overrides, profiles);
+  }
+  if (overrides.profileName !== undefined) {
+    throw new Error(
+      `Cannot select model profile ${JSON.stringify(overrides.profileName)} because TINKER_MODELS is not configured.`,
+    );
+  }
+
+  return runnerConfigFromEnv(overrides);
+}
+
+function runnerConfigFromProfile(
+  profile: ModelProfile,
+  overrides: RunnerConfigOverrides,
+  profiles: ModelProfiles,
+): RunnerConfig {
+  const contextProfile = overrides.contextProfile ?? profileToContextProfile(profile);
+  const contextBudget = deriveModelContextBudget(contextProfile);
+
+  return {
+    sessionId: overrides.sessionId ?? (createUuidV7() as SessionId),
+    workspaceRoot: path.resolve(
+      overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
+    ),
+    modelName: profile.model,
+    apiKey: profile.apiKey,
+    apiBase: profile.apiBase,
+    maxIterations:
+      overrides.maxIterations ??
+      parsePositiveInteger(
+        process.env.TINKER_MAX_ITERATIONS,
+        DEFAULT_MAX_ITERATIONS,
+        "TINKER_MAX_ITERATIONS",
+      ),
+    includeReasoningContent: profile.includeReasoningContent,
+    contextProfile,
+    contextBudget,
+    profileName: profile.name,
+    profiles,
+  };
+}
+
+function runnerConfigFromEnv(overrides: RunnerConfigOverrides): RunnerConfig {
   const modelName = overrides.modelName ?? readRequiredEnv("TINKER_MODEL");
   validateWebFetchRefinerModel(modelName);
   const contextProfile = overrides.contextProfile ?? readModelContextProfileFromEnv();
@@ -98,7 +160,10 @@ export function readRunnerConfig(overrides: RunnerConfigOverrides = {}): RunnerC
 }
 
 export function createModelClientFromEnv(
-  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
+  config: Pick<
+    RunnerConfig,
+    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+  >,
 ): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
@@ -108,8 +173,8 @@ export function createModelClientFromEnv(
     });
   }
 
-  const apiKey = readRequiredEnv("TINKER_API_KEY");
-  const baseURL = readRequiredEnv("TINKER_BASE_URL");
+  const apiKey = config.apiKey ?? readRequiredEnv("TINKER_API_KEY");
+  const baseURL = config.apiBase ?? readRequiredEnv("TINKER_BASE_URL");
 
   return new OpenAIChatModelClient({
     apiKey,
@@ -121,14 +186,20 @@ export function createModelClientFromEnv(
 }
 
 export function createRunnerModelClient(
-  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
+  config: Pick<
+    RunnerConfig,
+    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+  >,
   injected?: ModelClient,
 ): ModelClient {
   return injected ?? createModelClientFromEnv(config);
 }
 
 export function createWebFetchRefinerFromEnv(
-  config: Pick<RunnerConfig, "modelName" | "includeReasoningContent" | "contextBudget">,
+  config: Pick<
+    RunnerConfig,
+    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+  >,
 ): Refiner {
   return createModelRefiner({
     createModelClient: () => createModelClientFromEnv(config),

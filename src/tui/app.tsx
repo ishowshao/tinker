@@ -8,20 +8,24 @@ import { Footer } from "./components/footer";
 import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
+import { ModelPicker } from "./components/model-picker";
 import { PromptInput } from "./components/prompt-input";
 import {
   ResumeSessionPicker,
   ResumeSessionPickerLoading,
 } from "./components/resume-session-picker";
 import { Timeline } from "./components/timeline";
-import { parseSlashCommand } from "./slash-commands";
+import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
+import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 
 export type AppProps = {
   sessionController: TuiSessionController;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
+  profiles?: ModelProfiles;
+  persistDefaultProfile?: (profileName: string) => Promise<void>;
   onQuit?: () => void;
 };
 
@@ -33,6 +37,11 @@ type ResumePickerState =
       isResuming: boolean;
       error?: string;
     };
+
+type ModelPickerState = {
+  isSwitching: boolean;
+  error?: string;
+};
 
 export function App(props: AppProps) {
   const { exit } = useApp();
@@ -58,11 +67,27 @@ export function App(props: AppProps) {
   const [resumePicker, setResumePicker] = useState<ResumePickerState | undefined>(
     undefined,
   );
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [modelPickerState, setModelPickerState] = useState<
+    ModelPickerState | undefined
+  >(undefined);
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
   const activeController = useRef<AbortController | undefined>(undefined);
   const resumePickerRequest = useRef(0);
+
+  const canSwitchModel =
+    state.recentTurns.length === 0 &&
+    state.activeTurn === undefined &&
+    props.profiles !== undefined &&
+    props.profiles.profiles.size > 1;
+
+  const availableCommands = canSwitchModel
+    ? undefined
+    : SLASH_COMMANDS.filter((cmd) => cmd.name !== "model");
+
+  const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
 
   useEffect(() => {
     if (readGitBranch === undefined) {
@@ -173,6 +198,36 @@ export function App(props: AppProps) {
       .finally(() => setIsSessionOperation(false));
   };
 
+  const closeModelPicker = () => {
+    setShowModelPicker(false);
+    setModelPickerState(undefined);
+    setNotice(undefined);
+  };
+
+  const doSwitchModel = (profile: ModelProfile) => {
+    setShowModelPicker(false);
+    setModelPickerState(undefined);
+    setNotice(undefined);
+    setIsSessionOperation(true);
+    void props.sessionController
+      .switchModel(profile)
+      .then(async () => {
+        setGitBranchRefresh((current) => current + 1);
+        try {
+          await props.persistDefaultProfile?.(profile.name);
+          setNotice(`Switched to model profile "${profile.name}" (${profile.model}).`);
+        } catch (error) {
+          setNotice(
+            `Switched to model profile "${profile.name}" (${profile.model}), but failed to save it as the default: ${errorMessage(error)}`,
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        setNotice(`Model switch failed: ${errorMessage(error)}`);
+      })
+      .finally(() => setIsSessionOperation(false));
+  };
+
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
     setShowStatus(false);
@@ -195,6 +250,26 @@ export function App(props: AppProps) {
       if (command.type === "quit") {
         props.onQuit?.();
         exit();
+        return;
+      }
+      if (command.type === "model" || command.type === "model_switch") {
+        if (!canSwitchModel) {
+          setNotice(
+            "Cannot switch models after the session has turns or while running.",
+          );
+          return;
+        }
+        if (command.type === "model_switch") {
+          const targetProfile = props.profiles?.profiles.get(command.profileName);
+          if (targetProfile === undefined) {
+            setNotice(`Unknown model profile: ${command.profileName}`);
+            return;
+          }
+          void doSwitchModel(targetProfile);
+        } else {
+          setModelPickerState({ isSwitching: false });
+          setShowModelPicker(true);
+        }
         return;
       }
       if (command.type === "resume_list") {
@@ -292,16 +367,28 @@ export function App(props: AppProps) {
             />
           </Box>
           <Box marginTop={1} flexDirection="column">
-            <PromptInput
-              modelName={binding.modelName}
-              workspaceRoot={binding.workspaceRoot}
-              gitBranch={gitBranch}
-              contextUsage={state.contextUsage}
-              isDisabled={isRunning || isSessionOperation}
-              history={props.history}
-              onSubmit={onSubmit}
-              placeholder='Enter a coding request, or "/" for commands'
-            />
+            {showModelPicker ? (
+              <ModelPicker
+                profiles={profileList}
+                currentProfileName={binding.profileName}
+                isSwitching={modelPickerState?.isSwitching}
+                error={modelPickerState?.error}
+                onCancel={closeModelPicker}
+                onSelect={doSwitchModel}
+              />
+            ) : (
+              <PromptInput
+                modelName={binding.modelName}
+                workspaceRoot={binding.workspaceRoot}
+                gitBranch={gitBranch}
+                contextUsage={state.contextUsage}
+                isDisabled={isRunning || isSessionOperation}
+                history={props.history}
+                commands={availableCommands}
+                onSubmit={onSubmit}
+                placeholder='Enter a coding request, or "/" for commands'
+              />
+            )}
             {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
           </Box>
         </>

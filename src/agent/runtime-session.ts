@@ -75,6 +75,7 @@ export type RuntimeSessionContext = {
 type CommonRuntimeSessionInput = {
   workspaceRoot: string;
   modelName: string;
+  profileName?: string;
   maxIterations: number;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
@@ -254,6 +255,9 @@ class DefaultRuntimeSession implements RuntimeSession {
           data: {
             workspaceRoot: store.workspaceRoot,
             model: input.modelName,
+            ...(input.profileName === undefined
+              ? {}
+              : { profileName: input.profileName }),
             maxIterations: input.maxIterations,
             includeReasoningContent: input.includeReasoningContent,
             contextProfile: input.contextProfile,
@@ -293,6 +297,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       });
       const runtimeContract = createRuntimeContract({
         modelName: input.modelName,
+        profileName: input.profileName,
         includeReasoningContent: input.includeReasoningContent,
         contextProfile: input.contextProfile,
         contextBudget: input.contextBudget,

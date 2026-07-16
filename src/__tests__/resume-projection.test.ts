@@ -93,6 +93,11 @@ describe("session catalog and resume projection", () => {
       });
 
       const catalog = new SessionCatalog({ workspaceRoot: workspace });
+      expect(await catalog.get(sessionId)).toMatchObject({
+        sessionId,
+        modelName: "test-model",
+        profileName: "test-profile",
+      });
       const summaries = await catalog.list();
       expect(
         summaries.find((summary) => summary.sessionId === sessionId),
@@ -196,6 +201,7 @@ function runtimeInput(
     selection: { mode: "new", sessionId },
     workspaceRoot,
     modelName: "test-model",
+    profileName: "test-profile",
     maxIterations: 2,
     includeReasoningContent: false,
     contextProfile: TEST_CONTEXT_PROFILE,

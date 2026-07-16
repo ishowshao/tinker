@@ -5,6 +5,7 @@ import type {
 } from "../agent/runtime-session";
 import type { RunAgentResult } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
+import type { ModelProfile } from "../cli/model-profiles";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
 import type { TuiProjectionStore } from "./tui-projection-store";
 
@@ -12,6 +13,7 @@ export type TuiSessionBinding = {
   sessionId: SessionId;
   modelName: string;
   workspaceRoot: string;
+  profileName?: string;
   projectionStore: TuiProjectionStore;
   executeTurn(userPrompt: string, signal: AbortSignal): Promise<RunAgentResult>;
 };
@@ -22,6 +24,7 @@ export type TuiSessionController = {
   listSessions: () => Promise<readonly SessionSummary[]>;
   resume: (sessionId: SessionId) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
+  switchModel: (profile: ModelProfile) => Promise<void>;
 };
 
 export type ManagedTuiSessionBinding = TuiSessionBinding & {
@@ -38,6 +41,9 @@ export class DefaultTuiSessionController implements TuiSessionController {
     private readonly catalog: SessionCatalog,
     private readonly openSession: (
       sessionId: SessionId,
+    ) => Promise<ManagedTuiSessionBinding>,
+    private readonly createSessionWithProfile: (
+      profile: ModelProfile,
     ) => Promise<ManagedTuiSessionBinding>,
   ) {
     this.binding = initial;
@@ -88,6 +94,31 @@ export class DefaultTuiSessionController implements TuiSessionController {
     return this.serialize(() => this.catalog.delete(sessionId, this.binding.sessionId));
   }
 
+  switchModel(profile: ModelProfile): Promise<void> {
+    return this.serialize(async () => {
+      const current = this.binding;
+      if (!current.runtimeSession.canSwitchSession()) {
+        throw new Error(
+          "Cannot switch models while a turn or background task is active.",
+        );
+      }
+
+      const target = await this.createSessionWithProfile(profile);
+      try {
+        await current.runtimeSession.dispose({ type: "session_switch" });
+      } catch (error) {
+        await target.runtimeSession
+          .dispose({ type: "runner_failed", error: errorMessage(error) })
+          .catch(() => undefined);
+        throw error;
+      }
+      this.binding = target;
+      for (const listener of this.listeners) {
+        listener();
+      }
+    });
+  }
+
   dispose(reason: SessionDisposeReason): Promise<void> {
     return this.binding.runtimeSession.dispose(reason);
   }
@@ -110,12 +141,14 @@ export function managedTuiBinding(input: {
   runtimeSession: RuntimeSession;
   modelName: string;
   workspaceRoot: string;
+  profileName?: string;
   projectionStore: TuiProjectionStore;
 }): ManagedTuiSessionBinding {
   return {
     sessionId: input.runtimeSession.sessionId,
     modelName: input.modelName,
     workspaceRoot: input.workspaceRoot,
+    profileName: input.profileName,
     projectionStore: input.projectionStore,
     runtimeSession: input.runtimeSession,
     executeTurn: (userPrompt, signal) =>

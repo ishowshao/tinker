@@ -73,6 +73,7 @@ import {
 export type RuntimeContractV1 = {
   version: 1;
   modelName: string;
+  profileName?: string;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
@@ -1454,6 +1455,7 @@ export class SessionStore implements SessionLedgerCommitter {
 
 export function createRuntimeContract(input: {
   modelName: string;
+  profileName?: string;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
@@ -1464,6 +1466,7 @@ export function createRuntimeContract(input: {
   return Object.freeze({
     version: 1,
     modelName: input.modelName,
+    ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
     includeReasoningContent: input.includeReasoningContent,
     contextProfile: immutableCanonicalClone(input.contextProfile),
     contextBudget: immutableCanonicalClone(input.contextBudget),

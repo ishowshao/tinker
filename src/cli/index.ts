@@ -16,4 +16,14 @@ if (command === "run") {
   process.exit(exitCode);
 }
 
+if (command === "--profile" || command === "-p") {
+  const profileName = args[0];
+  if (profileName === undefined) {
+    process.stderr.write("Usage: tinker --profile <profile-name>\n");
+    process.exit(2);
+  }
+  await runTui({ profileName });
+  process.exit(0);
+}
+
 await runTui();

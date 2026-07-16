@@ -44,9 +44,10 @@ Tinker is configured via environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `TINKER_MODEL` | — | Required model name |
+| `TINKER_MODEL` | — | Required model name when `TINKER_MODELS` is not set |
 | `TINKER_BASE_URL` | — | Required API base URL |
 | `TINKER_API_KEY` | — | Required API key |
+| `TINKER_MODELS` | — | Path to a multi-model profiles JSON file (see below) |
 | `TINKER_WORKSPACE` | `process.cwd()` | Workspace root |
 | `TINKER_MAX_ITERATIONS` | `512` | Max agent loop iterations per turn |
 | `EXA_API_KEY` | — | Enables WebSearch tool |
@@ -57,6 +58,51 @@ Tinker is configured via environment variables:
 | `TINKER_TASK_STOP_GRACE_MS` | `5000` | Grace period before SIGKILL |
 | `TINKER_MCP_TIMEOUT_MS` | `30000` | MCP tool timeout |
 | `TINKER_CONTEXT_BUDGET_TOKENS` | `128000` | Context budget in tokens |
+
+### Multi-Model Profiles
+
+Set `TINKER_MODELS` in `.env` to point to a JSON file with multiple named model
+profiles. When set, the profile's `default` field selects the startup model, and
+the `/model` slash command (available in new sessions before any turns) lets you
+switch to another profile. If `TINKER_MODELS` is not set, Tinker falls back to
+the individual `TINKER_*` environment variables. A configured profiles file must
+exist and be valid; Tinker does not silently fall back when it cannot be loaded.
+
+```json
+{
+  "default": "deepseek",
+  "profiles": {
+    "deepseek": {
+      "model": "deepseek-chat",
+      "apiBase": "https://api.deepseek.com/v1",
+      "apiKey": "sk-xxx",
+      "contextWindowTokens": 128000,
+      "maxSupportedOutputTokens": 8192
+    },
+    "gpt-4o": {
+      "model": "gpt-4o",
+      "apiBase": "https://api.openai.com/v1",
+      "apiKey": "sk-yyy",
+      "contextWindowTokens": 128000,
+      "maxSupportedOutputTokens": 16384,
+      "includeReasoningContent": true
+    }
+  }
+}
+```
+
+You can also start TUI with a specific profile:
+
+```bash
+bun run tinker --profile gpt-4o
+```
+
+Switching models creates a new session. The previous session is preserved and
+can be resumed with `/resume`. Each session records its profile name, and resume
+reopens the session with that profile. Resume fails clearly if the profile is no
+longer present or its runtime contract has changed. Older sessions without a
+stored profile name can resume only when their model name uniquely matches one
+configured profile.
 
 `Read` has a fixed 262144-byte (256 KiB) content limit per call. A successful
 call always returns the complete requested line range. Use `offset` and `limit`

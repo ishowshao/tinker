@@ -29,6 +29,7 @@ import type {
 export type SessionStartedData = {
   workspaceRoot: string;
   model: string;
+  profileName?: string;
   maxIterations: number;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;

@@ -5,7 +5,33 @@ import {
   readRunnerConfig,
   RUNTIME_INSTRUCTIONS,
 } from "../cli/config";
+import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import { TEST_CONTEXT_PROFILE } from "./test-runtime";
+
+const TEST_PROFILES_JSON = JSON.stringify({
+  default: "deepseek",
+  profiles: {
+    deepseek: {
+      model: "deepseek-chat",
+      apiBase: "https://api.deepseek.com/v1",
+      apiKey: "sk-deepseek",
+      contextWindowTokens: 256 * 1024,
+      maxSupportedOutputTokens: 64 * 1024,
+    },
+    glm: {
+      model: "glm-4.6",
+      apiBase: "https://open.bigmodel.cn/api/paas/v4",
+      apiKey: "sk-glm",
+      contextWindowTokens: 256 * 1024,
+      maxSupportedOutputTokens: 64 * 1024,
+    },
+  },
+});
+
+const TEST_PROFILES: ModelProfiles = parseModelProfiles(
+  TEST_PROFILES_JSON,
+  "/test/models.json",
+);
 
 describe("runner config", () => {
   test("requires an explicit model name", () => {
@@ -147,6 +173,67 @@ describe("runner config", () => {
         "TINKER_MAX_ITERATIONS must be a positive integer",
       );
     });
+  });
+});
+
+describe("profile resolution", () => {
+  test("uses the JSON default profile when no override is given", () => {
+    withEnv("TINKER_MODEL", "ignored-legacy-value", () => {
+      const config = readRunnerConfig({}, TEST_PROFILES);
+      expect(config.modelName).toBe("deepseek-chat");
+      expect(config.profileName).toBe("deepseek");
+    });
+  });
+
+  test("uses the override profile name when it matches", () => {
+    withEnv("TINKER_MODEL", "ignored-legacy-value", () => {
+      const config = readRunnerConfig({ profileName: "glm" }, TEST_PROFILES);
+      expect(config.modelName).toBe("glm-4.6");
+      expect(config.profileName).toBe("glm");
+    });
+  });
+
+  test("fast-fails an unknown explicit profile and lists valid names", () => {
+    expect(() => readRunnerConfig({ profileName: "typo" }, TEST_PROFILES)).toThrow(
+      'Unknown model profile "typo". Available profiles: deepseek, glm.',
+    );
+  });
+
+  test("ignores TINKER_MODEL entirely when TINKER_MODELS is set", () => {
+    withEnv("TINKER_MODEL", "glm", () => {
+      const config = readRunnerConfig({}, TEST_PROFILES);
+      expect(config.modelName).toBe("deepseek-chat");
+      expect(config.profileName).toBe("deepseek");
+    });
+  });
+
+  test("passes apiKey and apiBase from the resolved profile", () => {
+    withEnv("TINKER_MODEL", undefined, () => {
+      const config = readRunnerConfig({}, TEST_PROFILES);
+      expect(config.apiKey).toBe("sk-deepseek");
+      expect(config.apiBase).toBe("https://api.deepseek.com/v1");
+    });
+  });
+
+  test("falls back to env vars when profiles is undefined", () => {
+    withEnvValues(
+      {
+        TINKER_MODEL: "env-model",
+        TINKER_CONTEXT_WINDOW_TOKENS: "1048576",
+        TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "393216",
+      },
+      () => {
+        const config = readRunnerConfig();
+        expect(config.modelName).toBe("env-model");
+        expect(config.profileName).toBeUndefined();
+      },
+    );
+  });
+
+  test("rejects an explicit profile when profiles are not configured", () => {
+    expect(() => readRunnerConfig({ profileName: "glm" })).toThrow(
+      'Cannot select model profile "glm" because TINKER_MODELS is not configured.',
+    );
   });
 });
 
