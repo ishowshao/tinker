@@ -369,6 +369,11 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 ### I2：温层确定性换出与手动 `/compact`
 
+**状态：技术方案待评审，尚未实施。**
+
+详细设计见
+[`context-revision-i2-deterministic-swap-manual-compact-design.md`](context-revision-i2-deterministic-swap-manual-compact-design.md)。
+
 先只允许用户在空闲状态手动触发 swap-only compaction：
 
 - 只替换已关闭 frame 中的大体积 tool observation。
