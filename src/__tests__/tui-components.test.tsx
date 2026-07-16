@@ -18,6 +18,7 @@ import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { parseModelProfiles } from "../cli/model-profiles";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import type { ViewFile } from "../tui/view-file";
 import {
   createTestRuntime,
   TEST_CONTEXT_BUDGET,
@@ -521,6 +522,59 @@ describe("tui components", () => {
 
     expect(runCount).toBe(0);
     expect(lastFrame()).toContain("Unknown command: /nope");
+    cleanup();
+  });
+
+  test("opens /view outside the agent turn and restores the TUI with Escape", async () => {
+    let runCount = 0;
+    const reads: Array<{ workspaceRoot: string; filePath: string }> = [];
+    const viewedFile: ViewFile = {
+      absolutePath: "/tmp/tinker/docs/design notes.ts",
+      displayPath: "docs/design notes.ts",
+      lines: ["export const viewed = true;"],
+      sizeBytes: 27,
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCount += 1;
+            return completedResult();
+          },
+        )}
+        readViewFile={async (workspaceRoot, filePath) => {
+          reads.push({ workspaceRoot, filePath });
+          if (filePath === "missing.ts") {
+            throw new Error("File does not exist: /tmp/tinker/missing.ts");
+          }
+          return viewedFile;
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/view docs/design notes.ts");
+    await Bun.sleep(25);
+
+    expect(reads).toEqual([
+      { workspaceRoot: "/tmp/tinker", filePath: "docs/design notes.ts" },
+    ]);
+    expect(lastFrame()).toContain("View: docs/design notes.ts");
+    expect(lastFrame()).toContain("export const viewed = true;");
+    expect(lastFrame()).not.toContain('Enter a coding request, or "/" for commands');
+    expect(runCount).toBe(0);
+
+    stdin.write("\u001b");
+    await Bun.sleep(25);
+    expect(lastFrame()).not.toContain("View: docs/design notes.ts");
+    expect(lastFrame()).toContain("model · /tmp/tinker");
+
+    await submitInput(stdin, "/view missing.ts");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      "View failed: File does not exist: /tmp/tinker/missing.ts",
+    );
+    expect(runCount).toBe(0);
     cleanup();
   });
 

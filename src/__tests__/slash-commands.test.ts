@@ -65,6 +65,26 @@ describe("findSlashCommand", () => {
 });
 
 describe("parseSlashCommand", () => {
+  test("parses /view with relative, absolute, and space-containing paths", () => {
+    expect(parseSlashCommand("/view src/tui/app.tsx")).toEqual({
+      type: "view",
+      filePath: "src/tui/app.tsx",
+    });
+    expect(parseSlashCommand("/view /tmp/outside.ts")).toEqual({
+      type: "view",
+      filePath: "/tmp/outside.ts",
+    });
+    expect(parseSlashCommand("/view docs/design notes.md")).toEqual({
+      type: "view",
+      filePath: "docs/design notes.md",
+    });
+  });
+
+  test("rejects /view without a path", () => {
+    expect(() => parseSlashCommand("/view")).toThrow("Usage: /view <path>");
+    expect(() => parseSlashCommand("/view   ")).toThrow("Usage: /view <path>");
+  });
+
   test("parses resume list, resume target, and confirmed deletion", () => {
     const sessionId = runtimeIdFactory.createSessionId();
     expect(parseSlashCommand("/resume")).toEqual({ type: "resume_list" });

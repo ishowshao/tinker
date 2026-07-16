@@ -9,6 +9,7 @@ import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
+import { FileViewer, FileViewerLoading } from "./components/file-viewer";
 import { PromptInput } from "./components/prompt-input";
 import {
   ResumeSessionPicker,
@@ -19,6 +20,7 @@ import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
+import { loadViewFile, type ViewFile } from "./view-file";
 
 export type AppProps = {
   sessionController: TuiSessionController;
@@ -26,6 +28,7 @@ export type AppProps = {
   history?: PromptHistory;
   profiles?: ModelProfiles;
   persistDefaultProfile?: (profileName: string) => Promise<void>;
+  readViewFile?: (workspaceRoot: string, filePath: string) => Promise<ViewFile>;
   onQuit?: () => void;
 };
 
@@ -42,6 +45,10 @@ type ModelPickerState = {
   isSwitching: boolean;
   error?: string;
 };
+
+type FileViewState =
+  | { status: "loading"; filePath: string }
+  | { status: "ready"; file: ViewFile };
 
 export function App(props: AppProps) {
   const { exit } = useApp();
@@ -71,11 +78,14 @@ export function App(props: AppProps) {
   const [modelPickerState, setModelPickerState] = useState<
     ModelPickerState | undefined
   >(undefined);
+  const [fileView, setFileView] = useState<FileViewState | undefined>(undefined);
+  const [viewError, setViewError] = useState<string | undefined>(undefined);
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
   const activeController = useRef<AbortController | undefined>(undefined);
   const resumePickerRequest = useRef(0);
+  const fileViewRequest = useRef(0);
 
   const canSwitchModel =
     state.recentTurns.length === 0 &&
@@ -228,9 +238,37 @@ export function App(props: AppProps) {
       .finally(() => setIsSessionOperation(false));
   };
 
+  const closeFileView = () => {
+    fileViewRequest.current += 1;
+    setFileView(undefined);
+  };
+
+  const openFileView = (filePath: string) => {
+    const requestId = fileViewRequest.current + 1;
+    fileViewRequest.current = requestId;
+    setNotice(undefined);
+    setViewError(undefined);
+    setFileView({ status: "loading", filePath });
+
+    void Promise.resolve()
+      .then(() => (props.readViewFile ?? loadViewFile)(workspaceRoot, filePath))
+      .then((file) => {
+        if (fileViewRequest.current === requestId) {
+          setFileView({ status: "ready", file });
+        }
+      })
+      .catch((error: unknown) => {
+        if (fileViewRequest.current === requestId) {
+          setFileView(undefined);
+          setViewError(`View failed: ${errorMessage(error)}`);
+        }
+      });
+  };
+
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
     setShowStatus(false);
+    setViewError(undefined);
 
     if (trimmed.startsWith("/")) {
       let command;
@@ -243,6 +281,10 @@ export function App(props: AppProps) {
 
       setNotice(undefined);
 
+      if (command.type === "view") {
+        openFileView(command.filePath);
+        return;
+      }
       if (command.type === "status") {
         setShowStatus(true);
         return;
@@ -329,7 +371,11 @@ export function App(props: AppProps) {
 
   return (
     <Box flexDirection="column">
-      {resumePicker?.status === "loading" ? (
+      {fileView?.status === "loading" ? (
+        <FileViewerLoading filePath={fileView.filePath} onCancel={closeFileView} />
+      ) : fileView?.status === "ready" ? (
+        <FileViewer file={fileView.file} onClose={closeFileView} />
+      ) : resumePicker?.status === "loading" ? (
         <ResumeSessionPickerLoading onCancel={closeResumePicker} />
       ) : resumePicker?.status === "ready" ? (
         <ResumeSessionPicker
@@ -389,6 +435,7 @@ export function App(props: AppProps) {
                 placeholder='Enter a coding request, or "/" for commands'
               />
             )}
+            {viewError === undefined ? null : <Text color="red">{viewError}</Text>}
             {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
           </Box>
         </>

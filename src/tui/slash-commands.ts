@@ -5,6 +5,7 @@ export type SlashCommand = {
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "status", description: "Show session and context details" },
+  { name: "view", description: "View a local UTF-8 text file" },
   { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
   { name: "session", description: "Manage stored sessions" },
@@ -13,6 +14,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 
 export type ParsedSlashCommand =
   | { type: "status" }
+  | { type: "view"; filePath: string }
   | { type: "quit" }
   | { type: "model" }
   | { type: "model_switch"; profileName: string }
@@ -28,7 +30,19 @@ export class SlashCommandError extends Error {
 }
 
 export function parseSlashCommand(input: string): ParsedSlashCommand {
-  const tokens = input.trim().split(/\s+/);
+  const trimmed = input.trim();
+  if (trimmed === "/view") {
+    throw new SlashCommandError("Usage: /view <path>");
+  }
+  if (trimmed.startsWith("/view ") || trimmed.startsWith("/view\t")) {
+    const filePath = trimmed.slice(5).trim();
+    if (filePath === "") {
+      throw new SlashCommandError("Usage: /view <path>");
+    }
+    return { type: "view", filePath };
+  }
+
+  const tokens = trimmed.split(/\s+/);
   const command = tokens[0];
   if (command === "/status" && tokens.length === 1) {
     return { type: "status" };
@@ -63,7 +77,7 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     }
     throw new SlashCommandError("Usage: /session delete <session-id> --confirm");
   }
-  throw new SlashCommandError(`Unknown command: ${input.trim()}`);
+  throw new SlashCommandError(`Unknown command: ${trimmed}`);
 }
 
 export function matchSlashCommands(

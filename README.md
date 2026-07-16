@@ -38,6 +38,17 @@ bun run tinker
 bun run tinker run "explain the project structure"
 ```
 
+### Slash Commands
+
+- `/view <path>` — Open a readable UTF-8 text file in a full-window viewer. Relative
+  paths must remain inside the workspace; absolute paths may point outside it. Use
+  the keyboard or mouse wheel to scroll and press `Esc` to close the viewer.
+- `/status` — Show session and context details.
+- `/model [profile-name]` — Choose a model profile for a new session.
+- `/resume [session-id]` — Choose or directly resume a stored session.
+- `/session delete <session-id> --confirm` — Delete a stored session.
+- `/quit` — Exit the TUI.
+
 ## Configuration
 
 Tinker is configured via environment variables:
