@@ -25,6 +25,7 @@ import type {
   ProjectInstructionFileName,
   ProjectInstructionManifest,
 } from "../instructions/project-instructions";
+import type { ContextSurfaceComponent } from "../context/context-surface";
 
 export type SessionStartedData = {
   workspaceRoot: string;
@@ -44,44 +45,72 @@ export type ContextUsageUpdatedData = {
   snapshot: ContextUsageSnapshot;
 };
 
-export type ContextRevisionStartedData = {
-  strategy: "swap";
-  reason: "manual";
-  policyVersion: "swap-only-v1";
-  rendererFormat: "swap-observation-v1";
-};
+export type ContextRevisionStartedData =
+  | {
+      strategy: "swap";
+      reason: "manual";
+      policyVersion: "swap-only-v1";
+      rendererFormat: "swap-observation-v1";
+    }
+  | {
+      strategy: "surface_refresh";
+      reason: "resume";
+      baseRevisionNumber: number;
+      changed: readonly ContextSurfaceComponent[];
+    };
 
-export type ContextRevisionFinishedData = {
-  strategy: "swap";
-  reason: "manual";
-  policyVersion: "swap-only-v1";
-  outcome:
-    | "below_target"
-    | "no_eligible_candidates"
-    | "target_reached"
-    | "insufficient_candidates";
-  baseRevisionNumber: number;
-  revisionNumber?: number;
-  addedOverrideCount: number;
-  totalOverrideCount: number;
-  originalObservationBytes: number;
-  projectedObservationBytes: number;
-  rawTokensBefore: number;
-  rawTokensAfter?: number;
-  guardedTokensBefore: number;
-  guardedTokensAfter?: number;
-  targetTokens: number;
-  planHash?: string;
-  durationMs: number;
-};
+export type ContextRevisionFinishedData =
+  | {
+      strategy: "swap";
+      reason: "manual";
+      policyVersion: "swap-only-v1";
+      outcome:
+        | "below_target"
+        | "no_eligible_candidates"
+        | "target_reached"
+        | "insufficient_candidates";
+      baseRevisionNumber: number;
+      revisionNumber?: number;
+      addedOverrideCount: number;
+      totalOverrideCount: number;
+      originalObservationBytes: number;
+      projectedObservationBytes: number;
+      rawTokensBefore: number;
+      rawTokensAfter?: number;
+      guardedTokensBefore: number;
+      guardedTokensAfter?: number;
+      targetTokens: number;
+      planHash?: string;
+      durationMs: number;
+    }
+  | {
+      strategy: "surface_refresh";
+      reason: "resume";
+      baseRevisionNumber: number;
+      revisionNumber: number;
+      changed: readonly ContextSurfaceComponent[];
+      toolCountBefore: number;
+      toolCountAfter: number;
+      measuredAnchorCleared: true;
+      durationMs: number;
+    };
 
-export type ContextRevisionFailedData = {
-  strategy: "swap";
-  reason: "manual";
-  stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
-  errorCode: string;
-  error: string;
-};
+export type ContextRevisionFailedData =
+  | {
+      strategy: "swap";
+      reason: "manual";
+      stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
+      errorCode: string;
+      error: string;
+    }
+  | {
+      strategy: "surface_refresh";
+      reason: "resume";
+      stage: "prepare" | "commit" | "activate";
+      errorCode: string;
+      error: string;
+      committed: boolean;
+    };
 
 export type ContextShadowPlannedData = {
   policyVersion: "swap-only-v1";
@@ -131,7 +160,16 @@ export type SessionResumedData = {
   recoveredFrameId?: ProtocolFrameId;
   syntheticCompletionCount: number;
   recallIndexRebuilt: boolean;
+  contextProfile: ModelContextProfile;
+  contextBudget: ModelContextBudget;
   projectInstructionFile?: ProjectInstructionFileName;
+  contextRefresh?: {
+    previousRevisionNumber: number;
+    revisionNumber: number;
+    changed: readonly ContextSurfaceComponent[];
+    toolCountBefore: number;
+    toolCountAfter: number;
+  };
 };
 
 export type InterruptedFrameRecoveredData = {

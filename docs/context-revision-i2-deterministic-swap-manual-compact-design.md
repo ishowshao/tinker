@@ -7,8 +7,11 @@
 - 前置阶段：
   [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I2
-- 当前实现：SessionStore schema v5、不可变线性 revision、单调 override 继承、手动
+- 本文落地基线：SessionStore schema v5、不可变线性 revision、单调 override 继承、手动
   `/compact`
+- 后继变更：schema v5 基线已由
+  [`runtime-contract-context-surface-refresh-design.md`](runtime-contract-context-surface-refresh-design.md)
+  一次性切换到 schema v6；I2 的 swap-only 语义继续保留
 - 当前活动策略：`swap-only-v1`；runtime pressure 仍只执行 shadow planning
 - 后继阶段：I3 Recall-first 冷前缀退休
 

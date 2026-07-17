@@ -4,6 +4,7 @@ import type { AssistantMessage } from "../agent/types";
 import type { ModelContextBudget } from "./model-context-profile";
 import type {
   ModelClient,
+  ModelMessageProtocol,
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
@@ -24,6 +25,10 @@ import {
 const OPENAI_CHAT_SERIALIZATION_VERSION = "openai-chat-v1";
 
 export class OpenAIChatModelClient implements ModelClient {
+  readonly messageProtocol: ModelMessageProtocol = Object.freeze({
+    adapter: "openai-chat",
+    serializationVersion: OPENAI_CHAT_SERIALIZATION_VERSION,
+  });
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
   private readonly provider: string;
@@ -77,12 +82,12 @@ export class OpenAIChatModelClient implements ModelClient {
     );
     const requestConfigHash = sha256(
       stableJsonStringify({
-        provider: this.provider,
-        baseURL: nonSecretBaseUrl(this.options.baseURL),
+        adapter: this.messageProtocol.adapter,
+        serializationVersion: this.messageProtocol.serializationVersion,
         model: this.options.model,
-        serializationVersion: OPENAI_CHAT_SERIALIZATION_VERSION,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
         includeReasoningContent: this.options.includeReasoningContent === true,
+        requestPolicy: { toolChoice: "auto" },
       }),
     );
     const prepared: PreparedModelRequest = {
@@ -164,18 +169,6 @@ function segmentKind(
       return "tool";
     case undefined:
       throw new Error("OpenAI message mapping changed the message count.");
-  }
-}
-
-function nonSecretBaseUrl(value: string | undefined): string {
-  if (value === undefined) {
-    return "https://api.openai.com/v1";
-  }
-  try {
-    const url = new URL(value);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return value.split(/[?#]/, 1)[0] ?? value;
   }
 }
 

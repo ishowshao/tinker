@@ -166,6 +166,7 @@ describe("turn cancellation", () => {
         sessionId: runtimeSession.sessionId,
         systemPrompt: "system",
         idFactory: deterministicIdFactory("cancel-model"),
+        initialToolDefinitions: tooling.registry.definitions(),
       });
       const pendingTurn = ledger.beginTurn({ turn, userPrompt: "wait" });
       const pending = runAgent({
@@ -191,10 +192,11 @@ describe("turn cancellation", () => {
       );
       expect(pendingTurn.projectedMessageCount()).toBe(2);
       pendingTurn.finish(result);
-      expect(ledger.buildCommittedModelRequest([]).request.messages.at(-1)).toEqual({
-        role: "user",
-        content: "wait",
-      });
+      expect(
+        ledger
+          .buildCommittedModelRequest(tooling.registry.definitions())
+          .request.messages.at(-1),
+      ).toEqual({ role: "user", content: "wait" });
       expect(events.events.map((event) => event.type)).toEqual([
         "agent.iteration.started",
         "context.usage.updated",
@@ -273,6 +275,7 @@ describe("turn cancellation", () => {
       sessionId: runtimeSession.sessionId,
       systemPrompt: "system",
       idFactory: deterministicIdFactory("cancel-tools"),
+      initialToolDefinitions: registry.definitions(),
     });
     const pendingTurn = ledger.beginTurn({ turn, userPrompt: "run tools" });
     const result = await runAgent({
@@ -291,7 +294,8 @@ describe("turn cancellation", () => {
     expect(result.status).toBe("cancelled");
     expect(thirdToolCalls).toBe(0);
     pendingTurn.finish(result);
-    const messages = ledger.buildCommittedModelRequest([]).request.messages;
+    const messages = ledger.buildCommittedModelRequest(registry.definitions()).request
+      .messages;
     const toolMessages = messages.filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(3);
     expect(toolMessages[0]?.content).toContain("Read succeeded");

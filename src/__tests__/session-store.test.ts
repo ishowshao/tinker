@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
 import { runtimeIdFactory } from "../ids/runtime-id";
-import { SessionStore, createRuntimeContract } from "../session/session-store";
+import { SessionError } from "../session/session-errors";
+import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
-import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
+import { finalizeTestSessionStore } from "./test-runtime";
 
 describe("SessionStore and SqliteSessionLedger", () => {
-  test("round-trips empty assistant tool-call text across turns and resume", async () => {
+  test("round-trips tool history and fast-fails an unknown observation format", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-store-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -20,7 +22,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
       });
-      store.finalizeRuntimeContract(testContract());
+      finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
       const turn: TurnIdentity = {
         sessionId,
@@ -136,6 +138,29 @@ describe("SessionStore and SqliteSessionLedger", () => {
       expect((await stat(store.databasePath)).mode & 0o777).toBe(0o600);
       expect((await stat(store.sessionDirectory)).mode & 0o777).toBe(0o700);
       await store.close("tui_exit");
+
+      const database = new Database(store.databasePath);
+      const trigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'tool_results_no_update'",
+        )
+        .get() as { sql: string };
+      database.exec("DROP TRIGGER tool_results_no_update");
+      database
+        .query(
+          "UPDATE tool_results SET observation_format = 'tool-observation-unknown' WHERE completion_kind = 'returned'",
+        )
+        .run();
+      database.exec(trigger.sql);
+      database.close();
+
+      const error = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(SessionError);
+      expect((error as SessionError).code).toBe("SESSION_INTEGRITY_FAILED");
+      expect((error as SessionError).message).toContain("observation format");
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -152,7 +177,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
       });
-      store.finalizeRuntimeContract(testContract());
+      finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
       const turn: TurnIdentity = {
         sessionId,
@@ -198,7 +223,6 @@ describe("SessionStore and SqliteSessionLedger", () => {
       await store.abandon();
 
       store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
-      store.assertRuntimeContract(testContract());
       const recovery = store.recoverInterruptedState(runtimeIdFactory);
       expect(recovery).toMatchObject({
         recoveredTurnId: turn.turnId,
@@ -237,7 +261,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
       });
-      store.finalizeRuntimeContract(testContract());
+      finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
       const turn: TurnIdentity = {
         sessionId,
@@ -262,15 +286,3 @@ describe("SessionStore and SqliteSessionLedger", () => {
     }
   });
 });
-
-function testContract() {
-  return createRuntimeContract({
-    modelName: "test-model",
-    includeReasoningContent: false,
-    contextProfile: TEST_CONTEXT_PROFILE,
-    contextBudget: TEST_CONTEXT_BUDGET,
-    systemPrompt: "system",
-    toolSchemaSha256: "a".repeat(64),
-    requestConfigSha256: "b".repeat(64),
-  });
-}

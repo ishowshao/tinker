@@ -33,6 +33,17 @@ export type CreateMcpManagerOptions = {
   maxObservationChars?: number;
 };
 
+export class McpInitializationError extends Error {
+  constructor(
+    readonly serverName: string,
+    readonly stage: "connect" | "list_tools" | "validate_tools",
+    options?: ErrorOptions,
+  ) {
+    super(`MCP server ${serverName} failed during ${stage}.`, options);
+    this.name = "McpInitializationError";
+  }
+}
+
 export async function createMcpManager(
   options: CreateMcpManagerOptions,
 ): Promise<McpManager> {
@@ -58,19 +69,22 @@ export async function createMcpManager(
           sessionId: options.runtimeSession.sessionId,
           data: {
             serverName,
-            error: error instanceof Error ? error.message : String(error),
+            error: "connection failed",
           },
         });
-        continue;
+        throw new McpInitializationError(serverName, "connect", {
+          cause: error,
+        });
       }
 
       try {
         tools = (await connection.client.listTools()).tools;
       } catch (error) {
+        let cause: unknown = error;
         try {
           await connection.close();
         } catch (closeError) {
-          throw new AggregateError(
+          cause = new AggregateError(
             [error, closeError],
             `Failed to inspect and close MCP server ${serverName}.`,
             { cause: closeError },
@@ -81,31 +95,55 @@ export async function createMcpManager(
           sessionId: options.runtimeSession.sessionId,
           data: {
             serverName,
-            error: error instanceof Error ? error.message : String(error),
+            error: "tool discovery failed",
           },
         });
-        continue;
+        throw new McpInitializationError(serverName, "list_tools", {
+          cause,
+        });
       }
 
       connections.push(connection);
 
       const seenToolNames = new Set<string>();
+      try {
+        for (const tool of tools) {
+          if (
+            tool.name.trim() === "" ||
+            typeof tool.inputSchema !== "object" ||
+            tool.inputSchema === null ||
+            Array.isArray(tool.inputSchema) ||
+            tool.inputSchema.type !== "object"
+          ) {
+            throw new Error("MCP tool name or input schema is invalid.");
+          }
+          if (seenToolNames.has(tool.name)) {
+            throw new Error(`Duplicate MCP tool name ${tool.name}.`);
+          }
 
-      for (const tool of tools) {
-        if (seenToolNames.has(tool.name)) {
-          continue;
+          seenToolNames.add(tool.name);
+          executors.push(
+            createMcpToolExecutor({
+              client: connection.client,
+              serverName,
+              tool,
+              timeoutMs,
+              maxObservationChars,
+            }),
+          );
         }
-
-        seenToolNames.add(tool.name);
-        executors.push(
-          createMcpToolExecutor({
-            client: connection.client,
+      } catch (error) {
+        await options.runtimeSession.append({
+          type: "mcp.server.failed",
+          sessionId: options.runtimeSession.sessionId,
+          data: {
             serverName,
-            tool,
-            timeoutMs,
-            maxObservationChars,
-          }),
-        );
+            error: "tool validation failed",
+          },
+        });
+        throw new McpInitializationError(serverName, "validate_tools", {
+          cause: error,
+        });
       }
 
       await options.runtimeSession.append({
@@ -114,6 +152,11 @@ export async function createMcpManager(
         data: { serverName, toolCount: seenToolNames.size },
       });
     }
+    executors.sort((left, right) => {
+      const leftName = left.definition.name;
+      const rightName = right.definition.name;
+      return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
+    });
   } catch (error) {
     const errors = [error];
     await closeConnections(connections, errors);

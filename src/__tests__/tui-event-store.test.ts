@@ -183,6 +183,13 @@ function testEvent(input: TestEventInput): AgentEvent {
       data: { error: stringValue(input.error) ?? "failed" },
     };
   }
+  if (input.type === "context.revision.finished") {
+    return {
+      ...base,
+      type: "context.revision.finished",
+      data: recordValue(input.data),
+    } as AgentEvent;
+  }
   throw new Error(`Unsupported test event: ${input.type}`);
 }
 
@@ -646,6 +653,37 @@ describe("tui event store", () => {
       ok: true,
     });
     expect(visibleTimelineItems(state).at(-1)?.status).toBe("ok");
+  });
+
+  test("shows a bounded notice after a context surface refresh", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "context.revision.finished",
+      data: {
+        strategy: "surface_refresh",
+        reason: "resume",
+        baseRevisionNumber: 1,
+        revisionNumber: 2,
+        changed: ["project_instruction", "tool_definitions"],
+        toolCountBefore: 10,
+        toolCountAfter: 11,
+        measuredAnchorCleared: true,
+        durationMs: 1.25,
+      },
+    });
+
+    const items = visibleTimelineItems(state);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: "context",
+      text: "runtime context refreshed on resume -> project instruction, tool definitions",
+      status: "info",
+    });
   });
 });
 

@@ -11,7 +11,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentEvent } from "../events/types";
 import { StdoutEventPrinter } from "../events/stdout-event-printer";
-import { createMcpManager } from "../mcp/mcp-manager";
+import { createMcpManager, McpInitializationError } from "../mcp/mcp-manager";
 import {
   createMcpToolExecutor as createMcpToolExecutorBase,
   mcpToolName,
@@ -65,6 +65,7 @@ function createMcpToolExecutor(
 
 async function connectTestClient(options: {
   tools: Tool[];
+  listToolsError?: Error;
   onCallTool: (
     name: string,
     args: Record<string, unknown> | undefined,
@@ -75,7 +76,12 @@ async function connectTestClient(options: {
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: options.tools }));
+  server.setRequestHandler(ListToolsRequestSchema, () => {
+    if (options.listToolsError !== undefined) {
+      throw options.listToolsError;
+    }
+    return { tools: options.tools };
+  });
   server.setRequestHandler(CallToolRequestSchema, (request) =>
     options.onCallTool(request.params.name, request.params.arguments),
   );
@@ -326,7 +332,7 @@ describe("mcp tool executor", () => {
 });
 
 describe("mcp manager", () => {
-  test("registers tools from good servers and reports failed servers", async () => {
+  test("fast-fails a configured server and closes prior connections", async () => {
     const client = await connectTestClient({
       tools: [ECHO_TOOL],
       onCallTool: () => ({ content: [] }),
@@ -335,11 +341,11 @@ describe("mcp manager", () => {
     const sink = collectingEventSink();
     const runtimeSession = createTestRuntime(sink).runtimeSession;
 
-    const manager = await createMcpManager({
+    const error = await createMcpManager({
       config: {
         servers: new Map([
-          ["bad", { command: "nope", args: [], env: {} }],
           ["good", { command: "nope", args: [], env: {} }],
+          ["bad", { command: "nope", args: [], env: {} }],
         ]),
       },
       runtimeSession,
@@ -356,25 +362,120 @@ describe("mcp manager", () => {
           },
         };
       },
-    });
+    }).catch((caught: unknown) => caught);
 
-    expect(manager.executors.map((executor) => executor.definition.name)).toEqual([
-      "mcp__good__echo",
-    ]);
+    expect(error).toBeInstanceOf(McpInitializationError);
+    expect(error).toMatchObject({ serverName: "bad", stage: "connect" });
     expect(
       sink.events.map((event) => ({ type: event.type, data: event.data })),
     ).toEqual([
       {
-        type: "mcp.server.failed",
-        data: { serverName: "bad", error: "spawn failed" },
-      },
-      {
         type: "mcp.server.connected",
         data: { serverName: "good", toolCount: 1 },
       },
+      {
+        type: "mcp.server.failed",
+        data: { serverName: "bad", error: "connection failed" },
+      },
     ]);
+    expect(closed).toBe(true);
+  });
 
-    await manager.dispose();
+  test("sorts final model-visible definitions independent of server tool order", async () => {
+    const client = await connectTestClient({
+      tools: [
+        { ...ECHO_TOOL, name: "zeta" },
+        { ...ECHO_TOOL, name: "alpha" },
+      ],
+      onCallTool: () => ({ content: [] }),
+    });
+    const runtimeSession = createTestRuntime().runtimeSession;
+    const manager = await createMcpManager({
+      config: {
+        servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
+      },
+      runtimeSession,
+      clientFactory: async () => ({ client, close: () => client.close() }),
+    });
+    try {
+      expect(manager.executors.map((tool) => tool.definition.name)).toEqual([
+        "mcp__srv__alpha",
+        "mcp__srv__zeta",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  test("fast-fails duplicate server tool names during validation", async () => {
+    const client = await connectTestClient({
+      tools: [ECHO_TOOL, ECHO_TOOL],
+      onCallTool: () => ({ content: [] }),
+    });
+    let closed = false;
+    const sink = collectingEventSink();
+    const runtimeSession = createTestRuntime(sink).runtimeSession;
+    const error = await createMcpManager({
+      config: {
+        servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
+      },
+      runtimeSession,
+      clientFactory: async () => ({
+        client,
+        close: async () => {
+          closed = true;
+          await client.close();
+        },
+      }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(McpInitializationError);
+    expect(error).toMatchObject({ serverName: "srv", stage: "validate_tools" });
+    expect(
+      sink.events.some(
+        (event) =>
+          event.type === "mcp.server.failed" &&
+          event.data.serverName === "srv" &&
+          event.data.error === "tool validation failed",
+      ),
+    ).toBe(true);
+    expect(closed).toBe(true);
+  });
+
+  test("fast-fails listTools with a bounded error and closes the connection", async () => {
+    const client = await connectTestClient({
+      tools: [],
+      listToolsError: new Error("secret discovery detail"),
+      onCallTool: () => ({ content: [] }),
+    });
+    let closed = false;
+    const sink = collectingEventSink();
+    const runtimeSession = createTestRuntime(sink).runtimeSession;
+    const error = await createMcpManager({
+      config: {
+        servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
+      },
+      runtimeSession,
+      clientFactory: async () => ({
+        client,
+        close: async () => {
+          closed = true;
+          await client.close();
+        },
+      }),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(McpInitializationError);
+    expect(error).toMatchObject({ serverName: "srv", stage: "list_tools" });
+    expect(
+      sink.events.some(
+        (event) =>
+          event.type === "mcp.server.failed" &&
+          event.data.serverName === "srv" &&
+          event.data.error === "tool discovery failed",
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(sink.events)).not.toContain("secret discovery detail");
     expect(closed).toBe(true);
   });
 

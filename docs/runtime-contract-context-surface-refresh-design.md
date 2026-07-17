@@ -3,9 +3,12 @@
 ## 文档状态
 
 - 日期：2026-07-17
-- 状态：已审阅，设计决策已确认，待实施；本文不代表实施授权
-- 当前基线：SessionStore schema v5、`RuntimeContractV1`、不可变 canonical history、
-  `initial_full` / `swap_only` ContextRevision、手动 `/compact`
+- 状态：已实施；schema、事务和自动化回归门禁已通过
+- 当前基线：SessionStore schema v6、`SessionCompatibilityContract`、immutable
+  `ContextSurface`、`initial_full` / `swap_only` / `surface_refresh` ContextRevision、手动
+  `/compact`
+- 外部验证：真实 provider 的 MCP add/remove smoke 和 interactive TUI smoke 仍需在各受支持
+  profile 的有效凭据环境单独执行；runtime 不提供静默 fallback
 - 相关设计：
   [`session-store-resume-design.md`](session-store-resume-design.md)、
   [`project-instructions-loading-design.md`](project-instructions-loading-design.md)、

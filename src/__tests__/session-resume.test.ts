@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import os from "node:os";
 import path from "node:path";
 import {
+  RuntimeEventAppendError,
   createRuntimeSession,
   type CreateRuntimeSessionInput,
 } from "../agent/runtime-session";
@@ -14,7 +15,8 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { SessionError } from "../session/session-errors";
-import { sessionDatabasePath } from "../session/session-store";
+import { SessionStore, sessionDatabasePath } from "../session/session-store";
+import type { ToolExecutor } from "../tools/types";
 import {
   buildSystemPrompt,
   loadProjectInstructions,
@@ -47,7 +49,7 @@ class ResumeModel extends TestModelClient {
 }
 
 describe("RuntimeSession resume", () => {
-  test("keeps the project instruction snapshot across turns and resume", async () => {
+  test("keeps the creation snapshot immutable and refreshes current project instructions on resume", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-rules-"));
     const sessionId = runtimeIdFactory.createSessionId();
     const nextSessionId = runtimeIdFactory.createSessionId();
@@ -85,9 +87,18 @@ describe("RuntimeSession resume", () => {
       );
       await session.dispose({ type: "tui_exit" });
 
+      const resumedSnapshot = await loadProjectInstructions(workspace);
+      const resumedPrompt = buildSystemPrompt({
+        workspaceRoot: resumedSnapshot.workspaceRoot,
+        runtimeInstructions: "runtime",
+        projectInstructions: resumedSnapshot,
+      });
       const resumedModel = new ResumeModel();
       session = await createRuntimeSession(
-        sessionInput(workspace, sessionId, resumedModel, sink, "resume"),
+        sessionInput(workspace, sessionId, resumedModel, sink, "resume", {
+          systemPrompt: resumedPrompt,
+          projectInstruction: projectInstructionManifest(resumedSnapshot),
+        }),
         { loadMcpConfig: async () => undefined },
       );
       await session.executeTurn({
@@ -95,15 +106,37 @@ describe("RuntimeSession resume", () => {
         signal: new AbortController().signal,
       });
       expect(resumedModel.inputs[0]?.messages[0]?.content).toContain(
-        "rule version one",
+        "rule version two",
       );
       expect(resumedModel.inputs[0]?.messages[0]?.content).not.toContain(
-        "rule version two",
+        "rule version one",
       );
       expect(
         sink.events.find((event) => event.type === "session.resumed")?.data,
       ).toMatchObject({ projectInstructionFile: "AGENTS.md" });
+      expect(
+        sink.events.find(
+          (event) =>
+            event.type === "context.revision.finished" &&
+            event.data.strategy === "surface_refresh",
+        )?.data,
+      ).toMatchObject({
+        strategy: "surface_refresh",
+        changed: ["system_prompt", "project_instruction"],
+      });
       await session.dispose({ type: "tui_exit" });
+
+      const database = new Database(sessionDatabasePath(workspace, sessionId), {
+        readonly: true,
+      });
+      expect(
+        (
+          database
+            .query("SELECT content FROM messages WHERE role = 'system'")
+            .get() as { content: string }
+        ).content,
+      ).toContain("rule version one");
+      database.close();
 
       const nextSnapshot = await loadProjectInstructions(workspace);
       const nextPrompt = buildSystemPrompt({
@@ -171,10 +204,180 @@ describe("RuntimeSession resume", () => {
 
       expect(error).toBeInstanceOf(SessionError);
       expect((error as SessionError).code).toBe("SESSION_RECOVERY_FAILED");
-      expect((error as SessionError).operation).toBe("read_stored_system_prompt");
+      expect((error as SessionError).operation).toBe("read_creation_system_prompt");
       expect(
         sink.events.filter((event) => event.type === "session.resumed"),
       ).toHaveLength(0);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("records deterministic surface revisions when an MCP tool is added and removed", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-runtime-mcp-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const sink = collectingEventSink();
+    let mcpEnabled = false;
+    const mcpTool: ToolExecutor = {
+      definition: {
+        name: "mcp__fixture__echo",
+        description: "Echo a message",
+        parameters: { type: "object", properties: {} },
+      },
+      async execute() {
+        return {
+          kind: "generic",
+          ok: false,
+          toolName: "mcp__fixture__echo",
+          error: "unused test executor",
+        };
+      },
+    };
+    const dependencies = {
+      loadMcpConfig: async () =>
+        mcpEnabled
+          ? {
+              servers: new Map([["fixture", { command: "unused", args: [], env: {} }]]),
+            }
+          : undefined,
+      createMcpManager: async () => ({
+        executors: [mcpTool],
+        async dispose() {},
+      }),
+    };
+
+    try {
+      let model = new ResumeModel();
+      let session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, model, sink, "new"),
+        dependencies,
+      );
+      await session.dispose({ type: "tui_exit" });
+
+      mcpEnabled = true;
+      model = new ResumeModel();
+      session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, model, sink, "resume"),
+        dependencies,
+      );
+      await session.executeTurn({
+        userPrompt: "after MCP add",
+        signal: new AbortController().signal,
+      });
+      expect(model.inputs[0]?.tools.map((tool) => tool.name)).toContain(
+        "mcp__fixture__echo",
+      );
+      await session.dispose({ type: "tui_exit" });
+
+      mcpEnabled = false;
+      model = new ResumeModel();
+      session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, model, sink, "resume"),
+        dependencies,
+      );
+      await session.executeTurn({
+        userPrompt: "after MCP remove",
+        signal: new AbortController().signal,
+      });
+      expect(model.inputs[0]?.tools.map((tool) => tool.name)).not.toContain(
+        "mcp__fixture__echo",
+      );
+      await session.dispose({ type: "tui_exit" });
+
+      const refreshes = sink.events.flatMap((event) =>
+        event.type === "context.revision.finished" &&
+        event.data.strategy === "surface_refresh"
+          ? [
+              {
+                revisionNumber: event.data.revisionNumber,
+                changed: event.data.changed,
+              },
+            ]
+          : [],
+      );
+      expect(refreshes).toEqual([
+        {
+          revisionNumber: 2,
+          changed: ["tool_definitions"],
+        },
+        {
+          revisionNumber: 3,
+          changed: ["tool_definitions"],
+        },
+      ]);
+
+      const database = new Database(sessionDatabasePath(workspace, sessionId), {
+        readonly: true,
+      });
+      expect(
+        database
+          .query(
+            "SELECT revision_number, kind FROM context_revisions ORDER BY revision_number",
+          )
+          .all(),
+      ).toEqual([
+        { revision_number: 1, kind: "initial_full" },
+        { revision_number: 2, kind: "surface_refresh" },
+        { revision_number: 3, kind: "surface_refresh" },
+      ]);
+      database.close();
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("keeps a committed surface revision when finished-event reporting fails", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-surface-event-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    try {
+      const first = await createRuntimeSession(
+        sessionInput(
+          workspace,
+          sessionId,
+          new ResumeModel(),
+          collectingEventSink(),
+          "new",
+        ),
+        { loadMcpConfig: async () => undefined },
+      );
+      await first.dispose({ type: "tui_exit" });
+
+      const error = await createRuntimeSession(
+        sessionInput(
+          workspace,
+          sessionId,
+          new ResumeModel(),
+          collectingEventSink(),
+          "resume",
+          { systemPrompt: "system-v2" },
+        ),
+        {
+          loadMcpConfig: async () => undefined,
+          createEventSink: () => ({
+            name: "surface-finished-fault",
+            async append(event) {
+              if (event.type === "context.revision.finished") {
+                throw new Error("injected surface event failure");
+              }
+            },
+          }),
+        },
+      ).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(RuntimeEventAppendError);
+
+      const reopened = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+      });
+      try {
+        expect(reopened.loadContextSnapshot()).toMatchObject({
+          revision: { kind: "surface_refresh", revisionNumber: 2 },
+          surface: { systemPrompt: "system-v2" },
+        });
+        expect(reopened.readActiveMeasuredContextAnchor()).toBeUndefined();
+      } finally {
+        await reopened.close("tui_exit");
+      }
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -324,7 +527,7 @@ describe("RuntimeSession resume", () => {
         loadMcpConfig: async () => undefined,
       }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(SessionError);
-      expect((error as SessionError).code).toBe("SESSION_RUNTIME_MISMATCH");
+      expect((error as SessionError).code).toBe("SESSION_COMPATIBILITY_MISMATCH");
       expect(mismatchedModel.inputs).toHaveLength(0);
 
       const resumedModel = new ResumeModel();
@@ -373,6 +576,8 @@ function sessionInput(
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
     modelClient,
+    systemPrompt: newSession.systemPrompt,
+    projectInstruction: newSession.projectInstruction,
     presentationSinks: [sink],
     persistence: false as const,
   };
@@ -380,8 +585,6 @@ function sessionInput(
     ? {
         ...common,
         selection: { mode, sessionId },
-        systemPrompt: newSession.systemPrompt,
-        projectInstruction: newSession.projectInstruction,
       }
     : { ...common, selection: { mode, sessionId } };
 }

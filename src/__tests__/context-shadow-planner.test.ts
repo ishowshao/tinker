@@ -270,6 +270,7 @@ describe("SwapPlanner", () => {
     const input = {
       active: built.compiled,
       revision: built.revision,
+      surface: built.surface,
       activeOverrides: built.activeOverrides,
       canonical: built.canonical,
       activePrepared,
@@ -378,6 +379,7 @@ describe("SwapPlanner", () => {
       canonical: built.canonical,
       activeOverrides: built.activeOverrides,
       addedOverrides: plan.addedOverrides,
+      activeSurface: built.surface,
     });
     expect(projected.entries.map((entry) => entry.frameId)).toEqual(
       built.compiled.entries.map((entry) => entry.frameId),
@@ -396,6 +398,7 @@ describe("SwapPlanner", () => {
     const result = new SwapPlanner(model).plan({
       active: built.compiled,
       revision: built.revision,
+      surface: built.surface,
       activeOverrides: built.activeOverrides,
       canonical: built.canonical,
       activePrepared,
@@ -516,6 +519,10 @@ describe("runtime shadow isolation", () => {
 });
 
 class PreparingOnlyModel implements ModelClient {
+  readonly messageProtocol = Object.freeze({
+    adapter: "openai-chat" as const,
+    serializationVersion: "openai-chat-v1",
+  });
   prepareCount = 0;
   requestCount = 0;
   private readonly serializer = new OpenAIChatModelClient({
@@ -537,6 +544,10 @@ class PreparingOnlyModel implements ModelClient {
 }
 
 class RuntimeShadowModel implements ModelClient {
+  readonly messageProtocol = Object.freeze({
+    adapter: "openai-chat" as const,
+    serializationVersion: "openai-chat-v1",
+  });
   requestCount = 0;
   readonly requestedInputs: ModelRequestInput[] = [];
   private readonly inputs = new WeakMap<object, ModelRequestInput>();

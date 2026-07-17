@@ -23,16 +23,25 @@ import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import { estimatePromptSegments } from "../model/token-estimator";
 import type { AssistantMessage } from "../agent/types";
 import { ContextMeter } from "../agent/context-meter";
-import type {
-  IterationId,
-  MessageId,
-  ProtocolFrameId,
-  ContextRevisionId,
-  RuntimeIdFactory,
-  SessionId,
-  ToolCallId,
-  TurnId,
+import {
+  runtimeIdFactory,
+  type ContextSurfaceId,
+  type IterationId,
+  type MessageId,
+  type ProtocolFrameId,
+  type ContextRevisionId,
+  type RuntimeIdFactory,
+  type SessionId,
+  type ToolCallId,
+  type TurnId,
 } from "../ids/runtime-id";
+import { createContextSurface } from "../context/context-surface";
+import {
+  createSessionCompatibilityContract,
+  type SessionStore,
+} from "../session/session-store";
+import type { ProjectInstructionManifest } from "../instructions/project-instructions";
+import type { ToolDefinition } from "../tools/types";
 import {
   RecallHistoryError,
   type SessionHistoryReader,
@@ -44,6 +53,53 @@ export const TEST_CONTEXT_PROFILE: ModelContextProfile = {
 };
 
 export const TEST_CONTEXT_BUDGET = deriveModelContextBudget(TEST_CONTEXT_PROFILE);
+
+export function finalizeTestSessionStore(
+  store: SessionStore,
+  input: {
+    systemPrompt: string;
+    modelName?: string;
+    profileName?: string;
+    includeReasoningContent?: boolean;
+    projectInstruction?: ProjectInstructionManifest;
+    tools?: readonly ToolDefinition[];
+    modelClient?: Pick<ModelClient, "messageProtocol" | "prepare">;
+  },
+): void {
+  const modelName = input.modelName ?? "test-model";
+  const tools = input.tools ?? [];
+  const requestInput: ModelRequestInput = {
+    messages: [{ role: "system", content: input.systemPrompt }],
+    tools: [...tools],
+  };
+  const prepared =
+    input.modelClient?.prepare(requestInput) ?? prepareTestModelRequest(requestInput);
+  const surface = createContextSurface({
+    surfaceId: runtimeIdFactory.createContextSurfaceId(),
+    sessionId: store.sessionId,
+    systemPrompt: input.systemPrompt,
+    ...(input.projectInstruction === undefined
+      ? {}
+      : { projectInstruction: input.projectInstruction }),
+    toolDefinitions: tools,
+    prepared,
+    createdAt: new Date().toISOString(),
+  });
+  store.finalizeInitialization({
+    contract: createSessionCompatibilityContract({
+      modelName,
+      ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
+      includeReasoningContent: input.includeReasoningContent === true,
+      contextProfile: TEST_CONTEXT_PROFILE,
+      messageProtocol: input.modelClient?.messageProtocol ?? {
+        adapter: "fake",
+        serializationVersion: "test-model-v1",
+      },
+    }),
+    surface,
+    revisionId: runtimeIdFactory.createContextRevisionId(),
+  });
+}
 
 export function createTestHistoryReader(sessionId: SessionId): SessionHistoryReader {
   return Object.freeze({
@@ -66,6 +122,11 @@ export function createTestHistoryReader(sessionId: SessionId): SessionHistoryRea
 const preparedInputs = new WeakMap<object, ModelRequestInput>();
 
 export abstract class TestModelClient implements ModelClient {
+  readonly messageProtocol = Object.freeze({
+    adapter: "fake" as const,
+    serializationVersion: "test-model-v1",
+  });
+
   prepare(input: ModelRequestInput): PreparedModelRequest {
     return prepareTestModelRequest(input);
   }
@@ -270,6 +331,7 @@ export function deterministicIdFactory(prefix = "test"): RuntimeIdFactory {
   let message = 0;
   let frame = 0;
   let revision = 0;
+  let surface = 0;
   return {
     createSessionId: () => `${prefix}-session-${++session}` as SessionId,
     createTurnId: () => `${prefix}-turn-${++turn}` as TurnId,
@@ -279,6 +341,7 @@ export function deterministicIdFactory(prefix = "test"): RuntimeIdFactory {
     createProtocolFrameId: () => `${prefix}-frame-${++frame}` as ProtocolFrameId,
     createContextRevisionId: () =>
       `${prefix}-revision-${++revision}` as ContextRevisionId,
+    createContextSurfaceId: () => `${prefix}-surface-${++surface}` as ContextSurfaceId,
   };
 }
 

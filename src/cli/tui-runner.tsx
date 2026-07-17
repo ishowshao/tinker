@@ -61,6 +61,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
       sink: EventSink,
     ): Promise<RuntimeSession> => {
       const modelClient = createRunnerModelClient(sessionConfig);
+      const projectInstructions = await loadProjectInstructions(workspaceRoot);
       const common = {
         workspaceRoot,
         modelName: sessionConfig.modelName,
@@ -70,6 +71,12 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         contextProfile: sessionConfig.contextProfile,
         contextBudget: sessionConfig.contextBudget,
         modelClient,
+        systemPrompt: buildSystemPrompt({
+          workspaceRoot,
+          runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
+          projectInstructions,
+        }),
+        projectInstruction: projectInstructionManifest(projectInstructions),
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefinerFromEnv(sessionConfig),
       };
@@ -80,16 +87,9 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         });
       }
 
-      const projectInstructions = await loadProjectInstructions(workspaceRoot);
       return createRuntimeSession({
         ...common,
         selection: { mode, sessionId },
-        systemPrompt: buildSystemPrompt({
-          workspaceRoot,
-          runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
-          projectInstructions,
-        }),
-        projectInstruction: projectInstructionManifest(projectInstructions),
       });
     };
 

@@ -14,6 +14,11 @@ import {
   canonicalSequenceHash,
   renderedMessageHash,
 } from "../context/compiled-context-hash";
+import {
+  contextSurfaceChangeManifestHash,
+  contextSurfaceChanges,
+  createContextSurface,
+} from "../context/context-surface";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
 import { swapOnlyPolicyV1 } from "../context/context-policy";
 import { SwapPlanner } from "../context/swap-planner";
@@ -27,13 +32,14 @@ import type {
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import {
   SessionStore,
-  createRuntimeContract,
+  type CommitSurfaceRefreshFaultStage,
   type CommitSwapRevisionFaultStage,
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import type { ToolDefinition } from "../tools/types";
 import {
   collectingEventSink,
+  finalizeTestSessionStore,
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
   TestModelClient,
@@ -232,6 +238,7 @@ describe("I2 deterministic context compaction", () => {
       const planning = new SwapPlanner(fixture.model).plan({
         active: built.compiled,
         revision: built.revision,
+        surface: built.surface,
         activeOverrides: built.activeOverrides,
         canonical: built.canonical,
         activePrepared: prepared,
@@ -250,6 +257,7 @@ describe("I2 deterministic context compaction", () => {
         canonical: built.canonical,
         activeOverrides: built.activeOverrides,
         addedOverrides: plan.addedOverrides,
+        activeSurface: built.surface,
       });
       fixture.store.writeMeasuredContextAnchor({
         totalTokens: 30,
@@ -313,6 +321,122 @@ describe("I2 deterministic context compaction", () => {
         ).toEqual({ count: 0 });
         inspection.close();
       }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("rolls back surface refresh at every fault stage and inherits the active swap view", async () => {
+    const fixture = await createFixture("tinker-surface-rollback-");
+    try {
+      appendReadTurn(fixture, `surface-source-${"s".repeat(10_000)}`);
+      appendTextTurns(fixture, 8);
+      const compacted = await fixture.manager.compact({
+        kind: "benchmark_forced",
+        targetTokens: 0,
+      });
+      expect(compacted).toMatchObject({
+        status: "compacted",
+        revisionNumber: 2,
+        totalOverrideCount: 1,
+      });
+
+      const base = fixture.store.loadContextSnapshot();
+      const canonicalBefore = readCanonicalStorage(fixture.store.databasePath);
+      const prepared = fixture.model.prepare({
+        messages: [{ role: "system", content: "system-v2" }],
+        tools: [...tools],
+      });
+      const surface = createContextSurface({
+        surfaceId: runtimeIdFactory.createContextSurfaceId(),
+        sessionId: fixture.sessionId,
+        systemPrompt: "system-v2",
+        toolDefinitions: tools,
+        prepared,
+        createdAt: "2026-07-17T00:00:00.000Z",
+      });
+      const compiler = new ContextRevisionCompiler();
+      const candidate = compiler.compileProspective({
+        active: compiler.compileActive(base),
+        canonical: base.canonical,
+        activeOverrides: base.activeOverrides,
+        addedOverrides: [],
+        activeSurface: base.surface,
+        surface,
+      });
+      const changes = contextSurfaceChanges(base.surface, surface);
+      const commitInput = {
+        expectedBaseRevisionId: base.revision.revisionId,
+        expectedBaseRevisionNumber: base.revision.revisionNumber,
+        expectedCanonicalThroughOrdinal: base.canonical.messages.length,
+        expectedBaseOverrideManifestSha256: base.revision.overrideManifestSha256,
+        surface,
+        changes,
+        changeManifestSha256: contextSurfaceChangeManifestHash(changes),
+        canonicalSequenceSha256: canonicalSequenceHash(base.canonical),
+        renderedMessageSha256: renderedMessageHash(candidate.entries),
+      } as const;
+      fixture.store.writeMeasuredContextAnchor(measuredAnchor());
+
+      const faultStages: readonly CommitSurfaceRefreshFaultStage[] = [
+        "before_surface_insert",
+        "after_surface_insert",
+        "after_revision_insert",
+        "after_measurement_delete",
+        "after_active_update",
+      ];
+      for (const faultStage of faultStages) {
+        expect(() =>
+          fixture.store.commitSurfaceRefresh(
+            {
+              ...commitInput,
+              revisionId: runtimeIdFactory.createContextRevisionId(),
+            },
+            {
+              faultInjector: (stage) => {
+                if (stage === faultStage) {
+                  throw new Error(`injected failure at ${faultStage}`);
+                }
+              },
+            },
+          ),
+        ).toThrow("commit_context_surface");
+
+        const after = fixture.store.loadContextSnapshot();
+        expect(after.revision.revisionId).toBe(base.revision.revisionId);
+        expect(after.surface.surfaceId).toBe(base.surface.surfaceId);
+        expect(after.activeOverrides).toEqual(base.activeOverrides);
+        expect(fixture.store.readActiveMeasuredContextAnchor()).toBeDefined();
+        const inspection = new Database(fixture.store.databasePath, {
+          readonly: true,
+        });
+        expect(
+          inspection.query("SELECT COUNT(*) AS count FROM context_surfaces").get(),
+        ).toEqual({ count: 1 });
+        expect(
+          inspection.query("SELECT COUNT(*) AS count FROM context_revisions").get(),
+        ).toEqual({ count: 2 });
+        inspection.close();
+      }
+
+      const committed = fixture.store.commitSurfaceRefresh({
+        ...commitInput,
+        revisionId: runtimeIdFactory.createContextRevisionId(),
+      });
+      expect(committed).toMatchObject({
+        kind: "surface_refresh",
+        revisionNumber: 3,
+        totalOverrideCount: 1,
+        overrideManifestSha256: base.revision.overrideManifestSha256,
+      });
+      const afterCommit = fixture.store.loadContextSnapshot();
+      expect(afterCommit.surface).toEqual(surface);
+      expect(afterCommit.activeOverrides).toEqual(base.activeOverrides);
+      expect(fixture.store.readActiveMeasuredContextAnchor()).toBeUndefined();
+      expect(readCanonicalStorage(fixture.store.databasePath)).toEqual(canonicalBefore);
+      expect(
+        fixture.ledger.buildCommittedModelRequest(tools).request.messages[0],
+      ).toEqual({ role: "system", content: "system-v2" });
     } finally {
       await fixture.cleanup();
     }
@@ -580,19 +704,13 @@ async function createFixture(prefix: string, options: { meter?: ContextMeter } =
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
   });
-  store.finalizeRuntimeContract(
-    createRuntimeContract({
-      modelName: "test-model",
-      includeReasoningContent: false,
-      contextProfile: TEST_CONTEXT_PROFILE,
-      contextBudget: TEST_CONTEXT_BUDGET,
-      systemPrompt: "system",
-      toolSchemaSha256: "a".repeat(64),
-      requestConfigSha256: "b".repeat(64),
-    }),
-  );
-  const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
   const model = new PreparingModel();
+  finalizeTestSessionStore(store, {
+    systemPrompt: "system",
+    tools,
+    modelClient: model,
+  });
+  const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
   const meter = options.meter ?? new ContextMeter(TEST_CONTEXT_BUDGET);
   const usages: ReturnType<ContextMeter["measure"]>[] = [];
   const manager = new ContextManager({

@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 5;
+export const SESSION_SCHEMA_VERSION = 6;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 5),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 6),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -37,10 +37,9 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       project_instruction_file TEXT CHECK (project_instruction_file IS NULL OR project_instruction_file IN ('AGENTS.md', 'CLAUDE.md')),
       project_instruction_byte_length INTEGER CHECK (project_instruction_byte_length IS NULL OR project_instruction_byte_length >= 1),
       project_instruction_sha256 TEXT CHECK (project_instruction_sha256 IS NULL OR length(project_instruction_sha256) = 64),
-      tool_schema_sha256 TEXT,
-      runtime_contract_json TEXT,
-      runtime_contract_sha256 TEXT,
-      active_revision_id TEXT NOT NULL,
+      session_compatibility_json TEXT,
+      session_compatibility_sha256 TEXT,
+      active_revision_id TEXT,
       next_turn_number INTEGER NOT NULL CHECK (next_turn_number >= 1),
       next_event_sequence INTEGER NOT NULL CHECK (next_event_sequence >= 1),
       open_count INTEGER NOT NULL CHECK (open_count >= 1),
@@ -51,10 +50,13 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       last_close_reason TEXT CHECK (last_close_reason IS NULL OR last_close_reason IN (
         'oneshot_complete', 'tui_exit', 'session_switch', 'runner_failed', 'initialization_failed'
       )),
-      CHECK ((runtime_contract_json IS NULL) = (runtime_contract_sha256 IS NULL)),
+      CHECK ((session_compatibility_json IS NULL) = (session_compatibility_sha256 IS NULL)),
       CHECK ((project_instruction_file IS NULL) = (project_instruction_byte_length IS NULL)),
       CHECK ((project_instruction_file IS NULL) = (project_instruction_sha256 IS NULL)),
-      CHECK ((initialization_state = 'creating') OR runtime_contract_json IS NOT NULL)
+      CHECK (
+        (initialization_state = 'creating' AND session_compatibility_json IS NULL AND active_revision_id IS NULL) OR
+        (initialization_state = 'ready' AND session_compatibility_json IS NOT NULL AND active_revision_id IS NOT NULL)
+      )
     ) STRICT`,
   },
   {
@@ -188,11 +190,31 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       CHECK (raw_json IS NULL OR json_valid(raw_json)),
       CHECK (
         (completion_kind = 'returned' AND raw_json IS NOT NULL AND raw_sha256 IS NOT NULL AND
-          observation_format = 'tool-observation-v2' AND synthetic_reason IS NULL AND synthetic_detail IS NULL) OR
+          observation_format IS NOT NULL AND length(observation_format) > 0 AND synthetic_reason IS NULL AND synthetic_detail IS NULL) OR
         (completion_kind = 'synthetic' AND raw_json IS NULL AND raw_sha256 IS NULL AND
           observation_format IS NULL AND synthetic_reason IS NOT NULL)
       ),
       CHECK ((synthetic_reason = 'failed_active') = (synthetic_detail IS NOT NULL))
+    ) STRICT`,
+  },
+  {
+    type: "table",
+    name: "context_surfaces",
+    sql: `CREATE TABLE context_surfaces (
+      surface_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      system_prompt TEXT NOT NULL CHECK (length(system_prompt) > 0),
+      system_prompt_sha256 TEXT NOT NULL CHECK (length(system_prompt_sha256) = 64),
+      project_instruction_json TEXT CHECK (project_instruction_json IS NULL OR json_valid(project_instruction_json)),
+      tool_definitions_json TEXT NOT NULL CHECK (json_valid(tool_definitions_json)),
+      tool_definitions_sha256 TEXT NOT NULL CHECK (length(tool_definitions_sha256) = 64),
+      tool_schema_sha256 TEXT NOT NULL CHECK (length(tool_schema_sha256) = 64),
+      request_config_sha256 TEXT NOT NULL CHECK (length(request_config_sha256) = 64),
+      request_max_output_tokens INTEGER NOT NULL CHECK (request_max_output_tokens >= 1),
+      surface_sha256 TEXT NOT NULL CHECK (length(surface_sha256) = 64),
+      created_at TEXT NOT NULL,
+      UNIQUE (session_id, surface_id),
+      FOREIGN KEY (session_id) REFERENCES session_meta(session_id)
     ) STRICT`,
   },
   {
@@ -203,7 +225,9 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       session_id TEXT NOT NULL,
       revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
       parent_revision_id TEXT,
-      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only')),
+      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only', 'surface_refresh')),
+      surface_id TEXT NOT NULL,
+      surface_sha256 TEXT NOT NULL CHECK (length(surface_sha256) = 64),
       keep_from_ordinal INTEGER NOT NULL CHECK (keep_from_ordinal = 1),
       source_through_ordinal INTEGER NOT NULL CHECK (source_through_ordinal >= 1),
       added_override_count INTEGER NOT NULL CHECK (added_override_count >= 0),
@@ -214,19 +238,25 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       policy_version TEXT,
       renderer_format TEXT,
       plan_sha256 TEXT CHECK (plan_sha256 IS NULL OR length(plan_sha256) = 64),
+      change_manifest_sha256 TEXT CHECK (change_manifest_sha256 IS NULL OR length(change_manifest_sha256) = 64),
       created_at TEXT NOT NULL,
       UNIQUE (session_id, revision_number),
       FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
       FOREIGN KEY (parent_revision_id) REFERENCES context_revisions(revision_id),
+      FOREIGN KEY (session_id, surface_id) REFERENCES context_surfaces(session_id, surface_id),
       CHECK (
         (kind = 'initial_full' AND revision_number = 1 AND parent_revision_id IS NULL AND
           source_through_ordinal = 1 AND added_override_count = 0 AND
           total_override_count = 0 AND policy_version IS NULL AND
-          renderer_format IS NULL AND plan_sha256 IS NULL) OR
+          renderer_format IS NULL AND plan_sha256 IS NULL AND change_manifest_sha256 IS NULL) OR
         (kind = 'swap_only' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
           added_override_count >= 1 AND total_override_count >= added_override_count AND
           policy_version = 'swap-only-v1' AND
-          renderer_format = 'swap-observation-v1' AND plan_sha256 IS NOT NULL)
+          renderer_format = 'swap-observation-v1' AND plan_sha256 IS NOT NULL AND
+          change_manifest_sha256 IS NULL) OR
+        (kind = 'surface_refresh' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
+          added_override_count = 0 AND policy_version IS NULL AND renderer_format IS NULL AND
+          plan_sha256 IS NULL AND change_manifest_sha256 IS NOT NULL)
       )
     ) STRICT`,
   },
@@ -341,6 +371,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
   ...immutableTriggers("messages"),
   ...immutableTriggers("tool_results"),
+  ...immutableTriggers("context_surfaces"),
   ...immutableTriggers("context_revisions"),
   ...immutableTriggers("context_overrides"),
   {
@@ -350,16 +381,31 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       BEFORE INSERT ON context_revisions
       WHEN NOT (
         NEW.session_id = (SELECT session_id FROM session_meta WHERE singleton = 1) AND
-        ((NEW.kind = 'initial_full' AND
-          NEW.revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
-          NOT EXISTS (SELECT 1 FROM context_revisions WHERE session_id = NEW.session_id)) OR
+        ((NEW.kind = 'initial_full' AND NEW.revision_number = 1 AND
+          (SELECT initialization_state FROM session_meta WHERE singleton = 1) = 'creating' AND
+          (SELECT active_revision_id FROM session_meta WHERE singleton = 1) IS NULL AND
+          NOT EXISTS (SELECT 1 FROM context_revisions WHERE session_id = NEW.session_id) AND
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_surfaces WHERE surface_id = NEW.surface_id)) OR
          (NEW.kind = 'swap_only' AND
           NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
           NEW.revision_number = 1 + COALESCE((
             SELECT revision_number FROM context_revisions
             WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
           ), 0) AND
-          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0)))
+          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          NEW.surface_id = (SELECT surface_id FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)) OR
+         (NEW.kind = 'surface_refresh' AND
+          NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
+          NEW.revision_number = 1 + COALESCE((
+            SELECT revision_number FROM context_revisions
+            WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
+          ), 0) AND
+          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          NEW.surface_id <> (SELECT surface_id FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_surfaces WHERE surface_id = NEW.surface_id) AND
+          NEW.total_override_count = (SELECT total_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.override_manifest_sha256 = (SELECT override_manifest_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)))
       )
       BEGIN SELECT RAISE(ABORT, 'invalid context revision insert'); END`,
   },
@@ -519,10 +565,16 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
         NEW.open_count >= OLD.open_count AND
         ((OLD.initialization_state = 'creating' AND NEW.initialization_state IN ('creating', 'ready')) OR
          (OLD.initialization_state = 'ready' AND NEW.initialization_state = 'ready')) AND
-        (OLD.tool_schema_sha256 IS NULL OR NEW.tool_schema_sha256 = OLD.tool_schema_sha256) AND
-        (OLD.runtime_contract_json IS NULL OR NEW.runtime_contract_json = OLD.runtime_contract_json) AND
-        (OLD.runtime_contract_sha256 IS NULL OR NEW.runtime_contract_sha256 = OLD.runtime_contract_sha256) AND
-        (OLD.active_revision_id = NEW.active_revision_id OR EXISTS (
+        (OLD.session_compatibility_json IS NULL OR NEW.session_compatibility_json = OLD.session_compatibility_json) AND
+        (OLD.session_compatibility_sha256 IS NULL OR NEW.session_compatibility_sha256 = OLD.session_compatibility_sha256) AND
+        ((OLD.active_revision_id IS NULL AND NEW.active_revision_id IS NOT NULL AND
+          OLD.initialization_state = 'creating' AND NEW.initialization_state = 'ready' AND
+          EXISTS (
+            SELECT 1 FROM context_revisions initial
+            WHERE initial.revision_id = NEW.active_revision_id
+              AND initial.session_id = OLD.session_id
+              AND initial.kind = 'initial_full'
+          )) OR OLD.active_revision_id = NEW.active_revision_id OR EXISTS (
           SELECT 1
           FROM context_revisions previous
           JOIN context_revisions next
@@ -532,12 +584,19 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           WHERE previous.revision_id = OLD.active_revision_id
             AND next.revision_id = NEW.active_revision_id
             AND next.session_id = OLD.session_id
-            AND next.kind = 'swap_only'
+            AND next.kind IN ('swap_only', 'surface_refresh')
             AND next.added_override_count = (
               SELECT COUNT(*) FROM context_overrides
               WHERE introduced_revision_id = next.revision_id
             )
-            AND next.total_override_count = previous.total_override_count + next.added_override_count
+            AND ((next.kind = 'swap_only' AND
+                  next.total_override_count = previous.total_override_count + next.added_override_count AND
+                  next.surface_id = previous.surface_id) OR
+                 (next.kind = 'surface_refresh' AND
+                  next.total_override_count = previous.total_override_count AND
+                  next.added_override_count = 0 AND
+                  next.override_manifest_sha256 = previous.override_manifest_sha256 AND
+                  next.surface_id <> previous.surface_id))
             AND NOT EXISTS (SELECT 1 FROM context_measurement_state)
         ))
       )
@@ -545,7 +604,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V5_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V6_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -575,7 +634,14 @@ export function createSessionSchema(database: Database): void {
   database.exec(`PRAGMA application_id = ${SESSION_APPLICATION_ID}`);
   database.exec(`PRAGMA user_version = ${SESSION_SCHEMA_VERSION}`);
   for (const definition of schemaDefinitions) {
-    database.exec(definition.sql);
+    try {
+      database.exec(definition.sql);
+    } catch (error) {
+      throw new Error(
+        `Failed to create session schema ${definition.type} ${definition.name}.`,
+        { cause: error },
+      );
+    }
   }
 }
 
@@ -648,7 +714,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v5.",
+      "Session FTS configuration does not match schema v6.",
       { sessionId },
     );
   }

@@ -179,6 +179,7 @@ describe("runAgent", () => {
         sessionId: runtimeSession.sessionId,
         systemPrompt: "system",
         idFactory: deterministicIdFactory("agent-loop"),
+        initialToolDefinitions: tooling.registry.definitions(),
       });
       const pendingTurn = ledger.beginTurn({
         turn,
@@ -234,6 +235,7 @@ describe("runAgent", () => {
       sessionId: runtimeSession.sessionId,
       systemPrompt: "system",
       idFactory,
+      initialToolDefinitions: tooling.registry.definitions(),
     });
     const previousTurn = {
       sessionId: runtimeSession.sessionId,
@@ -260,8 +262,9 @@ describe("runAgent", () => {
       finalText: "First prompt answered.",
       lastIteration: previousIteration,
     });
-    const initialMessages: AgentMessage[] = ledger.buildCommittedModelRequest([])
-      .request.messages;
+    const initialMessages: AgentMessage[] = ledger.buildCommittedModelRequest(
+      tooling.registry.definitions(),
+    ).request.messages;
     const secondTurn = ledger.beginTurn({
       turn,
       userPrompt: "Second prompt",
@@ -299,7 +302,10 @@ describe("runAgent", () => {
       { role: "user", content: "Second prompt" },
     ]);
     secondTurn.finish(result);
-    expect(ledger.buildCommittedModelRequest([]).request.messages).toEqual([
+    expect(
+      ledger.buildCommittedModelRequest(tooling.registry.definitions()).request
+        .messages,
+    ).toEqual([
       ...initialMessages,
       { role: "user", content: "Second prompt" },
       { role: "assistant", content: "Second prompt answered." },
@@ -325,6 +331,7 @@ describe("runAgent", () => {
       sessionId: identity.runtimeSession.sessionId,
       systemPrompt: "system",
       idFactory: deterministicIdFactory("barrier"),
+      initialToolDefinitions: registry.definitions(),
       committer: {
         commit(mutation) {
           if (mutation.kind === "commit_tool_completions") {
@@ -379,6 +386,7 @@ describe("runAgent", () => {
       sessionId: identity.runtimeSession.sessionId,
       systemPrompt: "system",
       idFactory: deterministicIdFactory("fatal-recall"),
+      initialToolDefinitions: registry.definitions(),
     });
     const pending = ledger.beginTurn({
       turn: identity.turn,
@@ -426,6 +434,7 @@ describe("runAgent", () => {
       sessionId: identity.runtimeSession.sessionId,
       systemPrompt: "system",
       idFactory: deterministicIdFactory("ordinary-recall"),
+      initialToolDefinitions: registry.definitions(),
     });
     const pending = ledger.beginTurn({
       turn: identity.turn,

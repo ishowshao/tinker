@@ -3,6 +3,7 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatMessageSource } from "../src/context/context-source";
+import { createContextSurface } from "../src/context/context-surface";
 import { contentHash } from "../src/context/protocol-frame";
 import { runtimeIdFactory, type MessageId } from "../src/ids/runtime-id";
 import {
@@ -18,7 +19,10 @@ import {
   verifySessionSchema,
   verifySqliteIntegrity,
 } from "../src/session/session-schema";
-import { createRuntimeContract, SessionStore } from "../src/session/session-store";
+import {
+  createSessionCompatibilityContract,
+  SessionStore,
+} from "../src/session/session-store";
 
 const benchmarkSystemPrompt = "Recall benchmark system prompt";
 const benchmarkModelName = "g0-recall-benchmark-model";
@@ -76,18 +80,32 @@ export async function runRecallBenchmark(
       systemPrompt: benchmarkSystemPrompt,
       idFactory: runtimeIdFactory,
     });
-    bootstrap.finalizeRuntimeContract(
-      createRuntimeContract({
+    const surface = createContextSurface({
+      surfaceId: runtimeIdFactory.createContextSurfaceId(),
+      sessionId,
+      systemPrompt: benchmarkSystemPrompt,
+      toolDefinitions: [],
+      prepared: {
+        requestConfigHash: sha256("g0-recall-benchmark-request"),
+        requestMaxOutputTokens: benchmarkContextBudget.requestMaxOutputTokens,
+        toolSchemaHash: sha256(""),
+      },
+      createdAt: new Date().toISOString(),
+    });
+    bootstrap.finalizeInitialization({
+      contract: createSessionCompatibilityContract({
         modelName: benchmarkModelName,
         profileName: "g0-recall-benchmark",
         includeReasoningContent: false,
         contextProfile: benchmarkContextProfile,
-        contextBudget: benchmarkContextBudget,
-        systemPrompt: benchmarkSystemPrompt,
-        toolSchemaSha256: sha256("g0-recall-benchmark-tools"),
-        requestConfigSha256: sha256("g0-recall-benchmark-request"),
+        messageProtocol: {
+          adapter: "fake",
+          serializationVersion: "g0-recall-benchmark-v1",
+        },
       }),
-    );
+      surface,
+      revisionId: runtimeIdFactory.createContextRevisionId(),
+    });
     const databasePath = bootstrap.databasePath;
     await bootstrap.close("tui_exit");
 

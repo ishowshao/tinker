@@ -37,7 +37,7 @@ import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V5_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V6_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -307,7 +307,7 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 5 ||
+      database.schemaVersion !== 6 ||
       !database.schemaFingerprintMatches ||
       database.contextRevisionCount !== compactionResults.length + 1 ||
       database.contextOverrideCount < compactionResults.length ||
@@ -403,6 +403,10 @@ export async function runLongSessionBenchmark(
 }
 
 class BenchmarkModelClient implements ModelClient {
+  readonly messageProtocol = Object.freeze({
+    adapter: "openai-chat" as const,
+    serializationVersion: "openai-chat-v1",
+  });
   readonly prepareDurations: number[] = [];
   maxPromptSegmentCount = 0;
   requestCount = 0;
@@ -861,6 +865,7 @@ async function createBenchmarkSession(input: {
     contextProfile: benchmarkContextProfile,
     contextBudget: benchmarkContextBudget,
     modelClient: input.model,
+    systemPrompt: benchmarkSystemPrompt,
     presentationSinks: [input.projection],
   };
   const sessionInput: CreateRuntimeSessionInput =
@@ -868,7 +873,6 @@ async function createBenchmarkSession(input: {
       ? {
           ...common,
           selection: { mode: "new", sessionId: input.sessionId },
-          systemPrompt: benchmarkSystemPrompt,
         }
       : {
           ...common,
@@ -1086,7 +1090,7 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V5_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V6_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),

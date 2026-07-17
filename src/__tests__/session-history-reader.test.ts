@@ -8,9 +8,9 @@ import { formatMessageSource } from "../context/context-source";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
 import { RecallHistoryError } from "../session/session-history-reader";
-import { SessionStore, createRuntimeContract } from "../session/session-store";
+import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
-import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
+import { finalizeTestSessionStore } from "./test-runtime";
 
 describe("SessionHistoryReader", () => {
   test("gets exact allowlisted content with stable UTF-8 byte pages", async () => {
@@ -288,7 +288,7 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
     systemPrompt: "private system prompt",
     idFactory: runtimeIdFactory,
   });
-  store.finalizeRuntimeContract(testContract());
+  finalizeTestSessionStore(store, { systemPrompt: "private system prompt" });
   const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
 
   const turn: TurnIdentity = {
@@ -465,18 +465,6 @@ function appendTextTurn(
     status: "completed",
     finalText: assistantText,
     lastIteration: iteration,
-  });
-}
-
-function testContract() {
-  return createRuntimeContract({
-    modelName: "test-model",
-    includeReasoningContent: false,
-    contextProfile: TEST_CONTEXT_PROFILE,
-    contextBudget: TEST_CONTEXT_BUDGET,
-    systemPrompt: "private system prompt",
-    toolSchemaSha256: "a".repeat(64),
-    requestConfigSha256: "b".repeat(64),
   });
 }
 

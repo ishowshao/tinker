@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
 import type {
   ContextRevisionId,
+  ContextSurfaceId,
   IterationId,
   MessageId,
   ProtocolFrameId,
@@ -22,11 +23,12 @@ import type {
   ToolCallId,
   TurnId,
 } from "../ids/runtime-id";
-import type {
-  ModelContextBudget,
-  ModelContextProfile,
+import {
+  createModelContextProfile,
+  type ModelContextProfile,
 } from "../model/model-context-profile";
-import type { ToolRawResult } from "../tools/types";
+import type { ModelMessageProtocol } from "../model/model-client";
+import type { ToolDefinition, ToolRawResult } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import {
   ContextProtocolError,
@@ -46,7 +48,7 @@ import {
   SWAP_OBSERVATION_FORMAT,
 } from "../context/context-swap-renderer";
 import {
-  TOOL_OBSERVATION_FORMAT,
+  SUPPORTED_TOOL_OBSERVATION_FORMATS,
   contentHash,
   immutableCanonicalClone,
   immutableRecord,
@@ -58,10 +60,17 @@ import {
   type ToolCompletion,
   type ToolResultRecord,
 } from "../context/protocol-frame";
+import {
+  contextSurfaceChangeManifestHash,
+  contextSurfaceChanges,
+  validateStoredContextSurface,
+  type ContextSurfaceChanges,
+  type StoredContextSurfaceV6,
+} from "../context/context-surface";
 import type {
-  StoredContextRevisionV5,
-  StoredContextSnapshotV5,
-  StoredSwapOverrideV5,
+  StoredContextRevisionV6,
+  StoredContextSnapshotV6,
+  StoredSwapOverrideV6,
   SwapOverride,
 } from "../context/context-revision";
 import type { IterationIdentity, ToolCall } from "../agent/types";
@@ -79,7 +88,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V5_FINGERPRINT,
+  SESSION_SCHEMA_V6_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -89,21 +98,16 @@ import {
   verifySqliteIntegrity,
 } from "./session-schema";
 
-export type RuntimeContractV1 = {
-  version: 1;
+export type SessionCompatibilityContract = {
   modelName: string;
   profileName?: string;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
-  contextBudget: ModelContextBudget;
-  systemPromptSha256: string;
-  toolSchemaSha256: string;
-  requestConfigSha256: string;
-  observationFormat: typeof TOOL_OBSERVATION_FORMAT;
+  messageProtocol: ModelMessageProtocol;
 };
 
-export type StoredSessionMetaV5 = {
-  schemaVersion: 5;
+export type StoredSessionMetaV6 = {
+  schemaVersion: 6;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -111,10 +115,9 @@ export type StoredSessionMetaV5 = {
   modelName: string;
   systemPromptSha256: string;
   projectInstruction?: ProjectInstructionManifest;
-  toolSchemaSha256: string | null;
-  runtimeContractJson: string | null;
-  runtimeContractSha256: string | null;
-  activeRevisionId: ContextRevisionId;
+  sessionCompatibilityJson: string | null;
+  sessionCompatibilitySha256: string | null;
+  activeRevisionId: ContextRevisionId | null;
   nextTurnNumber: number;
   nextEventSequence: number;
   openCount: number;
@@ -131,7 +134,7 @@ export type StoredSessionMetaV5 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV5["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV6["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -170,6 +173,30 @@ export type CommitSwapRevisionFaultStage =
 
 export type CommitSwapRevisionOptions = {
   faultInjector?: (stage: CommitSwapRevisionFaultStage) => void;
+};
+
+export type CommitSurfaceRefreshInput = {
+  revisionId: ContextRevisionId;
+  expectedBaseRevisionId: ContextRevisionId;
+  expectedBaseRevisionNumber: number;
+  expectedCanonicalThroughOrdinal: number;
+  expectedBaseOverrideManifestSha256: string;
+  surface: StoredContextSurfaceV6;
+  changes: ContextSurfaceChanges;
+  changeManifestSha256: string;
+  canonicalSequenceSha256: string;
+  renderedMessageSha256: string;
+};
+
+export type CommitSurfaceRefreshFaultStage =
+  | "before_surface_insert"
+  | "after_surface_insert"
+  | "after_revision_insert"
+  | "after_measurement_delete"
+  | "after_active_update";
+
+export type CommitSurfaceRefreshOptions = {
+  faultInjector?: (stage: CommitSurfaceRefreshFaultStage) => void;
 };
 
 export type CreateNewSessionStoreInput = {
@@ -254,21 +281,14 @@ export class SessionStore implements SessionLedgerCommitter {
       createSessionSchema(database);
       verifySessionSchema(database, input.sessionId);
 
-      const revisionId = input.idFactory.createContextRevisionId();
       const initialLedger = new InMemorySessionLedger({
         sessionId: input.sessionId,
         systemPrompt: input.systemPrompt,
         idFactory: input.idFactory,
-        initialRevisionId: revisionId,
         clock,
       });
       const initialView = initialLedger.snapshot({ fullIntegrity: true });
       const createdAt = clock();
-      const initialRevision = createInitialContextRevision({
-        revisionId,
-        canonical: initialView,
-        createdAt,
-      });
       runTransaction(database, () => {
         database!
           .query(
@@ -277,14 +297,14 @@ export class SessionStore implements SessionLedgerCommitter {
             session_id, workspace_root, model_name, system_prompt_sha256,
             project_instruction_file, project_instruction_byte_length,
             project_instruction_sha256,
-            tool_schema_sha256, runtime_contract_json, runtime_contract_sha256,
+            session_compatibility_json, session_compatibility_sha256,
             active_revision_id, next_turn_number, next_event_sequence, open_count,
             created_at, updated_at, last_opened_at, last_closed_at, last_close_reason
-          ) VALUES (1, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, 1, 1, 1, ?, ?, ?, NULL, NULL)`,
+          ) VALUES (1, ?, ?, 'creating', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 1, 1, ?, ?, ?, NULL, NULL)`,
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V5_FINGERPRINT,
+            SESSION_SCHEMA_V6_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -292,7 +312,6 @@ export class SessionStore implements SessionLedgerCommitter {
             input.projectInstruction?.path ?? null,
             input.projectInstruction?.byteLength ?? null,
             input.projectInstruction?.sha256 ?? null,
-            revisionId,
             createdAt,
             createdAt,
             createdAt,
@@ -302,24 +321,6 @@ export class SessionStore implements SessionLedgerCommitter {
           database!,
           requireItem(initialView.messages, 0, "system message"),
         );
-        database!
-          .query(
-            `INSERT INTO context_revisions (
-            revision_id, session_id, revision_number, parent_revision_id, kind,
-            keep_from_ordinal, source_through_ordinal, added_override_count,
-            total_override_count, override_manifest_sha256,
-            canonical_sequence_sha256, rendered_message_sha256, policy_version,
-            renderer_format, plan_sha256, created_at
-          ) VALUES (?, ?, 1, NULL, 'initial_full', 1, 1, 0, 0, ?, ?, ?, NULL, NULL, NULL, ?)`,
-          )
-          .run(
-            revisionId,
-            input.sessionId,
-            initialRevision.overrideManifestSha256,
-            initialRevision.canonicalSequenceSha256,
-            initialRevision.renderedMessageSha256,
-            createdAt,
-          );
       });
 
       const store = new SessionStore(database, lease, {
@@ -330,7 +331,7 @@ export class SessionStore implements SessionLedgerCommitter {
         clock,
       });
       await store.correctDatabaseModes();
-      store.validateAll({ allowOpenTail: false });
+      store.validateCreatingState();
       verifyRecallIndex(database, input.sessionId);
       return store;
     } catch (error) {
@@ -394,7 +395,11 @@ export class SessionStore implements SessionLedgerCommitter {
           { sessionId: input.sessionId },
         );
       }
-      store.validateAll({ allowOpenTail: true });
+      if (meta.initializationState === "creating") {
+        store.validateCreatingState();
+      } else {
+        store.validateAll({ allowOpenTail: true });
+      }
       try {
         verifyRecallIndex(database, input.sessionId);
       } catch (error) {
@@ -554,46 +559,106 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  finalizeRuntimeContract(contract: RuntimeContractV1): void {
+  finalizeInitialization(input: {
+    contract: SessionCompatibilityContract;
+    surface: StoredContextSurfaceV6;
+    revisionId: ContextRevisionId;
+  }): void {
     this.requireOpen();
+    const contract = normalizeSessionCompatibilityContract(input.contract);
     const json = stableJsonStringify(contract);
     const contractSha256 = sha256(json);
     const now = this.clock();
     try {
       runTransaction(this.database, () => {
+        const meta = this.readMeta();
+        if (
+          meta.initializationState !== "creating" ||
+          meta.activeRevisionId !== null ||
+          input.surface.sessionId !== this.sessionId
+        ) {
+          throw new Error("Session initialization base is invalid.");
+        }
+        validateStoredContextSurface(input.surface);
+        const canonical = this.loadProtocolView();
+        const creationPrompt = this.readCreationSystemPrompt();
+        if (input.surface.systemPrompt !== creationPrompt) {
+          throw new Error(
+            "Initial context surface must match the creation system prompt.",
+          );
+        }
+        const revision = createInitialContextRevision({
+          revisionId: input.revisionId,
+          canonical,
+          surface: input.surface,
+          createdAt: now,
+        });
+        insertContextSurface(this.database, input.surface);
+        this.database
+          .query(
+            `INSERT INTO context_revisions (
+              revision_id, session_id, revision_number, parent_revision_id, kind,
+              surface_id, surface_sha256, keep_from_ordinal,
+              source_through_ordinal, added_override_count, total_override_count,
+              override_manifest_sha256, canonical_sequence_sha256,
+              rendered_message_sha256, policy_version, renderer_format,
+              plan_sha256, change_manifest_sha256, created_at
+            ) VALUES (?, ?, 1, NULL, 'initial_full', ?, ?, 1, 1, 0, 0, ?, ?, ?, NULL, NULL, NULL, NULL, ?)`,
+          )
+          .run(
+            revision.revisionId,
+            this.sessionId,
+            revision.surfaceId,
+            revision.surfaceSha256,
+            revision.overrideManifestSha256,
+            revision.canonicalSequenceSha256,
+            revision.renderedMessageSha256,
+            revision.createdAt,
+          );
         const updated = this.database
           .query(
             `UPDATE session_meta
-           SET initialization_state = 'ready', tool_schema_sha256 = ?,
-               runtime_contract_json = ?, runtime_contract_sha256 = ?, updated_at = ?
+           SET initialization_state = 'ready', session_compatibility_json = ?,
+               session_compatibility_sha256 = ?, active_revision_id = ?, updated_at = ?
            WHERE singleton = 1 AND initialization_state = 'creating'
-             AND runtime_contract_json IS NULL`,
+             AND session_compatibility_json IS NULL AND active_revision_id IS NULL`,
           )
-          .run(contract.toolSchemaSha256, json, contractSha256, now);
+          .run(json, contractSha256, revision.revisionId, now);
         requireSingleChange(
           this.database,
           updated.changes,
-          "finalize runtime contract",
+          "finalize session initialization",
         );
+        const readback = this.loadContextSnapshot();
+        if (
+          readback.revision.revisionId !== revision.revisionId ||
+          readback.surface.surfaceId !== input.surface.surfaceId
+        ) {
+          throw new Error("Finalized session initialization readback failed.");
+        }
       });
     } catch (error) {
-      throw sessionWriteError("finalize_runtime_contract", this.sessionId, error);
+      throw sessionWriteError("finalize_session_initialization", this.sessionId, error);
     }
   }
 
-  assertRuntimeContract(contract: RuntimeContractV1): void {
+  assertSessionCompatibility(contract: SessionCompatibilityContract): void {
     const meta = this.readMeta();
-    const current = stableJsonStringify(contract);
+    const currentContract = normalizeSessionCompatibilityContract(contract);
+    const current = stableJsonStringify(currentContract);
     const currentHash = sha256(current);
     if (
-      meta.runtimeContractJson !== current ||
-      meta.runtimeContractSha256 !== currentHash
+      meta.sessionCompatibilityJson !== current ||
+      meta.sessionCompatibilitySha256 !== currentHash
     ) {
-      const changed = runtimeContractDifferences(meta.runtimeContractJson, contract);
+      const changed = compatibilityContractDifferences(
+        meta.sessionCompatibilityJson,
+        currentContract,
+      );
       throw new SessionError(
-        "SESSION_RUNTIME_MISMATCH",
-        "compare_runtime_contract",
-        `Session runtime contract changed: ${changed.join(", ") || "stored contract is invalid"}.`,
+        "SESSION_COMPATIBILITY_MISMATCH",
+        "compare_session_compatibility",
+        `Session compatibility contract changed: ${changed.join(", ") || "stored contract is invalid"}.`,
         { sessionId: this.sessionId },
       );
     }
@@ -602,7 +667,7 @@ export class SessionStore implements SessionLedgerCommitter {
   writeMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {
     this.requireOpen();
     assertMeasuredContextAnchor(anchor);
-    const revisionId = this.readMeta().activeRevisionId;
+    const revisionId = requireActiveRevisionId(this.readMeta());
     const now = this.clock();
     try {
       runTransaction(this.database, () => {
@@ -655,7 +720,7 @@ export class SessionStore implements SessionLedgerCommitter {
     if (state === undefined) {
       return undefined;
     }
-    if (state.revisionId !== this.readMeta().activeRevisionId) {
+    if (state.revisionId !== requireActiveRevisionId(this.readMeta())) {
       return undefined;
     }
     return state.anchor;
@@ -689,7 +754,7 @@ export class SessionStore implements SessionLedgerCommitter {
   commitSwapRevision(
     input: CommitSwapRevisionInput,
     options: CommitSwapRevisionOptions = {},
-  ): Extract<StoredContextRevisionV5, { kind: "swap_only" }> {
+  ): Extract<StoredContextRevisionV6, { kind: "swap_only" }> {
     this.requireOpen();
     assertCommitSwapRevisionInput(input);
     const now = this.clock();
@@ -727,6 +792,7 @@ export class SessionStore implements SessionLedgerCommitter {
           canonical: snapshot.canonical,
           activeOverrides: snapshot.activeOverrides,
           addedOverrides: input.addedOverrides,
+          activeSurface: snapshot.surface,
         });
         if (
           canonicalSequenceHash(
@@ -750,17 +816,20 @@ export class SessionStore implements SessionLedgerCommitter {
           .query(
             `INSERT INTO context_revisions (
               revision_id, session_id, revision_number, parent_revision_id, kind,
-              keep_from_ordinal, source_through_ordinal, added_override_count,
+              surface_id, surface_sha256, keep_from_ordinal,
+              source_through_ordinal, added_override_count,
               total_override_count, override_manifest_sha256,
               canonical_sequence_sha256, rendered_message_sha256, policy_version,
-              renderer_format, plan_sha256, created_at
-            ) VALUES (?, ?, ?, ?, 'swap_only', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              renderer_format, plan_sha256, change_manifest_sha256, created_at
+            ) VALUES (?, ?, ?, ?, 'swap_only', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
           )
           .run(
             input.revisionId,
             this.sessionId,
             revisionNumber,
             baseRevision.revisionId,
+            baseRevision.surfaceId,
+            baseRevision.surfaceSha256,
             input.expectedCanonicalThroughOrdinal,
             input.addedOverrides.length,
             totalOverrideCount,
@@ -856,12 +925,142 @@ export class SessionStore implements SessionLedgerCommitter {
         return readback.revision;
       });
     } catch (error) {
-      if (this.readMeta().activeRevisionId !== input.expectedBaseRevisionId) {
+      if (requireActiveRevisionId(this.readMeta()) !== input.expectedBaseRevisionId) {
         throw new Error("Failed context revision transaction changed active state.", {
           cause: error,
         });
       }
       throw sessionWriteError("commit_context_revision", this.sessionId, error);
+    }
+  }
+
+  commitSurfaceRefresh(
+    input: CommitSurfaceRefreshInput,
+    options: CommitSurfaceRefreshOptions = {},
+  ): Extract<StoredContextRevisionV6, { kind: "surface_refresh" }> {
+    this.requireOpen();
+    assertCommitSurfaceRefreshInput(input);
+    const now = this.clock();
+    try {
+      return runTransaction(this.database, () => {
+        const snapshot = this.loadContextSnapshot();
+        const baseRevision = snapshot.revision;
+        if (
+          baseRevision.revisionId !== input.expectedBaseRevisionId ||
+          baseRevision.revisionNumber !== input.expectedBaseRevisionNumber ||
+          snapshot.canonical.messages.length !==
+            input.expectedCanonicalThroughOrdinal ||
+          baseRevision.overrideManifestSha256 !==
+            input.expectedBaseOverrideManifestSha256
+        ) {
+          throw new Error("Context surface refresh base is stale.");
+        }
+        this.assertContextRevisionIdle();
+        validateStoredContextSurface(input.surface);
+        if (
+          input.surface.sessionId !== this.sessionId ||
+          input.surface.surfaceId === snapshot.surface.surfaceId ||
+          input.surface.surfaceSha256 === snapshot.surface.surfaceSha256
+        ) {
+          throw new Error("Context surface refresh does not introduce a new surface.");
+        }
+        const actualChanges = contextSurfaceChanges(snapshot.surface, input.surface);
+        if (
+          stableJsonStringify(actualChanges) !== stableJsonStringify(input.changes) ||
+          contextSurfaceChangeManifestHash(actualChanges) !==
+            input.changeManifestSha256 ||
+          !Object.values(actualChanges).some(Boolean)
+        ) {
+          throw new Error("Context surface refresh change manifest is invalid.");
+        }
+
+        const active = this.revisionCompiler.compileActive(snapshot);
+        const candidate = this.revisionCompiler.compileProspective({
+          active,
+          canonical: snapshot.canonical,
+          activeOverrides: snapshot.activeOverrides,
+          addedOverrides: [],
+          activeSurface: snapshot.surface,
+          surface: input.surface,
+        });
+        if (
+          canonicalSequenceHash(
+            snapshot.canonical,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.canonicalSequenceSha256 ||
+          renderedMessageHash(
+            candidate.entries,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.renderedMessageSha256
+        ) {
+          throw new Error("Candidate context surface prefix hash is invalid.");
+        }
+
+        const revisionNumber = baseRevision.revisionNumber + 1;
+        options.faultInjector?.("before_surface_insert");
+        insertContextSurface(this.database, input.surface);
+        options.faultInjector?.("after_surface_insert");
+        this.database
+          .query(
+            `INSERT INTO context_revisions (
+              revision_id, session_id, revision_number, parent_revision_id, kind,
+              surface_id, surface_sha256, keep_from_ordinal,
+              source_through_ordinal, added_override_count, total_override_count,
+              override_manifest_sha256, canonical_sequence_sha256,
+              rendered_message_sha256, policy_version, renderer_format,
+              plan_sha256, change_manifest_sha256, created_at
+            ) VALUES (?, ?, ?, ?, 'surface_refresh', ?, ?, 1, ?, 0, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)`,
+          )
+          .run(
+            input.revisionId,
+            this.sessionId,
+            revisionNumber,
+            baseRevision.revisionId,
+            input.surface.surfaceId,
+            input.surface.surfaceSha256,
+            input.expectedCanonicalThroughOrdinal,
+            baseRevision.totalOverrideCount,
+            baseRevision.overrideManifestSha256,
+            input.canonicalSequenceSha256,
+            input.renderedMessageSha256,
+            input.changeManifestSha256,
+            now,
+          );
+        options.faultInjector?.("after_revision_insert");
+
+        this.database.query("DELETE FROM context_measurement_state").run();
+        options.faultInjector?.("after_measurement_delete");
+        const switched = this.database
+          .query(
+            `UPDATE session_meta SET active_revision_id = ?, updated_at = ?
+             WHERE singleton = 1 AND active_revision_id = ?`,
+          )
+          .run(input.revisionId, now, baseRevision.revisionId);
+        requireSingleChange(
+          this.database,
+          switched.changes,
+          "activate context surface revision",
+        );
+        options.faultInjector?.("after_active_update");
+
+        const readback = this.loadContextSnapshot();
+        if (
+          readback.revision.kind !== "surface_refresh" ||
+          readback.revision.revisionId !== input.revisionId ||
+          readback.surface.surfaceId !== input.surface.surfaceId ||
+          this.loadMeasuredContextState() !== undefined
+        ) {
+          throw new Error("Committed context surface revision readback failed.");
+        }
+        return readback.revision;
+      });
+    } catch (error) {
+      if (requireActiveRevisionId(this.readMeta()) !== input.expectedBaseRevisionId) {
+        throw new Error("Failed context surface transaction changed active state.", {
+          cause: error,
+        });
+      }
+      throw sessionWriteError("commit_context_surface", this.sessionId, error);
     }
   }
 
@@ -1116,13 +1315,13 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  loadContextSnapshot(): StoredContextSnapshotV5 {
+  loadContextSnapshot(): StoredContextSnapshotV6 {
     this.requireOpen();
     const meta = this.readMeta();
     try {
       if (
         meta.sessionId !== this.sessionId ||
-        meta.schemaFingerprint !== SESSION_SCHEMA_V5_FINGERPRINT
+        meta.schemaFingerprint !== SESSION_SCHEMA_V6_FINGERPRINT
       ) {
         throw new Error("Session metadata identity or schema fingerprint changed.");
       }
@@ -1168,7 +1367,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  readMeta(): StoredSessionMetaV5 {
+  readMeta(): StoredSessionMetaV6 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -1182,7 +1381,7 @@ export class SessionStore implements SessionLedgerCommitter {
     return decodeMeta(rows[0], this.sessionId);
   }
 
-  readStoredSystemPrompt(): string {
+  readCreationSystemPrompt(): string {
     this.requireOpen();
     try {
       const frames = this.database
@@ -1235,8 +1434,8 @@ export class SessionStore implements SessionLedgerCommitter {
       }
       throw new SessionError(
         "SESSION_RECOVERY_FAILED",
-        "read_stored_system_prompt",
-        "Stored system prompt is missing or invalid.",
+        "read_creation_system_prompt",
+        "Creation system prompt is missing or invalid.",
         { sessionId: this.sessionId, cause: error },
       );
     }
@@ -1244,6 +1443,56 @@ export class SessionStore implements SessionLedgerCommitter {
 
   readProjectInstructionManifest(): ProjectInstructionManifest | undefined {
     return this.readMeta().projectInstruction;
+  }
+
+  validateCreatingState(): void {
+    this.requireOpen();
+    const meta = this.readMeta();
+    if (
+      meta.initializationState !== "creating" ||
+      meta.activeRevisionId !== null ||
+      meta.sessionCompatibilityJson !== null ||
+      meta.sessionCompatibilitySha256 !== null
+    ) {
+      throw new SessionError(
+        "SESSION_INTEGRITY_FAILED",
+        "validate_creating_store",
+        "Creating session metadata is invalid.",
+        { sessionId: this.sessionId },
+      );
+    }
+    this.readCreationSystemPrompt();
+    const counts = this.database
+      .query(
+        `SELECT
+          (SELECT COUNT(*) FROM context_surfaces) AS surfaces,
+          (SELECT COUNT(*) FROM context_revisions) AS revisions,
+          (SELECT COUNT(*) FROM turns) AS turns`,
+      )
+      .get() as Record<string, unknown> | null;
+    if (
+      counts === null ||
+      numberFromSql(counts.surfaces, "surfaces") !== 0 ||
+      numberFromSql(counts.revisions, "revisions") !== 0 ||
+      numberFromSql(counts.turns, "turns") !== 0
+    ) {
+      throw new SessionError(
+        "SESSION_INTEGRITY_FAILED",
+        "validate_creating_store",
+        "Creating session contains finalized or turn state.",
+        { sessionId: this.sessionId },
+      );
+    }
+    const view = this.loadProtocolView();
+    this.validator.validate(view, { fullIntegrity: true });
+    if (view.messages.length !== 1 || view.frames.length !== 1) {
+      throw new SessionError(
+        "SESSION_INTEGRITY_FAILED",
+        "validate_creating_store",
+        "Creating session must contain only its creation system frame.",
+        { sessionId: this.sessionId },
+      );
+    }
   }
 
   nextTurnNumber(): number {
@@ -1254,7 +1503,9 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V5_FINGERPRINT
+      meta.schemaFingerprint !== SESSION_SCHEMA_V6_FINGERPRINT ||
+      meta.initializationState !== "ready" ||
+      meta.activeRevisionId === null
     ) {
       throw new SessionError(
         "SESSION_SCHEMA_INVALID",
@@ -1263,15 +1514,16 @@ export class SessionStore implements SessionLedgerCommitter {
         { sessionId: this.sessionId },
       );
     }
-    this.readStoredSystemPrompt();
-    const view = this.loadProtocolView();
     try {
+      this.readCreationSystemPrompt();
+      const view = this.loadProtocolView();
       this.validator.validate(view, {
         allowOpenTail: options.allowOpenTail,
         fullIntegrity: true,
       });
       this.loadValidatedContextSnapshot(meta, view);
       this.validateCounters(meta, view);
+      return view;
     } catch (error) {
       if (error instanceof SessionError) {
         throw error;
@@ -1297,7 +1549,6 @@ export class SessionStore implements SessionLedgerCommitter {
         { sessionId: this.sessionId, cause: error },
       );
     }
-    return view;
   }
 
   async close(reason: SessionCloseReason): Promise<void> {
@@ -1594,9 +1845,23 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   private loadValidatedContextSnapshot(
-    meta: StoredSessionMetaV5,
+    meta: StoredSessionMetaV6,
     canonical: ProtocolContextView,
-  ): StoredContextSnapshotV5 {
+  ): StoredContextSnapshotV6 {
+    const activeRevisionId = requireActiveRevisionId(meta);
+    const surfaces = this.database
+      .query("SELECT * FROM context_surfaces ORDER BY rowid")
+      .all()
+      .map(decodeContextSurface);
+    const surfacesById = new Map<ContextSurfaceId, StoredContextSurfaceV6>();
+    for (const surface of surfaces) {
+      validateStoredContextSurface(surface);
+      if (surface.sessionId !== this.sessionId || surfacesById.has(surface.surfaceId)) {
+        throw new Error("Context surface identity is invalid or duplicated.");
+      }
+      surfacesById.set(surface.surfaceId, surface);
+    }
+
     const revisions = this.database
       .query("SELECT * FROM context_revisions ORDER BY revision_number")
       .all()
@@ -1609,13 +1874,19 @@ export class SessionStore implements SessionLedgerCommitter {
     for (let index = 0; index < revisions.length; index += 1) {
       const revision = requireItem(revisions, index, "context revision");
       const previous = revisions[index - 1];
+      const surface = surfacesById.get(revision.surfaceId);
       if (
         revision.sessionId !== this.sessionId ||
         revision.revisionNumber !== index + 1 ||
+        surface === undefined ||
+        surface.surfaceSha256 !== revision.surfaceSha256 ||
         (index === 0
           ? revision.kind !== "initial_full" || revision.parentRevisionId !== null
-          : revision.kind !== "swap_only" ||
-            revision.parentRevisionId !== previous?.revisionId)
+          : revision.kind === "initial_full" ||
+            revision.parentRevisionId !== previous?.revisionId) ||
+        (revision.kind === "swap_only" && revision.surfaceId !== previous?.surfaceId) ||
+        (revision.kind === "surface_refresh" &&
+          revision.surfaceId === previous?.surfaceId)
       ) {
         throw new Error("Context revision chain is not linear and contiguous.");
       }
@@ -1632,14 +1903,29 @@ export class SessionStore implements SessionLedgerCommitter {
       }
       revisionNumberById.set(revision.revisionId, revision.revisionNumber);
     }
+    const introducedSurfaceIds = new Set(
+      revisions
+        .filter((revision) => revision.kind !== "swap_only")
+        .map((revision) => revision.surfaceId),
+    );
+    if (
+      introducedSurfaceIds.size !== surfaces.length ||
+      surfaces.some((surface) => !introducedSurfaceIds.has(surface.surfaceId))
+    ) {
+      throw new Error("Context surface chain contains an orphan or duplicate surface.");
+    }
 
     const activeRevision = requireItem(
       revisions,
       revisions.length - 1,
       "active context revision",
     );
-    if (activeRevision.revisionId !== meta.activeRevisionId) {
+    if (activeRevision.revisionId !== activeRevisionId) {
       throw new Error("Active context revision is not the latest committed revision.");
+    }
+    const activeSurface = surfacesById.get(activeRevision.surfaceId);
+    if (activeSurface === undefined) {
+      throw new Error("Active context revision surface is missing.");
     }
 
     const overrides = this.database
@@ -1655,6 +1941,10 @@ export class SessionStore implements SessionLedgerCommitter {
 
     let cumulativeCount = 0;
     for (const revision of revisions) {
+      const surface = surfacesById.get(revision.surfaceId);
+      if (surface === undefined) {
+        throw new Error(`Context revision ${revision.revisionId} has no surface.`);
+      }
       const activeOverrides = overrides.filter(
         (override) =>
           (revisionNumberById.get(override.introducedRevisionId) ??
@@ -1673,6 +1963,30 @@ export class SessionStore implements SessionLedgerCommitter {
           `Context revision ${revision.revisionId} override manifest is invalid.`,
         );
       }
+      if (
+        revision.kind === "surface_refresh" &&
+        previousRevision(revisions, revision)?.overrideManifestSha256 !==
+          revision.overrideManifestSha256
+      ) {
+        throw new Error(
+          `Context surface revision ${revision.revisionId} changed overrides.`,
+        );
+      }
+      if (revision.kind === "surface_refresh") {
+        const parent = previousRevision(revisions, revision);
+        const parentSurface =
+          parent === undefined ? undefined : surfacesById.get(parent.surfaceId);
+        if (
+          parentSurface === undefined ||
+          contextSurfaceChangeManifestHash(
+            contextSurfaceChanges(parentSurface, surface),
+          ) !== revision.changeManifestSha256
+        ) {
+          throw new Error(
+            `Context surface revision ${revision.revisionId} change manifest is invalid.`,
+          );
+        }
+      }
       const prefix = protocolPrefixView(canonical, revision.sourceThroughOrdinal);
       this.revisionCompiler.compileActive({
         meta: Object.freeze({
@@ -1680,6 +1994,7 @@ export class SessionStore implements SessionLedgerCommitter {
           activeRevisionId: revision.revisionId,
         }),
         revision,
+        surface,
         activeOverrides,
         canonical: prefix,
       });
@@ -1696,18 +2011,19 @@ export class SessionStore implements SessionLedgerCommitter {
     return Object.freeze({
       meta: Object.freeze({
         sessionId: meta.sessionId,
-        activeRevisionId: meta.activeRevisionId,
+        activeRevisionId,
       }),
       revision: activeRevision,
+      surface: activeSurface,
       activeOverrides: Object.freeze(overrides),
       canonical,
     });
   }
 
   private validateStoredOverrides(
-    overrides: readonly StoredSwapOverrideV5[],
+    overrides: readonly StoredSwapOverrideV6[],
     canonical: ProtocolContextView,
-    revisions: readonly StoredContextRevisionV5[],
+    revisions: readonly StoredContextRevisionV6[],
     revisionNumberById: ReadonlyMap<ContextRevisionId, number>,
   ): void {
     const messages = new Map(
@@ -1768,7 +2084,7 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV5, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV6, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -1939,27 +2255,48 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 }
 
-export function createRuntimeContract(input: {
+export function createSessionCompatibilityContract(input: {
   modelName: string;
   profileName?: string;
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
-  contextBudget: ModelContextBudget;
-  systemPrompt: string;
-  toolSchemaSha256: string;
-  requestConfigSha256: string;
-}): RuntimeContractV1 {
+  messageProtocol: ModelMessageProtocol;
+}): SessionCompatibilityContract {
+  if (input.modelName.trim() === "") {
+    throw new Error("Session compatibility model name must not be empty.");
+  }
+  if (input.profileName !== undefined && input.profileName.trim() === "") {
+    throw new Error("Session compatibility profile name must not be empty.");
+  }
+  if (typeof input.includeReasoningContent !== "boolean") {
+    throw new Error("Session compatibility reasoning replay flag must be boolean.");
+  }
+  if (
+    !["openai-chat", "fake"].includes(input.messageProtocol.adapter) ||
+    input.messageProtocol.serializationVersion.trim() === ""
+  ) {
+    throw new Error("Session compatibility message protocol is invalid.");
+  }
   return Object.freeze({
-    version: 1,
     modelName: input.modelName,
     ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
     includeReasoningContent: input.includeReasoningContent,
-    contextProfile: immutableCanonicalClone(input.contextProfile),
-    contextBudget: immutableCanonicalClone(input.contextBudget),
-    systemPromptSha256: sha256(input.systemPrompt),
-    toolSchemaSha256: input.toolSchemaSha256,
-    requestConfigSha256: input.requestConfigSha256,
-    observationFormat: TOOL_OBSERVATION_FORMAT,
+    contextProfile: Object.freeze(createModelContextProfile(input.contextProfile)),
+    messageProtocol: immutableCanonicalClone(input.messageProtocol),
+  });
+}
+
+function normalizeSessionCompatibilityContract(
+  contract: SessionCompatibilityContract,
+): SessionCompatibilityContract {
+  return createSessionCompatibilityContract({
+    modelName: contract.modelName,
+    ...(contract.profileName === undefined
+      ? {}
+      : { profileName: contract.profileName }),
+    includeReasoningContent: contract.includeReasoningContent,
+    contextProfile: contract.contextProfile,
+    messageProtocol: contract.messageProtocol,
   });
 }
 
@@ -2057,6 +2394,38 @@ function insertToolResult(database: Database, result: ToolResultRecord): void {
       synthetic?.detail ?? null,
       result.observationSha256,
       result.createdAt,
+    );
+}
+
+function insertContextSurface(
+  database: Database,
+  surface: StoredContextSurfaceV6,
+): void {
+  validateStoredContextSurface(surface);
+  database
+    .query(
+      `INSERT INTO context_surfaces (
+        surface_id, session_id, system_prompt, system_prompt_sha256,
+        project_instruction_json, tool_definitions_json,
+        tool_definitions_sha256, tool_schema_sha256, request_config_sha256,
+        request_max_output_tokens, surface_sha256, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      surface.surfaceId,
+      surface.sessionId,
+      surface.systemPrompt,
+      surface.systemPromptSha256,
+      surface.projectInstruction === undefined
+        ? null
+        : stableJsonStringify(surface.projectInstruction),
+      stableJsonStringify(surface.toolDefinitions),
+      surface.toolDefinitionsSha256,
+      surface.toolSchemaSha256,
+      surface.requestConfigSha256,
+      surface.requestMaxOutputTokens,
+      surface.surfaceSha256,
+      surface.createdAt,
     );
 }
 
@@ -2191,7 +2560,7 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
       rawSha256: stringFromSql(row.raw_sha256, "raw_sha256"),
       observationFormat: enumFromSql(
         row.observation_format,
-        [TOOL_OBSERVATION_FORMAT] as const,
+        SUPPORTED_TOOL_OBSERVATION_FORMATS,
         "observation format",
       ),
     });
@@ -2229,16 +2598,62 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
   });
 }
 
-function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
+function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV6 {
+  const row = recordFromSql(rowValue, "context surface");
+  const projectInstruction =
+    row.project_instruction_json === null
+      ? undefined
+      : decodeProjectInstructionManifest(
+          parseJson(
+            stringFromSql(row.project_instruction_json, "project_instruction_json"),
+            "project_instruction_json",
+          ),
+        );
+  const toolDefinitions = decodeToolDefinitions(
+    parseJson(
+      stringFromSql(row.tool_definitions_json, "tool_definitions_json"),
+      "tool_definitions_json",
+    ),
+  );
+  const surface = Object.freeze({
+    surfaceId: stringFromSql(row.surface_id, "surface_id") as ContextSurfaceId,
+    sessionId: stringFromSql(row.session_id, "session_id") as SessionId,
+    systemPrompt: stringFromSql(row.system_prompt, "system_prompt"),
+    systemPromptSha256: sha256FromSql(row.system_prompt_sha256, "system_prompt_sha256"),
+    ...(projectInstruction === undefined ? {} : { projectInstruction }),
+    toolDefinitions,
+    toolDefinitionsSha256: sha256FromSql(
+      row.tool_definitions_sha256,
+      "tool_definitions_sha256",
+    ),
+    toolSchemaSha256: sha256FromSql(row.tool_schema_sha256, "tool_schema_sha256"),
+    requestConfigSha256: sha256FromSql(
+      row.request_config_sha256,
+      "request_config_sha256",
+    ),
+    requestMaxOutputTokens: numberFromSql(
+      row.request_max_output_tokens,
+      "request_max_output_tokens",
+    ),
+    surfaceSha256: sha256FromSql(row.surface_sha256, "surface_sha256"),
+    createdAt: timestampFromSql(row.created_at, "created_at"),
+  });
+  validateStoredContextSurface(surface);
+  return surface;
+}
+
+function decodeContextRevision(rowValue: unknown): StoredContextRevisionV6 {
   const row = recordFromSql(rowValue, "context revision");
   const kind = enumFromSql(
     row.kind,
-    ["initial_full", "swap_only"] as const,
+    ["initial_full", "swap_only", "surface_refresh"] as const,
     "context revision kind",
   );
   const common = {
     revisionId: stringFromSql(row.revision_id, "revision_id") as ContextRevisionId,
     sessionId: stringFromSql(row.session_id, "session_id") as SessionId,
+    surfaceId: stringFromSql(row.surface_id, "surface_id") as ContextSurfaceId,
+    surfaceSha256: sha256FromSql(row.surface_sha256, "surface_sha256"),
     keepFromOrdinal: numberFromSql(row.keep_from_ordinal, "keep_from_ordinal"),
     sourceThroughOrdinal: numberFromSql(
       row.source_through_ordinal,
@@ -2261,7 +2676,7 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
     createdAt: timestampFromSql(row.created_at, "created_at"),
   };
   if (common.keepFromOrdinal !== 1) {
-    throw new Error("Context revision keep_from_ordinal must be 1 in schema v5.");
+    throw new Error("Context revision keep_from_ordinal must be 1 in schema v6.");
   }
   const revisionNumber = numberFromSql(row.revision_number, "revision_number");
   const parentRevisionId = nullableStringFromSql(
@@ -2277,7 +2692,8 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
       common.totalOverrideCount !== 0 ||
       row.policy_version !== null ||
       row.renderer_format !== null ||
-      row.plan_sha256 !== null
+      row.plan_sha256 !== null ||
+      row.change_manifest_sha256 !== null
     ) {
       throw new Error("Initial context revision row is invalid.");
     }
@@ -2293,12 +2709,46 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
     });
   }
   if (
-    revisionNumber < 2 ||
-    parentRevisionId === null ||
-    common.addedOverrideCount < 1 ||
-    common.totalOverrideCount < common.addedOverrideCount
+    kind === "swap_only" &&
+    (revisionNumber < 2 ||
+      parentRevisionId === null ||
+      common.addedOverrideCount < 1 ||
+      common.totalOverrideCount < common.addedOverrideCount)
   ) {
     throw new Error("Swap context revision row is invalid.");
+  }
+  if (kind === "swap_only") {
+    if (row.change_manifest_sha256 !== null) {
+      throw new Error("Swap context revision has a change manifest.");
+    }
+    return Object.freeze({
+      ...common,
+      revisionNumber,
+      parentRevisionId: parentRevisionId!,
+      kind,
+      keepFromOrdinal: 1,
+      policyVersion: enumFromSql(
+        row.policy_version,
+        ["swap-only-v1"] as const,
+        "context revision policy",
+      ),
+      rendererFormat: enumFromSql(
+        row.renderer_format,
+        [SWAP_OBSERVATION_FORMAT] as const,
+        "context revision renderer format",
+      ),
+      planSha256: sha256FromSql(row.plan_sha256, "plan_sha256"),
+    });
+  }
+  if (
+    revisionNumber < 2 ||
+    parentRevisionId === null ||
+    common.addedOverrideCount !== 0 ||
+    row.policy_version !== null ||
+    row.renderer_format !== null ||
+    row.plan_sha256 !== null
+  ) {
+    throw new Error("Surface context revision row is invalid.");
   }
   return Object.freeze({
     ...common,
@@ -2306,21 +2756,15 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
     parentRevisionId,
     kind,
     keepFromOrdinal: 1,
-    policyVersion: enumFromSql(
-      row.policy_version,
-      ["swap-only-v1"] as const,
-      "context revision policy",
+    addedOverrideCount: 0,
+    changeManifestSha256: sha256FromSql(
+      row.change_manifest_sha256,
+      "change_manifest_sha256",
     ),
-    rendererFormat: enumFromSql(
-      row.renderer_format,
-      [SWAP_OBSERVATION_FORMAT] as const,
-      "context revision renderer format",
-    ),
-    planSha256: sha256FromSql(row.plan_sha256, "plan_sha256"),
   });
 }
 
-function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV5 {
+function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV6 {
   const row = recordFromSql(rowValue, "context override");
   if (row.representation !== "swapped") {
     throw new Error("Context override representation must be swapped.");
@@ -2338,7 +2782,7 @@ function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV5 {
       [SWAP_OBSERVATION_FORMAT] as const,
       "context override renderer format",
     ),
-    source: stringFromSql(row.source, "source") as StoredSwapOverrideV5["source"],
+    source: stringFromSql(row.source, "source") as StoredSwapOverrideV6["source"],
     originalContentSha256: sha256FromSql(
       row.original_content_sha256,
       "original_content_sha256",
@@ -2355,7 +2799,7 @@ function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV5 {
   });
 }
 
-function stripStoredOverride(override: StoredSwapOverrideV5): SwapOverride {
+function stripStoredOverride(override: StoredSwapOverrideV6): SwapOverride {
   return Object.freeze({
     frameId: override.frameId,
     messageId: override.messageId,
@@ -2458,6 +2902,53 @@ export function decodeStoredToolCalls(json: string): readonly ToolCall[] {
   return Object.freeze(calls);
 }
 
+function decodeProjectInstructionManifest(value: unknown): ProjectInstructionManifest {
+  const record = recordFromSql(value, "project instruction manifest");
+  assertObjectKeys(
+    record,
+    ["path", "byteLength", "sha256"],
+    ["path", "byteLength", "sha256"],
+    "project instruction manifest",
+  );
+  return Object.freeze({
+    path: enumFromSql(
+      record.path,
+      ["AGENTS.md", "CLAUDE.md"] as const,
+      "project instruction path",
+    ),
+    byteLength: numberFromJson(record.byteLength, "project instruction byteLength"),
+    sha256: sha256FromSql(record.sha256, "project instruction sha256"),
+  });
+}
+
+function decodeToolDefinitions(value: unknown): readonly ToolDefinition[] {
+  if (!Array.isArray(value)) {
+    throw new Error("tool_definitions_json must contain an array.");
+  }
+  const definitions = value.map((entry, index): ToolDefinition => {
+    const record = recordFromSql(entry, `tool definition ${index}`);
+    assertObjectKeys(
+      record,
+      ["name", "description", "parameters"],
+      ["name", "description", "parameters"],
+      `tool definition ${index}`,
+    );
+    const parameters = recordFromSql(
+      record.parameters,
+      `tool definition ${index} parameters`,
+    );
+    return Object.freeze({
+      name: stringFromSql(record.name, `tool definition ${index} name`),
+      description: stringFromSql(
+        record.description,
+        `tool definition ${index} description`,
+      ),
+      parameters: immutableCanonicalClone(parameters),
+    });
+  });
+  return Object.freeze(definitions);
+}
+
 export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   const raw = recordFromSql(value, "tool raw result");
   enumFromSql(
@@ -2547,16 +3038,53 @@ function assertCommitSwapRevisionInput(input: CommitSwapRevisionInput): void {
   }
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV5 {
+function assertCommitSurfaceRefreshInput(input: CommitSurfaceRefreshInput): void {
+  if (
+    input.revisionId.trim() === "" ||
+    input.expectedBaseRevisionId.trim() === "" ||
+    !Number.isSafeInteger(input.expectedBaseRevisionNumber) ||
+    input.expectedBaseRevisionNumber < 1 ||
+    !Number.isSafeInteger(input.expectedCanonicalThroughOrdinal) ||
+    input.expectedCanonicalThroughOrdinal < 1
+  ) {
+    throw new Error("Commit surface refresh input is invalid.");
+  }
+  for (const [name, hash] of [
+    ["expectedBaseOverrideManifestSha256", input.expectedBaseOverrideManifestSha256],
+    ["changeManifestSha256", input.changeManifestSha256],
+    ["canonicalSequenceSha256", input.canonicalSequenceSha256],
+    ["renderedMessageSha256", input.renderedMessageSha256],
+  ] as const) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new Error(`Commit surface refresh ${name} must be a SHA-256 hash.`);
+    }
+  }
+}
+
+function requireActiveRevisionId(meta: StoredSessionMetaV6): ContextRevisionId {
+  if (meta.initializationState !== "ready" || meta.activeRevisionId === null) {
+    throw new Error("Session has no active context revision.");
+  }
+  return meta.activeRevisionId;
+}
+
+function previousRevision(
+  revisions: readonly StoredContextRevisionV6[],
+  revision: StoredContextRevisionV6,
+): StoredContextRevisionV6 | undefined {
+  return revisions[revision.revisionNumber - 2];
+}
+
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV6 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 5) {
+  if (schemaVersion !== 6) {
     throw new Error(
-      `Session metadata schema version must be 5; received ${schemaVersion}.`,
+      `Session metadata schema version must be 6; received ${schemaVersion}.`,
     );
   }
   const projectInstructionFile = nullableStringFromSql(
@@ -2594,35 +3122,52 @@ function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSession
           byteLength: projectInstructionByteLength,
           sha256: sha256FromSql(projectInstructionSha256, "project_instruction_sha256"),
         };
+  const initializationState = enumFromSql(
+    row.initialization_state,
+    ["creating", "ready"] as const,
+    "initialization_state",
+  );
+  const sessionCompatibilityJson = nullableStringFromSql(
+    row.session_compatibility_json,
+    "session_compatibility_json",
+  );
+  const sessionCompatibilitySha256 = nullableStringFromSql(
+    row.session_compatibility_sha256,
+    "session_compatibility_sha256",
+  );
+  const activeRevisionId = nullableStringFromSql(
+    row.active_revision_id,
+    "active_revision_id",
+  ) as ContextRevisionId | null;
+  const modelName = stringFromSql(row.model_name, "model_name");
+  const storedContract =
+    sessionCompatibilityJson === null
+      ? undefined
+      : decodeSessionCompatibilityContract(sessionCompatibilityJson);
+  if (
+    (sessionCompatibilityJson === null) !== (sessionCompatibilitySha256 === null) ||
+    (sessionCompatibilityJson !== null &&
+      sha256(sessionCompatibilityJson) !== sessionCompatibilitySha256) ||
+    (initializationState === "creating") !== (activeRevisionId === null) ||
+    (initializationState === "creating") !== (sessionCompatibilityJson === null) ||
+    (storedContract !== undefined &&
+      (storedContract.modelName !== modelName ||
+        stableJsonStringify(storedContract) !== sessionCompatibilityJson))
+  ) {
+    throw new Error("Session compatibility or initialization metadata is invalid.");
+  }
   return {
     schemaVersion,
     schemaFingerprint: stringFromSql(row.schema_fingerprint, "schema_fingerprint"),
-    initializationState: enumFromSql(
-      row.initialization_state,
-      ["creating", "ready"] as const,
-      "initialization_state",
-    ),
+    initializationState,
     sessionId,
     workspaceRoot: stringFromSql(row.workspace_root, "workspace_root"),
-    modelName: stringFromSql(row.model_name, "model_name"),
+    modelName,
     systemPromptSha256: stringFromSql(row.system_prompt_sha256, "system_prompt_sha256"),
     ...(projectInstruction === undefined ? {} : { projectInstruction }),
-    toolSchemaSha256: nullableStringFromSql(
-      row.tool_schema_sha256,
-      "tool_schema_sha256",
-    ),
-    runtimeContractJson: nullableStringFromSql(
-      row.runtime_contract_json,
-      "runtime_contract_json",
-    ),
-    runtimeContractSha256: nullableStringFromSql(
-      row.runtime_contract_sha256,
-      "runtime_contract_sha256",
-    ),
-    activeRevisionId: stringFromSql(
-      row.active_revision_id,
-      "active_revision_id",
-    ) as ContextRevisionId,
+    sessionCompatibilityJson,
+    sessionCompatibilitySha256,
+    activeRevisionId,
     nextTurnNumber: numberFromSql(row.next_turn_number, "next_turn_number"),
     nextEventSequence: numberFromSql(row.next_event_sequence, "next_event_sequence"),
     openCount: numberFromSql(row.open_count, "open_count"),
@@ -2650,23 +3195,107 @@ function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSession
   };
 }
 
-function runtimeContractDifferences(
+function compatibilityContractDifferences(
   storedJson: string | null,
-  current: RuntimeContractV1,
+  current: SessionCompatibilityContract,
 ): string[] {
   if (storedJson === null) {
-    return ["runtimeContract"];
+    return ["sessionCompatibility"];
   }
-  const stored = parseJson(storedJson, "runtime_contract_json");
+  const stored = parseJson(storedJson, "session_compatibility_json");
   if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
-    return ["runtimeContract"];
+    return ["sessionCompatibility"];
   }
   const record = stored as Record<string, unknown>;
-  return Object.keys(current).filter(
-    (key) =>
-      stableJsonStringify(record[key]) !==
-      stableJsonStringify(current[key as keyof RuntimeContractV1]),
+  const fields: readonly (keyof SessionCompatibilityContract)[] = [
+    "modelName",
+    "profileName",
+    "includeReasoningContent",
+    "contextProfile",
+    "messageProtocol",
+  ];
+  return fields.filter((key) => {
+    const storedValue = record[key];
+    const currentValue = current[key];
+    if (storedValue === undefined || currentValue === undefined) {
+      return storedValue !== currentValue;
+    }
+    return stableJsonStringify(storedValue) !== stableJsonStringify(currentValue);
+  });
+}
+
+function decodeSessionCompatibilityContract(
+  json: string,
+): SessionCompatibilityContract {
+  const record = recordFromSql(
+    parseJson(json, "session_compatibility_json"),
+    "session compatibility contract",
   );
+  assertObjectKeys(
+    record,
+    [
+      "modelName",
+      "profileName",
+      "includeReasoningContent",
+      "contextProfile",
+      "messageProtocol",
+    ],
+    ["modelName", "includeReasoningContent", "contextProfile", "messageProtocol"],
+    "session compatibility contract",
+  );
+  const contextProfile = recordFromSql(
+    record.contextProfile,
+    "session compatibility context profile",
+  );
+  assertObjectKeys(
+    contextProfile,
+    ["contextWindowTokens", "maxSupportedOutputTokens"],
+    ["contextWindowTokens", "maxSupportedOutputTokens"],
+    "session compatibility context profile",
+  );
+  const messageProtocol = recordFromSql(
+    record.messageProtocol,
+    "session compatibility message protocol",
+  );
+  assertObjectKeys(
+    messageProtocol,
+    ["adapter", "serializationVersion"],
+    ["adapter", "serializationVersion"],
+    "session compatibility message protocol",
+  );
+  if (typeof record.includeReasoningContent !== "boolean") {
+    throw new Error("Session compatibility reasoning replay flag must be boolean.");
+  }
+  return createSessionCompatibilityContract({
+    modelName: stringFromSql(record.modelName, "compatibility modelName"),
+    ...(record.profileName === undefined
+      ? {}
+      : {
+          profileName: stringFromSql(record.profileName, "compatibility profileName"),
+        }),
+    includeReasoningContent: record.includeReasoningContent,
+    contextProfile: {
+      contextWindowTokens: numberFromJson(
+        contextProfile.contextWindowTokens,
+        "compatibility contextWindowTokens",
+      ),
+      maxSupportedOutputTokens: numberFromJson(
+        contextProfile.maxSupportedOutputTokens,
+        "compatibility maxSupportedOutputTokens",
+      ),
+    },
+    messageProtocol: {
+      adapter: enumFromSql(
+        messageProtocol.adapter,
+        ["openai-chat", "fake"] as const,
+        "compatibility message adapter",
+      ),
+      serializationVersion: stringFromSql(
+        messageProtocol.serializationVersion,
+        "compatibility serializationVersion",
+      ),
+    },
+  });
 }
 
 function openWritableDatabase(databasePath: string): Database {

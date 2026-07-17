@@ -3,12 +3,18 @@ import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ToolDefinition } from "../tools/types";
 
 export interface ModelClient {
+  readonly messageProtocol: ModelMessageProtocol;
   prepare(input: ModelRequestInput): PreparedModelRequest;
   request(
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput>;
 }
+
+export type ModelMessageProtocol = {
+  adapter: "openai-chat" | "fake";
+  serializationVersion: string;
+};
 
 export type ModelRequestOptions = {
   signal: AbortSignal;

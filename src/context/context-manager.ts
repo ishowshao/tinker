@@ -125,6 +125,7 @@ export class ContextManager {
       planning = this.planner.plan({
         active: built.compiled,
         revision: built.revision,
+        surface: built.surface,
         activeOverrides: built.activeOverrides,
         canonical: built.canonical,
         activePrepared,
@@ -188,10 +189,12 @@ export class ContextManager {
         canonical: built.canonical,
         activeOverrides: built.activeOverrides,
         addedOverrides: plan.addedOverrides,
+        activeSurface: built.surface,
       });
       const candidate = this.requestBuilder.build({
         canonical: built.canonical,
         revision: built.revision,
+        surface: built.surface,
         activeOverrides: candidateOverrides,
         compiled: candidateCompiled,
         tools,

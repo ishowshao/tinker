@@ -3,6 +3,7 @@ import { cancellationError } from "../agent/turn-cancellation";
 import type { ModelContextBudget } from "./model-context-profile";
 import type {
   ModelClient,
+  ModelMessageProtocol,
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
@@ -13,6 +14,10 @@ import { sha256, stableJsonStringify } from "./model-request-preflight";
 import { estimatePromptSegments } from "./token-estimator";
 
 export class FakeModelClient implements ModelClient {
+  readonly messageProtocol: ModelMessageProtocol = Object.freeze({
+    adapter: "fake",
+    serializationVersion: "fake-v1",
+  });
   private steps = 0;
   private readonly preparedInputs = new WeakMap<object, ModelRequestInput>();
 
@@ -34,7 +39,8 @@ export class FakeModelClient implements ModelClient {
     const messageSegments = input.messages.map(toPromptSegment);
     const requestConfigHash = sha256(
       stableJsonStringify({
-        adapter: "fake-v1",
+        adapter: this.messageProtocol.adapter,
+        serializationVersion: this.messageProtocol.serializationVersion,
         mode: this.mode,
         model: this.options.model,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,

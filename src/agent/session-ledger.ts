@@ -2,10 +2,14 @@ import type { ContextRevisionId, RuntimeIdFactory, SessionId } from "../ids/runt
 import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
-  StoredContextRevisionV5,
-  StoredContextSnapshotV5,
-  StoredSwapOverrideV5,
+  StoredContextRevisionV6,
+  StoredContextSnapshotV6,
+  StoredSwapOverrideV6,
 } from "../context/context-revision";
+import {
+  createContextSurface,
+  type StoredContextSurfaceV6,
+} from "../context/context-surface";
 import {
   ContextRevisionCompiler,
   createInitialContextRevision,
@@ -15,7 +19,7 @@ import {
   ContextProtocolValidator,
 } from "../context/context-protocol-validator";
 import {
-  TOOL_OBSERVATION_FORMAT,
+  CURRENT_TOOL_OBSERVATION_FORMAT,
   contentHash,
   immutableCanonicalClone,
   immutableRecord,
@@ -36,6 +40,7 @@ import type {
   ToolCall,
   TurnIdentity,
 } from "./types";
+import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 
 export type SessionLedger = {
   beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn;
@@ -122,7 +127,9 @@ export type CreateInMemorySessionLedgerInput = {
   idFactory: RuntimeIdFactory;
   systemPrompt?: string;
   initialView?: ProtocolContextView;
-  initialSnapshot?: StoredContextSnapshotV5;
+  initialSnapshot?: StoredContextSnapshotV6;
+  initialSurface?: StoredContextSurfaceV6;
+  initialToolDefinitions?: readonly ToolDefinition[];
   initialRevisionId?: ContextRevisionId;
   contextBuilder?: ContextBuilder;
   revisionCompiler?: ContextRevisionCompiler;
@@ -138,8 +145,9 @@ export class InMemorySessionLedger implements SessionLedger {
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
   private readonly revisionCompiler: ContextRevisionCompiler;
-  private readonly revision: StoredContextRevisionV5;
-  private readonly activeOverrides: readonly StoredSwapOverrideV5[];
+  private readonly revision: StoredContextRevisionV6;
+  private readonly surface: StoredContextSurfaceV6;
+  private readonly activeOverrides: readonly StoredSwapOverrideV6[];
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
@@ -162,6 +170,7 @@ export class InMemorySessionLedger implements SessionLedger {
       }
       this.view = immutableView(input.initialSnapshot.canonical);
       this.revision = input.initialSnapshot.revision;
+      this.surface = input.initialSnapshot.surface;
       this.activeOverrides = input.initialSnapshot.activeOverrides;
     } else {
       this.view =
@@ -173,17 +182,32 @@ export class InMemorySessionLedger implements SessionLedger {
               this.clock,
             )
           : immutableView(input.initialView);
+      const systemMessage = this.view.messages[0];
+      if (systemMessage?.role !== "system") {
+        throw new Error("Session ledger canonical history has no system message.");
+      }
+      this.surface =
+        input.initialSurface ??
+        createInMemoryContextSurface({
+          sessionId: input.sessionId,
+          systemPrompt: systemMessage.content,
+          tools: input.initialToolDefinitions ?? [],
+          idFactory: input.idFactory,
+          createdAt: this.view.frames[0]?.createdAt ?? this.clock(),
+        });
       this.revision = createInitialContextRevision({
         revisionId:
           input.initialRevisionId ?? input.idFactory.createContextRevisionId(),
         canonical: this.view,
+        surface: this.surface,
         createdAt: this.view.frames[0]?.createdAt ?? this.clock(),
       });
       this.activeOverrides = Object.freeze([]);
     }
     if (
       this.view.sessionId !== input.sessionId ||
-      this.revision.sessionId !== input.sessionId
+      this.revision.sessionId !== input.sessionId ||
+      this.surface.sessionId !== input.sessionId
     ) {
       throw new Error("Session ledger history or revision belongs to another session.");
     }
@@ -513,11 +537,12 @@ export class InMemorySessionLedger implements SessionLedger {
     try {
       const canonical = this.view;
       const compiled = this.revisionCompiler.compileActive(
-        snapshotFor(canonical, this.revision, this.activeOverrides),
+        snapshotFor(canonical, this.revision, this.surface, this.activeOverrides),
       );
       return this.contextBuilder.build({
         canonical,
         revision: this.revision,
+        surface: this.surface,
         activeOverrides: this.activeOverrides,
         compiled,
         tools,
@@ -598,17 +623,41 @@ export class InMemorySessionLedger implements SessionLedger {
 
 function snapshotFor(
   canonical: ProtocolContextView,
-  revision: StoredContextRevisionV5,
-  activeOverrides: readonly StoredSwapOverrideV5[],
-): StoredContextSnapshotV5 {
+  revision: StoredContextRevisionV6,
+  surface: StoredContextSurfaceV6,
+  activeOverrides: readonly StoredSwapOverrideV6[],
+): StoredContextSnapshotV6 {
   return Object.freeze({
     meta: Object.freeze({
       sessionId: canonical.sessionId,
       activeRevisionId: revision.revisionId,
     }),
     revision,
+    surface,
     activeOverrides,
     canonical,
+  });
+}
+
+function createInMemoryContextSurface(input: {
+  sessionId: SessionId;
+  systemPrompt: string;
+  tools: readonly ToolDefinition[];
+  idFactory: RuntimeIdFactory;
+  createdAt: string;
+}): StoredContextSurfaceV6 {
+  const serializedTools = input.tools.map((tool) => stableJsonStringify(tool));
+  return createContextSurface({
+    surfaceId: input.idFactory.createContextSurfaceId(),
+    sessionId: input.sessionId,
+    systemPrompt: input.systemPrompt,
+    toolDefinitions: input.tools,
+    prepared: {
+      requestConfigHash: sha256("in-memory-model-request-v1"),
+      requestMaxOutputTokens: 1,
+      toolSchemaHash: sha256(serializedTools.join("\n")),
+    },
+    createdAt: input.createdAt,
   });
 }
 
@@ -763,7 +812,7 @@ function canonicalCompletion(input: ToolCompletionInput): ToolCompletion {
     kind: "returned",
     raw,
     rawSha256: rawResultHash(raw),
-    observationFormat: TOOL_OBSERVATION_FORMAT,
+    observationFormat: CURRENT_TOOL_OBSERVATION_FORMAT,
   });
 }
 

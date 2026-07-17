@@ -33,13 +33,29 @@ import {
 import { ObservationBuilder } from "../observation/observation-builder";
 import { ContextProtocolError } from "../context/context-protocol-validator";
 import { CompiledContextError } from "../context/compiled-context-validator";
-import { ContextRevisionError } from "../context/context-revision-compiler";
+import {
+  ContextRevisionCompiler,
+  ContextRevisionError,
+} from "../context/context-revision-compiler";
+import {
+  changedContextSurfaceComponents,
+  contextSurfaceChangeManifestHash,
+  contextSurfaceChanges,
+  createContextSurface,
+  sameContextSurface,
+  type ContextSurfaceComponent,
+  type StoredContextSurfaceV6,
+} from "../context/context-surface";
+import {
+  canonicalSequenceHash,
+  renderedMessageHash,
+} from "../context/compiled-context-hash";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import {
   SessionStore,
-  createRuntimeContract,
+  createSessionCompatibilityContract,
   type SessionRecoveryResult,
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
@@ -88,6 +104,14 @@ export type RuntimeSessionContext = {
   append(input: AgentEventInput): Promise<void>;
 };
 
+export type ContextSurfaceRefreshSummary = {
+  readonly previousRevisionNumber: number;
+  readonly revisionNumber: number;
+  readonly changed: readonly ContextSurfaceComponent[];
+  readonly toolCountBefore: number;
+  readonly toolCountAfter: number;
+};
+
 type CommonRuntimeSessionInput = {
   workspaceRoot: string;
   modelName: string;
@@ -97,6 +121,8 @@ type CommonRuntimeSessionInput = {
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
   modelClient: ModelClient;
+  systemPrompt: string;
+  projectInstruction?: ProjectInstructionManifest;
   presentationSinks?: EventSink[];
   persistence?:
     | false
@@ -109,8 +135,6 @@ type CommonRuntimeSessionInput = {
 
 type CreateNewRuntimeSessionInput = CommonRuntimeSessionInput & {
   selection: { mode: "new"; sessionId: SessionId };
-  systemPrompt: string;
-  projectInstruction?: ProjectInstructionManifest;
 };
 
 type ResumeRuntimeSessionInput = CommonRuntimeSessionInput & {
@@ -251,11 +275,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     validateCreateInput(input);
     const store = await dependencies.openStore(input, dependencies.idFactory);
     let session: DefaultRuntimeSession;
-    let systemPrompt: string;
     try {
-      systemPrompt = isNewSessionInput(input)
-        ? input.systemPrompt
-        : store.readStoredSystemPrompt();
       session = new DefaultRuntimeSession(
         input,
         dependencies,
@@ -276,6 +296,17 @@ class DefaultRuntimeSession implements RuntimeSession {
     let started = false;
 
     try {
+      const compatibility = createSessionCompatibilityContract({
+        modelName: input.modelName,
+        profileName: input.profileName,
+        includeReasoningContent: input.includeReasoningContent,
+        contextProfile: input.contextProfile,
+        messageProtocol: input.modelClient.messageProtocol,
+      });
+      if (input.selection.mode === "resume") {
+        store.assertSessionCompatibility(compatibility);
+      }
+
       if (isNewSessionInput(input)) {
         await session.append({
           type: "session.started",
@@ -319,25 +350,30 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
 
       const definitions = session.requireTooling().registry.definitions();
-      const contractPrepared = input.modelClient.prepare({
-        messages: [{ role: "system", content: systemPrompt }],
+      const surfacePrepared = input.modelClient.prepare({
+        messages: [{ role: "system", content: input.systemPrompt }],
         tools: definitions,
       });
-      const runtimeContract = createRuntimeContract({
-        modelName: input.modelName,
-        profileName: input.profileName,
-        includeReasoningContent: input.includeReasoningContent,
-        contextProfile: input.contextProfile,
-        contextBudget: input.contextBudget,
-        systemPrompt,
-        toolSchemaSha256: contractPrepared.toolSchemaHash,
-        requestConfigSha256: contractPrepared.requestConfigHash,
+      const candidateSurface = createContextSurface({
+        surfaceId: dependencies.idFactory.createContextSurfaceId(),
+        sessionId: session.sessionId,
+        systemPrompt: input.systemPrompt,
+        ...(input.projectInstruction === undefined
+          ? {}
+          : { projectInstruction: input.projectInstruction }),
+        toolDefinitions: definitions,
+        prepared: surfacePrepared,
+        createdAt: new Date().toISOString(),
       });
       if (input.selection.mode === "new") {
-        store.finalizeRuntimeContract(runtimeContract);
+        store.finalizeInitialization({
+          contract: compatibility,
+          surface: candidateSurface,
+          revisionId: dependencies.idFactory.createContextRevisionId(),
+        });
       } else {
-        store.assertRuntimeContract(runtimeContract);
         session.recovery = store.recoverInterruptedState(dependencies.idFactory);
+        const refresh = await session.refreshContextSurface(candidateSurface);
         const openCount = store.markResumed();
         if (
           session.recovery.recoveredTurnId !== undefined &&
@@ -353,18 +389,20 @@ class DefaultRuntimeSession implements RuntimeSession {
             },
           });
         }
-        const projectInstruction = store.readProjectInstructionManifest();
         await session.append({
           type: "session.resumed",
           sessionId: session.sessionId,
           data: {
             openCount,
             ...session.recovery,
-            ...(projectInstruction === undefined
+            contextProfile: input.contextProfile,
+            contextBudget: input.contextBudget,
+            ...(input.projectInstruction === undefined
               ? {}
               : {
-                  projectInstructionFile: projectInstruction.path,
+                  projectInstructionFile: input.projectInstruction.path,
                 }),
+            ...(refresh === undefined ? {} : { contextRefresh: refresh }),
           },
         });
       }
@@ -389,6 +427,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         .requireLedger()
         .buildCommittedModelRequest(definitions);
       const initialPrepared = input.modelClient.prepare(initialBuilt.request);
+      assertPreparedMatchesSurface(initialPrepared, initialBuilt.surface);
       session.committedPrefixAuditor.audit(
         initialBuilt.compiled.revisionId,
         initialPrepared,
@@ -413,6 +452,117 @@ class DefaultRuntimeSession implements RuntimeSession {
       return session;
     } catch (error) {
       return session.rollbackInitialization(error, started);
+    }
+  }
+
+  private async refreshContextSurface(
+    candidateSurface: StoredContextSurfaceV6,
+  ): Promise<ContextSurfaceRefreshSummary | undefined> {
+    const snapshot = this.store.loadContextSnapshot();
+    if (sameContextSurface(snapshot.surface, candidateSurface)) {
+      return undefined;
+    }
+
+    const changes = contextSurfaceChanges(snapshot.surface, candidateSurface);
+    const changed = changedContextSurfaceComponents(changes);
+    if (changed.length === 0) {
+      throw new Error("Changed context surface has an empty change manifest.");
+    }
+    const startedAt = performance.now();
+    await this.append({
+      type: "context.revision.started",
+      sessionId: this.sessionId,
+      data: {
+        strategy: "surface_refresh",
+        reason: "resume",
+        baseRevisionNumber: snapshot.revision.revisionNumber,
+        changed,
+      },
+    });
+
+    let stage: "prepare" | "commit" | "activate" = "prepare";
+    let committed = false;
+    try {
+      const compiler = new ContextRevisionCompiler();
+      const active = compiler.compileActive(snapshot);
+      const candidateCompiled = compiler.compileProspective({
+        active,
+        canonical: snapshot.canonical,
+        activeOverrides: snapshot.activeOverrides,
+        addedOverrides: [],
+        activeSurface: snapshot.surface,
+        surface: candidateSurface,
+      });
+      const prepared = this.input.modelClient.prepare({
+        messages: candidateCompiled.entries.map((entry) => entry.message),
+        tools: [...candidateSurface.toolDefinitions],
+      });
+      assertPreparedMatchesSurface(prepared, candidateSurface);
+
+      stage = "commit";
+      const revision = this.store.commitSurfaceRefresh({
+        revisionId: this.dependencies.idFactory.createContextRevisionId(),
+        expectedBaseRevisionId: snapshot.revision.revisionId,
+        expectedBaseRevisionNumber: snapshot.revision.revisionNumber,
+        expectedCanonicalThroughOrdinal: snapshot.canonical.messages.length,
+        expectedBaseOverrideManifestSha256: snapshot.revision.overrideManifestSha256,
+        surface: candidateSurface,
+        changes,
+        changeManifestSha256: contextSurfaceChangeManifestHash(changes),
+        canonicalSequenceSha256: canonicalSequenceHash(snapshot.canonical),
+        renderedMessageSha256: renderedMessageHash(candidateCompiled.entries),
+      });
+      committed = true;
+
+      stage = "activate";
+      this.contextMeter.startRevision({
+        reason: "context_rebuilt",
+        requestConfigHash: prepared.requestConfigHash,
+        toolSchemaHash: prepared.toolSchemaHash,
+      });
+      const summary = Object.freeze({
+        previousRevisionNumber: snapshot.revision.revisionNumber,
+        revisionNumber: revision.revisionNumber,
+        changed,
+        toolCountBefore: snapshot.surface.toolDefinitions.length,
+        toolCountAfter: candidateSurface.toolDefinitions.length,
+      });
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "surface_refresh",
+          reason: "resume",
+          baseRevisionNumber: summary.previousRevisionNumber,
+          revisionNumber: summary.revisionNumber,
+          changed: summary.changed,
+          toolCountBefore: summary.toolCountBefore,
+          toolCountAfter: summary.toolCountAfter,
+          measuredAnchorCleared: true,
+          durationMs: elapsedMs(startedAt),
+        },
+      });
+      return summary;
+    } catch (error) {
+      await this.append({
+        type: "context.revision.failed",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "surface_refresh",
+          reason: "resume",
+          stage,
+          errorCode: boundedContextErrorCode(
+            error instanceof SessionError
+              ? error.code
+              : error instanceof Error
+                ? error.name
+                : "CONTEXT_SURFACE_REFRESH_FAILED",
+          ),
+          error: `Context surface refresh failed at ${stage}.`,
+          committed,
+        },
+      }).catch(() => undefined);
+      throw error;
     }
   }
 
@@ -1078,20 +1228,39 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
     throw new Error("RuntimeSession modelName must not be empty.");
   }
   requirePositiveNumber(input.maxIterations, "maxIterations");
-  if (isNewSessionInput(input) && input.systemPrompt.trim() === "") {
+  if (input.systemPrompt.trim() === "") {
     throw new Error("RuntimeSession systemPrompt must not be empty.");
   }
   if (
     typeof input.modelClient !== "object" ||
     input.modelClient === null ||
     typeof input.modelClient.prepare !== "function" ||
-    typeof input.modelClient.request !== "function"
+    typeof input.modelClient.request !== "function" ||
+    typeof input.modelClient.messageProtocol !== "object" ||
+    input.modelClient.messageProtocol === null
   ) {
     throw new Error(
       "RuntimeSession modelClient must implement prepare() and request().",
     );
   }
   assertMatchingContextBudget(input.contextProfile, input.contextBudget);
+}
+
+function assertPreparedMatchesSurface(
+  prepared: ReturnType<ModelClient["prepare"]>,
+  surface: StoredContextSurfaceV6,
+): void {
+  if (
+    prepared.requestConfigHash !== surface.requestConfigSha256 ||
+    prepared.toolSchemaHash !== surface.toolSchemaSha256 ||
+    prepared.requestMaxOutputTokens !== surface.requestMaxOutputTokens
+  ) {
+    throw new Error("Prepared model request does not match its context surface.");
+  }
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 100) / 100;
 }
 
 function isNewSessionInput(

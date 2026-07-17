@@ -334,7 +334,7 @@ describe("RuntimeSession lifecycle", () => {
         ledger = new InMemorySessionLedger({
           sessionId: store.sessionId,
           idFactory,
-          initialView: store.loadProtocolView(),
+          initialSnapshot: store.loadContextSnapshot(),
           committer: store,
         });
         return ledger;
@@ -345,8 +345,9 @@ describe("RuntimeSession lifecycle", () => {
       userPrompt: "use tools",
       signal: new AbortController().signal,
     });
-    const failedMessages = requireLedger(ledger).buildCommittedModelRequest([]).request
-      .messages;
+    const failedMessages = materializeAgentMessages(
+      requireLedger(ledger).snapshot().messages,
+    );
     const recovered = await session.executeTurn({
       userPrompt: "continue",
       signal: new AbortController().signal,
@@ -383,7 +384,7 @@ describe("RuntimeSession lifecycle", () => {
           new InMemorySessionLedger({
             sessionId: store.sessionId,
             idFactory,
-            initialView: store.loadProtocolView(),
+            initialSnapshot: store.loadContextSnapshot(),
             committer: {
               commit(mutation) {
                 if (mutation.kind === "commit_tool_completions") {
@@ -577,7 +578,7 @@ describe("RuntimeSession lifecycle", () => {
           ledger = new InMemorySessionLedger({
             sessionId: store.sessionId,
             idFactory,
-            initialView: store.loadProtocolView(),
+            initialSnapshot: store.loadContextSnapshot(),
             committer: store,
           });
           return ledger;
@@ -593,12 +594,12 @@ describe("RuntimeSession lifecycle", () => {
     expect(invalid.status === "failed" ? invalid.error : "").toContain(
       "invalid frame identity",
     );
-    expect(
-      requireLedger(ledger).buildCommittedModelRequest([]).request.messages,
-    ).toEqual([
-      { role: "system", content: "system" },
-      { role: "user", content: "bad turn" },
-    ]);
+    expect(materializeAgentMessages(requireLedger(ledger).snapshot().messages)).toEqual(
+      [
+        { role: "system", content: "system" },
+        { role: "user", content: "bad turn" },
+      ],
+    );
 
     const recovered = await session.executeTurn({
       userPrompt: "clean turn",
@@ -627,7 +628,7 @@ describe("RuntimeSession lifecycle", () => {
           ledger = new InMemorySessionLedger({
             sessionId: store.sessionId,
             idFactory,
-            initialView: store.loadProtocolView(),
+            initialSnapshot: store.loadContextSnapshot(),
             committer: store,
           });
           return ledger;
@@ -759,7 +760,7 @@ describe("RuntimeSession lifecycle", () => {
           ledger = new InMemorySessionLedger({
             sessionId: store.sessionId,
             idFactory,
-            initialView: store.loadProtocolView(),
+            initialSnapshot: store.loadContextSnapshot(),
             committer: store,
           });
           return ledger;

@@ -2,6 +2,7 @@ import type { AgentMessage } from "../agent/types";
 import { stableJsonStringify } from "../model/model-request-preflight";
 import { formatMessageSource } from "./context-source";
 import type { CompiledRevisionContext, SwapOverride } from "./context-revision";
+import type { StoredContextSurfaceV6 } from "./context-surface";
 import {
   contentHash,
   type CanonicalMessageRecord,
@@ -21,24 +22,27 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
+    surface: StoredContextSurfaceV6,
   ): void {
     const byMessageId = overrideMap(overrides, "Active");
-    this.validate(compiled, canonical, byMessageId);
+    this.validate(compiled, canonical, byMessageId, surface);
   }
 
   validateProspective(
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
+    surface: StoredContextSurfaceV6,
   ): void {
     const byMessageId = overrideMap(overrides, "Prospective");
-    this.validate(compiled, canonical, byMessageId);
+    this.validate(compiled, canonical, byMessageId, surface);
   }
 
   private validate(
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: ReadonlyMap<string, SwapOverride>,
+    surface: StoredContextSurfaceV6,
   ): void {
     if (compiled.sessionId !== canonical.sessionId) {
       fail("Compiled context belongs to another session.");
@@ -79,10 +83,19 @@ export class CompiledContextValidator {
 
       const override = overrides.get(entry.messageId);
       if (override === undefined) {
-        if (entry.representation !== "canonical") {
-          fail(`Unapproved swapped entry at ordinal ${entry.ordinal}.`);
+        if (entry.representation === "canonical") {
+          assertSameMessage(entry.message, record);
+          continue;
         }
-        assertSameMessage(entry.message, record);
+        if (
+          entry.representation !== "surface" ||
+          record.ordinal !== 1 ||
+          record.role !== "system" ||
+          entry.message.role !== "system" ||
+          entry.message.content !== surface.systemPrompt
+        ) {
+          fail(`Unapproved surface entry at ordinal ${entry.ordinal}.`);
+        }
         continue;
       }
 
@@ -112,7 +125,8 @@ export class CompiledContextValidator {
     }
     if (
       compiled.manifest.canonicalSequenceHash !== canonicalSequenceHash(canonical) ||
-      compiled.manifest.renderedMessageHash !== renderedMessageHash(compiled.entries)
+      compiled.manifest.renderedMessageHash !== renderedMessageHash(compiled.entries) ||
+      compiled.manifest.surfaceSha256 !== surface.surfaceSha256
     ) {
       fail("Compiled context manifest hash does not match its entries.");
     }

@@ -84,10 +84,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
-| 稳定来源与 `Recall` | 已完成 | 当前 schema v5 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
-| 模型 profile 与 runtime contract | 已完成 | profile 身份、显式预算、request/tool schema hash 已持久化并在 resume 时校验 |
-| 项目指令快照 | 已完成 | 新 session 加载单一 AGENTS.md/CLAUDE.md，resume 使用已存 system prompt，不读取当前文件重建历史 |
-| Context revision 与确定性换出 | 已完成 | schema v5 使用不可变线性 revision、首次引入 override、原子 active switch 和手动 `/compact`；`keepFromOrdinal=1` |
+| 稳定来源与 `Recall` | 已完成 | 当前 schema v6 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
+| 模型 profile 与兼容契约 | 已完成 | `SessionCompatibilityContract` 只冻结历史消息协议；request fingerprint、tool surface 与 activation policy 已分离 |
+| 项目指令与 active surface | 已完成 | creation system message 保持不可变；resume 加载当前 AGENTS.md/CLAUDE.md，并以 `surface_refresh` 留下 durable revision |
+| Context revision 与确定性换出 | 已完成 | schema v6 使用 immutable `ContextSurface`、线性 revision、单调 override、原子 active switch 和手动 `/compact`；`keepFromOrdinal=1` |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -95,6 +95,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 - [`turn-cancellation-design.md`](turn-cancellation-design.md)
 - [`session-turn-iteration-identity-design.md`](session-turn-iteration-identity-design.md)
 - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
+- [`runtime-contract-context-surface-refresh-design.md`](runtime-contract-context-surface-refresh-design.md)
 
 ### 3.2 部分具备，但不能当成已完成
 
@@ -324,8 +325,8 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 - 长会话 benchmark 已改用真实 RuntimeSession、SessionStore、默认工具、ContextMeter 与
   TUI projection，默认覆盖 50 个 workload turns、中点 resume、受控取消和 Recall
   search -> get。
-- Recall benchmark 通过当前 SessionStore 创建 schema/runtime contract，再生成 10,000
-  条确定性 canonical messages，不再复制历史 schema SQL。
+- Recall benchmark 通过当前 SessionStore 两阶段创建 schema/compatibility contract，再生成
+  10,000 条确定性 canonical messages，不再复制历史 schema SQL。
 - `scripts/**/*.ts` 已进入 TypeScript、ESLint 与 Biome；低成本 `bench:smoke` 已进入
   `bun run check`。
 - 50-turn 基线最终为 207-message request、194,579 measured tokens，request build p95

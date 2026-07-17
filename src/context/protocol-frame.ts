@@ -9,7 +9,12 @@ import type {
   TurnIdentity,
 } from "../agent/types";
 
-export const TOOL_OBSERVATION_FORMAT = "tool-observation-v2" as const;
+export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v2" as const;
+export const SUPPORTED_TOOL_OBSERVATION_FORMATS = [
+  CURRENT_TOOL_OBSERVATION_FORMAT,
+] as const;
+export type SupportedToolObservationFormat =
+  (typeof SUPPORTED_TOOL_OBSERVATION_FORMATS)[number];
 
 export type CanonicalMessageBase = {
   readonly messageId: MessageId;
@@ -80,7 +85,7 @@ export type ToolCompletion =
       readonly kind: "returned";
       readonly raw: ToolRawResult;
       readonly rawSha256: string;
-      readonly observationFormat: typeof TOOL_OBSERVATION_FORMAT;
+      readonly observationFormat: SupportedToolObservationFormat;
     }
   | {
       readonly kind: "synthetic";

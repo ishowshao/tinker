@@ -8,13 +8,13 @@ import type { IterationIdentity, TurnIdentity } from "../agent/types";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
-  SESSION_SCHEMA_V5_FINGERPRINT,
+  SESSION_SCHEMA_V6_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   verifySessionSchema,
 } from "../session/session-schema";
-import { SessionStore, createRuntimeContract } from "../session/session-store";
+import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
-import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
+import { finalizeTestSessionStore } from "./test-runtime";
 
 describe("session schema identity", () => {
   test("persists all three schema identities and rejects structural drift", async () => {
@@ -34,7 +34,7 @@ describe("session schema identity", () => {
             schema_fingerprint: string;
           }
         ).schema_fingerprint,
-      ).toBe(SESSION_SCHEMA_V5_FINGERPRINT);
+      ).toBe(SESSION_SCHEMA_V6_FINGERPRINT);
       expect(
         database
           .query(
@@ -114,7 +114,7 @@ describe("session schema identity", () => {
   });
 
   test("rejects older schemas without migration", () => {
-    for (const version of [1, 2, 4]) {
+    for (const version of [1, 2, 4, 5]) {
       const sessionId = runtimeIdFactory.createSessionId();
       const database = new Database(":memory:");
       try {
@@ -232,17 +232,7 @@ async function createReadyStore(
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
   });
-  store.finalizeRuntimeContract(
-    createRuntimeContract({
-      modelName: "test-model",
-      includeReasoningContent: false,
-      contextProfile: TEST_CONTEXT_PROFILE,
-      contextBudget: TEST_CONTEXT_BUDGET,
-      systemPrompt: "system",
-      toolSchemaSha256: "a".repeat(64),
-      requestConfigSha256: "b".repeat(64),
-    }),
-  );
+  finalizeTestSessionStore(store, { systemPrompt: "system" });
   return store;
 }
 

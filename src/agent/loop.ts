@@ -342,6 +342,7 @@ async function runShadowPlanning(input: {
     result = shadowPlanning.planner.plan({
       active: input.built.compiled,
       revision: input.built.revision,
+      surface: input.built.surface,
       activeOverrides: input.built.activeOverrides,
       canonical: input.built.canonical,
       activePrepared: input.prepared,

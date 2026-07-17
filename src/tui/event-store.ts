@@ -96,6 +96,11 @@ export function reduceTuiProjection(
         contextBudget: event.data.contextBudget,
       };
     case "session.resumed":
+      return {
+        ...state,
+        contextProfile: event.data.contextProfile,
+        contextBudget: event.data.contextBudget,
+      };
     case "session.interrupted_frame_recovered":
       return state;
     case "context.usage.updated":
@@ -301,13 +306,29 @@ export function reduceTuiProjection(
     case "context.shadow.planned":
     case "context.shadow.failed":
     case "context.revision.started":
-    case "context.revision.finished":
     case "context.revision.failed":
     case "tool.observation":
       return state;
+    case "context.revision.finished":
+      return event.data.strategy === "surface_refresh"
+        ? appendNotice(
+            state,
+            {
+              id: `notice-context-refresh-${event.eventSequence}`,
+              label: "context",
+              text: `runtime context refreshed on resume -> ${event.data.changed.map(formatSurfaceComponent).join(", ")}`,
+              status: "info",
+            },
+            policy.sessionNoticeLimit,
+          )
+        : state;
     default:
       return assertNever(event);
   }
+}
+
+function formatSurfaceComponent(component: string): string {
+  return component.replaceAll("_", " ");
 }
 
 export const applyAgentEvent = reduceTuiProjection;

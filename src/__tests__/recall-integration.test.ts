@@ -203,6 +203,7 @@ function runtimeInput(
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
     modelClient,
+    systemPrompt: "system",
     presentationSinks: [collectingEventSink()],
     persistence: false as const,
   };
@@ -210,7 +211,6 @@ function runtimeInput(
     ? {
         ...common,
         selection: { mode, sessionId },
-        systemPrompt: "system",
       }
     : { ...common, selection: { mode, sessionId } };
 }

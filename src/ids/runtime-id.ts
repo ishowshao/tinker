@@ -11,6 +11,7 @@ export type ToolCallId = RuntimeId<"tool-call">;
 export type MessageId = RuntimeId<"message">;
 export type ProtocolFrameId = RuntimeId<"protocol-frame">;
 export type ContextRevisionId = RuntimeId<"context-revision">;
+export type ContextSurfaceId = RuntimeId<"context-surface">;
 
 export type RuntimeIdFactory = {
   createSessionId(): SessionId;
@@ -20,6 +21,7 @@ export type RuntimeIdFactory = {
   createMessageId(): MessageId;
   createProtocolFrameId(): ProtocolFrameId;
   createContextRevisionId(): ContextRevisionId;
+  createContextSurfaceId(): ContextSurfaceId;
 };
 
 export const runtimeIdFactory: RuntimeIdFactory = {
@@ -30,6 +32,7 @@ export const runtimeIdFactory: RuntimeIdFactory = {
   createMessageId: () => createUuidV7() as MessageId,
   createProtocolFrameId: () => createUuidV7() as ProtocolFrameId,
   createContextRevisionId: () => createUuidV7() as ContextRevisionId,
+  createContextSurfaceId: () => createUuidV7() as ContextSurfaceId,
 };
 
 const canonicalUuidV7Pattern =

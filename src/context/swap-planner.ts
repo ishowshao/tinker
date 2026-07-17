@@ -14,8 +14,9 @@ import { CompiledContextError } from "./compiled-context-validator";
 import type { SwapOnlyPolicyV1 } from "./context-policy";
 import { ContextProtocolError } from "./context-protocol-validator";
 import type {
+  BuiltContextRequest,
   CompiledRevisionContext,
-  StoredContextRevisionV5,
+  StoredContextRevisionV6,
   SwapOverride,
 } from "./context-revision";
 import {
@@ -66,7 +67,8 @@ export type SwapRevisionPlan = {
 
 export type SwapPlanningInput = {
   readonly active: CompiledRevisionContext;
-  readonly revision: StoredContextRevisionV5;
+  readonly revision: StoredContextRevisionV6;
+  readonly surface: BuiltContextRequest["surface"];
   readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
   readonly activePrepared: PreparedModelRequest;
@@ -206,10 +208,12 @@ export class SwapPlanner {
           canonical: input.canonical,
           activeOverrides: input.activeOverrides,
           addedOverrides,
+          activeSurface: input.surface,
         });
         const built = this.requestBuilder.build({
           canonical: input.canonical,
           revision: input.revision,
+          surface: input.surface,
           activeOverrides: [...input.activeOverrides, ...addedOverrides],
           compiled,
           tools: input.tools,
@@ -428,7 +432,7 @@ export function assertPlanBaseCurrent(
   plan: SwapRevisionPlan,
   current: {
     readonly active: CompiledRevisionContext;
-    readonly revision: StoredContextRevisionV5;
+    readonly revision: StoredContextRevisionV6;
     readonly activeOverrides: readonly SwapOverride[];
     readonly activePrepared: PreparedModelRequest;
   },

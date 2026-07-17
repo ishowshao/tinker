@@ -19,11 +19,14 @@ import { stableJsonStringify } from "../model/model-request-preflight";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { SessionStore } from "../session/session-store";
 import { SessionError } from "../session/session-errors";
-import { TEST_CONTEXT_BUDGET, prepareTestModelRequest } from "./test-runtime";
+import {
+  finalizeTestSessionStore,
+  TEST_CONTEXT_BUDGET,
+  prepareTestModelRequest,
+} from "./test-runtime";
 
 describe("ContextRevisionCompiler", () => {
   test("is the byte-stable active rendering path and keeps candidate prompts outside it", () => {
-    const fixture = completedReadFixture("x".repeat(9_000));
     const tools = [
       {
         name: "Read",
@@ -31,6 +34,7 @@ describe("ContextRevisionCompiler", () => {
         parameters: { type: "object", properties: {} },
       },
     ];
+    const fixture = completedReadFixture("x".repeat(9_000), tools);
     const built = fixture.ledger.buildCommittedModelRequest(tools);
     const legacyMessages = materializeAgentMessages(
       fixture.ledger.snapshot({ fullIntegrity: true }).messages,
@@ -79,6 +83,7 @@ describe("ContextRevisionCompiler", () => {
       canonical: built.canonical,
       activeOverrides: built.activeOverrides,
       addedOverrides: [override],
+      activeSurface: built.surface,
     });
 
     expect(compiled.entries.map((entry) => [entry.frameId, entry.messageId])).toEqual(
@@ -104,6 +109,7 @@ describe("ContextRevisionCompiler", () => {
         active: built.compiled,
         canonical: built.canonical,
         activeOverrides: built.activeOverrides,
+        activeSurface: built.surface,
         addedOverrides: [
           {
             ...override,
@@ -130,6 +136,8 @@ describe("ContextRevisionCompiler", () => {
         keepFromOrdinal: 1,
         createdAt: "2026-07-16T00:00:00.000Z",
       },
+      surface: built.surface,
+      activeOverrides: built.activeOverrides,
       canonical: built.canonical,
     };
     expect(() =>
@@ -139,7 +147,7 @@ describe("ContextRevisionCompiler", () => {
 });
 
 describe("SessionStore context snapshot", () => {
-  test("decodes the initial v5 revision without changing durable state", async () => {
+  test("decodes the initial v6 revision without changing durable state", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -150,6 +158,7 @@ describe("SessionStore context snapshot", () => {
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
       });
+      finalizeTestSessionStore(store, { systemPrompt: "system" });
       const before = store.loadContextSnapshot();
       const after = store.loadContextSnapshot();
       expect(before).toEqual(after);
@@ -164,14 +173,14 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(5);
+      expect(store.readMeta().schemaVersion).toBe(6);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 
-  test("fast-fails when active revision metadata no longer matches v5", async () => {
+  test("fast-fails when active revision metadata no longer matches v6", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-bad-"));
     const sessionId = runtimeIdFactory.createSessionId();
     let store: SessionStore | undefined;
@@ -183,6 +192,7 @@ describe("SessionStore context snapshot", () => {
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
       });
+      finalizeTestSessionStore(store, { systemPrompt: "system" });
       const database = new Database(store.databasePath, { readwrite: true });
       database.exec("DROP TRIGGER session_meta_monotonic_update");
       database
@@ -277,12 +287,20 @@ describe("CommittedPrefixAuditor", () => {
   });
 });
 
-function completedReadFixture(observation: string) {
+function completedReadFixture(
+  observation: string,
+  tools: readonly {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  }[] = [],
+) {
   const sessionId = runtimeIdFactory.createSessionId();
   const ledger = new InMemorySessionLedger({
     sessionId,
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
+    initialToolDefinitions: tools,
     clock: () => "2026-07-16T00:00:00.000Z",
   });
   const turn: TurnIdentity = {

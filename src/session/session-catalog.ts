@@ -178,7 +178,7 @@ async function readSummary(
     return {
       sessionId,
       modelName: requireString(row.model_name, "model_name"),
-      ...profileNameFromRuntimeContract(row.runtime_contract_json),
+      ...profileNameFromCompatibility(row.session_compatibility_json),
       createdAt: requireTimestamp(row.created_at, "created_at"),
       updatedAt: requireTimestamp(row.updated_at, "updated_at"),
       turnCount,
@@ -206,16 +206,16 @@ async function readSummary(
   }
 }
 
-function profileNameFromRuntimeContract(value: unknown): { profileName?: string } {
+function profileNameFromCompatibility(value: unknown): { profileName?: string } {
   if (value === null) {
     return {};
   }
   if (typeof value !== "string") {
-    throw new Error("Session runtime contract must be JSON text.");
+    throw new Error("Session compatibility contract must be JSON text.");
   }
   const parsed = JSON.parse(value) as unknown;
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Session runtime contract must be an object.");
+    throw new Error("Session compatibility contract must be an object.");
   }
   const profileName = (parsed as Record<string, unknown>).profileName;
   if (profileName === undefined) {

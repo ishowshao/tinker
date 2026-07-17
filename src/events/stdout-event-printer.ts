@@ -24,7 +24,7 @@ export class StdoutEventPrinter implements EventSink {
         break;
       case "session.resumed":
         this.stdout.write(
-          `session.resumed sessionId=${event.sessionId} openCount=${event.data.openCount} recallIndexRebuilt=${event.data.recallIndexRebuilt}\n`,
+          `session.resumed sessionId=${event.sessionId} openCount=${event.data.openCount} recallIndexRebuilt=${event.data.recallIndexRebuilt}${event.data.contextRefresh === undefined ? "" : ` contextRevision=${event.data.contextRefresh.revisionNumber}`}\n`,
         );
         break;
       case "session.interrupted_frame_recovered":
@@ -67,12 +67,16 @@ export class StdoutEventPrinter implements EventSink {
         break;
       case "context.revision.started":
         this.stdout.write(
-          `context.revision.started reason=${event.data.reason} policy=${event.data.policyVersion}\n`,
+          event.data.strategy === "swap"
+            ? `context.revision.started reason=${event.data.reason} policy=${event.data.policyVersion}\n`
+            : `context.revision.started reason=${event.data.reason} strategy=surface_refresh changed=${event.data.changed.join(",")}\n`,
         );
         break;
       case "context.revision.finished":
         this.stdout.write(
-          `context.revision.finished outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} added=${event.data.addedOverrideCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
+          event.data.strategy === "swap"
+            ? `context.revision.finished outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} added=${event.data.addedOverrideCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`
+            : `context.revision.finished strategy=surface_refresh revision=${event.data.revisionNumber} changed=${event.data.changed.join(",")} tools=${event.data.toolCountBefore}->${event.data.toolCountAfter}\n`,
         );
         break;
       case "context.revision.failed":

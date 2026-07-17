@@ -4,8 +4,8 @@ import { Database } from "bun:sqlite";
 import type { ToolCall } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
 import {
-  assertMatchingContextBudget,
   createModelContextProfile,
+  deriveModelContextBudget,
   type ModelContextBudget,
   type ModelContextProfile,
 } from "../model/model-context-profile";
@@ -78,7 +78,7 @@ export class ResumeProjectionReader {
       const recentTurns = turns.map((turn) => projectTurn(database, turn, policy));
       const last = recentTurns.at(-1);
       const terminal = terminalProjection(last);
-      const context = decodeContextContract(meta.runtime_contract_json);
+      const context = decodeContextCompatibility(meta.session_compatibility_json);
       return {
         status: terminal.status,
         sessionId: input.sessionId,
@@ -100,20 +100,19 @@ export class ResumeProjectionReader {
   }
 }
 
-function decodeContextContract(value: unknown): {
+function decodeContextCompatibility(value: unknown): {
   profile: ModelContextProfile;
   budget: ModelContextBudget;
 } {
   if (typeof value !== "string") {
-    throw new Error("Session runtime contract is missing.");
+    throw new Error("Session compatibility contract is missing.");
   }
   const parsed = JSON.parse(value) as unknown;
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Session runtime contract must be an object.");
+    throw new Error("Session compatibility contract must be an object.");
   }
   const record = parsed as Record<string, unknown>;
   const profileRecord = objectValue(record.contextProfile, "contextProfile");
-  const budgetRecord = objectValue(record.contextBudget, "contextBudget");
   const profile = createModelContextProfile({
     contextWindowTokens: positiveInteger(
       profileRecord.contextWindowTokens,
@@ -124,31 +123,7 @@ function decodeContextContract(value: unknown): {
       "maxSupportedOutputTokens",
     ),
   });
-  const budget: ModelContextBudget = {
-    contextWindowTokens: positiveInteger(
-      budgetRecord.contextWindowTokens,
-      "budget.contextWindowTokens",
-    ),
-    maxSupportedOutputTokens: positiveInteger(
-      budgetRecord.maxSupportedOutputTokens,
-      "budget.maxSupportedOutputTokens",
-    ),
-    requestMaxOutputTokens: positiveInteger(
-      budgetRecord.requestMaxOutputTokens,
-      "requestMaxOutputTokens",
-    ),
-    inputBudgetTokens: positiveInteger(
-      budgetRecord.inputBudgetTokens,
-      "inputBudgetTokens",
-    ),
-    triggerRatio: 0.8,
-    triggerTokens: positiveInteger(budgetRecord.triggerTokens, "triggerTokens"),
-  };
-  if (budgetRecord.triggerRatio !== 0.8) {
-    throw new Error("Session context triggerRatio must be 0.8.");
-  }
-  assertMatchingContextBudget(profile, budget);
-  return { profile, budget };
+  return { profile, budget: deriveModelContextBudget(profile) };
 }
 
 function projectTurn(
