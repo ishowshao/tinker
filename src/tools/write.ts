@@ -218,11 +218,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isNotFound(error: unknown): boolean {
+  // ENOTDIR means a parent component is a file, so the target file cannot exist.
+  // Treat it as missing here so parent creation reports the underlying path error.
   return (
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    error.code === "ENOENT"
+    (error.code === "ENOENT" || error.code === "ENOTDIR")
   );
 }
 

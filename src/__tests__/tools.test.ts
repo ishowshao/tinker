@@ -472,6 +472,9 @@ describe("Read and Write tools", () => {
       });
 
       expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toContain(
+        "Failed to create parent directory:",
+      );
       expect("error" in raw ? raw.error : "").toContain("not a directory");
       expect(await readFile(blocker, "utf8")).toBe("unchanged\n");
     } finally {
@@ -755,7 +758,35 @@ describe("Edit tool", () => {
       });
 
       expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toContain(
+        "Failed to create parent directory:",
+      );
       expect("error" in raw ? raw.error : "").toContain("not a directory");
+      expect(await readFile(blocker, "utf8")).toBe("unchanged\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("reports a missing target when an ordinary Edit parent path is a file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+    const blocker = path.join(workspace, "blocker");
+
+    try {
+      await writeFile(blocker, "unchanged\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Edit",
+        args: {
+          file_path: "blocker/nested/notes.txt",
+          old_string: "old",
+          new_string: "new",
+        },
+      });
+
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toBe("File does not exist.");
       expect(await readFile(blocker, "utf8")).toBe("unchanged\n");
     } finally {
       await rm(workspace, { recursive: true });
