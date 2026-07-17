@@ -1,8 +1,8 @@
-import path from "node:path";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
+import { ensureParentDirectory } from "./ensure-parent-directory";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import { defineToolExecutor } from "./types";
@@ -28,7 +28,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
     definition: {
       name: "Write",
       description:
-        "Write full file content in the local workspace. Existing files must be read first.",
+        "Write full file content. Missing parent directories are created automatically. Existing files must be read first.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -71,17 +71,6 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
           ok: false,
           filePath: input.file_path,
           error: errorMessage(error),
-        };
-      }
-
-      const parentPath = path.dirname(absolutePath);
-      const parentCheck = await directoryExists(parentPath);
-      if (!parentCheck.ok) {
-        return {
-          ok: false,
-          filePath: input.file_path,
-          absolutePath,
-          error: parentCheck.error,
         };
       }
 
@@ -129,6 +118,17 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         oldContent = target.content;
       }
 
+      throwIfTurnCancelled(context.signal);
+      try {
+        await ensureParentDirectory(absolutePath);
+      } catch (error) {
+        return {
+          ok: false,
+          filePath: input.file_path,
+          absolutePath,
+          error: `Failed to create parent directory: ${errorMessage(error)}`,
+        };
+      }
       throwIfTurnCancelled(context.signal);
       await writeFile(absolutePath, input.content, "utf8");
       const newSha256 = sha256Text(input.content);
@@ -182,19 +182,6 @@ function parseWriteArgs(
       content: args.content,
     },
   };
-}
-
-async function directoryExists(
-  directoryPath: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const info = await stat(directoryPath);
-    return info.isDirectory()
-      ? { ok: true }
-      : { ok: false, error: "Parent path is not a directory." };
-  } catch {
-    return { ok: false, error: "Parent directory does not exist." };
-  }
 }
 
 async function targetFileState(

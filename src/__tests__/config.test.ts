@@ -285,7 +285,13 @@ describe("system prompt", () => {
 
     expect(prompt).toContain("Use Glob to find files by name or path pattern.");
     expect(prompt).toContain("Use Read to open specific files returned by Grep.");
-    expect(prompt).toContain("Use Edit to replace exact strings in files.");
+    expect(prompt).toContain("Use Edit to replace exact strings in existing files.");
+    expect(prompt).toContain(
+      'Edit with old_string="" can create a file or write to an empty file without a prior Read',
+    );
+    expect(prompt).toContain(
+      "Write creates missing parent directories when creating a file.",
+    );
     expect(prompt).toContain("A successful paginated Read is sufficient.");
     expect(prompt).toContain("Use Bash to run tests");
     expect(prompt).toContain(

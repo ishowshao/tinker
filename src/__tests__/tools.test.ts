@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
@@ -406,6 +414,71 @@ describe("Read and Write tools", () => {
     }
   });
 
+  test("creates missing parent directories for a new file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const filePath = path.join(workspace, "src", "generated", "api", "client.ts");
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: {
+          file_path: "src/generated/api/client.ts",
+          content: "export const client = true;\n",
+        },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect((await stat(path.dirname(filePath))).isDirectory()).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("export const client = true;\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("creates missing parent directories for an absolute file path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
+    const workspace = path.join(root, "workspace");
+    const filePath = path.join(root, "outside", "nested", "notes.txt");
+
+    try {
+      await mkdir(workspace);
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: { file_path: filePath, content: "outside\n" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("outside\n");
+    } finally {
+      await rm(root, { recursive: true });
+    }
+  });
+
+  test("fails when a Write parent path is a file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
+    const blocker = path.join(workspace, "blocker");
+
+    try {
+      await writeFile(blocker, "unchanged\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: { file_path: "blocker/nested/notes.txt", content: "new\n" },
+      });
+
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toContain("not a directory");
+      expect(await readFile(blocker, "utf8")).toBe("unchanged\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("returns a structured patch when overwriting after Read", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
 
@@ -612,6 +685,78 @@ describe("Edit tool", () => {
       expect("created" in raw ? raw.created : false).toBe(true);
       const patch = "patch" in raw ? raw.patch : undefined;
       expect(patch?.[0]?.lines).toEqual(["+a", "+b"]);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("creates missing parent directories in Edit creation mode", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const filePath = path.join(workspace, "src", "generated", "client.ts");
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Edit",
+        args: {
+          file_path: "src/generated/client.ts",
+          old_string: "",
+          new_string: "export const client = true;\n",
+        },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("export const client = true;\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("does not create parent directories for a missing ordinary Edit target", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+    const parentPath = path.join(workspace, "missing", "nested");
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Edit",
+        args: {
+          file_path: "missing/nested/notes.txt",
+          old_string: "old",
+          new_string: "new",
+        },
+      });
+
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toBe("File does not exist.");
+      expect(stat(parentPath)).rejects.toThrow();
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("fails when an Edit creation parent path is a file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+    const blocker = path.join(workspace, "blocker");
+
+    try {
+      await writeFile(blocker, "unchanged\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Edit",
+        args: {
+          file_path: "blocker/nested/notes.txt",
+          old_string: "",
+          new_string: "new\n",
+        },
+      });
+
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toContain("not a directory");
+      expect(await readFile(blocker, "utf8")).toBe("unchanged\n");
     } finally {
       await rm(workspace, { recursive: true });
     }

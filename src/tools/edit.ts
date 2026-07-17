@@ -1,8 +1,8 @@
-import path from "node:path";
 import { Buffer } from "node:buffer";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
+import { ensureParentDirectory } from "./ensure-parent-directory";
 import { sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import { defineToolExecutor } from "./types";
@@ -30,7 +30,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
     definition: {
       name: "Edit",
       description:
-        "Replace an exact string in a workspace file. The file must be read first; a successful paginated Read is sufficient.",
+        "Replace an exact string in an existing file. Exact replacement requires a prior Read; a successful paginated Read is sufficient. Set old_string='' to create a file or write to an empty file; missing parent directories are created when creating a file.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -41,7 +41,8 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
           },
           old_string: {
             type: "string",
-            description: "Exact text to replace.",
+            description:
+              "Exact text to replace. Use an empty string only to create a file or write to an empty file.",
           },
           new_string: {
             type: "string",
@@ -81,17 +82,6 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
           ok: false,
           filePath: input.file_path,
           error: errorMessage(error),
-        };
-      }
-
-      const parentPath = path.dirname(absolutePath);
-      const parentCheck = await directoryExists(parentPath);
-      if (!parentCheck.ok) {
-        return {
-          ok: false,
-          filePath: input.file_path,
-          absolutePath,
-          error: parentCheck.error,
         };
       }
 
@@ -300,6 +290,20 @@ async function writeEditedContent(input: {
     }
   }
 
+  if (input.created) {
+    try {
+      await ensureParentDirectory(input.absolutePath);
+    } catch (error) {
+      return {
+        ok: false,
+        filePath: input.filePath,
+        absolutePath: input.absolutePath,
+        error: `Failed to create parent directory: ${errorMessage(error)}`,
+      };
+    }
+    throwIfTurnCancelled(input.signal);
+  }
+
   await writeFile(input.absolutePath, input.newContent, "utf8");
   const newSha256 = sha256Text(input.newContent);
   const writtenInfo = await stat(input.absolutePath);
@@ -328,19 +332,6 @@ async function writeEditedContent(input: {
     patch: patch.hunks,
     patchTruncated: patch.truncated,
   };
-}
-
-async function directoryExists(
-  directoryPath: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const info = await stat(directoryPath);
-    return info.isDirectory()
-      ? { ok: true }
-      : { ok: false, error: "Parent path is not a directory." };
-  } catch {
-    return { ok: false, error: "Parent directory does not exist." };
-  }
 }
 
 async function fileMtime(
