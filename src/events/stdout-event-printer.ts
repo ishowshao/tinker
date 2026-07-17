@@ -65,6 +65,21 @@ export class StdoutEventPrinter implements EventSink {
           `context.shadow.failed stage=${event.data.stage} code=${event.data.errorCode}\n`,
         );
         break;
+      case "context.revision.started":
+        this.stdout.write(
+          `context.revision.started reason=${event.data.reason} policy=${event.data.policyVersion}\n`,
+        );
+        break;
+      case "context.revision.finished":
+        this.stdout.write(
+          `context.revision.finished outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} added=${event.data.addedOverrideCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
+        );
+        break;
+      case "context.revision.failed":
+        this.stderr.write(
+          `context.revision.failed stage=${event.data.stage} code=${event.data.errorCode}\n`,
+        );
+        break;
       case "assistant.progress":
         this.stdout.write(
           `assistant.progress iteration=${event.iterationNumber}\n${event.data.content}\n`,

@@ -3,7 +3,12 @@ import { CompositeEventSink } from "../events/composite-event-sink";
 import type { EventSink } from "../events/event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { ObservationTextLog } from "../events/observation-text-log";
-import type { AgentEvent, AgentEventInput, AgentEventType } from "../events/types";
+import type {
+  AgentEvent,
+  AgentEventInput,
+  AgentEventType,
+  ContextRevisionFinishedData,
+} from "../events/types";
 import {
   runtimeIdFactory,
   type RuntimeIdFactory,
@@ -13,7 +18,13 @@ import { loadMcpConfig } from "../mcp/mcp-config";
 import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
-import { ShadowSwapPlanner } from "../context/context-shadow-planner";
+import { SwapPlanner } from "../context/swap-planner";
+import {
+  ContextManager,
+  ContextManagerError,
+  type ContextCompactionResult,
+  type ContextCompactionTrigger,
+} from "../context/context-manager";
 import {
   assertMatchingContextBudget,
   type ModelContextBudget,
@@ -61,6 +72,7 @@ export type RuntimeSession = {
   readonly resumed: boolean;
   readonly recovery: SessionRecoveryResult;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
+  compactContext(): Promise<ContextCompactionResult>;
   canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
@@ -123,6 +135,7 @@ export type RuntimeSessionFactoryDependencies = {
   createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
   selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
   onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
+  manualCompactionTrigger: () => ContextCompactionTrigger;
 };
 
 export class RuntimeEventAppendError extends Error {
@@ -139,6 +152,7 @@ type RuntimeSessionState =
   | "initializing"
   | "ready"
   | "executing"
+  | "compacting"
   | "faulted"
   | "disposing"
   | "disposed";
@@ -172,6 +186,7 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   createEventSink,
   selectShadowPlanning: ({ preflight }) =>
     preflight.pressure === "normal" ? undefined : { trigger: "runtime_pressure" },
+  manualCompactionTrigger: () => ({ kind: "manual" }),
 };
 
 class DefaultRuntimeSession implements RuntimeSession {
@@ -193,11 +208,13 @@ class DefaultRuntimeSession implements RuntimeSession {
   private mcpManager?: McpManager;
   private ledger?: SessionLedger;
   private activeTurn?: ActiveTurn;
+  private activeCompaction?: Promise<ContextCompactionResult>;
   private disposePromise?: Promise<void>;
   private faultCause?: unknown;
   private readonly contextMeter: ContextMeter;
   private readonly committedPrefixAuditor = new CommittedPrefixAuditor();
-  private readonly shadowPlanner: ShadowSwapPlanner;
+  private readonly shadowPlanner: SwapPlanner;
+  private contextManager?: ContextManager;
 
   private readonly context: RuntimeSessionContext;
 
@@ -214,7 +231,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.contextMeter = new ContextMeter(input.contextBudget, {
       onMeasuredAnchor: (anchor) => store.writeMeasuredContextAnchor(anchor),
     });
-    this.shadowPlanner = new ShadowSwapPlanner(input.modelClient);
+    this.shadowPlanner = new SwapPlanner(input.modelClient);
     this.context = {
       sessionId: this.sessionId,
       createIteration: (turn, iterationNumber) =>
@@ -353,6 +370,21 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
 
       session.ledger = dependencies.createLedger(store, dependencies.idFactory);
+      session.contextManager = new ContextManager({
+        store,
+        ledger: session.requireLedger(),
+        model: input.modelClient,
+        contextMeter: session.contextMeter,
+        committedPrefixAuditor: session.committedPrefixAuditor,
+        idFactory: dependencies.idFactory,
+        tools: () => session.requireTooling().registry.definitions(),
+        onUsageUpdated: (snapshot) =>
+          session.append({
+            type: "context.usage.updated",
+            sessionId: session.sessionId,
+            data: { phase: "revision", snapshot },
+          }),
+      });
       const initialBuilt = session
         .requireLedger()
         .buildCommittedModelRequest(definitions);
@@ -436,6 +468,98 @@ class DefaultRuntimeSession implements RuntimeSession {
     );
     this.activeTurn = { controller, completion };
     return completion;
+  }
+
+  compactContext(): Promise<ContextCompactionResult> {
+    if (this.state !== "ready") {
+      throw new Error(`Cannot compact context while RuntimeSession is ${this.state}.`);
+    }
+    if (this.activeTurn !== undefined) {
+      throw new Error("Cannot compact context while a turn is active.");
+    }
+    const completion = this.performCompactContext();
+    this.activeCompaction = completion;
+    void completion.then(
+      () => {
+        if (this.activeCompaction === completion) {
+          this.activeCompaction = undefined;
+        }
+      },
+      () => {
+        if (this.activeCompaction === completion) {
+          this.activeCompaction = undefined;
+        }
+      },
+    );
+    return completion;
+  }
+
+  private async performCompactContext(): Promise<ContextCompactionResult> {
+    if (this.state !== "ready") {
+      throw new Error(`Cannot compact context while RuntimeSession is ${this.state}.`);
+    }
+    if (this.activeTurn !== undefined) {
+      throw new Error("Cannot compact context while a turn is active.");
+    }
+    this.store.assertContextRevisionIdle();
+    this.state = "compacting";
+    let started = false;
+    try {
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "swap",
+          reason: "manual",
+          policyVersion: "swap-only-v1",
+          rendererFormat: "swap-observation-v1",
+        },
+      });
+      started = true;
+      const result = await this.requireContextManager().compact(
+        this.dependencies.manualCompactionTrigger(),
+      );
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: contextRevisionFinishedData(result),
+      });
+      if (this.state === "compacting") {
+        this.state = "ready";
+      }
+      return result;
+    } catch (error) {
+      if (started && !(error instanceof RuntimeEventAppendError)) {
+        const failure =
+          error instanceof ContextManagerError
+            ? error
+            : new ContextManagerError(
+                "activate",
+                error instanceof Error ? error.name : "CONTEXT_COMPACTION_FAILED",
+                true,
+                false,
+                "Context compaction failed.",
+                { cause: error },
+              );
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "swap",
+            reason: "manual",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Context compaction failed at ${failure.stage}.`,
+          },
+        }).catch(() => undefined);
+      }
+      if (!(error instanceof ContextManagerError) || error.fatal) {
+        this.fault(error);
+      } else if (this.state === "compacting") {
+        this.state = "ready";
+      }
+      throw error;
+    }
   }
 
   dispose(reason: SessionDisposeReason): Promise<void> {
@@ -578,6 +702,17 @@ class DefaultRuntimeSession implements RuntimeSession {
 
     this.state = "disposing";
     const errors: unknown[] = this.faultCause === undefined ? [] : [this.faultCause];
+    const activeCompaction = this.activeCompaction;
+    if (activeCompaction !== undefined) {
+      try {
+        await activeCompaction;
+      } catch {
+        // The compactContext caller owns its primary error. Disposal still continues.
+      }
+    }
+    if (this.faultCause !== undefined && !errors.includes(this.faultCause)) {
+      errors.push(this.faultCause);
+    }
     const activeTurn = this.activeTurn;
     if (activeTurn !== undefined) {
       activeTurn.controller.abort(new TurnCancelledError("session_dispose"));
@@ -883,6 +1018,13 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.ledger;
   }
 
+  private requireContextManager(): ContextManager {
+    if (this.contextManager === undefined) {
+      throw new Error("RuntimeSession ContextManager is not initialized.");
+    }
+    return this.contextManager;
+  }
+
   private fault(error: unknown): void {
     this.faultCause ??= error;
     if (this.state !== "disposing" && this.state !== "disposed") {
@@ -1004,6 +1146,53 @@ function throwCollectedErrors(errors: unknown[], message: string): void {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function contextRevisionFinishedData(
+  result: ContextCompactionResult,
+): ContextRevisionFinishedData {
+  if (result.status === "unchanged") {
+    return {
+      strategy: "swap",
+      reason: "manual",
+      policyVersion: "swap-only-v1",
+      outcome: result.outcome,
+      baseRevisionNumber: result.revisionNumber,
+      addedOverrideCount: 0,
+      totalOverrideCount: result.totalOverrideCount,
+      originalObservationBytes: 0,
+      projectedObservationBytes: 0,
+      rawTokensBefore: result.rawTokensBefore,
+      guardedTokensBefore: result.guardedTokensBefore,
+      targetTokens: result.targetTokens,
+      durationMs: result.durationMs,
+    };
+  }
+  return {
+    strategy: "swap",
+    reason: "manual",
+    policyVersion: "swap-only-v1",
+    outcome: result.outcome,
+    baseRevisionNumber: result.previousRevisionNumber,
+    revisionNumber: result.revisionNumber,
+    addedOverrideCount: result.addedOverrideCount,
+    totalOverrideCount: result.totalOverrideCount,
+    originalObservationBytes: result.originalObservationBytes,
+    projectedObservationBytes: result.projectedObservationBytes,
+    rawTokensBefore: result.rawTokensBefore,
+    rawTokensAfter: result.rawTokensAfter,
+    guardedTokensBefore: result.guardedTokensBefore,
+    guardedTokensAfter: result.guardedTokensAfter,
+    targetTokens: result.targetTokens,
+    planHash: result.planHash,
+    durationMs: result.durationMs,
+  };
+}
+
+function boundedContextErrorCode(code: string): string {
+  return /^[A-Za-z0-9_]+$/.test(code) && code.length <= 80
+    ? code
+    : "CONTEXT_COMPACTION_FAILED";
 }
 
 function requirePositiveNumber(value: number, name: string): void {

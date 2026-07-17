@@ -21,6 +21,7 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
 - **Observation system**: Tool execution results are formatted into structured text that the model sees, with separate raw results for event logs and TUI display.
 - **Turn cancellation**: Users can cancel an ongoing turn safely, with protocol-safe synthetic tool messages.
 - **Context metering**: Budget-aware context management with protocol validation before sending requests to the model.
+- **Deterministic context compaction**: Idle sessions can swap eligible historical tool output into Recall-addressable placeholders without calling the model.
 - **Choice of models**: Supports any OpenAI-compatible API (defaults to DeepSeek). Configurable via environment variables.
 
 ## Quick Start
@@ -44,6 +45,7 @@ bun run tinker run "explain the project structure"
   paths must remain inside the workspace; absolute paths may point outside it. Use
   the keyboard or mouse wheel to scroll and press `Esc` to close the viewer.
 - `/status` — Show session and context details.
+- `/compact` — Deterministically compact eligible historical tool output while the session is idle.
 - `/model [profile-name]` — Choose a model profile for a new session.
 - `/resume [session-id]` — Choose or directly resume a stored session.
 - `/session delete <session-id> --confirm` — Delete a stored session.

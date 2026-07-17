@@ -3,7 +3,7 @@ import { formatMessageSource } from "./context-source";
 import type { CanonicalMessageRecord, ToolResultRecord } from "./protocol-frame";
 import type { ToolRawResult, ToolRawResultKind } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
-import type { ProspectiveSwapOverride } from "./context-revision";
+import type { SwapOverride } from "./context-revision";
 
 const MAX_METADATA_BYTES = 1_024;
 const MAX_SCALAR_BYTES = 256;
@@ -37,7 +37,7 @@ export class ContextSwapRenderer {
   render(input: {
     message: Extract<CanonicalMessageRecord, { role: "tool" }>;
     result: ToolResultRecord;
-  }): ProspectiveSwapOverride {
+  }): SwapOverride {
     const { message, result } = input;
     if (
       result.toolMessageId !== message.messageId ||

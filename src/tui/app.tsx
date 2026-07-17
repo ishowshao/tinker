@@ -1,6 +1,10 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import {
+  ContextManagerError,
+  type ContextCompactionResult,
+} from "../context/context-manager";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { visibleTimelineItems } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
@@ -289,6 +293,17 @@ export function App(props: AppProps) {
         setShowStatus(true);
         return;
       }
+      if (command.type === "compact") {
+        setIsSessionOperation(true);
+        void props.sessionController
+          .compact()
+          .then((result) => setNotice(formatContextCompactionNotice(result)))
+          .catch((error: unknown) => {
+            setNotice(formatContextCompactionFailureNotice(error));
+          })
+          .finally(() => setIsSessionOperation(false));
+        return;
+      }
       if (command.type === "quit") {
         props.onQuit?.();
         exit();
@@ -446,4 +461,37 @@ export function App(props: AppProps) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function formatContextCompactionNotice(result: ContextCompactionResult): string {
+  if (result.status === "unchanged") {
+    if (result.outcome === "below_target") {
+      return `Context is already below the compact target (${result.guardedTokensBefore.toLocaleString("en-US")} <= ${result.targetTokens.toLocaleString("en-US")} estimated tokens).`;
+    }
+    return "No eligible historical tool observations can be compacted.";
+  }
+  const before = result.guardedTokensBefore.toLocaleString("en-US");
+  const after = result.guardedTokensAfter.toLocaleString("en-US");
+  if (result.outcome === "insufficient_candidates") {
+    return `Context compacted: ${result.addedOverrideCount} observations swapped, ${before} -> ${after} estimated tokens; target ${result.targetTokens.toLocaleString("en-US")} was not reached.`;
+  }
+  const reduction =
+    result.guardedTokensBefore === 0
+      ? "0.0"
+      : (
+          ((result.guardedTokensBefore - result.guardedTokensAfter) /
+            result.guardedTokensBefore) *
+          100
+        ).toFixed(1);
+  return `Context compacted: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.addedOverrideCount} observations swapped, ${before} -> ${after} estimated tokens (-${reduction}%).`;
+}
+
+export function formatContextCompactionFailureNotice(error: unknown): string {
+  if (!(error instanceof ContextManagerError)) {
+    return "Context compaction failed.";
+  }
+  const code = /^[A-Za-z0-9_]+$/.test(error.code)
+    ? error.code
+    : "CONTEXT_COMPACTION_FAILED";
+  return `Context compaction failed at ${error.stage} (${code}).`;
 }

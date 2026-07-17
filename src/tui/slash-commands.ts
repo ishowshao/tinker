@@ -5,6 +5,7 @@ export type SlashCommand = {
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "status", description: "Show session and context details" },
+  { name: "compact", description: "Compact eligible historical tool output" },
   { name: "view", description: "View a local UTF-8 text file" },
   { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
@@ -14,6 +15,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 
 export type ParsedSlashCommand =
   | { type: "status" }
+  | { type: "compact" }
   | { type: "view"; filePath: string }
   | { type: "quit" }
   | { type: "model" }
@@ -46,6 +48,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
   const command = tokens[0];
   if (command === "/status" && tokens.length === 1) {
     return { type: "status" };
+  }
+  if (command === "/compact") {
+    if (tokens.length === 1) {
+      return { type: "compact" };
+    }
+    throw new SlashCommandError("Usage: /compact");
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };

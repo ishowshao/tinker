@@ -8,6 +8,7 @@ import {
   type RuntimeSession,
   type RuntimeSessionFactoryDependencies,
 } from "../src/agent/runtime-session";
+import type { ContextCompactionResult } from "../src/context/context-manager";
 import type {
   AgentTurnLedger,
   PendingLedgerTurn,
@@ -32,11 +33,11 @@ import { OpenAIChatModelClient } from "../src/model/openai-chat-model-client";
 import { estimatePromptSegments } from "../src/model/token-estimator";
 import type { ProtocolContextView } from "../src/context/protocol-frame";
 import type { BuiltContextRequest } from "../src/context/context-revision";
-import type { ShadowPlanningResult } from "../src/context/context-shadow-planner";
+import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V4_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V5_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -83,6 +84,18 @@ export type LongSessionBenchmarkResult = {
     durationMs: number;
     planHash: string;
   };
+  compaction: {
+    count: number;
+    results: readonly ContextCompactionResult[];
+    databaseAndWalBytes: {
+      samples: readonly CompactionStorageSample[];
+      totalDelta: number;
+    };
+    addedOverrideCount: number;
+    totalOverrideCount: number;
+    activeRevisionNumber: number;
+    providerRequestCountUnchanged: boolean;
+  };
   database: {
     schemaVersion: number;
     schemaFingerprintMatches: boolean;
@@ -91,6 +104,8 @@ export type LongSessionBenchmarkResult = {
     frameCount: number;
     toolResultCount: number;
     contextRevisionCount: number;
+    contextOverrideCount: number;
+    totalOverrideCount: number;
     revisionNumber: number;
     revisionKind: string;
     keepFromOrdinal: number;
@@ -161,6 +176,8 @@ export async function runLongSessionBenchmark(
   });
   const shadow = new BenchmarkShadowController();
   const turnDurations: number[] = [];
+  const compactionResults: ContextCompactionResult[] = [];
+  const compactionStorageSamples: CompactionStorageSample[] = [];
   const samples: LongSessionSample[] = [];
   let session: RuntimeSession | undefined;
   let completedWorkloadTurns = 0;
@@ -198,6 +215,20 @@ export async function runLongSessionBenchmark(
       }
       completedWorkloadTurns += 1;
 
+      if (turnNumber === forcedShadowMinimumTurnCount) {
+        const providerRequestsBefore = model.requestCount;
+        const storageBefore = await sqliteStorageSize(databasePath);
+        const compaction = await session.compactContext();
+        const storageAfter = await sqliteStorageSize(databasePath);
+        compactionResults.push(compaction);
+        compactionStorageSamples.push(
+          compactionStorageSample(compaction, storageBefore, storageAfter),
+        );
+        if (model.requestCount !== providerRequestsBefore) {
+          throw new Error("Long-session compaction requested the provider.");
+        }
+      }
+
       if (turnNumber % sampleEvery === 0 || turnNumber === workloadTurnCount) {
         samples.push(
           await benchmarkSample({
@@ -226,6 +257,20 @@ export async function runLongSessionBenchmark(
         if (!session.resumed || session.recovery.syntheticCompletionCount !== 0) {
           throw new Error("Long-session benchmark did not resume cleanly.");
         }
+      }
+    }
+
+    if (workloadTurnCount >= forcedShadowMinimumTurnCount + 9) {
+      const providerRequestsBeforeSecondCompact = model.requestCount;
+      const storageBefore = await sqliteStorageSize(databasePath);
+      const compaction = await session.compactContext();
+      const storageAfter = await sqliteStorageSize(databasePath);
+      compactionResults.push(compaction);
+      compactionStorageSamples.push(
+        compactionStorageSample(compaction, storageBefore, storageAfter),
+      );
+      if (model.requestCount !== providerRequestsBeforeSecondCompact) {
+        throw new Error("Long-session second compaction requested the provider.");
       }
     }
 
@@ -262,16 +307,17 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 4 ||
+      database.schemaVersion !== 5 ||
       !database.schemaFingerprintMatches ||
-      database.contextRevisionCount !== 1 ||
-      database.revisionNumber !== 1 ||
-      database.revisionKind !== "initial_full" ||
+      database.contextRevisionCount !== compactionResults.length + 1 ||
+      database.contextOverrideCount < compactionResults.length ||
+      database.revisionNumber !== compactionResults.length + 1 ||
+      database.revisionKind !== "swap_only" ||
       database.keepFromOrdinal !== 1 ||
       !database.activeRevisionMatches ||
       !database.measuredRevisionMatches
     ) {
-      throw new Error("Long-session shadow planning changed schema v4 revision state.");
+      throw new Error("Long-session durable compaction revision state is invalid.");
     }
     const finalSnapshot = projection.store.getSnapshot();
     assertBoundedProjection(finalSnapshot);
@@ -291,6 +337,11 @@ export async function runLongSessionBenchmark(
       resumeVerified: true,
       recallVerified: true,
       shadow: shadowSummary,
+      compaction: summarizeCompactions(
+        compactionResults,
+        compactionStorageSamples,
+        database,
+      ),
       database,
       projection: {
         policy: defaultTuiProjectionPolicy,
@@ -641,7 +692,7 @@ class BenchmarkProjectionSink implements EventSink {
 class BenchmarkShadowController {
   private requested = false;
   private historyReader?: SessionHistoryReader;
-  private result?: ShadowPlanningResult;
+  private result?: SwapPlanningResult;
   private recallVerified = false;
 
   bindHistoryReader(reader: SessionHistoryReader): void {
@@ -666,16 +717,20 @@ class BenchmarkShadowController {
     return { trigger: "benchmark_forced", forcedTargetTokens: 0 };
   }
 
-  observe(result: ShadowPlanningResult, built: BuiltContextRequest): void {
+  observe(result: SwapPlanningResult, built: BuiltContextRequest): void {
     if (this.result !== undefined) {
       throw new Error("Long-session benchmark produced multiple forced shadow plans.");
     }
     const plan = result.plan;
     const reader = this.historyReader;
-    if (plan === undefined || plan.selected.length === 0 || reader === undefined) {
+    if (
+      plan === undefined ||
+      plan.addedOverrides.length === 0 ||
+      reader === undefined
+    ) {
       throw new Error("Long-session forced shadow plan selected no Recall source.");
     }
-    for (const selected of plan.selected) {
+    for (const selected of plan.addedOverrides) {
       const canonical = built.canonical.messages.find(
         (message) => message.messageId === selected.messageId,
       );
@@ -727,7 +782,7 @@ class BenchmarkShadowController {
       eventCount: shadowEvents,
       outcome: result.outcome,
       eligibleCandidateCount: result.eligibleCandidateCount,
-      selectedCandidateCount: plan.selected.length,
+      selectedCandidateCount: plan.addedOverrides.length,
       excludedByReason: result.excludedByReason,
       selectedByRawKind: result.selectedByRawKind,
       originalObservationBytes: result.originalObservationBytes,
@@ -741,6 +796,51 @@ class BenchmarkShadowController {
       planHash: plan.planHash,
     };
   }
+}
+
+function summarizeCompactions(
+  results: readonly ContextCompactionResult[],
+  storageSamples: readonly CompactionStorageSample[],
+  database: LongSessionBenchmarkResult["database"],
+): LongSessionBenchmarkResult["compaction"] {
+  if (results.length < 1 || results.some((result) => result.status !== "compacted")) {
+    throw new Error("Long-session benchmark did not commit its context revisions.");
+  }
+  const compacted = results as readonly Extract<
+    ContextCompactionResult,
+    { status: "compacted" }
+  >[];
+  const last = compacted.at(-1);
+  if (
+    last === undefined ||
+    last.revisionNumber !== database.revisionNumber ||
+    last.totalOverrideCount !== database.totalOverrideCount
+  ) {
+    throw new Error("Long-session compaction summary does not match durable state.");
+  }
+  if (
+    storageSamples.length !== compacted.length ||
+    storageSamples.some(
+      (sample, index) => sample.revisionNumber !== compacted[index]?.revisionNumber,
+    )
+  ) {
+    throw new Error("Long-session compaction storage samples are incomplete.");
+  }
+  return {
+    count: compacted.length,
+    results: Object.freeze([...compacted]),
+    databaseAndWalBytes: {
+      samples: Object.freeze([...storageSamples]),
+      totalDelta: storageSamples.reduce((total, sample) => total + sample.delta, 0),
+    },
+    addedOverrideCount: compacted.reduce(
+      (total, result) => total + result.addedOverrideCount,
+      0,
+    ),
+    totalOverrideCount: last.totalOverrideCount,
+    activeRevisionNumber: last.revisionNumber,
+    providerRequestCountUnchanged: true,
+  };
 }
 
 async function createBenchmarkSession(input: {
@@ -786,6 +886,10 @@ async function createBenchmarkSession(input: {
     },
     selectShadowPlanning: (planningInput) => input.shadow.select(planningInput),
     onShadowPlanningResult: (result, built) => input.shadow.observe(result, built),
+    manualCompactionTrigger: () => ({
+      kind: "benchmark_forced",
+      targetTokens: 0,
+    }),
   };
   return createRuntimeSession(sessionInput, dependencies);
 }
@@ -943,17 +1047,20 @@ function readDatabaseSummary(
           (SELECT COUNT(*) FROM messages) AS message_count,
           (SELECT COUNT(*) FROM protocol_frames) AS frame_count,
           (SELECT COUNT(*) FROM tool_results) AS tool_result_count,
-          (SELECT COUNT(*) FROM context_revisions) AS context_revision_count`,
+          (SELECT COUNT(*) FROM context_revisions) AS context_revision_count,
+          (SELECT COUNT(*) FROM context_overrides) AS context_override_count`,
       )
       .get() as Record<string, number | bigint>;
     const revision = database
       .query(
         `SELECT cr.revision_number, cr.kind, cr.keep_from_ordinal,
+                cr.total_override_count,
                 sm.active_revision_id = cr.revision_id AS active_matches,
                 cms.revision_id = cr.revision_id AS measured_matches
          FROM session_meta sm
          JOIN context_revisions cr ON cr.session_id = sm.session_id
-         LEFT JOIN context_measurement_state cms ON cms.session_id = sm.session_id`,
+         LEFT JOIN context_measurement_state cms ON cms.session_id = sm.session_id
+         WHERE cr.revision_id = sm.active_revision_id`,
       )
       .get() as Record<string, string | number | bigint>;
     const roleRows = database
@@ -979,12 +1086,16 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V4_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V5_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),
       toolResultCount: numberFromDatabase(counts.tool_result_count),
       contextRevisionCount: numberFromDatabase(counts.context_revision_count),
+      contextOverrideCount: numberFromDatabase(counts.context_override_count),
+      totalOverrideCount: numberFromDatabase(
+        revision.total_override_count as number | bigint,
+      ),
       revisionNumber: numberFromDatabase(revision.revision_number as number | bigint),
       revisionKind: String(revision.kind),
       keepFromOrdinal: numberFromDatabase(
@@ -1042,6 +1153,37 @@ async function directorySize(directory: string): Promise<number> {
     }
   }
   return total;
+}
+
+async function sqliteStorageSize(databasePath: string): Promise<number> {
+  return (await fileSize(databasePath)) + (await fileSize(`${databasePath}-wal`));
+}
+
+async function fileSize(filePath: string): Promise<number> {
+  try {
+    return (await stat(filePath)).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw error;
+  }
+}
+
+function compactionStorageSample(
+  result: ContextCompactionResult,
+  before: number,
+  after: number,
+): CompactionStorageSample {
+  if (result.status !== "compacted") {
+    throw new Error("Benchmark compaction did not create a revision.");
+  }
+  return {
+    revisionNumber: result.revisionNumber,
+    before,
+    after,
+    delta: after - before,
+  };
 }
 
 function memorySnapshot(): MemorySnapshot {
@@ -1107,6 +1249,13 @@ type LongSessionSample = MemorySnapshot & {
   visibleItemCount: number;
   usedInputTokens?: number;
   sessionStorageBytes: number;
+};
+
+type CompactionStorageSample = {
+  revisionNumber: number;
+  before: number;
+  after: number;
+  delta: number;
 };
 
 if (import.meta.main) {

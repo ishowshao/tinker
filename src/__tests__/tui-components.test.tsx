@@ -11,7 +11,12 @@ import { PromptInput } from "../tui/components/prompt-input";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
 import type { SessionId } from "../ids/runtime-id";
+import { runtimeIdFactory } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
+import {
+  ContextManagerError,
+  type ContextCompactionResult,
+} from "../context/context-manager";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiSessionController } from "../tui/tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
@@ -46,6 +51,9 @@ function createProjectionStore(): TuiProjectionStore {
 function createSessionController(
   projectionStore: TuiProjectionStore,
   run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>,
+  compact: () => Promise<ContextCompactionResult> = async () => {
+    throw new Error("not used");
+  },
 ): TuiSessionController {
   const binding = {
     sessionId: "session-1" as SessionId,
@@ -58,6 +66,7 @@ function createSessionController(
     getBinding: () => binding,
     subscribe: () => () => undefined,
     listSessions: async () => [],
+    compact,
     resume: async () => {
       throw new Error("not used");
     },
@@ -227,6 +236,86 @@ describe("tui components", () => {
     await submitInput(stdin, "/nope");
     await Bun.sleep(25);
     expect(lastFrame()).not.toContain("Estimator");
+    cleanup();
+  });
+
+  test("runs /compact outside the agent turn and renders a bounded result", async () => {
+    let runCalls = 0;
+    let compactCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+          async () => {
+            compactCalls += 1;
+            return {
+              status: "compacted",
+              outcome: "target_reached",
+              previousRevisionId: runtimeIdFactory.createContextRevisionId(),
+              revisionId: runtimeIdFactory.createContextRevisionId(),
+              previousRevisionNumber: 1,
+              revisionNumber: 2,
+              addedOverrideCount: 3,
+              totalOverrideCount: 3,
+              originalObservationBytes: 42_762,
+              projectedObservationBytes: 1_665,
+              rawTokensBefore: 43_964,
+              rawTokensAfter: 31_577,
+              guardedTokensBefore: 48_361,
+              guardedTokensAfter: 34_735,
+              targetTokens: 39_321,
+              planHash: "a".repeat(64),
+              planningDurationMs: 1.1,
+              validationDurationMs: 1.2,
+              transactionDurationMs: 1.3,
+              activationDurationMs: 0.6,
+              durationMs: 4.2,
+            };
+          },
+        )}
+      />,
+    );
+
+    await submitInput(stdin, "/compact");
+    await Bun.sleep(30);
+    expect(lastFrame()).toContain("Context compacted: revision 1 -> 2");
+    expect(lastFrame()).toContain("48,361 -> 34,735 estimated tokens");
+    expect(lastFrame()).toContain("(-28.2%)");
+    expect(compactCalls).toBe(1);
+    expect(runCalls).toBe(0);
+    cleanup();
+  });
+
+  test("bounds /compact failures without rendering the underlying error body", async () => {
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => completedResult(),
+          async () => {
+            throw new ContextManagerError(
+              "validate",
+              "prospective_prepare_failed",
+              false,
+              false,
+              "secret path /tmp/private and ctx://message/private",
+            );
+          },
+        )}
+      />,
+    );
+
+    await submitInput(stdin, "/compact");
+    await Bun.sleep(30);
+    expect(lastFrame()).toContain(
+      "Context compaction failed at validate (prospective_prepare_failed).",
+    );
+    expect(lastFrame()).not.toContain("/tmp/private");
+    expect(lastFrame()).not.toContain("ctx://message/private");
     cleanup();
   });
 

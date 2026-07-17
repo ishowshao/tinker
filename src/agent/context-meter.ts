@@ -59,7 +59,7 @@ type PreparedMeasurement = {
 
 export class ContextMeter {
   private readonly calibration = new RollingTokenCalibration();
-  private readonly measurements = new WeakMap<object, PreparedMeasurement>();
+  private measurements = new WeakMap<object, PreparedMeasurement>();
   private anchor?: MeasuredContextAnchor;
   private lastProviderUsage?: ModelUsage;
   private calibrationIdentity?: string;
@@ -217,9 +217,36 @@ export class ContextMeter {
     });
   }
 
+  startRevision(input: {
+    reason: "context_rebuilt";
+    requestConfigHash: string;
+    toolSchemaHash: string;
+  }): void {
+    const nextIdentity = `${input.requestConfigHash}:${input.toolSchemaHash}`;
+    if (
+      this.calibrationIdentity !== undefined &&
+      this.calibrationIdentity !== nextIdentity
+    ) {
+      this.anchor = undefined;
+      this.lastProviderUsage = undefined;
+      this.measurements = new WeakMap();
+      this.calibration.clear();
+      this.calibrationIdentity = nextIdentity;
+      throw new Error(
+        "Context revision changed the request configuration or tool schema.",
+      );
+    }
+    this.anchor = undefined;
+    this.lastProviderUsage = undefined;
+    this.measurements = new WeakMap();
+    this.calibrationIdentity = nextIdentity;
+  }
+
   invalidate(reason: ContextInvalidationReason): void {
     void reason;
     this.anchor = undefined;
+    this.lastProviderUsage = undefined;
+    this.measurements = new WeakMap();
     this.calibration.clear();
     this.calibrationIdentity = undefined;
   }

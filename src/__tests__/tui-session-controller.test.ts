@@ -67,6 +67,9 @@ function fakeRuntime(sessionId: SessionId): {
       finalText: "done",
       lastIteration: createTestRuntime().iteration,
     }),
+    compactContext: async () => {
+      throw new Error("not used");
+    },
     canSwitchSession: () => true,
     dispose: async (reason) => {
       disposals.push(reason);

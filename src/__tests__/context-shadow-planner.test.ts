@@ -5,12 +5,12 @@ import type { RuntimeSessionContext } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
+import { swapOnlyPolicyV1 } from "../context/context-policy";
 import {
   assertPlanBaseCurrent,
-  ShadowPlanStaleError,
-  ShadowSwapPlanner,
-  shadowSwapPolicyV1,
-} from "../context/context-shadow-planner";
+  SwapPlanStaleError,
+  SwapPlanner,
+} from "../context/swap-planner";
 import { ContextSwapRenderer } from "../context/context-swap-renderer";
 import {
   contentHash,
@@ -256,7 +256,7 @@ describe("ContextSwapRenderer", () => {
   });
 });
 
-describe("ShadowSwapPlanner", () => {
+describe("SwapPlanner", () => {
   test("filters, ranks, estimates, and hashes deterministic plans without requesting", () => {
     const fixture = planningFixture();
     const built = fixture.ledger.buildCommittedModelRequest([]);
@@ -265,15 +265,17 @@ describe("ShadowSwapPlanner", () => {
     model.prepareCount = 0;
     const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
     const activeUsage = meter.measure(activePrepared);
-    const planner = new ShadowSwapPlanner(model);
+    const planner = new SwapPlanner(model);
     const targetTokens = Math.max(0, activeUsage.usedInputTokens - 1);
     const input = {
       active: built.compiled,
+      revision: built.revision,
+      activeOverrides: built.activeOverrides,
       canonical: built.canonical,
       activePrepared,
       activeUsage,
       tools: [],
-      policy: shadowSwapPolicyV1,
+      policy: swapOnlyPolicyV1,
       trigger: "benchmark_forced" as const,
       forcedTargetTokens: targetTokens,
     };
@@ -290,13 +292,13 @@ describe("ShadowSwapPlanner", () => {
       synthetic_completion: 1,
       protected_recent_turn: 8,
     });
-    expect(first.plan?.selected).toHaveLength(1);
+    expect(first.plan?.addedOverrides).toHaveLength(1);
     expect(first.selectedByRawKind).toEqual({ grep: 1 });
     expect(first.plan?.rawTokensAfter).toBeLessThan(first.rawTokensBefore);
     expect(first.plan?.guardedTokensAfter).toBeLessThan(first.guardedTokensBefore);
     expect(first.plan?.planHash).toBe(second.plan?.planHash);
-    expect(first.plan?.selected.map((entry) => entry.messageId)).toEqual(
-      second.plan?.selected.map((entry) => entry.messageId),
+    expect(first.plan?.addedOverrides.map((entry) => entry.messageId)).toEqual(
+      second.plan?.addedOverrides.map((entry) => entry.messageId),
     );
     expect(model.requestCount).toBe(0);
     expect(model.prepareCount).toBeGreaterThan(0);
@@ -309,6 +311,8 @@ describe("ShadowSwapPlanner", () => {
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: built.compiled,
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared,
       }),
     ).not.toThrow();
@@ -319,50 +323,61 @@ describe("ShadowSwapPlanner", () => {
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: built.compiled,
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared: stalePrepared,
       }),
-    ).toThrow(ShadowPlanStaleError);
+    ).toThrow(SwapPlanStaleError);
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: {
           ...built.compiled,
           revisionId: runtimeIdFactory.createContextRevisionId(),
         },
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared,
       }),
-    ).toThrow(ShadowPlanStaleError);
+    ).toThrow(SwapPlanStaleError);
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: {
           ...built.compiled,
           canonicalThroughOrdinal: built.compiled.canonicalThroughOrdinal + 1,
         },
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared,
       }),
-    ).toThrow(ShadowPlanStaleError);
+    ).toThrow(SwapPlanStaleError);
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: built.compiled,
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared: {
           ...activePrepared,
           requestConfigHash: "changed-request-config",
         },
       }),
-    ).toThrow(ShadowPlanStaleError);
+    ).toThrow(SwapPlanStaleError);
     expect(() =>
       assertPlanBaseCurrent(plan, {
         active: built.compiled,
+        revision: built.revision,
+        activeOverrides: built.activeOverrides,
         activePrepared: {
           ...activePrepared,
           toolSchemaHash: "changed-tool-schema",
         },
       }),
-    ).toThrow(ShadowPlanStaleError);
+    ).toThrow(SwapPlanStaleError);
 
     const projected = new ContextRevisionCompiler().compileProspective({
       active: built.compiled,
       canonical: built.canonical,
-      overrides: plan.selected,
+      activeOverrides: built.activeOverrides,
+      addedOverrides: plan.addedOverrides,
     });
     expect(projected.entries.map((entry) => entry.frameId)).toEqual(
       built.compiled.entries.map((entry) => entry.frameId),
@@ -378,18 +393,20 @@ describe("ShadowSwapPlanner", () => {
     const model = new PreparingOnlyModel();
     const activePrepared = model.prepare(built.request);
     const activeUsage = new ContextMeter(TEST_CONTEXT_BUDGET).measure(activePrepared);
-    const result = new ShadowSwapPlanner(model).plan({
+    const result = new SwapPlanner(model).plan({
       active: built.compiled,
+      revision: built.revision,
+      activeOverrides: built.activeOverrides,
       canonical: built.canonical,
       activePrepared,
       activeUsage,
       tools: [],
-      policy: shadowSwapPolicyV1,
+      policy: swapOnlyPolicyV1,
       trigger: "benchmark_forced",
       forcedTargetTokens: 0,
     });
     expect(result.outcome).toBe("insufficient_candidates");
-    expect(result.plan?.selected).toHaveLength(result.eligibleCandidateCount);
+    expect(result.plan?.addedOverrides).toHaveLength(result.eligibleCandidateCount);
     expect(result.plan?.guardedTokensAfter).toBeGreaterThan(0);
     expect(result.plan?.guardedTokensAfter).toBeLessThan(result.guardedTokensBefore);
   });
@@ -412,7 +429,7 @@ describe("runtime shadow isolation", () => {
       model,
       contextMeter: new ContextMeter(TEST_CONTEXT_BUDGET),
       shadowPlanning: {
-        planner: new ShadowSwapPlanner(model),
+        planner: new SwapPlanner(model),
         select: ({ preflight }) => ({
           trigger: "benchmark_forced",
           forcedTargetTokens: Math.max(0, preflight.usedInputTokens - 1),
@@ -469,7 +486,7 @@ describe("runtime shadow isolation", () => {
       model,
       contextMeter: new ContextMeter(TEST_CONTEXT_BUDGET),
       shadowPlanning: {
-        planner: new ShadowSwapPlanner(model),
+        planner: new SwapPlanner(model),
         select: ({ preflight }) => ({
           trigger: "benchmark_forced",
           forcedTargetTokens: Math.max(0, preflight.usedInputTokens - 1),
@@ -489,7 +506,7 @@ describe("runtime shadow isolation", () => {
     expect(model.requestedInputs[0]).toEqual(expected);
     const failure = events.find((event) => event.type === "context.shadow.failed");
     expect(failure?.data).toEqual({
-      policyVersion: "shadow-swap-v1",
+      policyVersion: "swap-only-v1",
       stage: "prepare",
       errorCode: "prospective_prepare_failed",
       error: "Prospective request preparation failed.",

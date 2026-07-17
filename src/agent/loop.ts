@@ -13,13 +13,13 @@ import { ContextProtocolError } from "../context/context-protocol-validator";
 import { CompiledContextError } from "../context/compiled-context-validator";
 import { ContextRevisionError } from "../context/context-revision-compiler";
 import type { BuiltContextRequest } from "../context/context-revision";
+import { swapOnlyPolicyV1 } from "../context/context-policy";
 import {
-  shadowSwapPolicyV1,
-  ShadowPlanningDiagnosticError,
-  type ShadowPlanningResult,
-  type ShadowPlanningTrigger,
-  type ShadowSwapPlanner,
-} from "../context/context-shadow-planner";
+  SwapPlanningDiagnosticError,
+  type SwapPlanningResult,
+  type SwapPlanningTrigger,
+  type SwapPlanner,
+} from "../context/swap-planner";
 import { SessionError } from "../session/session-errors";
 import {
   normalizeSyntheticDetail,
@@ -41,17 +41,17 @@ export type RunAgentInput = {
   contextMeter: ContextMeter;
   committedPrefixAuditor?: CommittedPrefixAuditor;
   shadowPlanning?: {
-    planner: ShadowSwapPlanner;
+    planner: SwapPlanner;
     select(input: {
       built: BuiltContextRequest;
       preflight: ReturnType<ContextMeter["measure"]>;
     }):
       | {
-          trigger: ShadowPlanningTrigger;
+          trigger: Exclude<SwapPlanningTrigger, "manual">;
           forcedTargetTokens?: number;
         }
       | undefined;
-    onResult?(result: ShadowPlanningResult, built: BuiltContextRequest): void;
+    onResult?(result: SwapPlanningResult, built: BuiltContextRequest): void;
   };
   tools: ToolRegistry;
   toolRuntime: ToolRuntime;
@@ -337,15 +337,17 @@ async function runShadowPlanning(input: {
   }
 
   const startedAt = performance.now();
-  let result: ShadowPlanningResult;
+  let result: SwapPlanningResult;
   try {
     result = shadowPlanning.planner.plan({
       active: input.built.compiled,
+      revision: input.built.revision,
+      activeOverrides: input.built.activeOverrides,
       canonical: input.built.canonical,
       activePrepared: input.prepared,
       activeUsage: input.preflight,
       tools: input.input.tools.definitions(),
-      policy: shadowSwapPolicyV1,
+      policy: swapOnlyPolicyV1,
       trigger: decision.trigger,
       ...(decision.forcedTargetTokens === undefined
         ? {}
@@ -356,9 +358,9 @@ async function runShadowPlanning(input: {
       throw error;
     }
     const failure =
-      error instanceof ShadowPlanningDiagnosticError
+      error instanceof SwapPlanningDiagnosticError
         ? error
-        : new ShadowPlanningDiagnosticError(
+        : new SwapPlanningDiagnosticError(
             "validate",
             "unexpected_shadow_failure",
             "Shadow planning failed without changing the active request.",
@@ -367,7 +369,7 @@ async function runShadowPlanning(input: {
       type: "context.shadow.failed",
       ...input.iteration,
       data: {
-        policyVersion: "shadow-swap-v1",
+        policyVersion: "swap-only-v1",
         stage: failure.stage,
         errorCode: failure.code,
         error: failure.message,
@@ -381,12 +383,12 @@ async function runShadowPlanning(input: {
     type: "context.shadow.planned",
     ...input.iteration,
     data: {
-      policyVersion: "shadow-swap-v1",
+      policyVersion: "swap-only-v1",
       trigger: decision.trigger,
       outcome: result.outcome,
       canonicalMessageCount: result.canonicalMessageCount,
       eligibleCandidateCount: result.eligibleCandidateCount,
-      selectedCandidateCount: result.plan?.selected.length ?? 0,
+      selectedCandidateCount: result.plan?.addedOverrides.length ?? 0,
       excludedByReason: { ...result.excludedByReason },
       selectedByRawKind: { ...result.selectedByRawKind },
       originalObservationBytes: result.originalObservationBytes,

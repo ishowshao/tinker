@@ -33,6 +33,19 @@ import {
   ContextProtocolValidator,
 } from "../context/context-protocol-validator";
 import {
+  activeOverrideManifestHash,
+  canonicalSequenceHash,
+  renderedMessageHash,
+} from "../context/compiled-context-hash";
+import {
+  ContextRevisionCompiler,
+  createInitialContextRevision,
+} from "../context/context-revision-compiler";
+import {
+  ContextSwapRenderer,
+  SWAP_OBSERVATION_FORMAT,
+} from "../context/context-swap-renderer";
+import {
   TOOL_OBSERVATION_FORMAT,
   contentHash,
   immutableCanonicalClone,
@@ -46,8 +59,10 @@ import {
   type ToolResultRecord,
 } from "../context/protocol-frame";
 import type {
-  StoredContextSnapshotV4,
-  StoredInitialContextRevisionV4,
+  StoredContextRevisionV5,
+  StoredContextSnapshotV5,
+  StoredSwapOverrideV5,
+  SwapOverride,
 } from "../context/context-revision";
 import type { IterationIdentity, ToolCall } from "../agent/types";
 import type { MeasuredContextAnchor } from "../agent/context-meter";
@@ -64,7 +79,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V4_FINGERPRINT,
+  SESSION_SCHEMA_V5_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -87,8 +102,8 @@ export type RuntimeContractV1 = {
   observationFormat: typeof TOOL_OBSERVATION_FORMAT;
 };
 
-export type StoredSessionMetaV4 = {
-  schemaVersion: 4;
+export type StoredSessionMetaV5 = {
+  schemaVersion: 5;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -116,7 +131,7 @@ export type StoredSessionMetaV4 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV4["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV5["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -128,6 +143,33 @@ export type SessionRecoveryResult = {
 type StoredMeasuredContextState = {
   revisionId: ContextRevisionId;
   anchor: MeasuredContextAnchor;
+};
+
+export type CommitSwapRevisionInput = {
+  revisionId: ContextRevisionId;
+  expectedBaseRevisionId: ContextRevisionId;
+  expectedBaseRevisionNumber: number;
+  expectedCanonicalThroughOrdinal: number;
+  expectedBaseOverrideManifestSha256: string;
+  policyVersion: "swap-only-v1";
+  rendererFormat: typeof SWAP_OBSERVATION_FORMAT;
+  planHash: string;
+  addedOverrides: readonly SwapOverride[];
+  nextOverrideManifestSha256: string;
+  canonicalSequenceSha256: string;
+  renderedMessageSha256: string;
+};
+
+export type CommitSwapRevisionFaultStage =
+  | "before_revision_insert"
+  | "after_revision_insert"
+  | "after_first_override_insert"
+  | "after_overrides_insert"
+  | "after_measurement_delete"
+  | "after_active_update";
+
+export type CommitSwapRevisionOptions = {
+  faultInjector?: (stage: CommitSwapRevisionFaultStage) => void;
 };
 
 export type CreateNewSessionStoreInput = {
@@ -155,6 +197,8 @@ export class SessionStore implements SessionLedgerCommitter {
   private closed = false;
   private recallIndexRebuilt = false;
   private readonly validator = new ContextProtocolValidator();
+  private readonly revisionCompiler = new ContextRevisionCompiler();
+  private readonly swapRenderer = new ContextSwapRenderer();
 
   private constructor(
     private readonly database: Database,
@@ -220,6 +264,11 @@ export class SessionStore implements SessionLedgerCommitter {
       });
       const initialView = initialLedger.snapshot({ fullIntegrity: true });
       const createdAt = clock();
+      const initialRevision = createInitialContextRevision({
+        revisionId,
+        canonical: initialView,
+        createdAt,
+      });
       runTransaction(database, () => {
         database!
           .query(
@@ -235,7 +284,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V4_FINGERPRINT,
+            SESSION_SCHEMA_V5_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -256,10 +305,21 @@ export class SessionStore implements SessionLedgerCommitter {
         database!
           .query(
             `INSERT INTO context_revisions (
-            revision_id, session_id, revision_number, kind, keep_from_ordinal, created_at
-          ) VALUES (?, ?, 1, 'initial_full', 1, ?)`,
+            revision_id, session_id, revision_number, parent_revision_id, kind,
+            keep_from_ordinal, source_through_ordinal, added_override_count,
+            total_override_count, override_manifest_sha256,
+            canonical_sequence_sha256, rendered_message_sha256, policy_version,
+            renderer_format, plan_sha256, created_at
+          ) VALUES (?, ?, 1, NULL, 'initial_full', 1, 1, 0, 0, ?, ?, ?, NULL, NULL, NULL, ?)`,
           )
-          .run(revisionId, input.sessionId, createdAt);
+          .run(
+            revisionId,
+            input.sessionId,
+            initialRevision.overrideManifestSha256,
+            initialRevision.canonicalSequenceSha256,
+            initialRevision.renderedMessageSha256,
+            createdAt,
+          );
       });
 
       const store = new SessionStore(database, lease, {
@@ -601,6 +661,233 @@ export class SessionStore implements SessionLedgerCommitter {
     return state.anchor;
   }
 
+  assertContextRevisionIdle(): void {
+    this.requireOpen();
+    const row = this.database
+      .query(
+        `SELECT
+          (SELECT COUNT(*) FROM turns WHERE status = 'open') AS open_turns,
+          (SELECT COUNT(*) FROM iterations WHERE outcome = 'open') AS open_iterations,
+          (SELECT COUNT(*) FROM protocol_frames WHERE state = 'open') AS open_frames`,
+      )
+      .get() as Record<string, unknown> | null;
+    if (
+      row === null ||
+      numberFromSql(row.open_turns, "open_turns") !== 0 ||
+      numberFromSql(row.open_iterations, "open_iterations") !== 0 ||
+      numberFromSql(row.open_frames, "open_frames") !== 0
+    ) {
+      throw new SessionError(
+        "SESSION_INTEGRITY_FAILED",
+        "assert_context_revision_idle",
+        "Context revision requires a fully idle session store.",
+        { sessionId: this.sessionId },
+      );
+    }
+  }
+
+  commitSwapRevision(
+    input: CommitSwapRevisionInput,
+    options: CommitSwapRevisionOptions = {},
+  ): Extract<StoredContextRevisionV5, { kind: "swap_only" }> {
+    this.requireOpen();
+    assertCommitSwapRevisionInput(input);
+    const now = this.clock();
+    try {
+      return runTransaction(this.database, () => {
+        const snapshot = this.loadContextSnapshot();
+        const baseRevision = snapshot.revision;
+        if (
+          baseRevision.revisionId !== input.expectedBaseRevisionId ||
+          baseRevision.revisionNumber !== input.expectedBaseRevisionNumber ||
+          snapshot.canonical.messages.length !==
+            input.expectedCanonicalThroughOrdinal ||
+          baseRevision.overrideManifestSha256 !==
+            input.expectedBaseOverrideManifestSha256
+        ) {
+          throw new Error("Context revision commit base is stale.");
+        }
+        this.assertContextRevisionIdle();
+
+        const active = this.revisionCompiler.compileActive(snapshot);
+        const candidateOverrides = [
+          ...snapshot.activeOverrides,
+          ...input.addedOverrides,
+        ];
+        if (
+          new Set(candidateOverrides.map((override) => override.messageId)).size !==
+            candidateOverrides.length ||
+          activeOverrideManifestHash(candidateOverrides) !==
+            input.nextOverrideManifestSha256
+        ) {
+          throw new Error("Candidate override manifest is invalid.");
+        }
+        const candidate = this.revisionCompiler.compileProspective({
+          active,
+          canonical: snapshot.canonical,
+          activeOverrides: snapshot.activeOverrides,
+          addedOverrides: input.addedOverrides,
+        });
+        if (
+          canonicalSequenceHash(
+            snapshot.canonical,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.canonicalSequenceSha256 ||
+          renderedMessageHash(
+            candidate.entries,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.renderedMessageSha256
+        ) {
+          throw new Error("Candidate context revision prefix hash is invalid.");
+        }
+        this.validateAddedOverrides(input.addedOverrides, snapshot.canonical);
+
+        const revisionNumber = baseRevision.revisionNumber + 1;
+        const totalOverrideCount =
+          baseRevision.totalOverrideCount + input.addedOverrides.length;
+        options.faultInjector?.("before_revision_insert");
+        this.database
+          .query(
+            `INSERT INTO context_revisions (
+              revision_id, session_id, revision_number, parent_revision_id, kind,
+              keep_from_ordinal, source_through_ordinal, added_override_count,
+              total_override_count, override_manifest_sha256,
+              canonical_sequence_sha256, rendered_message_sha256, policy_version,
+              renderer_format, plan_sha256, created_at
+            ) VALUES (?, ?, ?, ?, 'swap_only', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.revisionId,
+            this.sessionId,
+            revisionNumber,
+            baseRevision.revisionId,
+            input.expectedCanonicalThroughOrdinal,
+            input.addedOverrides.length,
+            totalOverrideCount,
+            input.nextOverrideManifestSha256,
+            input.canonicalSequenceSha256,
+            input.renderedMessageSha256,
+            input.policyVersion,
+            input.rendererFormat,
+            input.planHash,
+            now,
+          );
+        options.faultInjector?.("after_revision_insert");
+
+        for (let index = 0; index < input.addedOverrides.length; index += 1) {
+          const override = requireItem(
+            input.addedOverrides,
+            index,
+            "added context override",
+          );
+          this.database
+            .query(
+              `INSERT INTO context_overrides (
+                introduced_revision_id, session_id, message_id, frame_id, ordinal,
+                representation, renderer_format, source, original_content_sha256,
+                rendered_content, rendered_content_sha256, original_bytes,
+                rendered_bytes, byte_savings, created_at
+              ) VALUES (?, ?, ?, ?, ?, 'swapped', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              input.revisionId,
+              this.sessionId,
+              override.messageId,
+              override.frameId,
+              override.ordinal,
+              input.rendererFormat,
+              override.source,
+              override.originalContentSha256,
+              override.renderedContent,
+              override.renderedContentSha256,
+              override.originalBytes,
+              override.renderedBytes,
+              override.byteSavings,
+              now,
+            );
+          if (index === 0) {
+            options.faultInjector?.("after_first_override_insert");
+          }
+        }
+        options.faultInjector?.("after_overrides_insert");
+
+        const storedCandidateOverrides = this.database
+          .query(
+            `SELECT co.* FROM context_overrides co
+             JOIN context_revisions cr
+               ON cr.revision_id = co.introduced_revision_id
+             WHERE cr.revision_number <= ?
+             ORDER BY co.ordinal`,
+          )
+          .all(revisionNumber)
+          .map(decodeStoredSwapOverride);
+        if (
+          storedCandidateOverrides.length !== totalOverrideCount ||
+          activeOverrideManifestHash(storedCandidateOverrides) !==
+            input.nextOverrideManifestSha256
+        ) {
+          throw new Error("Stored candidate override readback is invalid.");
+        }
+
+        this.database.query("DELETE FROM context_measurement_state").run();
+        options.faultInjector?.("after_measurement_delete");
+        const switched = this.database
+          .query(
+            `UPDATE session_meta
+             SET active_revision_id = ?, updated_at = ?
+             WHERE singleton = 1 AND active_revision_id = ?`,
+          )
+          .run(input.revisionId, now, baseRevision.revisionId);
+        requireSingleChange(
+          this.database,
+          switched.changes,
+          "activate context revision",
+        );
+        options.faultInjector?.("after_active_update");
+
+        const readback = this.loadContextSnapshot();
+        if (
+          readback.revision.kind !== "swap_only" ||
+          readback.revision.revisionId !== input.revisionId ||
+          this.loadMeasuredContextState() !== undefined
+        ) {
+          throw new Error("Committed context revision readback failed.");
+        }
+        return readback.revision;
+      });
+    } catch (error) {
+      if (this.readMeta().activeRevisionId !== input.expectedBaseRevisionId) {
+        throw new Error("Failed context revision transaction changed active state.", {
+          cause: error,
+        });
+      }
+      throw sessionWriteError("commit_context_revision", this.sessionId, error);
+    }
+  }
+
+  private validateAddedOverrides(
+    overrides: readonly SwapOverride[],
+    canonical: ProtocolContextView,
+  ): void {
+    const messages = new Map(
+      canonical.messages.map((message) => [message.messageId, message] as const),
+    );
+    const results = new Map(
+      canonical.toolResults.map((result) => [result.toolMessageId, result] as const),
+    );
+    for (const override of overrides) {
+      const message = messages.get(override.messageId);
+      const result = results.get(override.messageId);
+      if (message?.role !== "tool" || result === undefined) {
+        throw new Error("Added context override does not target a tool result.");
+      }
+      const expected = this.swapRenderer.render({ message, result });
+      if (stableJsonStringify(expected) !== stableJsonStringify(override)) {
+        throw new Error("Added context override is not deterministic.");
+      }
+    }
+  }
+
   markResumed(): number {
     this.requireOpen();
     const now = this.clock();
@@ -829,17 +1116,16 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  loadContextSnapshot(): StoredContextSnapshotV4 {
+  loadContextSnapshot(): StoredContextSnapshotV5 {
     this.requireOpen();
     const meta = this.readMeta();
     try {
       if (
         meta.sessionId !== this.sessionId ||
-        meta.schemaFingerprint !== SESSION_SCHEMA_V4_FINGERPRINT
+        meta.schemaFingerprint !== SESSION_SCHEMA_V5_FINGERPRINT
       ) {
         throw new Error("Session metadata identity or schema fingerprint changed.");
       }
-      const revision = this.loadInitialRevision(meta);
       const canonical = this.loadProtocolView();
       this.validator.validate(canonical, { fullIntegrity: true });
       const systemFrame = canonical.frames[0];
@@ -854,14 +1140,7 @@ export class SessionStore implements SessionLedgerCommitter {
       ) {
         throw new Error("Stored context snapshot ordinal or system invariant failed.");
       }
-      return Object.freeze({
-        meta: Object.freeze({
-          sessionId: meta.sessionId,
-          activeRevisionId: meta.activeRevisionId,
-        }),
-        revision,
-        canonical,
-      });
+      return this.loadValidatedContextSnapshot(meta, canonical);
     } catch (error) {
       if (error instanceof SessionError) {
         throw error;
@@ -889,7 +1168,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  readMeta(): StoredSessionMetaV4 {
+  readMeta(): StoredSessionMetaV5 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -975,7 +1254,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V4_FINGERPRINT
+      meta.schemaFingerprint !== SESSION_SCHEMA_V5_FINGERPRINT
     ) {
       throw new SessionError(
         "SESSION_SCHEMA_INVALID",
@@ -991,8 +1270,7 @@ export class SessionStore implements SessionLedgerCommitter {
         allowOpenTail: options.allowOpenTail,
         fullIntegrity: true,
       });
-      this.loadInitialRevision(meta);
-      this.loadMeasuredContextState();
+      this.loadValidatedContextSnapshot(meta, view);
       this.validateCounters(meta, view);
     } catch (error) {
       if (error instanceof SessionError) {
@@ -1315,40 +1593,166 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  private loadInitialRevision(
-    meta: StoredSessionMetaV4,
-  ): StoredInitialContextRevisionV4 {
-    const rows = this.database.query("SELECT * FROM context_revisions").all() as Array<
-      Record<string, unknown>
-    >;
-    if (rows.length !== 1) {
-      throw new Error(`Expected one initial context revision; found ${rows.length}.`);
+  private loadValidatedContextSnapshot(
+    meta: StoredSessionMetaV5,
+    canonical: ProtocolContextView,
+  ): StoredContextSnapshotV5 {
+    const revisions = this.database
+      .query("SELECT * FROM context_revisions ORDER BY revision_number")
+      .all()
+      .map(decodeContextRevision);
+    if (revisions.length === 0) {
+      throw new Error("Session has no context revision.");
     }
-    const row = rows[0];
-    const revisionId = stringFromSql(
-      row.revision_id,
-      "revision_id",
-    ) as ContextRevisionId;
-    const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
-    const revisionNumber = numberFromSql(row.revision_number, "revision_number");
-    const keepFromOrdinal = numberFromSql(row.keep_from_ordinal, "keep_from_ordinal");
+
+    const revisionNumberById = new Map<ContextRevisionId, number>();
+    for (let index = 0; index < revisions.length; index += 1) {
+      const revision = requireItem(revisions, index, "context revision");
+      const previous = revisions[index - 1];
+      if (
+        revision.sessionId !== this.sessionId ||
+        revision.revisionNumber !== index + 1 ||
+        (index === 0
+          ? revision.kind !== "initial_full" || revision.parentRevisionId !== null
+          : revision.kind !== "swap_only" ||
+            revision.parentRevisionId !== previous?.revisionId)
+      ) {
+        throw new Error("Context revision chain is not linear and contiguous.");
+      }
+      const boundary = canonical.frames.find(
+        (frame) => frame.lastOrdinal === revision.sourceThroughOrdinal,
+      );
+      if (
+        revision.sourceThroughOrdinal > canonical.messages.length ||
+        boundary?.state !== "closed"
+      ) {
+        throw new Error(
+          `Context revision ${revision.revisionId} has an invalid source boundary.`,
+        );
+      }
+      revisionNumberById.set(revision.revisionId, revision.revisionNumber);
+    }
+
+    const activeRevision = requireItem(
+      revisions,
+      revisions.length - 1,
+      "active context revision",
+    );
+    if (activeRevision.revisionId !== meta.activeRevisionId) {
+      throw new Error("Active context revision is not the latest committed revision.");
+    }
+
+    const overrides = this.database
+      .query(
+        `SELECT co.* FROM context_overrides co
+         JOIN context_revisions cr
+           ON cr.revision_id = co.introduced_revision_id
+         ORDER BY cr.revision_number, co.ordinal`,
+      )
+      .all()
+      .map(decodeStoredSwapOverride);
+    this.validateStoredOverrides(overrides, canonical, revisions, revisionNumberById);
+
+    let cumulativeCount = 0;
+    for (const revision of revisions) {
+      const activeOverrides = overrides.filter(
+        (override) =>
+          (revisionNumberById.get(override.introducedRevisionId) ??
+            Number.POSITIVE_INFINITY) <= revision.revisionNumber,
+      );
+      const introducedCount = overrides.filter(
+        (override) => override.introducedRevisionId === revision.revisionId,
+      ).length;
+      cumulativeCount += introducedCount;
+      if (
+        introducedCount !== revision.addedOverrideCount ||
+        cumulativeCount !== revision.totalOverrideCount ||
+        activeOverrideManifestHash(activeOverrides) !== revision.overrideManifestSha256
+      ) {
+        throw new Error(
+          `Context revision ${revision.revisionId} override manifest is invalid.`,
+        );
+      }
+      const prefix = protocolPrefixView(canonical, revision.sourceThroughOrdinal);
+      this.revisionCompiler.compileActive({
+        meta: Object.freeze({
+          sessionId: this.sessionId,
+          activeRevisionId: revision.revisionId,
+        }),
+        revision,
+        activeOverrides,
+        canonical: prefix,
+      });
+    }
+
+    const measurement = this.loadMeasuredContextState();
     if (
-      revisionId !== meta.activeRevisionId ||
-      revisionNumber !== 1 ||
-      row.kind !== "initial_full" ||
-      keepFromOrdinal !== 1 ||
-      sessionId !== this.sessionId
+      measurement !== undefined &&
+      measurement.revisionId !== activeRevision.revisionId
     ) {
-      throw new Error("Initial context revision invariant failed.");
+      throw new Error("Context measurement is not bound to the active revision.");
     }
+
     return Object.freeze({
-      revisionId,
-      sessionId,
-      revisionNumber: 1,
-      kind: "initial_full",
-      keepFromOrdinal: 1,
-      createdAt: timestampFromSql(row.created_at, "created_at"),
+      meta: Object.freeze({
+        sessionId: meta.sessionId,
+        activeRevisionId: meta.activeRevisionId,
+      }),
+      revision: activeRevision,
+      activeOverrides: Object.freeze(overrides),
+      canonical,
     });
+  }
+
+  private validateStoredOverrides(
+    overrides: readonly StoredSwapOverrideV5[],
+    canonical: ProtocolContextView,
+    revisions: readonly StoredContextRevisionV5[],
+    revisionNumberById: ReadonlyMap<ContextRevisionId, number>,
+  ): void {
+    const messages = new Map(
+      canonical.messages.map((message) => [message.messageId, message] as const),
+    );
+    const frames = new Map(
+      canonical.frames.map((frame) => [frame.frameId, frame] as const),
+    );
+    const results = new Map(
+      canonical.toolResults.map((result) => [result.toolMessageId, result] as const),
+    );
+    const revisionsById = new Map(
+      revisions.map((revision) => [revision.revisionId, revision] as const),
+    );
+    const seenMessages = new Set<MessageId>();
+    for (const override of overrides) {
+      const revision = revisionsById.get(override.introducedRevisionId);
+      const message = messages.get(override.messageId);
+      const frame = frames.get(override.frameId);
+      const result = results.get(override.messageId);
+      if (
+        revision?.kind !== "swap_only" ||
+        revisionNumberById.get(revision.revisionId) === undefined ||
+        override.ordinal > revision.sourceThroughOrdinal ||
+        seenMessages.has(override.messageId) ||
+        message?.role !== "tool" ||
+        message.frameId !== override.frameId ||
+        message.ordinal !== override.ordinal ||
+        frame?.kind !== "tool_exchange" ||
+        frame.state !== "closed" ||
+        result === undefined
+      ) {
+        throw new Error("Stored context override canonical identity is invalid.");
+      }
+      const rendered = this.swapRenderer.render({ message, result });
+      if (
+        stableJsonStringify(rendered) !==
+        stableJsonStringify(stripStoredOverride(override))
+      ) {
+        throw new Error(
+          `Stored context override ${override.messageId} does not match deterministic rendering.`,
+        );
+      }
+      seenMessages.add(override.messageId);
+    }
   }
 
   private loadMeasuredContextState(): StoredMeasuredContextState | undefined {
@@ -1364,7 +1768,7 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV4, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV5, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -1825,6 +2229,173 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
   });
 }
 
+function decodeContextRevision(rowValue: unknown): StoredContextRevisionV5 {
+  const row = recordFromSql(rowValue, "context revision");
+  const kind = enumFromSql(
+    row.kind,
+    ["initial_full", "swap_only"] as const,
+    "context revision kind",
+  );
+  const common = {
+    revisionId: stringFromSql(row.revision_id, "revision_id") as ContextRevisionId,
+    sessionId: stringFromSql(row.session_id, "session_id") as SessionId,
+    keepFromOrdinal: numberFromSql(row.keep_from_ordinal, "keep_from_ordinal"),
+    sourceThroughOrdinal: numberFromSql(
+      row.source_through_ordinal,
+      "source_through_ordinal",
+    ),
+    addedOverrideCount: numberFromSql(row.added_override_count, "added_override_count"),
+    totalOverrideCount: numberFromSql(row.total_override_count, "total_override_count"),
+    overrideManifestSha256: sha256FromSql(
+      row.override_manifest_sha256,
+      "override_manifest_sha256",
+    ),
+    canonicalSequenceSha256: sha256FromSql(
+      row.canonical_sequence_sha256,
+      "canonical_sequence_sha256",
+    ),
+    renderedMessageSha256: sha256FromSql(
+      row.rendered_message_sha256,
+      "rendered_message_sha256",
+    ),
+    createdAt: timestampFromSql(row.created_at, "created_at"),
+  };
+  if (common.keepFromOrdinal !== 1) {
+    throw new Error("Context revision keep_from_ordinal must be 1 in schema v5.");
+  }
+  const revisionNumber = numberFromSql(row.revision_number, "revision_number");
+  const parentRevisionId = nullableStringFromSql(
+    row.parent_revision_id,
+    "parent_revision_id",
+  ) as ContextRevisionId | null;
+  if (kind === "initial_full") {
+    if (
+      revisionNumber !== 1 ||
+      parentRevisionId !== null ||
+      common.sourceThroughOrdinal !== 1 ||
+      common.addedOverrideCount !== 0 ||
+      common.totalOverrideCount !== 0 ||
+      row.policy_version !== null ||
+      row.renderer_format !== null ||
+      row.plan_sha256 !== null
+    ) {
+      throw new Error("Initial context revision row is invalid.");
+    }
+    return Object.freeze({
+      ...common,
+      revisionNumber: 1,
+      parentRevisionId: null,
+      kind,
+      keepFromOrdinal: 1,
+      sourceThroughOrdinal: 1,
+      addedOverrideCount: 0,
+      totalOverrideCount: 0,
+    });
+  }
+  if (
+    revisionNumber < 2 ||
+    parentRevisionId === null ||
+    common.addedOverrideCount < 1 ||
+    common.totalOverrideCount < common.addedOverrideCount
+  ) {
+    throw new Error("Swap context revision row is invalid.");
+  }
+  return Object.freeze({
+    ...common,
+    revisionNumber,
+    parentRevisionId,
+    kind,
+    keepFromOrdinal: 1,
+    policyVersion: enumFromSql(
+      row.policy_version,
+      ["swap-only-v1"] as const,
+      "context revision policy",
+    ),
+    rendererFormat: enumFromSql(
+      row.renderer_format,
+      [SWAP_OBSERVATION_FORMAT] as const,
+      "context revision renderer format",
+    ),
+    planSha256: sha256FromSql(row.plan_sha256, "plan_sha256"),
+  });
+}
+
+function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV5 {
+  const row = recordFromSql(rowValue, "context override");
+  if (row.representation !== "swapped") {
+    throw new Error("Context override representation must be swapped.");
+  }
+  return Object.freeze({
+    introducedRevisionId: stringFromSql(
+      row.introduced_revision_id,
+      "introduced_revision_id",
+    ) as ContextRevisionId,
+    frameId: stringFromSql(row.frame_id, "frame_id") as ProtocolFrameId,
+    messageId: stringFromSql(row.message_id, "message_id") as MessageId,
+    ordinal: numberFromSql(row.ordinal, "ordinal"),
+    rendererFormat: enumFromSql(
+      row.renderer_format,
+      [SWAP_OBSERVATION_FORMAT] as const,
+      "context override renderer format",
+    ),
+    source: stringFromSql(row.source, "source") as StoredSwapOverrideV5["source"],
+    originalContentSha256: sha256FromSql(
+      row.original_content_sha256,
+      "original_content_sha256",
+    ),
+    renderedContent: stringFromSql(row.rendered_content, "rendered_content"),
+    renderedContentSha256: sha256FromSql(
+      row.rendered_content_sha256,
+      "rendered_content_sha256",
+    ),
+    originalBytes: numberFromSql(row.original_bytes, "original_bytes"),
+    renderedBytes: numberFromSql(row.rendered_bytes, "rendered_bytes"),
+    byteSavings: numberFromSql(row.byte_savings, "byte_savings"),
+    createdAt: timestampFromSql(row.created_at, "created_at"),
+  });
+}
+
+function stripStoredOverride(override: StoredSwapOverrideV5): SwapOverride {
+  return Object.freeze({
+    frameId: override.frameId,
+    messageId: override.messageId,
+    ordinal: override.ordinal,
+    source: override.source,
+    originalContentSha256: override.originalContentSha256,
+    renderedContent: override.renderedContent,
+    renderedContentSha256: override.renderedContentSha256,
+    originalBytes: override.originalBytes,
+    renderedBytes: override.renderedBytes,
+    byteSavings: override.byteSavings,
+  });
+}
+
+function protocolPrefixView(
+  canonical: ProtocolContextView,
+  throughOrdinal: number,
+): ProtocolContextView {
+  const messages = canonical.messages.filter(
+    (message) => message.ordinal <= throughOrdinal,
+  );
+  const messageIds = new Set(messages.map((message) => message.messageId));
+  return Object.freeze({
+    sessionId: canonical.sessionId,
+    faulted: false,
+    frames: Object.freeze(
+      canonical.frames.filter(
+        (frame) =>
+          frame.state === "closed" &&
+          frame.lastOrdinal !== undefined &&
+          frame.lastOrdinal <= throughOrdinal,
+      ),
+    ),
+    messages: Object.freeze(messages),
+    toolResults: Object.freeze(
+      canonical.toolResults.filter((result) => messageIds.has(result.toolMessageId)),
+    ),
+  });
+}
+
 export function decodeStoredToolCalls(json: string): readonly ToolCall[] {
   const value = parseJson(json, "tool_calls_json");
   if (!Array.isArray(value) || value.length === 0) {
@@ -1949,16 +2520,43 @@ function decodeMeasuredContextState(
   });
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV4 {
+function assertCommitSwapRevisionInput(input: CommitSwapRevisionInput): void {
+  if (
+    input.revisionId.trim() === "" ||
+    input.expectedBaseRevisionId.trim() === "" ||
+    !Number.isSafeInteger(input.expectedBaseRevisionNumber) ||
+    input.expectedBaseRevisionNumber < 1 ||
+    !Number.isSafeInteger(input.expectedCanonicalThroughOrdinal) ||
+    input.expectedCanonicalThroughOrdinal < 1 ||
+    input.addedOverrides.length < 1 ||
+    input.policyVersion !== "swap-only-v1" ||
+    input.rendererFormat !== SWAP_OBSERVATION_FORMAT
+  ) {
+    throw new Error("Commit swap revision input is invalid.");
+  }
+  for (const [name, hash] of [
+    ["expectedBaseOverrideManifestSha256", input.expectedBaseOverrideManifestSha256],
+    ["planHash", input.planHash],
+    ["nextOverrideManifestSha256", input.nextOverrideManifestSha256],
+    ["canonicalSequenceSha256", input.canonicalSequenceSha256],
+    ["renderedMessageSha256", input.renderedMessageSha256],
+  ] as const) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new Error(`Commit swap revision ${name} must be a SHA-256 hash.`);
+    }
+  }
+}
+
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV5 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 4) {
+  if (schemaVersion !== 5) {
     throw new Error(
-      `Session metadata schema version must be 4; received ${schemaVersion}.`,
+      `Session metadata schema version must be 5; received ${schemaVersion}.`,
     );
   }
   const projectInstructionFile = nullableStringFromSql(

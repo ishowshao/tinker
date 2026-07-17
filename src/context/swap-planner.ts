@@ -9,11 +9,14 @@ import {
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import { estimatePromptSegments } from "../model/token-estimator";
 import type { ToolDefinition } from "../tools/types";
+import { activeOverrideManifestHash } from "./compiled-context-hash";
 import { CompiledContextError } from "./compiled-context-validator";
+import type { SwapOnlyPolicyV1 } from "./context-policy";
 import { ContextProtocolError } from "./context-protocol-validator";
 import type {
   CompiledRevisionContext,
-  ProspectiveSwapOverride,
+  StoredContextRevisionV5,
+  SwapOverride,
 } from "./context-revision";
 import {
   ContextRevisionCompiler,
@@ -31,52 +34,51 @@ import type {
   ToolResultRecord,
 } from "./protocol-frame";
 
-export const shadowSwapPolicyV1 = Object.freeze({
-  version: "shadow-swap-v1",
-  minimumObservationBytes: 8 * 1_024,
-  protectedRecentTurnCount: 8,
-  targetInputRatio: 0.6,
-} as const);
+export type SwapPlanningTrigger = "manual" | "runtime_pressure" | "benchmark_forced";
 
-export type ShadowSwapPolicyV1 = typeof shadowSwapPolicyV1;
-export type ShadowPlanningTrigger = "runtime_pressure" | "benchmark_forced";
-export type ShadowPlanningOutcome =
+export type SwapPlanningOutcome =
   | "below_trigger"
+  | "below_target"
   | "no_eligible_candidates"
   | "target_reached"
   | "insufficient_candidates";
 
-export type ShadowRevisionPlan = {
+export type SwapRevisionPlan = {
   readonly version: 1;
-  readonly policyVersion: "shadow-swap-v1";
-  readonly planHash: string;
+  readonly policyVersion: "swap-only-v1";
   readonly baseRevisionId: CompiledRevisionContext["revisionId"];
+  readonly baseRevisionNumber: number;
   readonly baseCanonicalThroughOrdinal: number;
+  readonly baseOverrideManifestSha256: string;
   readonly basePrefixHash: string;
   readonly requestConfigHash: string;
   readonly toolSchemaHash: string;
-  readonly selected: readonly ProspectiveSwapOverride[];
+  readonly addedOverrides: readonly SwapOverride[];
+  readonly nextOverrideManifestSha256: string;
   readonly targetTokens: number;
   readonly rawTokensBefore: number;
   readonly rawTokensAfter: number;
   readonly guardedTokensBefore: number;
   readonly guardedTokensAfter: number;
   readonly projectedPrefixHash: string;
+  readonly planHash: string;
 };
 
-export type ShadowPlanningInput = {
+export type SwapPlanningInput = {
   readonly active: CompiledRevisionContext;
+  readonly revision: StoredContextRevisionV5;
+  readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
   readonly activePrepared: PreparedModelRequest;
   readonly activeUsage: ContextUsageSnapshot;
   readonly tools: readonly ToolDefinition[];
-  readonly policy: ShadowSwapPolicyV1;
-  readonly trigger: ShadowPlanningTrigger;
+  readonly policy: SwapOnlyPolicyV1;
+  readonly trigger: SwapPlanningTrigger;
   readonly forcedTargetTokens?: number;
 };
 
-export type ShadowPlanningResult = {
-  readonly outcome: ShadowPlanningOutcome;
+export type SwapPlanningResult = {
+  readonly outcome: SwapPlanningOutcome;
   readonly canonicalMessageCount: number;
   readonly eligibleCandidateCount: number;
   readonly excludedByReason: Readonly<Record<string, number>>;
@@ -86,10 +88,10 @@ export type ShadowPlanningResult = {
   readonly rawTokensBefore: number;
   readonly guardedTokensBefore: number;
   readonly targetTokens: number;
-  readonly plan?: ShadowRevisionPlan;
+  readonly plan?: SwapRevisionPlan;
 };
 
-export class ShadowPlanningDiagnosticError extends Error {
+export class SwapPlanningDiagnosticError extends Error {
   constructor(
     readonly stage: "candidate" | "render" | "prepare" | "validate",
     readonly code: string,
@@ -97,21 +99,21 @@ export class ShadowPlanningDiagnosticError extends Error {
     options?: ErrorOptions,
   ) {
     super(message, options);
-    this.name = "ShadowPlanningDiagnosticError";
+    this.name = "SwapPlanningDiagnosticError";
   }
 }
 
-export class ShadowPlanStaleError extends Error {
+export class SwapPlanStaleError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "ShadowPlanStaleError";
+    this.name = "SwapPlanStaleError";
   }
 }
 
 type ModelPreparer = Pick<ModelClient, "prepare">;
 
 type EligibleCandidate = {
-  readonly override: ProspectiveSwapOverride;
+  readonly override: SwapOverride;
   readonly rawKind: SwappableRawKind;
 };
 
@@ -127,7 +129,7 @@ type Projection = {
   readonly guardedTokens: number;
 };
 
-export class ShadowSwapPlanner {
+export class SwapPlanner {
   constructor(
     private readonly model: ModelPreparer,
     private readonly compiler = new ContextRevisionCompiler(),
@@ -135,7 +137,7 @@ export class ShadowSwapPlanner {
     private readonly renderer = new ContextSwapRenderer(),
   ) {}
 
-  plan(input: ShadowPlanningInput): ShadowPlanningResult {
+  plan(input: SwapPlanningInput): SwapPlanningResult {
     validatePlanningInput(input);
     const activeFingerprint = promptPrefixFingerprint(input.activePrepared);
     assertActiveFingerprint(input, activeFingerprint);
@@ -149,9 +151,8 @@ export class ShadowSwapPlanner {
     const targetTokens = planningTarget(input);
 
     if (
-      (input.trigger === "runtime_pressure" &&
-        input.activeUsage.pressure === "normal") ||
-      guardedTokensBefore <= targetTokens
+      input.trigger === "runtime_pressure" &&
+      input.activeUsage.pressure === "normal"
     ) {
       return emptyResult(
         input,
@@ -161,8 +162,21 @@ export class ShadowSwapPlanner {
         targetTokens,
       );
     }
+    if (guardedTokensBefore <= targetTokens) {
+      return emptyResult(
+        input,
+        input.trigger === "runtime_pressure" ? "below_trigger" : "below_target",
+        rawTokensBefore,
+        guardedTokensBefore,
+        targetTokens,
+      );
+    }
 
-    const scan = this.scanCandidates(input.canonical, input.policy);
+    const scan = this.scanCandidates(
+      input.canonical,
+      input.activeOverrides,
+      input.policy,
+    );
     if (scan.eligible.length === 0) {
       return {
         ...emptyResult(
@@ -182,16 +196,21 @@ export class ShadowSwapPlanner {
       if (existing !== undefined) {
         return existing;
       }
-      const selected = scan.eligible.slice(0, count).map((entry) => entry.override);
+      const addedOverrides = scan.eligible
+        .slice(0, count)
+        .map((entry) => entry.override);
       let prepared: PreparedModelRequest;
       try {
         const compiled = this.compiler.compileProspective({
           active: input.active,
           canonical: input.canonical,
-          overrides: selected,
+          activeOverrides: input.activeOverrides,
+          addedOverrides,
         });
         const built = this.requestBuilder.build({
           canonical: input.canonical,
+          revision: input.revision,
+          activeOverrides: [...input.activeOverrides, ...addedOverrides],
           compiled,
           tools: input.tools,
         });
@@ -200,7 +219,7 @@ export class ShadowSwapPlanner {
         if (isCanonicalPlanningError(error)) {
           throw error;
         }
-        throw new ShadowPlanningDiagnosticError(
+        throw new SwapPlanningDiagnosticError(
           "prepare",
           "prospective_prepare_failed",
           "Prospective request preparation failed.",
@@ -235,17 +254,16 @@ export class ShadowSwapPlanner {
       previousCount = count;
       count = Math.min(scan.eligible.length, count * 2);
     }
-
     if (last === undefined) {
-      throw new ShadowPlanningDiagnosticError(
+      throw new SwapPlanningDiagnosticError(
         "validate",
         "missing_projection",
-        "Shadow planning produced no prospective projection.",
+        "Swap planning produced no prospective projection.",
       );
     }
 
     let outcome: Extract<
-      ShadowPlanningOutcome,
+      SwapPlanningOutcome,
       "target_reached" | "insufficient_candidates"
     >;
     let finalProjection: Projection;
@@ -271,7 +289,7 @@ export class ShadowSwapPlanner {
       finalProjection.rawTokens >= rawTokensBefore ||
       finalProjection.guardedTokens >= guardedTokensBefore
     ) {
-      throw new ShadowPlanningDiagnosticError(
+      throw new SwapPlanningDiagnosticError(
         "validate",
         "no_token_reduction",
         "Prospective request did not strictly reduce raw and guarded tokens.",
@@ -279,7 +297,7 @@ export class ShadowSwapPlanner {
     }
 
     const selectedCandidates = scan.eligible.slice(0, finalProjection.count);
-    const selected = Object.freeze(
+    const addedOverrides = Object.freeze(
       selectedCandidates.map((candidate) => candidate.override),
     );
     const projectedFingerprint = promptPrefixFingerprint(finalProjection.prepared);
@@ -287,7 +305,7 @@ export class ShadowSwapPlanner {
       input,
       activeFingerprint,
       projectedFingerprint,
-      selected,
+      addedOverrides,
       targetTokens,
       rawTokensBefore,
       rawTokensAfter: finalProjection.rawTokens,
@@ -296,6 +314,8 @@ export class ShadowSwapPlanner {
     });
     assertPlanBaseCurrent(plan, {
       active: input.active,
+      revision: input.revision,
+      activeOverrides: input.activeOverrides,
       activePrepared: input.activePrepared,
     });
 
@@ -305,11 +325,11 @@ export class ShadowSwapPlanner {
       eligibleCandidateCount: scan.eligible.length,
       excludedByReason: scan.excludedByReason,
       selectedByRawKind: countRawKinds(selectedCandidates),
-      originalObservationBytes: selected.reduce(
+      originalObservationBytes: addedOverrides.reduce(
         (total, override) => total + override.originalBytes,
         0,
       ),
-      projectedObservationBytes: selected.reduce(
+      projectedObservationBytes: addedOverrides.reduce(
         (total, override) => total + override.renderedBytes,
         0,
       ),
@@ -322,8 +342,12 @@ export class ShadowSwapPlanner {
 
   private scanCandidates(
     canonical: ProtocolContextView,
-    policy: ShadowSwapPolicyV1,
+    activeOverrides: readonly SwapOverride[],
+    policy: SwapOnlyPolicyV1,
   ): CandidateScan {
+    const alreadySwapped = new Set(
+      activeOverrides.map((override) => override.messageId),
+    );
     const closedFrames = new Set(
       canonical.frames
         .filter((frame) => frame.state === "closed")
@@ -341,6 +365,10 @@ export class ShadowSwapPlanner {
 
     for (const message of canonical.messages) {
       if (message.role !== "tool") {
+        continue;
+      }
+      if (alreadySwapped.has(message.messageId)) {
+        increment(exclusions, "already_swapped");
         continue;
       }
       const reason = basicExclusionReason({
@@ -374,7 +402,7 @@ export class ShadowSwapPlanner {
         );
       } catch (error) {
         if (!(error instanceof SwapRenderUnsupportedError)) {
-          throw new ShadowPlanningDiagnosticError(
+          throw new SwapPlanningDiagnosticError(
             "render",
             "renderer_failed",
             "Swap placeholder rendering failed.",
@@ -397,56 +425,66 @@ export class ShadowSwapPlanner {
 }
 
 export function assertPlanBaseCurrent(
-  plan: ShadowRevisionPlan,
+  plan: SwapRevisionPlan,
   current: {
     readonly active: CompiledRevisionContext;
+    readonly revision: StoredContextRevisionV5;
+    readonly activeOverrides: readonly SwapOverride[];
     readonly activePrepared: PreparedModelRequest;
   },
 ): void {
   const fingerprint = promptPrefixFingerprint(current.activePrepared);
   if (
     plan.baseRevisionId !== current.active.revisionId ||
+    plan.baseRevisionId !== current.revision.revisionId ||
+    plan.baseRevisionNumber !== current.revision.revisionNumber ||
     plan.baseCanonicalThroughOrdinal !== current.active.canonicalThroughOrdinal ||
+    plan.baseOverrideManifestSha256 !==
+      activeOverrideManifestHash(current.activeOverrides) ||
     plan.basePrefixHash !== fingerprint.prefixHash ||
     plan.requestConfigHash !== fingerprint.requestConfigHash ||
     plan.toolSchemaHash !== fingerprint.toolSchemaHash
   ) {
-    throw new ShadowPlanStaleError(
-      "Shadow revision plan base no longer matches the active request.",
+    throw new SwapPlanStaleError(
+      "Swap revision plan base no longer matches the active request.",
     );
   }
 }
 
-function validatePlanningInput(input: ShadowPlanningInput): void {
-  if (input.policy.version !== "shadow-swap-v1") {
-    throw new ShadowPlanningDiagnosticError(
+function validatePlanningInput(input: SwapPlanningInput): void {
+  if (input.policy.version !== "swap-only-v1") {
+    throw new SwapPlanningDiagnosticError(
       "validate",
       "unsupported_policy",
-      "Shadow planning policy version is unsupported.",
+      "Swap planning policy version is unsupported.",
     );
   }
   if (
     input.active.sessionId !== input.canonical.sessionId ||
-    input.active.canonicalThroughOrdinal !== input.canonical.messages.length
+    input.revision.sessionId !== input.canonical.sessionId ||
+    input.revision.revisionId !== input.active.revisionId ||
+    input.active.canonicalThroughOrdinal !== input.canonical.messages.length ||
+    input.revision.overrideManifestSha256 !==
+      activeOverrideManifestHash(input.activeOverrides)
   ) {
     throw new ContextRevisionError(
-      "Active compiled context does not match canonical planning input.",
+      "Active revision does not match canonical planning input.",
     );
   }
   if (
     input.forcedTargetTokens !== undefined &&
     (!Number.isSafeInteger(input.forcedTargetTokens) || input.forcedTargetTokens < 0)
   ) {
-    throw new ShadowPlanningDiagnosticError(
+    throw new SwapPlanningDiagnosticError(
       "validate",
       "invalid_target",
-      "Forced shadow target must be a non-negative safe integer.",
+      "Forced swap target must be a non-negative safe integer.",
     );
   }
 }
 
 function assertActiveFingerprint(
-  input: ShadowPlanningInput,
+  input: SwapPlanningInput,
   fingerprint: PromptPrefixFingerprint,
 ): void {
   if (
@@ -460,22 +498,22 @@ function assertActiveFingerprint(
   }
 }
 
-function planningTarget(input: ShadowPlanningInput): number {
+function planningTarget(input: SwapPlanningInput): number {
   if (input.trigger === "benchmark_forced") {
     if (input.forcedTargetTokens === undefined) {
-      throw new ShadowPlanningDiagnosticError(
+      throw new SwapPlanningDiagnosticError(
         "validate",
         "missing_forced_target",
-        "Forced shadow planning requires an explicit target.",
+        "Forced swap planning requires an explicit target.",
       );
     }
     return input.forcedTargetTokens;
   }
   if (input.forcedTargetTokens !== undefined) {
-    throw new ShadowPlanningDiagnosticError(
+    throw new SwapPlanningDiagnosticError(
       "validate",
       "unexpected_forced_target",
-      "Runtime pressure planning cannot override the policy target.",
+      "Only benchmark-forced planning accepts an explicit target.",
     );
   }
   return Math.floor(
@@ -484,12 +522,15 @@ function planningTarget(input: ShadowPlanningInput): number {
 }
 
 function emptyResult(
-  input: ShadowPlanningInput,
-  outcome: Extract<ShadowPlanningOutcome, "below_trigger" | "no_eligible_candidates">,
+  input: SwapPlanningInput,
+  outcome: Extract<
+    SwapPlanningOutcome,
+    "below_trigger" | "below_target" | "no_eligible_candidates"
+  >,
   rawTokensBefore: number,
   guardedTokensBefore: number,
   targetTokens: number,
-): ShadowPlanningResult {
+): SwapPlanningResult {
   return Object.freeze({
     outcome,
     canonicalMessageCount: input.canonical.messages.length,
@@ -593,7 +634,7 @@ function assertProspectiveConfiguration(
     prospective.toolSchemaHash !== active.toolSchemaHash ||
     prospective.requestMaxOutputTokens !== active.requestMaxOutputTokens
   ) {
-    throw new ShadowPlanningDiagnosticError(
+    throw new SwapPlanningDiagnosticError(
       "validate",
       "prospective_configuration_changed",
       "Prospective request preparation changed its fixed configuration.",
@@ -602,52 +643,48 @@ function assertProspectiveConfiguration(
 }
 
 function createPlan(input: {
-  input: ShadowPlanningInput;
+  input: SwapPlanningInput;
   activeFingerprint: PromptPrefixFingerprint;
   projectedFingerprint: PromptPrefixFingerprint;
-  selected: readonly ProspectiveSwapOverride[];
+  addedOverrides: readonly SwapOverride[];
   targetTokens: number;
   rawTokensBefore: number;
   rawTokensAfter: number;
   guardedTokensBefore: number;
   guardedTokensAfter: number;
-}): ShadowRevisionPlan {
+}): SwapRevisionPlan {
   const planningInput = input.input;
-  const activeFingerprint = input.activeFingerprint;
-  const projectedFingerprint = input.projectedFingerprint;
-  const selected = input.selected;
-  const targetTokens = input.targetTokens;
+  const nextOverrideManifestSha256 = activeOverrideManifestHash([
+    ...planningInput.activeOverrides,
+    ...input.addedOverrides,
+  ]);
   const planIdentity = {
     version: 1,
-    policyVersion: "shadow-swap-v1",
+    policyVersion: "swap-only-v1",
     baseRevisionId: planningInput.active.revisionId,
+    baseRevisionNumber: planningInput.revision.revisionNumber,
     baseCanonicalThroughOrdinal: planningInput.active.canonicalThroughOrdinal,
-    basePrefixHash: activeFingerprint.prefixHash,
-    requestConfigHash: activeFingerprint.requestConfigHash,
-    toolSchemaHash: activeFingerprint.toolSchemaHash,
-    selected: selected.map((override) => ({
+    baseOverrideManifestSha256: planningInput.revision.overrideManifestSha256,
+    basePrefixHash: input.activeFingerprint.prefixHash,
+    requestConfigHash: input.activeFingerprint.requestConfigHash,
+    toolSchemaHash: input.activeFingerprint.toolSchemaHash,
+    addedOverrides: input.addedOverrides.map((override) => ({
       messageId: override.messageId,
       originalContentSha256: override.originalContentSha256,
       renderedContentSha256: override.renderedContentSha256,
     })),
-    targetTokens,
+    nextOverrideManifestSha256,
+    targetTokens: input.targetTokens,
+    projectedPrefixHash: input.projectedFingerprint.prefixHash,
   } as const;
   return Object.freeze({
-    version: 1,
-    policyVersion: "shadow-swap-v1",
+    ...planIdentity,
     planHash: sha256(stableJsonStringify(planIdentity)),
-    baseRevisionId: planningInput.active.revisionId,
-    baseCanonicalThroughOrdinal: planningInput.active.canonicalThroughOrdinal,
-    basePrefixHash: activeFingerprint.prefixHash,
-    requestConfigHash: activeFingerprint.requestConfigHash,
-    toolSchemaHash: activeFingerprint.toolSchemaHash,
-    selected,
-    targetTokens,
+    addedOverrides: input.addedOverrides,
     rawTokensBefore: input.rawTokensBefore,
     rawTokensAfter: input.rawTokensAfter,
     guardedTokensBefore: input.guardedTokensBefore,
     guardedTokensAfter: input.guardedTokensAfter,
-    projectedPrefixHash: projectedFingerprint.prefixHash,
   });
 }
 

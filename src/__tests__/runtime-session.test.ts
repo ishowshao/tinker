@@ -915,9 +915,10 @@ describe("RuntimeSession lifecycle", () => {
     const runnerApiKeys: (keyof RuntimeSession)[] = [
       "sessionId",
       "executeTurn",
+      "compactContext",
       "dispose",
     ];
-    expect(runnerApiKeys).toHaveLength(3);
+    expect(runnerApiKeys).toHaveLength(4);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { ContextCompactionResult } from "../context/context-manager";
 import type {
   ExecuteTurnInput,
   RuntimeSession,
@@ -22,6 +23,7 @@ export type TuiSessionController = {
   getBinding: () => TuiSessionBinding;
   subscribe: (listener: () => void) => () => void;
   listSessions: () => Promise<readonly SessionSummary[]>;
+  compact: () => Promise<ContextCompactionResult>;
   resume: (sessionId: SessionId) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
   switchModel: (profile: ModelProfile) => Promise<void>;
@@ -34,7 +36,7 @@ export type ManagedTuiSessionBinding = TuiSessionBinding & {
 export class DefaultTuiSessionController implements TuiSessionController {
   private readonly listeners = new Set<() => void>();
   private binding: ManagedTuiSessionBinding;
-  private operation?: Promise<void>;
+  private operation?: Promise<unknown>;
 
   constructor(
     initial: ManagedTuiSessionBinding,
@@ -60,6 +62,10 @@ export class DefaultTuiSessionController implements TuiSessionController {
 
   listSessions(): Promise<readonly SessionSummary[]> {
     return this.catalog.list(this.binding.sessionId);
+  }
+
+  compact(): Promise<ContextCompactionResult> {
+    return this.serialize(() => this.binding.runtimeSession.compactContext());
   }
 
   resume(sessionId: SessionId): Promise<void> {
@@ -123,7 +129,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
     return this.binding.runtimeSession.dispose(reason);
   }
 
-  private serialize(operation: () => Promise<void>): Promise<void> {
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
     if (this.operation !== undefined) {
       return Promise.reject(new Error("Another session operation is already running."));
     }

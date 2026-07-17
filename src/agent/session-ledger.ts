@@ -1,11 +1,15 @@
-import type { RuntimeIdFactory, SessionId } from "../ids/runtime-id";
+import type { ContextRevisionId, RuntimeIdFactory, SessionId } from "../ids/runtime-id";
 import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
-  StoredContextSnapshotV4,
-  StoredInitialContextRevisionV4,
+  StoredContextRevisionV5,
+  StoredContextSnapshotV5,
+  StoredSwapOverrideV5,
 } from "../context/context-revision";
-import { ContextRevisionCompiler } from "../context/context-revision-compiler";
+import {
+  ContextRevisionCompiler,
+  createInitialContextRevision,
+} from "../context/context-revision-compiler";
 import {
   ContextProtocolError,
   ContextProtocolValidator,
@@ -118,8 +122,8 @@ export type CreateInMemorySessionLedgerInput = {
   idFactory: RuntimeIdFactory;
   systemPrompt?: string;
   initialView?: ProtocolContextView;
-  initialSnapshot?: StoredContextSnapshotV4;
-  initialRevisionId?: StoredInitialContextRevisionV4["revisionId"];
+  initialSnapshot?: StoredContextSnapshotV5;
+  initialRevisionId?: ContextRevisionId;
   contextBuilder?: ContextBuilder;
   revisionCompiler?: ContextRevisionCompiler;
   clock?: () => string;
@@ -134,7 +138,8 @@ export class InMemorySessionLedger implements SessionLedger {
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
   private readonly revisionCompiler: ContextRevisionCompiler;
-  private readonly revision: StoredInitialContextRevisionV4;
+  private readonly revision: StoredContextRevisionV5;
+  private readonly activeOverrides: readonly StoredSwapOverrideV5[];
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
@@ -157,6 +162,7 @@ export class InMemorySessionLedger implements SessionLedger {
       }
       this.view = immutableView(input.initialSnapshot.canonical);
       this.revision = input.initialSnapshot.revision;
+      this.activeOverrides = input.initialSnapshot.activeOverrides;
     } else {
       this.view =
         input.initialView === undefined
@@ -167,15 +173,13 @@ export class InMemorySessionLedger implements SessionLedger {
               this.clock,
             )
           : immutableView(input.initialView);
-      this.revision = Object.freeze({
+      this.revision = createInitialContextRevision({
         revisionId:
           input.initialRevisionId ?? input.idFactory.createContextRevisionId(),
-        sessionId: input.sessionId,
-        revisionNumber: 1,
-        kind: "initial_full",
-        keepFromOrdinal: 1,
+        canonical: this.view,
         createdAt: this.view.frames[0]?.createdAt ?? this.clock(),
       });
+      this.activeOverrides = Object.freeze([]);
     }
     if (
       this.view.sessionId !== input.sessionId ||
@@ -509,10 +513,12 @@ export class InMemorySessionLedger implements SessionLedger {
     try {
       const canonical = this.view;
       const compiled = this.revisionCompiler.compileActive(
-        snapshotFor(canonical, this.revision),
+        snapshotFor(canonical, this.revision, this.activeOverrides),
       );
       return this.contextBuilder.build({
         canonical,
+        revision: this.revision,
+        activeOverrides: this.activeOverrides,
         compiled,
         tools,
         ...(candidateUserPrompt === undefined ? {} : { candidateUserPrompt }),
@@ -592,14 +598,16 @@ export class InMemorySessionLedger implements SessionLedger {
 
 function snapshotFor(
   canonical: ProtocolContextView,
-  revision: StoredInitialContextRevisionV4,
-): StoredContextSnapshotV4 {
+  revision: StoredContextRevisionV5,
+  activeOverrides: readonly StoredSwapOverrideV5[],
+): StoredContextSnapshotV5 {
   return Object.freeze({
     meta: Object.freeze({
       sessionId: canonical.sessionId,
       activeRevisionId: revision.revisionId,
     }),
     revision,
+    activeOverrides,
     canonical,
   });
 }

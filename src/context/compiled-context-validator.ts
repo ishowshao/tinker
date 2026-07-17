@@ -1,10 +1,7 @@
 import type { AgentMessage } from "../agent/types";
 import { stableJsonStringify } from "../model/model-request-preflight";
 import { formatMessageSource } from "./context-source";
-import type {
-  CompiledRevisionContext,
-  ProspectiveSwapOverride,
-} from "./context-revision";
+import type { CompiledRevisionContext, SwapOverride } from "./context-revision";
 import {
   contentHash,
   type CanonicalMessageRecord,
@@ -23,28 +20,25 @@ export class CompiledContextValidator {
   validateActive(
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
+    overrides: readonly SwapOverride[],
   ): void {
-    this.validate(compiled, canonical, new Map());
+    const byMessageId = overrideMap(overrides, "Active");
+    this.validate(compiled, canonical, byMessageId);
   }
 
   validateProspective(
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
-    overrides: readonly ProspectiveSwapOverride[],
+    overrides: readonly SwapOverride[],
   ): void {
-    const byMessageId = new Map(
-      overrides.map((override) => [override.messageId, override] as const),
-    );
-    if (byMessageId.size !== overrides.length) {
-      fail("Prospective compiled context contains duplicate overrides.");
-    }
+    const byMessageId = overrideMap(overrides, "Prospective");
     this.validate(compiled, canonical, byMessageId);
   }
 
   private validate(
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
-    overrides: ReadonlyMap<string, ProspectiveSwapOverride>,
+    overrides: ReadonlyMap<string, SwapOverride>,
   ): void {
     if (compiled.sessionId !== canonical.sessionId) {
       fail("Compiled context belongs to another session.");
@@ -126,7 +120,7 @@ export class CompiledContextValidator {
 }
 
 function validateOverrideIdentity(
-  override: ProspectiveSwapOverride,
+  override: SwapOverride,
   record: CanonicalMessageRecord,
 ): void {
   if (
@@ -152,6 +146,19 @@ function validateOverrideIdentity(
   ) {
     fail(`Swap override metadata is invalid at ordinal ${record.ordinal}.`);
   }
+}
+
+function overrideMap(
+  overrides: readonly SwapOverride[],
+  label: string,
+): ReadonlyMap<string, SwapOverride> {
+  const byMessageId = new Map(
+    overrides.map((override) => [override.messageId, override] as const),
+  );
+  if (byMessageId.size !== overrides.length) {
+    fail(`${label} compiled context contains duplicate overrides.`);
+  }
+  return byMessageId;
 }
 
 function assertSameMessage(actual: AgentMessage, record: CanonicalMessageRecord): void {

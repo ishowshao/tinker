@@ -3,13 +3,13 @@
 ## 文档状态
 
 - 日期：2026-07-17
-- 状态：设计稿，尚未实施
+- 状态：已实施并通过 I2 门禁
 - 前置阶段：
   [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I2
-- 当前实现基线：SessionStore schema v4、`initial_full` 唯一活动 revision、I1 shadow
-  planner
-- 本阶段目标 schema：SessionStore schema v5
+- 当前实现：SessionStore schema v5、不可变线性 revision、单调 override 继承、手动
+  `/compact`
+- 当前活动策略：`swap-only-v1`；runtime pressure 仍只执行 shadow planning
 - 后继阶段：I3 Recall-first 冷前缀退休
 
 ## 一、结论
@@ -42,6 +42,39 @@ I2 只把 I1 已经证明合法、确定且能严格缩小请求的 swap plan，
 I2 不是“自动 compaction”。运行时 pressure path 仍只允许 shadow planning；只有用户在
 session 没有 active turn 时显式执行 `/compact`，才允许切换活动 revision。
 
+### 1.1 实施结果（2026-07-17）
+
+- SessionStore 已一次性切换到 schema v5；v4 明确返回
+  `SESSION_SCHEMA_UNSUPPORTED`，没有 migration、dual-read 或 full-history fallback。
+- 生产链路已统一为 `SwapPlanner -> ContextManager.compact() ->
+  SessionStore.commitSwapRevision()`；I1 shadow runtime 复用同一个 planner，旧
+  `context-shadow-planner.ts` 已删除。
+- 50-turn formal benchmark 实际提交 revision 2 和 3，最终为 3 条 revision、28 条首次
+  引入的 override，`keepFromOrdinal` 始终为 1，provider request 保持 104 次。
+- 第一次 compact 新增 3 条 override，observation 从 42,762 bytes 降到 1,665 bytes，
+  guarded token 从 53,301 降到 39,675；planning/validation/transaction/activation/total
+  分别为 9.25/5.11/8.02/1.88/24.28ms，database + WAL 增加 61,800 bytes。
+- 第二次 compact 只新增 25 条 override、继承前 3 条；observation 从 357,246 bytes 降到
+  14,351 bytes，guarded token 从 199,761 降到 86,073（下降 56.9%）；各阶段分别为
+  54.32/19.28/34.23/2.12/109.96ms，database + WAL 增加 103,000 bytes。两次合计增加
+  164,800 bytes。
+- formal workload 的 resume、受控取消、Recall round-trip、active/measured revision 和
+  schema fingerprint 全部通过；request build p50/p95 为 2.19/11.00ms。RSS 增量
+  232,013,824 bytes 只作为 canonical 全历史仍在热路径的观测，不是 I2 收益承诺。
+- 10,000-message Recall benchmark 的 trigram search p50/p95 为 0.21/0.23ms，
+  `openSessionStoreValidation` 为 151.76ms，采样内存峰值增量 49,152 bytes。
+- transaction 内 6 个注入点都证明 revision、override、active ID 和旧 measurement 完整
+  回滚；COMMIT 后 meter activation 注入失败则保留 new active revision，measurement 为空，
+  close/reopen 后按相同 placeholder bytes 恢复。
+- 真实 PTY 使用 18,000-token input budget：`/compact` 将 16,977 降到 5,098 estimated
+  tokens（下降 70.0%），随后下一 turn 正常完成并可 `/quit`。
+- 当前显式真实 provider profile 的 smoke 中，compact 从 9,443 降到 5,063 guarded
+  tokens、耗时 5.14ms，compact 本身零 provider request；两次 post-compact 请求均被
+  provider 接受。第一次 prompt cache hit/miss 为 0/3,303 tokens，第二次为
+  3,200/138 tokens；这些 cache 数值只记录本次真实成本，不作为 SLA。
+- 最终 `bun run check` 通过 typecheck、Biome、ESLint、457 项测试和 I2 benchmark
+  smoke；`git diff --check` 通过。
+
 ## 二、I1 交付基线与当前缺口
 
 ### 2.1 I1 已经冻结的契约
@@ -63,7 +96,7 @@ I2 直接依赖以下已实施事实，不重新设计：
 I1 正式基准中，3 条 observation 从 42,762 bytes 降到 1,665 bytes，完整请求 raw/guarded
 token 都下降 28.2%。这个结果证明 I2 有明确收益，但不证明自动换出已经安全。
 
-### 2.2 当前代码不能直接提交 shadow plan
+### 2.2 实施前代码不能直接提交 shadow plan（缺口现已闭合）
 
 | 当前实现 | I2 缺口 |
 | --- | --- |
@@ -1553,7 +1586,7 @@ started event append succeeds
 
 ## 二十一、代码组织
 
-### 21.1 建议新增
+### 21.1 实际新增
 
 ```text
 src/context/context-manager.ts
@@ -1565,7 +1598,7 @@ src/context/swap-planner.ts
 `context-shadow-planner.ts` 的纯 planning 逻辑迁入 `swap-planner.ts`；shadow runtime 和
 ContextManager 共用它，不保留两套候选/排序/估值实现。
 
-### 21.2 建议修改
+### 21.2 实际修改
 
 ```text
 src/context/context-revision.ts
@@ -1580,7 +1613,7 @@ src/context/compiled-context-validator.ts
   - active validation 接受真实 active override set
 
 src/context/context-shadow-planner.ts
-  - 拆出通用 pure planner；保留 shadow wiring/event adapter 或删除后改调用点
+  - 已删除；shadow wiring 直接调用通用 SwapPlanner
 
 src/context/context-swap-renderer.ts
   - 保持 swap-observation-v1 byte contract
@@ -1627,7 +1660,7 @@ scripts/bench-long-session-memory.ts
 - ContextManager 不调用 tool runtime 或 model request；
 - Recall 不读取 `context_overrides` 才能返回历史正文。
 
-## 二十二、实施顺序
+## 二十二、实施顺序（已完成）
 
 ### I2.1：schema v5 与类型 cutover
 

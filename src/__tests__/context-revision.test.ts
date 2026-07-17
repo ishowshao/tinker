@@ -77,7 +77,8 @@ describe("ContextRevisionCompiler", () => {
     const compiled = new ContextRevisionCompiler().compileProspective({
       active: built.compiled,
       canonical: built.canonical,
-      overrides: [override],
+      activeOverrides: built.activeOverrides,
+      addedOverrides: [override],
     });
 
     expect(compiled.entries.map((entry) => [entry.frameId, entry.messageId])).toEqual(
@@ -102,7 +103,8 @@ describe("ContextRevisionCompiler", () => {
       new ContextRevisionCompiler().compileProspective({
         active: built.compiled,
         canonical: built.canonical,
-        overrides: [
+        activeOverrides: built.activeOverrides,
+        addedOverrides: [
           {
             ...override,
             renderedContentSha256: "0".repeat(64),
@@ -132,12 +134,12 @@ describe("ContextRevisionCompiler", () => {
     };
     expect(() =>
       new ContextRevisionCompiler().compileActive(snapshot as never),
-    ).toThrow("Unsupported active context revision");
+    ).toThrow("Active context revision");
   });
 });
 
 describe("SessionStore context snapshot", () => {
-  test("decodes the only v4 revision without changing durable state", async () => {
+  test("decodes the initial v5 revision without changing durable state", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -162,14 +164,14 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(4);
+      expect(store.readMeta().schemaVersion).toBe(5);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 
-  test("fast-fails when active revision metadata no longer matches v4", async () => {
+  test("fast-fails when active revision metadata no longer matches v5", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-bad-"));
     const sessionId = runtimeIdFactory.createSessionId();
     let store: SessionStore | undefined;

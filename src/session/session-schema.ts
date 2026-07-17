@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 4;
+export const SESSION_SCHEMA_VERSION = 5;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 4),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 5),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -201,12 +201,62 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     sql: `CREATE TABLE context_revisions (
       revision_id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL,
-      revision_number INTEGER NOT NULL CHECK (revision_number = 1),
-      kind TEXT NOT NULL CHECK (kind = 'initial_full'),
+      revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
+      parent_revision_id TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only')),
       keep_from_ordinal INTEGER NOT NULL CHECK (keep_from_ordinal = 1),
+      source_through_ordinal INTEGER NOT NULL CHECK (source_through_ordinal >= 1),
+      added_override_count INTEGER NOT NULL CHECK (added_override_count >= 0),
+      total_override_count INTEGER NOT NULL CHECK (total_override_count >= 0),
+      override_manifest_sha256 TEXT NOT NULL CHECK (length(override_manifest_sha256) = 64),
+      canonical_sequence_sha256 TEXT NOT NULL CHECK (length(canonical_sequence_sha256) = 64),
+      rendered_message_sha256 TEXT NOT NULL CHECK (length(rendered_message_sha256) = 64),
+      policy_version TEXT,
+      renderer_format TEXT,
+      plan_sha256 TEXT CHECK (plan_sha256 IS NULL OR length(plan_sha256) = 64),
       created_at TEXT NOT NULL,
       UNIQUE (session_id, revision_number),
-      FOREIGN KEY (session_id) REFERENCES session_meta(session_id)
+      FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
+      FOREIGN KEY (parent_revision_id) REFERENCES context_revisions(revision_id),
+      CHECK (
+        (kind = 'initial_full' AND revision_number = 1 AND parent_revision_id IS NULL AND
+          source_through_ordinal = 1 AND added_override_count = 0 AND
+          total_override_count = 0 AND policy_version IS NULL AND
+          renderer_format IS NULL AND plan_sha256 IS NULL) OR
+        (kind = 'swap_only' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
+          added_override_count >= 1 AND total_override_count >= added_override_count AND
+          policy_version = 'swap-only-v1' AND
+          renderer_format = 'swap-observation-v1' AND plan_sha256 IS NOT NULL)
+      )
+    ) STRICT`,
+  },
+  {
+    type: "table",
+    name: "context_overrides",
+    sql: `CREATE TABLE context_overrides (
+      introduced_revision_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      frame_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
+      representation TEXT NOT NULL CHECK (representation = 'swapped'),
+      renderer_format TEXT NOT NULL CHECK (renderer_format = 'swap-observation-v1'),
+      source TEXT NOT NULL,
+      original_content_sha256 TEXT NOT NULL CHECK (length(original_content_sha256) = 64),
+      rendered_content TEXT NOT NULL CHECK (length(rendered_content) > 0),
+      rendered_content_sha256 TEXT NOT NULL CHECK (length(rendered_content_sha256) = 64),
+      original_bytes INTEGER NOT NULL CHECK (original_bytes > 0),
+      rendered_bytes INTEGER NOT NULL CHECK (rendered_bytes > 0),
+      byte_savings INTEGER NOT NULL CHECK (byte_savings > 0),
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (introduced_revision_id, message_id),
+      UNIQUE (session_id, message_id),
+      UNIQUE (introduced_revision_id, ordinal),
+      FOREIGN KEY (introduced_revision_id) REFERENCES context_revisions(revision_id),
+      FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
+      FOREIGN KEY (message_id) REFERENCES messages(message_id),
+      FOREIGN KEY (frame_id) REFERENCES protocol_frames(frame_id),
+      CHECK (original_bytes = rendered_bytes + byte_savings)
     ) STRICT`,
   },
   {
@@ -228,6 +278,16 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       FOREIGN KEY (revision_id) REFERENCES context_revisions(revision_id),
       CHECK (total_tokens = prompt_tokens + completion_tokens)
     ) STRICT`,
+  },
+  {
+    type: "index",
+    name: "idx_context_revisions_session_number",
+    sql: "CREATE INDEX idx_context_revisions_session_number ON context_revisions(session_id, revision_number)",
+  },
+  {
+    type: "index",
+    name: "idx_context_overrides_revision_ordinal",
+    sql: "CREATE INDEX idx_context_overrides_revision_ordinal ON context_overrides(introduced_revision_id, ordinal)",
   },
   {
     type: "index",
@@ -282,6 +342,89 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   ...immutableTriggers("messages"),
   ...immutableTriggers("tool_results"),
   ...immutableTriggers("context_revisions"),
+  ...immutableTriggers("context_overrides"),
+  {
+    type: "trigger",
+    name: "context_revisions_validate_insert",
+    sql: `CREATE TRIGGER context_revisions_validate_insert
+      BEFORE INSERT ON context_revisions
+      WHEN NOT (
+        NEW.session_id = (SELECT session_id FROM session_meta WHERE singleton = 1) AND
+        ((NEW.kind = 'initial_full' AND
+          NEW.revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
+          NOT EXISTS (SELECT 1 FROM context_revisions WHERE session_id = NEW.session_id)) OR
+         (NEW.kind = 'swap_only' AND
+          NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
+          NEW.revision_number = 1 + COALESCE((
+            SELECT revision_number FROM context_revisions
+            WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
+          ), 0) AND
+          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0)))
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid context revision insert'); END`,
+  },
+  {
+    type: "trigger",
+    name: "context_overrides_validate_insert",
+    sql: `CREATE TRIGGER context_overrides_validate_insert
+      BEFORE INSERT ON context_overrides
+      WHEN NOT (
+        EXISTS (
+          SELECT 1 FROM context_revisions cr
+          WHERE cr.revision_id = NEW.introduced_revision_id
+            AND cr.session_id = NEW.session_id
+            AND cr.kind = 'swap_only'
+            AND NEW.ordinal <= cr.source_through_ordinal
+        ) AND
+        EXISTS (
+          SELECT 1
+          FROM messages m
+          JOIN protocol_frames pf ON pf.frame_id = m.frame_id
+          JOIN tool_results tr ON tr.tool_message_id = m.message_id
+          WHERE m.message_id = NEW.message_id
+            AND m.session_id = NEW.session_id
+            AND m.frame_id = NEW.frame_id
+            AND m.ordinal = NEW.ordinal
+            AND m.role = 'tool'
+            AND m.content_sha256 = NEW.original_content_sha256
+            AND length(CAST(m.content AS BLOB)) = NEW.original_bytes
+            AND pf.session_id = NEW.session_id
+            AND pf.kind = 'tool_exchange'
+            AND pf.state = 'closed'
+            AND tr.session_id = NEW.session_id
+            AND tr.frame_id = NEW.frame_id
+            AND tr.observation_sha256 = NEW.original_content_sha256
+        ) AND
+        NEW.source = 'ctx://message/' || NEW.message_id AND
+        length(CAST(NEW.rendered_content AS BLOB)) = NEW.rendered_bytes AND
+        NEW.rendered_bytes < NEW.original_bytes
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid context override insert'); END`,
+  },
+  {
+    type: "trigger",
+    name: "context_measurement_active_insert",
+    sql: `CREATE TRIGGER context_measurement_active_insert
+      BEFORE INSERT ON context_measurement_state
+      WHEN NOT EXISTS (
+        SELECT 1 FROM session_meta sm
+        WHERE sm.singleton = 1 AND sm.session_id = NEW.session_id
+          AND sm.active_revision_id = NEW.revision_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'context measurement revision is not active'); END`,
+  },
+  {
+    type: "trigger",
+    name: "context_measurement_active_update",
+    sql: `CREATE TRIGGER context_measurement_active_update
+      BEFORE UPDATE ON context_measurement_state
+      WHEN NOT EXISTS (
+        SELECT 1 FROM session_meta sm
+        WHERE sm.singleton = 1 AND sm.session_id = NEW.session_id
+          AND sm.active_revision_id = NEW.revision_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'context measurement revision is not active'); END`,
+  },
   {
     type: "trigger",
     name: "protocol_frames_no_delete",
@@ -370,7 +513,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
         OLD.project_instruction_file IS NEW.project_instruction_file AND
         OLD.project_instruction_byte_length IS NEW.project_instruction_byte_length AND
         OLD.project_instruction_sha256 IS NEW.project_instruction_sha256 AND
-        OLD.active_revision_id = NEW.active_revision_id AND OLD.created_at = NEW.created_at AND
+        OLD.created_at = NEW.created_at AND
         NEW.next_turn_number >= OLD.next_turn_number AND
         NEW.next_event_sequence >= OLD.next_event_sequence AND
         NEW.open_count >= OLD.open_count AND
@@ -378,13 +521,31 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
          (OLD.initialization_state = 'ready' AND NEW.initialization_state = 'ready')) AND
         (OLD.tool_schema_sha256 IS NULL OR NEW.tool_schema_sha256 = OLD.tool_schema_sha256) AND
         (OLD.runtime_contract_json IS NULL OR NEW.runtime_contract_json = OLD.runtime_contract_json) AND
-        (OLD.runtime_contract_sha256 IS NULL OR NEW.runtime_contract_sha256 = OLD.runtime_contract_sha256)
+        (OLD.runtime_contract_sha256 IS NULL OR NEW.runtime_contract_sha256 = OLD.runtime_contract_sha256) AND
+        (OLD.active_revision_id = NEW.active_revision_id OR EXISTS (
+          SELECT 1
+          FROM context_revisions previous
+          JOIN context_revisions next
+            ON next.parent_revision_id = previous.revision_id
+           AND next.session_id = previous.session_id
+           AND next.revision_number = previous.revision_number + 1
+          WHERE previous.revision_id = OLD.active_revision_id
+            AND next.revision_id = NEW.active_revision_id
+            AND next.session_id = OLD.session_id
+            AND next.kind = 'swap_only'
+            AND next.added_override_count = (
+              SELECT COUNT(*) FROM context_overrides
+              WHERE introduced_revision_id = next.revision_id
+            )
+            AND next.total_override_count = previous.total_override_count + next.added_override_count
+            AND NOT EXISTS (SELECT 1 FROM context_measurement_state)
+        ))
       )
       BEGIN SELECT RAISE(ABORT, 'invalid session metadata transition'); END`,
   },
 ];
 
-export const SESSION_SCHEMA_V4_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V5_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -487,7 +648,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v2.",
+      "Session FTS configuration does not match schema v5.",
       { sessionId },
     );
   }

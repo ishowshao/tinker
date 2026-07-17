@@ -2,19 +2,20 @@
 
 ## 文档状态
 
-- 日期：2026-07-16
+- 日期：2026-07-17
 - 性质：实施路线图，不替代阶段技术设计
 - 目标方案：[`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)
 - 当前依据：仓库现有源码、测试与已完成的 runtime 设计
 
 ## 一、结论
 
-现在不应直接实施完整的「无限上下文」方案。
+现在仍不应直接实施自动化的完整「无限上下文」方案。
 
 Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
 preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
-地基阶段、G0 基准门禁和 I1 Context Revision 影子规划已经完成；I1 仍未切换活动视图，
-下一步只能在独立设计和门禁下进入 I2 温层确定性换出与手动 `/compact`。
+地基阶段、G0 基准门禁、I1 Context Revision 影子规划，以及 I2 温层确定性换出与手动
+`/compact` 已经完成。活动视图现在可以原子切换并精确恢复；下一步只能在独立设计和门禁
+下进入 I3 Recall-first 冷前缀退休，runtime pressure 仍不得自动提交 revision。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -83,9 +84,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
-| 稳定来源与 `Recall` | 已完成 | 当前 schema v4 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
+| 稳定来源与 `Recall` | 已完成 | 当前 schema v5 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
 | 模型 profile 与 runtime contract | 已完成 | profile 身份、显式预算、request/tool schema hash 已持久化并在 resume 时校验 |
 | 项目指令快照 | 已完成 | 新 session 加载单一 AGENTS.md/CLAUDE.md，resume 使用已存 system prompt，不读取当前文件重建历史 |
+| Context revision 与确定性换出 | 已完成 | schema v5 使用不可变线性 revision、首次引入 override、原子 active switch 和手动 `/compact`；`keepFromOrdinal=1` |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -98,12 +100,12 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 | 能力 | 已有部分 | 仍缺少 |
 | --- | --- | --- |
-| Context revision | F4 有且仅有 `initial_full` revision | 尚未建立多 revision 编译、影子规划或 active view 切换 |
+| 自动 context 管理 | I1 pressure shadow planning 与 I2 手动 swap-only 已完成 | 尚未实施 I3 冷前缀退休、I4 主动 Recall 评测或任何自动 revision commit |
 
 ### 3.3 尚未开始
 
-- 确定性换出、Recall-first 冷前缀退休、可选结构化 checkpoint、`/compact` 和
-  自动 compaction。
+- Recall-first 冷前缀退休、主动 Recall 评测、可选结构化 checkpoint 和自动
+  compaction。
 
 ### 3.4 旧路线图如何迁移
 
@@ -369,7 +371,7 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 ### I2：温层确定性换出与手动 `/compact`
 
-**状态：技术方案待评审，尚未实施。**
+**状态：已完成（2026-07-17）。**
 
 详细设计见
 [`context-revision-i2-deterministic-swap-manual-compact-design.md`](context-revision-i2-deterministic-swap-manual-compact-design.md)。
@@ -386,6 +388,29 @@ G0 不改变 runtime 行为，只恢复可重复的工程门禁：
 
 验收门槛：换出零模型调用、tool 协议始终合法、输入 token 严格下降、原文可 Recall、
 revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement，也不引入模型摘要。
+
+实际结果：
+
+- SessionStore 已一次性切换到 schema v5；v4 无 migration/dual-read，直接
+  `SESSION_SCHEMA_UNSUPPORTED`。revision chain、override、active switch 和 measurement
+  binding 由 schema fingerprint、trigger、读取时全链验证和 transaction readback 共同
+  约束。
+- `SwapPlanner` 现在由 I1 shadow 与 I2 `ContextManager.compact()` 共用；生产手动路径只
+  接受 `{ kind: "manual" }`，runtime pressure 仍只 shadow，不存在自动 commit flag。
+- 50-turn formal benchmark 提交 revision 2/3，累计 28 条 override。第一次 guarded token
+  从 53,301 降到 39,675，第二次从 199,761 降到 86,073；provider request 仍为 104 次，
+  resume、取消、Recall 和 measured revision 均通过。
+- 两次 compact 的 planning/validation/transaction/activation/total 分别为
+  9.25/5.11/8.02/1.88/24.28ms 和 54.32/19.28/34.23/2.12/109.96ms；database + WAL
+  分别增加 61,800 和 103,000 bytes。
+- transaction 内 6 个 fault point 全部回滚到旧 active revision 并保留旧 measurement；
+  COMMIT 后 activation fault 则保留新 revision，measurement 为空，重启能精确恢复。
+- 真实 PTY 中 `/compact` 将 16,977 降到 5,098 estimated tokens（下降 70.0%），随后可
+  继续 turn 并正常 `/quit`。真实 provider smoke 中 compact 零请求；两次 post-compact
+  请求均通过，cache hit/miss 从 0/3,303 变为 3,200/138 tokens。
+- 10,000-message Recall benchmark 的 trigram p95 为 0.23ms；最终 `bun run check` 包含
+  457 项测试并通过，formal benchmark、Recall benchmark、fault matrix、PTY 和真实
+  provider smoke 也全部通过。
 
 ### I3：Recall-first 冷前缀退休
 
@@ -454,6 +479,6 @@ Recall-only 显著改善主动恢复和任务成功率，否则不进入默认�
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前已完成 **I1：Context Revision 与影子规划**。下一项是 **I2：温层确定性换出与手动
-`/compact`**，但必须先独立定稿 schema、transaction、失效和失败语义；在 I2 门槛满足前
-不切换 active revision，也不启用确定性换出或 compaction。
+当前已完成 **I2：温层确定性换出与手动 `/compact`**。下一项是 **I3：Recall-first 冷前缀
+退休**，但必须先独立定稿合法退休边界、active compiler 语义、Recall 质量门禁和失败恢复；
+在 I3 门槛满足前，`keepFromOrdinal` 继续固定为 1，也不启用自动 revision commit。

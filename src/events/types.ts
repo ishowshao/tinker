@@ -40,15 +40,55 @@ export type SessionStartedData = {
 };
 
 export type ContextUsageUpdatedData = {
-  phase: "initial" | "preflight" | "measured" | "invalidated";
+  phase: "initial" | "preflight" | "measured" | "revision";
   snapshot: ContextUsageSnapshot;
 };
 
+export type ContextRevisionStartedData = {
+  strategy: "swap";
+  reason: "manual";
+  policyVersion: "swap-only-v1";
+  rendererFormat: "swap-observation-v1";
+};
+
+export type ContextRevisionFinishedData = {
+  strategy: "swap";
+  reason: "manual";
+  policyVersion: "swap-only-v1";
+  outcome:
+    | "below_target"
+    | "no_eligible_candidates"
+    | "target_reached"
+    | "insufficient_candidates";
+  baseRevisionNumber: number;
+  revisionNumber?: number;
+  addedOverrideCount: number;
+  totalOverrideCount: number;
+  originalObservationBytes: number;
+  projectedObservationBytes: number;
+  rawTokensBefore: number;
+  rawTokensAfter?: number;
+  guardedTokensBefore: number;
+  guardedTokensAfter?: number;
+  targetTokens: number;
+  planHash?: string;
+  durationMs: number;
+};
+
+export type ContextRevisionFailedData = {
+  strategy: "swap";
+  reason: "manual";
+  stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
+  errorCode: string;
+  error: string;
+};
+
 export type ContextShadowPlannedData = {
-  policyVersion: "shadow-swap-v1";
+  policyVersion: "swap-only-v1";
   trigger: "runtime_pressure" | "benchmark_forced";
   outcome:
     | "below_trigger"
+    | "below_target"
     | "no_eligible_candidates"
     | "target_reached"
     | "insufficient_candidates";
@@ -69,7 +109,7 @@ export type ContextShadowPlannedData = {
 };
 
 export type ContextShadowFailedData = {
-  policyVersion: "shadow-swap-v1";
+  policyVersion: "swap-only-v1";
   stage: "candidate" | "render" | "prepare" | "validate";
   errorCode: string;
   error: string;
@@ -120,6 +160,9 @@ export type AgentEventDataMap = {
   "model.request.started": Record<string, never>;
   "model.request.finished": { output: ModelRequestOutput };
   "context.usage.updated": ContextUsageUpdatedData;
+  "context.revision.started": ContextRevisionStartedData;
+  "context.revision.finished": ContextRevisionFinishedData;
+  "context.revision.failed": ContextRevisionFailedData;
   "context.shadow.planned": ContextShadowPlannedData;
   "context.shadow.failed": ContextShadowFailedData;
   "assistant.progress": { content: string };
@@ -191,6 +234,9 @@ export type AgentEventInput =
       | "session.interrupted_frame_recovered"
       | "session.finished"
       | "context.usage.updated"
+      | "context.revision.started"
+      | "context.revision.finished"
+      | "context.revision.failed"
     >
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">

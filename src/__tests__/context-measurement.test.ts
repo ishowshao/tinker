@@ -292,6 +292,40 @@ describe("ContextMeter", () => {
     expect(meter.measure(rebuilt).source).toBe("estimated_full");
   });
 
+  test("starts a rebuilt revision with a full estimate while preserving calibration", () => {
+    const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
+    const first = prepareTestModelRequest({
+      messages: [{ role: "user", content: "original" }],
+      tools: [],
+    });
+    meter.measure(first);
+    meter.recordProviderUsage(
+      first,
+      testModelOutput(first, { role: "assistant", content: "answer" }),
+    );
+
+    meter.startRevision({
+      reason: "context_rebuilt",
+      requestConfigHash: first.requestConfigHash,
+      toolSchemaHash: first.toolSchemaHash,
+    });
+    const rebuilt = prepareTestModelRequest({
+      messages: [{ role: "user", content: "swapped placeholder" }],
+      tools: [],
+    });
+    expect(meter.measure(rebuilt)).toMatchObject({
+      source: "estimated_full",
+      calibrationSampleCount: 1,
+    });
+    expect(meter.measure(rebuilt).lastProviderUsage).toBeUndefined();
+    expect(() =>
+      meter.recordProviderUsage(
+        first,
+        testModelOutput(first, { role: "assistant", content: "stale" }),
+      ),
+    ).toThrow("before measuring");
+  });
+
   test("blocks a guarded estimate above the strict input budget", () => {
     const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
     const prepared = prepareTestModelRequest({

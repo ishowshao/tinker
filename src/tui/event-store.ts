@@ -300,6 +300,9 @@ export function reduceTuiProjection(
     case "agent.iteration.finished":
     case "context.shadow.planned":
     case "context.shadow.failed":
+    case "context.revision.started":
+    case "context.revision.finished":
+    case "context.revision.failed":
     case "tool.observation":
       return state;
     default:

@@ -2,12 +2,16 @@ import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
   CompiledRevisionContext,
+  StoredContextRevisionV5,
+  SwapOverride,
 } from "../context/context-revision";
 import type { ProtocolContextView } from "../context/protocol-frame";
 
 export class ContextBuilder {
   build(input: {
     canonical: ProtocolContextView;
+    revision: StoredContextRevisionV5;
+    activeOverrides: readonly SwapOverride[];
     compiled: CompiledRevisionContext;
     tools: readonly ToolDefinition[];
     candidateUserPrompt?: string;
@@ -26,6 +30,8 @@ export class ContextBuilder {
     }
     return Object.freeze({
       canonical: input.canonical,
+      revision: input.revision,
+      activeOverrides: input.activeOverrides,
       compiled: input.compiled,
       request: {
         messages,

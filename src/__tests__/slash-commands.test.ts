@@ -65,6 +65,12 @@ describe("findSlashCommand", () => {
 });
 
 describe("parseSlashCommand", () => {
+  test("parses only the zero-argument /compact command", () => {
+    expect(parseSlashCommand("/compact")).toEqual({ type: "compact" });
+    expect(() => parseSlashCommand("/compact now")).toThrow("Usage: /compact");
+    expect(() => parseSlashCommand("/compact --force")).toThrow("Usage: /compact");
+  });
+
   test("parses /view with relative, absolute, and space-containing paths", () => {
     expect(parseSlashCommand("/view src/tui/app.tsx")).toEqual({
       type: "view",
