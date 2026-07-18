@@ -23,6 +23,7 @@ import {
 } from "./model-request-preflight";
 
 const OPENAI_CHAT_SERIALIZATION_VERSION = "openai-chat-v1";
+const OPENAI_CHAT_TIMEOUT_MS = 30 * 60 * 1_000;
 
 export class OpenAIChatModelClient implements ModelClient {
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
@@ -49,7 +50,7 @@ export class OpenAIChatModelClient implements ModelClient {
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
-      timeout: options.timeoutMs,
+      timeout: options.timeoutMs ?? OPENAI_CHAT_TIMEOUT_MS,
       fetch: options.fetch,
     });
   }
