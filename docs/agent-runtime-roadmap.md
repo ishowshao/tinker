@@ -415,6 +415,11 @@ revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement�
 
 ### I3：Recall-first 冷前缀退休
 
+**状态：技术方案已形成，尚未实施（2026-07-17）。**
+
+详细设计见
+[`context-revision-i3-recall-first-prefix-retirement-design.md`](context-revision-i3-recall-first-prefix-retirement-design.md)。
+
 当 swap-only 的 placeholder 和 tool-call 骨架开始形成线性增长的 token 地板时，先不生成
 摘要，而是允许连续的完整旧前缀退出 active context：
 
