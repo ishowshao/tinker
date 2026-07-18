@@ -8,8 +8,10 @@ import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
+import { PromptHistory } from "../tui/prompt-history";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
+import type { ProjectSlashCommand } from "../tui/project-slash-commands";
 import type { SessionId } from "../ids/runtime-id";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
@@ -721,6 +723,93 @@ describe("tui components", () => {
 
     expect(runCount).toBe(0);
     expect(lastFrame()).toContain("Unknown command: /nope");
+    cleanup();
+  });
+
+  test("expands a project slash command as an ordinary prompt", async () => {
+    const prompts: string[] = [];
+    const history = new PromptHistory();
+    const projectSlashCommands: readonly ProjectSlashCommand[] = [
+      {
+        name: "literal-slash-prompt",
+        description: "Submit a prompt beginning with a slash",
+        prompt: "/this is ordinary prompt text",
+      },
+    ];
+    const { stdin, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async (prompt) => {
+            prompts.push(prompt);
+            return completedResult();
+          },
+        )}
+        history={history}
+        projectSlashCommands={projectSlashCommands}
+      />,
+    );
+
+    await submitInput(stdin, "/literal-slash-prompt");
+    await Bun.sleep(25);
+
+    expect(prompts).toEqual(["/this is ordinary prompt text"]);
+    expect(history.entries).toEqual(["/this is ordinary prompt text"]);
+    cleanup();
+  });
+
+  test("rejects project command arguments without running the agent", async () => {
+    let runCount = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCount += 1;
+            return completedResult();
+          },
+        )}
+        projectSlashCommands={[
+          {
+            name: "review-changes",
+            description: "Review changes",
+            prompt: "Review the workspace changes.",
+          },
+        ]}
+      />,
+    );
+
+    await submitInput(stdin, "/review-changes now");
+    await Bun.sleep(25);
+
+    expect(runCount).toBe(0);
+    expect(lastFrame()).toContain("Usage: /review-changes");
+    cleanup();
+  });
+
+  test("lists project commands after built-in slash commands", async () => {
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+        projectSlashCommands={[
+          {
+            name: "review-changes",
+            description: "Review changes",
+            prompt: "Review the workspace changes.",
+          },
+        ]}
+      />,
+    );
+
+    stdin.write("/");
+    await Bun.sleep(25);
+    const frame = lastFrame() ?? "";
+
+    expect(frame).toContain("/quit");
+    expect(frame).toContain("/review-changes");
+    expect(frame.indexOf("/quit")).toBeLessThan(frame.indexOf("/review-changes"));
     cleanup();
   });
 

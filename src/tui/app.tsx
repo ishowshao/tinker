@@ -23,6 +23,10 @@ import {
 } from "./components/resume-session-picker";
 import { Timeline } from "./components/timeline";
 import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands";
+import {
+  resolveProjectSlashCommand,
+  type ProjectSlashCommand,
+} from "./project-slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
@@ -32,6 +36,7 @@ export type AppProps = {
   sessionController: TuiSessionController;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
+  projectSlashCommands?: readonly ProjectSlashCommand[];
   profiles?: ModelProfiles;
   persistDefaultProfile?: (profileName: string) => Promise<void>;
   readViewFile?: (workspaceRoot: string, filePath: string) => Promise<ViewFile>;
@@ -100,9 +105,10 @@ export function App(props: AppProps) {
     props.profiles !== undefined &&
     props.profiles.profiles.size > 1;
 
-  const availableCommands = canSwitchModel
-    ? undefined
-    : SLASH_COMMANDS.filter((cmd) => cmd.name !== "model");
+  const builtInCommands = canSwitchModel
+    ? SLASH_COMMANDS
+    : SLASH_COMMANDS.filter((command) => command.name !== "model");
+  const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
   const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
 
@@ -272,103 +278,8 @@ export function App(props: AppProps) {
       });
   };
 
-  const onSubmit = (prompt: string) => {
+  const submitAgentPrompt = (prompt: string) => {
     const trimmed = prompt.trim();
-    setShowStatus(false);
-    setShowSkills(false);
-    setViewError(undefined);
-
-    if (trimmed.startsWith("/")) {
-      let command;
-      try {
-        command = parseSlashCommand(trimmed);
-      } catch (error) {
-        setNotice(errorMessage(error));
-        return;
-      }
-
-      setNotice(undefined);
-
-      if (command.type === "view") {
-        openFileView(command.filePath);
-        return;
-      }
-      if (command.type === "status") {
-        setShowStatus(true);
-        return;
-      }
-      if (command.type === "skills") {
-        setShowSkills(true);
-        return;
-      }
-      if (command.type === "compact") {
-        setIsSessionOperation(true);
-        void props.sessionController
-          .compact()
-          .then((result) => setNotice(formatContextCompactionNotice(result)))
-          .catch((error: unknown) => {
-            setNotice(formatContextCompactionFailureNotice(error));
-          })
-          .finally(() => setIsSessionOperation(false));
-        return;
-      }
-      if (command.type === "compact_retire") {
-        setIsSessionOperation(true);
-        void props.sessionController
-          .retire()
-          .then((result) => setNotice(formatContextRetirementNotice(result)))
-          .catch((error: unknown) => {
-            setNotice(formatContextRetirementFailureNotice(error));
-          })
-          .finally(() => setIsSessionOperation(false));
-        return;
-      }
-      if (command.type === "quit") {
-        props.onQuit?.();
-        exit();
-        return;
-      }
-      if (command.type === "model" || command.type === "model_switch") {
-        if (!canSwitchModel) {
-          setNotice(
-            "Cannot switch models after the session has turns or while running.",
-          );
-          return;
-        }
-        if (command.type === "model_switch") {
-          const targetProfile = props.profiles?.profiles.get(command.profileName);
-          if (targetProfile === undefined) {
-            setNotice(`Unknown model profile: ${command.profileName}`);
-            return;
-          }
-          void doSwitchModel(targetProfile);
-        } else {
-          setModelPickerState({ isSwitching: false });
-          setShowModelPicker(true);
-        }
-        return;
-      }
-      if (command.type === "resume_list") {
-        openResumePicker();
-        return;
-      }
-      setIsSessionOperation(true);
-      const operation =
-        command.type === "resume"
-          ? props.sessionController
-              .resume(command.sessionId)
-              .then(() => setNotice(`Resumed session ${command.sessionId}.`))
-          : props.sessionController
-              .delete(command.sessionId)
-              .then(() => setNotice(`Deleted session ${command.sessionId}.`));
-      void operation
-        .catch((error: unknown) => {
-          setNotice(`Session operation failed: ${errorMessage(error)}`);
-        })
-        .finally(() => setIsSessionOperation(false));
-      return;
-    }
-
     if (trimmed === "" || isRunning) {
       return;
     }
@@ -401,6 +312,111 @@ export function App(props: AppProps) {
           setGitBranchRefresh((current) => current + 1);
         }
       });
+  };
+
+  const onSubmit = (prompt: string) => {
+    const trimmed = prompt.trim();
+    setShowStatus(false);
+    setShowSkills(false);
+    setViewError(undefined);
+
+    if (trimmed.startsWith("/")) {
+      try {
+        const projectCommand = resolveProjectSlashCommand(
+          trimmed,
+          props.projectSlashCommands ?? [],
+        );
+        if (projectCommand !== undefined) {
+          submitAgentPrompt(projectCommand.prompt);
+          return;
+        }
+
+        const command = parseSlashCommand(trimmed);
+        setNotice(undefined);
+
+        if (command.type === "view") {
+          openFileView(command.filePath);
+          return;
+        }
+        if (command.type === "status") {
+          setShowStatus(true);
+          return;
+        }
+        if (command.type === "skills") {
+          setShowSkills(true);
+          return;
+        }
+        if (command.type === "compact") {
+          setIsSessionOperation(true);
+          void props.sessionController
+            .compact()
+            .then((result) => setNotice(formatContextCompactionNotice(result)))
+            .catch((error: unknown) => {
+              setNotice(formatContextCompactionFailureNotice(error));
+            })
+            .finally(() => setIsSessionOperation(false));
+          return;
+        }
+        if (command.type === "compact_retire") {
+          setIsSessionOperation(true);
+          void props.sessionController
+            .retire()
+            .then((result) => setNotice(formatContextRetirementNotice(result)))
+            .catch((error: unknown) => {
+              setNotice(formatContextRetirementFailureNotice(error));
+            })
+            .finally(() => setIsSessionOperation(false));
+          return;
+        }
+        if (command.type === "quit") {
+          props.onQuit?.();
+          exit();
+          return;
+        }
+        if (command.type === "model" || command.type === "model_switch") {
+          if (!canSwitchModel) {
+            setNotice(
+              "Cannot switch models after the session has turns or while running.",
+            );
+            return;
+          }
+          if (command.type === "model_switch") {
+            const targetProfile = props.profiles?.profiles.get(command.profileName);
+            if (targetProfile === undefined) {
+              setNotice(`Unknown model profile: ${command.profileName}`);
+              return;
+            }
+            void doSwitchModel(targetProfile);
+          } else {
+            setModelPickerState({ isSwitching: false });
+            setShowModelPicker(true);
+          }
+          return;
+        }
+        if (command.type === "resume_list") {
+          openResumePicker();
+          return;
+        }
+        setIsSessionOperation(true);
+        const operation =
+          command.type === "resume"
+            ? props.sessionController
+                .resume(command.sessionId)
+                .then(() => setNotice(`Resumed session ${command.sessionId}.`))
+            : props.sessionController
+                .delete(command.sessionId)
+                .then(() => setNotice(`Deleted session ${command.sessionId}.`));
+        void operation
+          .catch((error: unknown) => {
+            setNotice(`Session operation failed: ${errorMessage(error)}`);
+          })
+          .finally(() => setIsSessionOperation(false));
+      } catch (error) {
+        setNotice(errorMessage(error));
+      }
+      return;
+    }
+    submitAgentPrompt(trimmed);
   };
 
   return (

@@ -40,6 +40,7 @@ import {
   type ModelProfile,
 } from "./model-profiles";
 import { loadSkillCatalog } from "../skills/skill-loader";
+import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 
 export async function runTui(options: { profileName?: string } = {}): Promise<void> {
   const profiles = await loadModelProfiles();
@@ -55,6 +56,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
   let quitRequested = false;
 
   try {
+    const projectSlashCommands = await loadProjectSlashCommands(workspaceRoot);
     const createSessionForConfig = async (
       sessionConfig: RunnerConfig,
       mode: "new" | "resume",
@@ -215,6 +217,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         sessionController={controller}
         readGitBranch={readCurrentGitBranch}
         history={promptHistory}
+        projectSlashCommands={projectSlashCommands}
         profiles={profiles}
         persistDefaultProfile={persistDefaultProfile}
         onQuit={() => {

@@ -145,6 +145,33 @@ longer present or its runtime contract has changed. Older sessions without a
 stored profile name can resume only when their model name uniquely matches one
 configured profile.
 
+### Project Custom Slash Commands
+
+The TUI loads optional project-scoped prompt aliases from `.tinker.json` in the
+workspace root:
+
+```json
+{
+  "version": 1,
+  "slashCommands": [
+    {
+      "name": "git-commit-and-push",
+      "description": "Commit and push workspace changes",
+      "prompt": "Please inspect the workspace changes, create an appropriate commit, and push it."
+    }
+  ]
+}
+```
+
+Enter `/git-commit-and-push` to submit its configured prompt as an ordinary user
+turn. Built-in slash commands appear first in suggestions, followed by project
+commands in configuration order. Custom commands accept no arguments and cannot
+override built-ins. The optional configuration is loaded once at TUI startup,
+must be valid when present, and has a 1 MiB size limit. It is not loaded by the
+one-shot `tinker run` command. See
+[`docs/project-custom-slash-commands-design.md`](docs/project-custom-slash-commands-design.md)
+for the full contract.
+
 `Read` has a fixed 262144-byte (256 KiB) content limit per call. A successful
 call always returns the complete requested line range. Use `offset` and `limit`
 to page through larger files; oversized requests fail instead of returning

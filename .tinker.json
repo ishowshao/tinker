@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "slashCommands": [
+    {
+      "name": "git-commit-and-push",
+      "description": "提交并推送工作区变更",
+      "prompt": "请帮我提交推送工作区变更"
+    },
+    {
+      "name": "summarize-changes",
+      "description": "查看并总结工作区变更",
+      "prompt": "帮我查看并总结工作区的变更"
+    }
+  ]
+}
