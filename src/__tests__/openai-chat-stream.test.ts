@@ -72,6 +72,29 @@ describe("accumulateOpenAIChatCompletionChunks", () => {
     expect(output.message.content).toBe("answer");
   });
 
+  test("preserves a consistent resolved model identity", () => {
+    const completion = accumulateOpenAIChatCompletionChunks(
+      [
+        { ...chunk({ role: "assistant", content: "ok" }), model: "snapshot-42" },
+        { ...USAGE_ONLY_CHUNK, model: "snapshot-42" },
+      ],
+      PROVIDER,
+    );
+    expect(completion.model).toBe("snapshot-42");
+  });
+
+  test("fast-fails conflicting resolved model identities", () => {
+    expect(() =>
+      accumulateOpenAIChatCompletionChunks(
+        [
+          { ...chunk({ role: "assistant", content: "ok" }), model: "snapshot-a" },
+          { ...USAGE_ONLY_CHUNK, model: "snapshot-b" },
+        ],
+        PROVIDER,
+      ),
+    ).toThrow('conflicts with previously streamed model "snapshot-a"');
+  });
+
   test("merges tool call fragments by index", () => {
     const completion = accumulateOpenAIChatCompletionChunks(
       [

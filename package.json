@@ -4,6 +4,8 @@
   "scripts": {
     "bench:long-session": "bun scripts/bench-long-session-memory.ts",
     "bench:i3-provider-smoke": "bun scripts/bench-i3-provider-smoke.ts",
+    "bench:i4-active-recall": "bun scripts/bench-i4-active-recall.ts",
+    "qualify:i4-active-recall": "bun scripts/qualify-i4-active-recall.ts",
     "bench:recall": "bun scripts/bench-recall.ts",
     "bench:smoke": "bun scripts/bench-smoke.ts",
     "tinker": "bun src/cli/index.ts",

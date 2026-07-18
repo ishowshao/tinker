@@ -38,7 +38,10 @@ export type ClosedTurnBoundary = {
   readonly messageCount: number;
 };
 
-export type PrefixRetirementPlanningTrigger = "manual" | "benchmark_forced";
+export type PrefixRetirementPlanningTrigger =
+  | "manual"
+  | "runtime_pressure"
+  | "benchmark_forced";
 
 export type PrefixRetirementPlan = {
   readonly policyVersion: "recall-first-retirement-v1";
@@ -321,7 +324,11 @@ function validatePlanningInput(input: PrefixRetirementPlanningInput): void {
   if (input.policy.version !== "recall-first-retirement-v1") {
     fail("unsupported_policy", "Prefix retirement policy is unsupported.");
   }
-  if (input.trigger !== "manual" && input.trigger !== "benchmark_forced") {
+  if (
+    input.trigger !== "manual" &&
+    input.trigger !== "runtime_pressure" &&
+    input.trigger !== "benchmark_forced"
+  ) {
     fail("unsupported_trigger", "Prefix retirement trigger is unsupported.");
   }
   if (

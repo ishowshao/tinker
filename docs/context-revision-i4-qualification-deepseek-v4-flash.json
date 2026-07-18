@@ -1,0 +1,126 @@
+{
+  "schemaVersion": "active-recall-qualification-v1",
+  "qualificationId": "deepseek-v4-flash-floor-v1",
+  "qualifiedAt": "2026-07-18T09:06:43.013Z",
+  "profile": "deepseek-v4-flash",
+  "requestedModel": "deepseek-v4-flash",
+  "resolvedModels": [
+    "deepseek-v4-flash"
+  ],
+  "manifestVersion": "active-recall-manifest-v1",
+  "manifestSha256": "093679e221e02b71ba5acf54693faa7a299d05dd25f6faabbeb84645d4db4d2d",
+  "graderVersion": "active-recall-deterministic-grader-v1",
+  "fixtureVersion": "active-recall-long-session-fixture-v1",
+  "recallContractSha256": "c75108d351ed3223928ebeb52c7258a6f95033287a8e560fb5b2efff8e084c9b",
+  "recallToolDefinitionSha256": "60caf87f313ea35e74e278ab8b30337cc8af1cc83d82d957a73857a764f3e3d9",
+  "policy": {
+    "version": "active-recall-qualification-policy-v1",
+    "holdoutTrialsPerView": 3,
+    "minimumFullHistoryTaskSuccessRate": 0.95,
+    "minimumSwapOnlyTaskSuccessRate": 0.95,
+    "minimumRecallOnlyTaskSuccessRate": 0.9,
+    "minimumRecallOnlyActiveRecallRate": 0.9,
+    "minimumRecallOnlySearchGetSuccessRate": 0.3,
+    "minimumCounterfactualGroupTaskSuccessRate": 0.6666666666666666,
+    "maximumInvalidRecallCallsPerRecallOnlyTrial": 0.2,
+    "maximumNegativeUnnecessaryRecallRate": 0.3333333333333333,
+    "maximumRecallOnlyTokenRatioToFullHistory": 3,
+    "maximumRecallOnlyLatencyRatioToFullHistory": 3,
+    "requireCacheAccounting": true,
+    "requireSingleResolvedModel": true
+  },
+  "policySha256": "77ca611594d4e9b7b5a597a3a33e35fcaaffae284dc2ac9953ce9a63cce1c009",
+  "positiveReportSha256": "ef84dfee3fdefd7bbf1be2f1641bccc4a1aa06874b22172fecc03dfa2db840d6",
+  "negativeReportSha256": "c991980ae2824102174315c9b25c1e4affdbbd22aac320e1a254f2702ba3d1b4",
+  "gates": [
+    {
+      "name": "full_history_task_success",
+      "passed": true,
+      "actual": 1,
+      "requirement": ">= 0.95"
+    },
+    {
+      "name": "swap_only_task_success",
+      "passed": true,
+      "actual": 1,
+      "requirement": ">= 0.95"
+    },
+    {
+      "name": "recall_only_task_success",
+      "passed": true,
+      "actual": 0.9667,
+      "requirement": ">= 0.9"
+    },
+    {
+      "name": "recall_only_active_recall",
+      "passed": true,
+      "actual": 0.9667,
+      "requirement": ">= 0.9"
+    },
+    {
+      "name": "recall_only_search_get_success",
+      "passed": true,
+      "actual": 0.3,
+      "requirement": ">= 0.3"
+    },
+    {
+      "name": "counterfactual_group_task_success",
+      "passed": true,
+      "actual": 0.8333,
+      "requirement": ">= 0.6667"
+    },
+    {
+      "name": "invalid_recall_calls_per_recall_only_trial",
+      "passed": true,
+      "actual": 0.0333,
+      "requirement": "<= 0.2"
+    },
+    {
+      "name": "negative_unnecessary_recall",
+      "passed": true,
+      "actual": 0,
+      "requirement": "<= 0.3333"
+    },
+    {
+      "name": "recall_only_token_ratio",
+      "passed": true,
+      "actual": 1.1555,
+      "requirement": "<= 3"
+    },
+    {
+      "name": "recall_only_latency_ratio",
+      "passed": true,
+      "actual": 1.365,
+      "requirement": "<= 3"
+    },
+    {
+      "name": "cache_accounting",
+      "passed": true,
+      "actual": "complete",
+      "requirement": "all provider trials report cache hit and miss tokens"
+    },
+    {
+      "name": "resolved_model_identity",
+      "passed": true,
+      "actual": [
+        "deepseek-v4-flash"
+      ],
+      "requirement": "exactly one resolved model across all provider requests"
+    }
+  ],
+  "metrics": {
+    "fullHistoryTaskSuccessRate": 1,
+    "swapOnlyTaskSuccessRate": 1,
+    "recallOnlyTaskSuccessRate": 0.9667,
+    "recallOnlyActiveRecallRate": 0.9667,
+    "recallOnlySearchGetSuccessRate": 0.3,
+    "minimumCounterfactualGroupTaskSuccessRate": 0.8333,
+    "invalidRecallCallsPerRecallOnlyTrial": 0.0333,
+    "negativeUnnecessaryRecallRate": 0,
+    "recallOnlyTokenRatioToFullHistory": 1.1555,
+    "recallOnlyLatencyRatioToFullHistory": 1.365
+  },
+  "automaticSwapOnly": true,
+  "automaticPrefixRetirement": true,
+  "passed": true
+}

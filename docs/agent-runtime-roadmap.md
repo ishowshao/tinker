@@ -16,11 +16,13 @@ preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来�
 地基阶段、G0 基准门禁、I1 Context Revision 影子规划、I2 温层确定性换出与手动
 `/compact`，以及 I3 Recall-first 冷前缀退休与手动 `/compact retire` 已经完成。活动视图
 现在可以原子换出 observation 或退休完整冷前缀并精确恢复。Agent Skills 也已在 schema v8
-上完成严格发现、渐进披露、durable activation、resume 重绑定和 `/skills` 展示；下一步仍是
-I4 主动 Recall 评测与自动化门禁，runtime pressure 不得自动提交 revision。
+上完成严格发现、渐进披露、durable activation、resume 重绑定和 `/skills` 展示。I4 主动
+Recall 评测与自动化门禁也已完成：DeepSeek floor holdout 通过后，runtime pressure 可以在
+turn commit/skill settlement 或 resume 后的 idle boundary 自动提交 swap，并在仍高于 target 时
+提交 qualified prefix retirement。
 
-如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
-TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
+这条顺序已经避免了直接开发完整“无限上下文”的不可归因风险：自动路径复用 I1 至 I3 的
+deterministic planner/transaction，没有引入摘要、checkpoint 或新的历史 source of truth。
 
 后续路线改为：
 
@@ -105,11 +107,11 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 | 能力 | 已有部分 | 仍缺少 |
 | --- | --- | --- |
-| 自动 context 管理 | I1 pressure shadow planning、I2 手动 swap-only 与 I3 手动冷前缀退休已完成 | 尚未实施 I4 主动 Recall 评测或任何自动 revision commit |
+| 自动 context 管理 | I4 已完成 DeepSeek floor qualification、automatic swap 与 guarded retirement | admission rescue 和可选 checkpoint 仍未实施 |
 
 ### 3.3 尚未开始
 
-- 主动 Recall 评测、可选结构化 checkpoint 和自动 compaction。
+- 可选结构化 checkpoint；只有后续证据显示 Recall-only 存在稳定缺口时才启动。
 
 ### 3.4 旧路线图如何迁移
 
@@ -464,6 +466,11 @@ placeholder，协议骨架完整，resume 恢复同一 active revision，并且�
 
 ### I4：主动 Recall 评测与自动化门禁
 
+**状态：已完成（2026-07-18）；DeepSeek floor qualification 通过，自动 swap 与 retirement 已开启。**
+
+详细设计见
+[`context-revision-i4-active-recall-evaluation-automation-gates-design.md`](context-revision-i4-active-recall-evaluation-automation-gates-design.md)。
+
 - 建立超过 placeholder 保护区的长会话基准，对比 full-history、swap-only 和
   Recall-only retirement。
 - 分别覆盖显式提示历史、隐式依赖早期约束、词面线索改写、旧失败防重复和
@@ -472,15 +479,18 @@ placeholder，协议骨架完整，resume 恢复同一 active revision，并且�
   无效检索次数、token/延迟和 cache hit/miss。
 - 自动 swap-only 先通过协议、预算、cache 和 revision 失败语义门禁；自动 prefix
   retirement 在此基础上还必须通过主动 Recall 质量门禁。
-- 自动 prefix retirement 按 model profile/snapshot 分别过门；未达门槛的模型仍只允许
-  手动退休或 swap-only。
-- 资格同时绑定 system prompt hash 和 Recall tool schema hash；任一变化或 provider 只能
-  给出可漂移 alias 时，自动退休资格失效。
+- 当前配置按用户明确选择使用 `deepseek-v4-flash` capability floor；真实 response/chunk 只解析到
+  一个 model identity，当前高级 profile 继承该行为资格。
+- 资格绑定 manifest、grader、fixture、policy、正负 holdout report、Recall contract 文本与 Recall
+  definition hash；证据和编译门禁由测试互相校验。
 - 只有评测支持后，才对外使用“原文可精确找回”“compaction 不删除 session 历史”等
   产品表述；不承诺“模型永不忘记”。
 
-验收门槛：自动化必须使用明确的模型评测结果，不因 model name 或主观判断默认开启；
-Recall-only 未达任务质量门槛时，先保持手动路径，再决定是否需要 checkpoint。
+实测结果：full-history 30/30、swap-only 30/30、Recall-only 29/30、主动 Recall 29/30，三类
+negative control 0/9 无效 Recall；retirement 相对 full-history 的 token/latency 为 1.1555x/1.365x。
+机器 qualification 12/12 gates 通过。最终 `bun run check` 为 574 tests / 3,657 assertions；50-turn
+long-session、10,000-message Recall、真实 DeepSeek provider smoke 和真实 TUI PTY 均通过。详细
+证据见 I4 设计文档及其 checked-in JSON reports。
 
 ### I5：证据驱动的可选结构化 Checkpoint
 
@@ -509,7 +519,6 @@ Recall-only 显著改善主动恢复和任务成功率，否则不进入默认�
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前已完成 **I3：Recall-first 冷前缀退休与手动 `/compact retire`**。下一项是 **I4：主动
-Recall 评测与自动化门禁**；在 I4 对具体 model profile、system prompt hash 与 Recall tool
-schema hash 给出足够证据前，runtime pressure 仍只做 shadow planning，不启用 automatic
-revision commit。
+当前已完成 **I4：主动 Recall 评测与自动化门禁**。下一项不是默认进入 I5；本轮 30 个
+retirement holdout 只有一个随机的隐式依赖失败，没有形成稳定 checkpoint 需求。继续收集真实长
+会话证据；只有缺口稳定、可重现且 Recall/query 改进不能解决时，才设计 I5。

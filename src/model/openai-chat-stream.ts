@@ -24,12 +24,27 @@ export function accumulateOpenAIChatCompletionChunks(
   let content: string | undefined;
   let reasoningContent: string | undefined;
   let finishReason: string | undefined;
+  let resolvedModel: string | undefined;
   let usage: Record<string, unknown> | undefined;
   const toolCalls: ToolCallAccumulator[] = [];
 
   chunks.forEach((chunk, chunkIndex) => {
     const path = `chunk[${chunkIndex}]`;
     const record = requireRecord(chunk, path, options);
+
+    if (record.model !== undefined && record.model !== null) {
+      if (typeof record.model !== "string" || record.model.trim() === "") {
+        throw providerStreamError(options, `${path}.model`, "must be a string");
+      }
+      if (resolvedModel !== undefined && resolvedModel !== record.model) {
+        throw providerStreamError(
+          options,
+          `${path}.model`,
+          `conflicts with previously streamed model ${JSON.stringify(resolvedModel)}`,
+        );
+      }
+      resolvedModel = record.model;
+    }
 
     if (record.usage !== undefined && record.usage !== null) {
       usage = requireRecord(record.usage, `${path}.usage`, options);
@@ -136,6 +151,7 @@ export function accumulateOpenAIChatCompletionChunks(
       },
     ],
     ...(usage === undefined ? {} : { usage }),
+    ...(resolvedModel === undefined ? {} : { model: resolvedModel }),
   };
 }
 

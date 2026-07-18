@@ -9,7 +9,9 @@
 - 当前基线：SessionStore schema v7、immutable `ContextSurface`、线性
   `ContextRevision`、`swap-only-v1`、`recall-first-retirement-v1`、手动 `/compact`、
   手动 `/compact retire`、稳定来源与 `Recall`
-- 后继阶段：I4 主动 Recall 评测与自动化门禁
+- 后继阶段：
+  [`context-revision-i4-active-recall-evaluation-automation-gates-design.md`](context-revision-i4-active-recall-evaluation-automation-gates-design.md)
+  主动 Recall 评测与自动化门禁
 - 相关设计：
   [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)、
   [`context-revision-i2-deterministic-swap-manual-compact-design.md`](context-revision-i2-deterministic-swap-manual-compact-design.md)、
@@ -473,7 +475,7 @@ and task tools to verify current workspace and process state.
   prepared tool schema 全部一致的 snapshot。
 
 如果只调整 contract 文案但语义版本仍为 v1，system prompt/surface hash 会变化，现有
-`surface_refresh` 会记录新 surface，I4 绑定的 system prompt hash 资格随之失效并要求重测，
+`surface_refresh` 会记录新 surface；I4 还会重新匹配当前 contract 文本和 Recall definition hash，
 无需升级 session schema。只有 contract 语义或 renderer contract 发生不兼容变化时才发布 v2；
 发布时把 v2 设为 current，同时继续保留 v1 decoder，直到没有受支持 revision 再引用它。
 
@@ -1206,7 +1208,7 @@ retirement flag。
 
 ## 二十、实施结果（2026-07-18）
 
-I3 已按本文边界落地，automatic retirement 仍未启用：
+I3 按本文边界交付时，automatic retirement 仍未启用：
 
 - SessionStore 已一次性切换为 schema v7；v6 无 migration、dual-read 或 fallback，直接
   `SESSION_SCHEMA_UNSUPPORTED`。`prefix_retirement`、active override manifest、
@@ -1269,15 +1271,16 @@ Explicit Recall search -> get works after retirement
 Automatic revision commit is still disabled
 ```
 
-I4 才负责：
+后续 I4 已负责并完成：
 
 - full-history、swap-only、Recall-only retirement 的主动 Recall 对照评测；
 - 隐式历史依赖、措辞改写、旧失败防重复和历史/当前版本区分；
-- 按 model profile/snapshot 绑定 system prompt hash 与 Recall tool schema hash；
+- 以 DeepSeek capability floor 绑定冻结 suite/policy/report 与 Recall contract/definition hash；
 - 决定 automatic swap-only 和 automatic prefix retirement 是否分别放行；
 - 未达门槛时保持手动路径，并判断是否有证据进入 I5 checkpoint 设计。
 
-I4 不得因为 I3 的结构和显式 Recall smoke 通过，就默认模型具备可靠的主动长期记忆。
+I4 没有因为 I3 的结构和显式 Recall smoke 通过就默认放行，而是在独立 holdout 达到 29/30
+Recall-only task success 后才启用 automatic retirement。
 
 ## 二十二、最终设计决策
 

@@ -1,0 +1,1500 @@
+{
+  "schemaVersion": "active-recall-report-v1",
+  "createdAt": "2026-07-18T08:49:15.323Z",
+  "suite": "calibration",
+  "manifestVersion": "active-recall-manifest-v1",
+  "manifestHash": "093679e221e02b71ba5acf54693faa7a299d05dd25f6faabbeb84645d4db4d2d",
+  "profile": "deepseek-v4-flash",
+  "model": "deepseek-v4-flash",
+  "stream": true,
+  "fixture": {
+    "turnCount": 10,
+    "payloadBytes": 12288
+  },
+  "run": {
+    "views": [
+      "full_history",
+      "swap_only",
+      "recall_only_retirement"
+    ],
+    "trialsPerView": 1,
+    "includeNegative": false,
+    "caseIds": [
+      "cal-explicit-atlas-channel-a",
+      "cal-explicit-atlas-channel-b",
+      "cal-implicit-ember-serialization-a",
+      "cal-implicit-ember-serialization-b",
+      "cal-rewrite-profile-store-a",
+      "cal-rewrite-profile-store-b",
+      "cal-failure-beta-command-a",
+      "cal-failure-beta-command-b",
+      "cal-version-settings-a",
+      "cal-version-settings-b"
+    ]
+  },
+  "aggregate": {
+    "trialCount": 30,
+    "positiveTrialCount": 30,
+    "negativeTrialCount": 0,
+    "taskSuccessRate": 0.7667,
+    "fullHistoryTaskSuccessRate": 1,
+    "swapOnlyTaskSuccessRate": 1,
+    "recallOnlyTaskSuccessRate": 0.3,
+    "recallOnlyActiveRecallRate": 0.8,
+    "recallOnlySearchGetSuccessRate": 0,
+    "recallOnlyCorrectSourceRate": 0,
+    "invalidRecallCallCount": 3,
+    "providerRequestCount": 81,
+    "providerLatencyMs": 169598.6042,
+    "providerUsage": {
+      "promptTokens": 2783468,
+      "completionTokens": 11941,
+      "totalTokens": 2795409,
+      "promptCacheHitTokens": 1733888,
+      "promptCacheMissTokens": 1049580,
+      "reasoningTokens": 7477
+    }
+  },
+  "trials": [
+    {
+      "caseId": "cal-explicit-atlas-channel-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 3,
+        "getCount": 0,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 7481.7345,
+        "usage": {
+          "promptTokens": 153335,
+          "completionTokens": 434,
+          "totalTokens": 153769,
+          "promptCacheHitTokens": 114816,
+          "promptCacheMissTokens": 38519,
+          "reasoningTokens": 218
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-explicit-atlas-channel-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4854.0704,
+        "usage": {
+          "promptTokens": 95499,
+          "completionTokens": 291,
+          "totalTokens": 95790,
+          "promptCacheHitTokens": 63488,
+          "promptCacheMissTokens": 32011,
+          "reasoningTokens": 154
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-explicit-atlas-channel-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4250.2373,
+        "usage": {
+          "promptTokens": 93917,
+          "completionTokens": 220,
+          "totalTokens": 94137,
+          "promptCacheHitTokens": 62336,
+          "promptCacheMissTokens": 31581,
+          "reasoningTokens": 87
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-explicit-atlas-channel-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 2,
+        "getCount": 1,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 1,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": true,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 5441.7309,
+        "usage": {
+          "promptTokens": 153781,
+          "completionTokens": 311,
+          "totalTokens": 154092,
+          "promptCacheHitTokens": 114944,
+          "promptCacheMissTokens": 38837,
+          "reasoningTokens": 87
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-explicit-atlas-channel-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4092.1673,
+        "usage": {
+          "promptTokens": 95671,
+          "completionTokens": 311,
+          "totalTokens": 95982,
+          "promptCacheHitTokens": 63616,
+          "promptCacheMissTokens": 32055,
+          "reasoningTokens": 122
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-explicit-atlas-channel-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "cal-explicit-atlas-channel",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 5220.4574,
+        "usage": {
+          "promptTokens": 93870,
+          "completionTokens": 338,
+          "totalTokens": 94208,
+          "promptCacheHitTokens": 62464,
+          "promptCacheMissTokens": 31406,
+          "reasoningTokens": 202
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2020.3605,
+        "usage": {
+          "promptTokens": 38696,
+          "completionTokens": 124,
+          "totalTokens": 38820,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 38696,
+          "reasoningTokens": 89
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2309.9347,
+        "usage": {
+          "promptTokens": 32172,
+          "completionTokens": 108,
+          "totalTokens": 32280,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 32172,
+          "reasoningTokens": 96
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 7065.822,
+        "usage": {
+          "promptTokens": 68210,
+          "completionTokens": 668,
+          "totalTokens": 68878,
+          "promptCacheHitTokens": 32000,
+          "promptCacheMissTokens": 36210,
+          "reasoningTokens": 540
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2208.4386,
+        "usage": {
+          "promptTokens": 38645,
+          "completionTokens": 102,
+          "totalTokens": 38747,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 38645,
+          "reasoningTokens": 90
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2117.5949,
+        "usage": {
+          "promptTokens": 32115,
+          "completionTokens": 111,
+          "totalTokens": 32226,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 32115,
+          "reasoningTokens": 99
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-implicit-ember-serialization-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "cal-implicit-ember-serialization",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 9490.1543,
+        "usage": {
+          "promptTokens": 68208,
+          "completionTokens": 780,
+          "totalTokens": 68988,
+          "promptCacheHitTokens": 32000,
+          "promptCacheMissTokens": 36208,
+          "reasoningTokens": 603
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1997.8128,
+        "usage": {
+          "promptTokens": 38532,
+          "completionTokens": 84,
+          "totalTokens": 38616,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 38532,
+          "reasoningTokens": 70
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1766.992,
+        "usage": {
+          "promptTokens": 32025,
+          "completionTokens": 79,
+          "totalTokens": 32104,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 32025,
+          "reasoningTokens": 66
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 3,
+        "getCount": 0,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 6,
+        "nonRecallCallCount": 3
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 8937.1568,
+        "usage": {
+          "promptTokens": 127428,
+          "completionTokens": 795,
+          "totalTokens": 128223,
+          "promptCacheHitTokens": 95360,
+          "promptCacheMissTokens": 32068,
+          "reasoningTokens": 487
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2527.5103,
+        "usage": {
+          "promptTokens": 38501,
+          "completionTokens": 93,
+          "totalTokens": 38594,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 38501,
+          "reasoningTokens": 79
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1788.2833,
+        "usage": {
+          "promptTokens": 32007,
+          "completionTokens": 77,
+          "totalTokens": 32084,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 32007,
+          "reasoningTokens": 64
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-rewrite-profile-store-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "cal-rewrite-profile-store",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 5,
+        "searchCount": 5,
+        "getCount": 0,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 5,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 6,
+        "latencyMs": 11887.6883,
+        "usage": {
+          "promptTokens": 196576,
+          "completionTokens": 864,
+          "totalTokens": 197440,
+          "promptCacheHitTokens": 160384,
+          "promptCacheMissTokens": 36192,
+          "reasoningTokens": 408
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 5,
+        "searchCount": 5,
+        "getCount": 0,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 5,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 6,
+        "latencyMs": 10085.0357,
+        "usage": {
+          "promptTokens": 237739,
+          "completionTokens": 654,
+          "totalTokens": 238393,
+          "promptCacheHitTokens": 197760,
+          "promptCacheMissTokens": 39979,
+          "reasoningTokens": 294
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2587.502,
+        "usage": {
+          "promptTokens": 32410,
+          "completionTokens": 137,
+          "totalTokens": 32547,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 32410,
+          "reasoningTokens": 120
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 5,
+        "searchCount": 4,
+        "getCount": 1,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 1
+      },
+      "tools": {
+        "callCount": 5,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 6,
+        "latencyMs": 11141.5424,
+        "usage": {
+          "promptTokens": 194507,
+          "completionTokens": 851,
+          "totalTokens": 195358,
+          "promptCacheHitTokens": 161664,
+          "promptCacheMissTokens": 32843,
+          "reasoningTokens": 511
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2364.0213,
+        "usage": {
+          "promptTokens": 39017,
+          "completionTokens": 141,
+          "totalTokens": 39158,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 39017,
+          "reasoningTokens": 117
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3522.8637,
+        "usage": {
+          "promptTokens": 65106,
+          "completionTokens": 246,
+          "totalTokens": 65352,
+          "promptCacheHitTokens": 32512,
+          "promptCacheMissTokens": 32594,
+          "reasoningTokens": 158
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-failure-beta-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "cal-failure-beta-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 7,
+        "searchCount": 6,
+        "getCount": 1,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 2
+      },
+      "tools": {
+        "callCount": 7,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 8,
+        "latencyMs": 25307.6557,
+        "usage": {
+          "promptTokens": 269913,
+          "completionTokens": 2193,
+          "totalTokens": 272106,
+          "promptCacheHitTokens": 235008,
+          "promptCacheMissTokens": 34905,
+          "reasoningTokens": 1629
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-version-settings-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 5462.5133,
+        "usage": {
+          "promptTokens": 79006,
+          "completionTokens": 361,
+          "totalTokens": 79367,
+          "promptCacheHitTokens": 39424,
+          "promptCacheMissTokens": 39582,
+          "reasoningTokens": 180
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-version-settings-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3839.5862,
+        "usage": {
+          "promptTokens": 65406,
+          "completionTokens": 228,
+          "totalTokens": 65634,
+          "promptCacheHitTokens": 32640,
+          "promptCacheMissTokens": 32766,
+          "reasoningTokens": 161
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-version-settings-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 3,
+        "getCount": 0,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 6164.6608,
+        "usage": {
+          "promptTokens": 97118,
+          "completionTokens": 464,
+          "totalTokens": 97582,
+          "promptCacheHitTokens": 64640,
+          "promptCacheMissTokens": 32478,
+          "reasoningTokens": 202
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "cal-version-settings-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3341.939,
+        "usage": {
+          "promptTokens": 78737,
+          "completionTokens": 224,
+          "totalTokens": 78961,
+          "promptCacheHitTokens": 39296,
+          "promptCacheMissTokens": 39441,
+          "reasoningTokens": 157
+        },
+        "resolvedModels": []
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-version-settings-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3397.2781,
+        "usage": {
+          "promptTokens": 65471,
+          "completionTokens": 247,
+          "totalTokens": 65718,
+          "promptCacheHitTokens": 32768,
+          "promptCacheMissTokens": 32703,
+          "reasoningTokens": 177
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "cal-version-settings-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "cal-version-settings",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 6925.8597,
+        "usage": {
+          "promptTokens": 129850,
+          "completionTokens": 405,
+          "totalTokens": 130255,
+          "promptCacheHitTokens": 96768,
+          "promptCacheMissTokens": 33082,
+          "reasoningTokens": 210
+        },
+        "resolvedModels": []
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 2
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    }
+  ]
+}

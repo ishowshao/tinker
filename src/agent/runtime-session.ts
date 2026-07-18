@@ -78,6 +78,10 @@ import type {
 } from "./types";
 import { ContextMeter } from "./context-meter";
 import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
+import {
+  selectContextAutomation,
+  type ContextAutomationDecision,
+} from "../context/context-automation-policy";
 import type { SkillCatalogSnapshot } from "../skills/skill-loader";
 import {
   activeSkillManifestEntry,
@@ -210,6 +214,9 @@ export type RuntimeSessionFactoryDependencies = {
   createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
   selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
   onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
+  selectContextAutomation: typeof selectContextAutomation;
+  automaticCompactionTrigger: () => ContextCompactionTrigger;
+  automaticRetirementTrigger: () => ContextRetirementTrigger;
   manualCompactionTrigger: () => ContextCompactionTrigger;
   manualRetirementTrigger: () => ContextRetirementTrigger;
 };
@@ -229,6 +236,7 @@ type RuntimeSessionState =
   | "ready"
   | "executing"
   | "compacting"
+  | "maintaining_context"
   | "faulted"
   | "disposing"
   | "disposed";
@@ -262,6 +270,9 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   createEventSink,
   selectShadowPlanning: ({ preflight }) =>
     preflight.pressure === "normal" ? undefined : { trigger: "runtime_pressure" },
+  selectContextAutomation,
+  automaticCompactionTrigger: () => ({ kind: "runtime_pressure" }),
+  automaticRetirementTrigger: () => ({ kind: "runtime_pressure" }),
   manualCompactionTrigger: () => ({ kind: "manual" }),
   manualRetirementTrigger: () => ({ kind: "manual" }),
 };
@@ -294,6 +305,8 @@ class DefaultRuntimeSession implements RuntimeSession {
   private readonly committedPrefixAuditor = new CommittedPrefixAuditor();
   private readonly shadowPlanner: SwapPlanner;
   private contextManager?: ContextManager;
+  private contextAutomationDecision?: ContextAutomationDecision;
+  private pendingAutomaticContextMaintenance = false;
   private readonly skillCatalog: SkillCatalogSnapshot;
   private skillCoordinator = new SkillActivationCoordinator();
 
@@ -619,6 +632,20 @@ class DefaultRuntimeSession implements RuntimeSession {
         data: { phase: "initial", snapshot: initialSnapshot },
       });
 
+      session.contextAutomationDecision = dependencies.selectContextAutomation({
+        ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
+        surface: store.loadContextSnapshot().surface,
+      });
+      if (
+        input.selection.mode === "resume" &&
+        initialSnapshot.pressure !== "normal" &&
+        session.contextAutomationDecision.automaticSwapOnly
+      ) {
+        session.pendingAutomaticContextMaintenance = true;
+        session.state = "executing";
+        await session.performAutomaticContextMaintenance();
+      }
+
       session.state = "ready";
       return session;
     } catch (error) {
@@ -759,6 +786,13 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.skillCatalog.shadowed.map((entry) => entry.name),
       ),
     });
+  }
+
+  private requireContextAutomation(): ContextAutomationDecision {
+    if (this.contextAutomationDecision === undefined) {
+      throw new Error("RuntimeSession context automation is not initialized.");
+    }
+    return this.contextAutomationDecision;
   }
 
   private appendSkillsCatalogLoaded(): Promise<void> {
@@ -1355,7 +1389,16 @@ class DefaultRuntimeSession implements RuntimeSession {
           committedPrefixAuditor: this.committedPrefixAuditor,
           shadowPlanning: {
             planner: this.shadowPlanner,
-            select: this.dependencies.selectShadowPlanning,
+            select: (planningInput) => {
+              const selection = this.dependencies.selectShadowPlanning(planningInput);
+              if (
+                selection?.trigger === "runtime_pressure" &&
+                this.requireContextAutomation().automaticSwapOnly
+              ) {
+                this.pendingAutomaticContextMaintenance = true;
+              }
+              return selection;
+            },
             ...(this.dependencies.onShadowPlanningResult === undefined
               ? {}
               : { onResult: this.dependencies.onShadowPlanningResult }),
@@ -1397,6 +1440,9 @@ class DefaultRuntimeSession implements RuntimeSession {
       pendingLedgerTurn.finish(result);
       settled = true;
       await this.settleClosedTurnSkills();
+      if (result.status === "completed") {
+        await this.performAutomaticContextMaintenance();
+      }
       return result;
     } catch (error) {
       if (!settled) {
@@ -1407,9 +1453,140 @@ class DefaultRuntimeSession implements RuntimeSession {
     } finally {
       removeExternalAbortListener();
       this.activeTurn = undefined;
+      this.pendingAutomaticContextMaintenance = false;
       if (this.state === "executing") {
         this.state = "ready";
       }
+    }
+  }
+
+  private async performAutomaticContextMaintenance(): Promise<void> {
+    if (!this.pendingAutomaticContextMaintenance) return;
+    this.pendingAutomaticContextMaintenance = false;
+    const automation = this.requireContextAutomation();
+    if (!automation.automaticSwapOnly) return;
+    if (this.state !== "executing") {
+      throw new Error(
+        `Cannot run automatic context maintenance while RuntimeSession is ${this.state}.`,
+      );
+    }
+    this.store.assertContextRevisionIdle();
+    const qualificationId = requireAutomationQualificationId(automation);
+    this.state = "maintaining_context";
+    try {
+      const swap = await this.performAutomaticCompaction(qualificationId);
+      if (swap === undefined) return;
+      if (automation.automaticPrefixRetirement && automaticSwapNeedsRetirement(swap)) {
+        await this.performAutomaticRetirement(qualificationId);
+      }
+    } finally {
+      if (this.state === "maintaining_context") {
+        this.state = "executing";
+      }
+    }
+  }
+
+  private async performAutomaticCompaction(
+    qualificationId: string,
+  ): Promise<ContextCompactionResult | undefined> {
+    let started = false;
+    try {
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "swap",
+          reason: "runtime_pressure",
+          policyVersion: "swap-only-v1",
+          rendererFormat: "swap-observation-v1",
+          qualificationId,
+        },
+      });
+      started = true;
+      const result = await this.requireContextManager().compact(
+        this.dependencies.automaticCompactionTrigger(),
+      );
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: contextRevisionFinishedData(result, "runtime_pressure", qualificationId),
+      });
+      return result;
+    } catch (error) {
+      if (started && !(error instanceof RuntimeEventAppendError)) {
+        const failure = automaticContextFailure(error, "compaction");
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "swap",
+            reason: "runtime_pressure",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Automatic context compaction failed at ${failure.stage}.`,
+            qualificationId,
+          },
+        }).catch(() => undefined);
+      }
+      if (error instanceof ContextManagerError && !error.fatal) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private async performAutomaticRetirement(
+    qualificationId: string,
+  ): Promise<ContextRetirementResult | undefined> {
+    const baseRevisionNumber = this.store.loadContextSnapshot().revision.revisionNumber;
+    let started = false;
+    try {
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "retire_prefix",
+          reason: "runtime_pressure",
+          policyVersion: "recall-first-retirement-v1",
+          baseRevisionNumber,
+          qualificationId,
+        },
+      });
+      started = true;
+      const result = await this.requireContextManager().retirePrefix(
+        this.dependencies.automaticRetirementTrigger(),
+      );
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: contextRetirementFinishedData(
+          result,
+          "runtime_pressure",
+          qualificationId,
+        ),
+      });
+      return result;
+    } catch (error) {
+      if (started && !(error instanceof RuntimeEventAppendError)) {
+        const failure = automaticContextFailure(error, "retirement");
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "retire_prefix",
+            reason: "runtime_pressure",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Automatic context retirement failed at ${failure.stage}.`,
+            committed: failure.committed,
+            qualificationId,
+          },
+        }).catch(() => undefined);
+      }
+      if (error instanceof ContextManagerError && !error.fatal) {
+        return undefined;
+      }
+      throw error;
     }
   }
 
@@ -1951,11 +2128,13 @@ function errorMessage(error: unknown): string {
 
 function contextRevisionFinishedData(
   result: ContextCompactionResult,
+  reason: "manual" | "runtime_pressure" = "manual",
+  qualificationId?: string,
 ): ContextRevisionFinishedData {
   if (result.status === "unchanged") {
     return {
       strategy: "swap",
-      reason: "manual",
+      reason,
       policyVersion: "swap-only-v1",
       outcome: result.outcome,
       baseRevisionNumber: result.revisionNumber,
@@ -1967,11 +2146,12 @@ function contextRevisionFinishedData(
       guardedTokensBefore: result.guardedTokensBefore,
       targetTokens: result.targetTokens,
       durationMs: result.durationMs,
+      ...(qualificationId === undefined ? {} : { qualificationId }),
     };
   }
   return {
     strategy: "swap",
-    reason: "manual",
+    reason,
     policyVersion: "swap-only-v1",
     outcome: result.outcome,
     baseRevisionNumber: result.previousRevisionNumber,
@@ -1987,16 +2167,19 @@ function contextRevisionFinishedData(
     targetTokens: result.targetTokens,
     planHash: result.planHash,
     durationMs: result.durationMs,
+    ...(qualificationId === undefined ? {} : { qualificationId }),
   };
 }
 
 function contextRetirementFinishedData(
   result: ContextRetirementResult,
+  reason: "manual" | "runtime_pressure" = "manual",
+  qualificationId?: string,
 ): ContextRevisionFinishedData {
   if (result.status === "unchanged") {
     return {
       strategy: "retire_prefix",
-      reason: "manual",
+      reason,
       policyVersion: "recall-first-retirement-v1",
       outcome: result.outcome,
       baseRevisionNumber: result.revisionNumber,
@@ -2010,11 +2193,12 @@ function contextRetirementFinishedData(
       targetTokens: result.targetTokens,
       planningDurationMs: result.planningDurationMs,
       durationMs: result.durationMs,
+      ...(qualificationId === undefined ? {} : { qualificationId }),
     };
   }
   return {
     strategy: "retire_prefix",
-    reason: "manual",
+    reason,
     policyVersion: "recall-first-retirement-v1",
     outcome: result.outcome,
     baseRevisionNumber: result.previousRevisionNumber,
@@ -2036,7 +2220,44 @@ function contextRetirementFinishedData(
     transactionDurationMs: result.transactionDurationMs,
     activationDurationMs: result.activationDurationMs,
     durationMs: result.durationMs,
+    ...(qualificationId === undefined ? {} : { qualificationId }),
   };
+}
+
+function requireAutomationQualificationId(decision: ContextAutomationDecision): string {
+  if (
+    !decision.automaticSwapOnly ||
+    (decision.reason !== "qualified" && decision.reason !== "swap_only_qualified") ||
+    decision.qualificationId === undefined
+  ) {
+    throw new Error("Automatic context maintenance has no qualification identity.");
+  }
+  return decision.qualificationId;
+}
+
+function automaticSwapNeedsRetirement(result: ContextCompactionResult): boolean {
+  return (
+    result.outcome === "no_eligible_candidates" ||
+    result.outcome === "insufficient_candidates"
+  );
+}
+
+function automaticContextFailure(
+  error: unknown,
+  strategy: "compaction" | "retirement",
+): ContextManagerError {
+  return error instanceof ContextManagerError
+    ? error
+    : new ContextManagerError(
+        "activate",
+        error instanceof Error
+          ? error.name
+          : `AUTOMATIC_CONTEXT_${strategy.toUpperCase()}_FAILED`,
+        true,
+        false,
+        `Automatic context ${strategy} failed.`,
+        { cause: error },
+      );
 }
 
 function boundedContextErrorCode(code: string): string {

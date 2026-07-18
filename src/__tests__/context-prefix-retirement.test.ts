@@ -161,6 +161,14 @@ describe("I3 Recall-first prefix retirement", () => {
     try {
       appendTextTurns(fixture, 8, (turnNumber) => `turn-${turnNumber}`);
       const before = fixture.store.loadContextSnapshot();
+      const belowTarget = await fixture.manager.retirePrefix({
+        kind: "runtime_pressure",
+      });
+      expect(belowTarget).toMatchObject({
+        status: "unchanged",
+        outcome: "below_target",
+        keepFromOrdinal: 1,
+      });
       const result = await fixture.manager.retirePrefix({
         kind: "benchmark_forced",
         targetTokens: 1,

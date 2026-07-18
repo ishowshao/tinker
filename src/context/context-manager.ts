@@ -55,12 +55,13 @@ export type ContextCompactionTrigger =
 
 export type ContextRetirementTrigger =
   | { kind: "manual" }
+  | { kind: "runtime_pressure" }
   | { kind: "benchmark_forced"; targetTokens: number };
 
 export type ContextCompactionResult =
   | {
       status: "unchanged";
-      outcome: "below_target" | "no_eligible_candidates";
+      outcome: "below_trigger" | "below_target" | "no_eligible_candidates";
       revisionId: ReturnType<RuntimeIdFactory["createContextRevisionId"]>;
       revisionNumber: number;
       activeOverrideCount: number;
@@ -282,6 +283,20 @@ export class ContextManager {
     }
     const planningDurationMs = elapsedMs(startedAt);
 
+    if (planning.outcome === "below_trigger" && trigger.kind === "runtime_pressure") {
+      return Object.freeze({
+        status: "unchanged",
+        outcome: planning.outcome,
+        revisionId: built.revision.revisionId,
+        revisionNumber: built.revision.revisionNumber,
+        activeOverrideCount: built.revision.activeOverrideCount,
+        rawTokensBefore: planning.rawTokensBefore,
+        guardedTokensBefore: planning.guardedTokensBefore,
+        targetTokens: planning.targetTokens,
+        planningDurationMs,
+        durationMs: elapsedMs(startedAt),
+      });
+    }
     if (
       planning.outcome === "below_target" ||
       planning.outcome === "no_eligible_candidates"

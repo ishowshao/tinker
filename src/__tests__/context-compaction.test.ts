@@ -457,6 +457,15 @@ describe("I2 deterministic context compaction", () => {
         revisionNumber: 1,
         activeOverrideCount: 0,
       });
+      const belowTrigger = await fixture.manager.compact({
+        kind: "runtime_pressure",
+      });
+      expect(belowTrigger).toMatchObject({
+        status: "unchanged",
+        outcome: "below_trigger",
+        revisionNumber: 1,
+        activeOverrideCount: 0,
+      });
       const noCandidates = await fixture.manager.compact({
         kind: "benchmark_forced",
         targetTokens: 0,

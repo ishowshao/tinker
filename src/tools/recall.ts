@@ -18,8 +18,50 @@ import {
   type RecallRawResult,
   type RecallToolErrorCode,
   type ToolExecutionContext,
+  type ToolDefinition,
   type ToolExecutor,
 } from "./types";
+
+export const RECALL_TOOL_DEFINITION: ToolDefinition = Object.freeze({
+  name: "Recall",
+  description:
+    "Search or retrieve immutable model-visible history from the current session. Search matches literal substrings: use a short distinctive anchor such as a path, symbol, project, command fragment, or error text, not a whole natural-language question. Results are historical snapshots and may differ from the current workspace. Use search to find a source, get to retrieve exact content, and Read/Grep for current files.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      mode: { type: "string", enum: ["search", "get"] },
+      query: { type: "string", maxLength: 1024 },
+      roles: {
+        type: "array",
+        minItems: 1,
+        uniqueItems: true,
+        items: { type: "string", enum: ["user", "assistant", "tool"] },
+      },
+      tool_names: {
+        type: "array",
+        minItems: 1,
+        maxItems: 16,
+        uniqueItems: true,
+        items: { type: "string", minLength: 1 },
+      },
+      turn_from: { type: "integer", minimum: 1 },
+      turn_to: { type: "integer", minimum: 1 },
+      limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
+      offset: { type: "integer", minimum: 0, default: 0 },
+      snapshot_through_ordinal: { type: "integer", minimum: 1 },
+      source: { type: "string" },
+      byte_offset: { type: "integer", minimum: 0, default: 0 },
+      byte_limit: {
+        type: "integer",
+        minimum: 256,
+        maximum: 20_000,
+        default: 12_000,
+      },
+    },
+    required: ["mode"],
+  },
+});
 
 type RecallSearchArgs = {
   mode: "search";
@@ -55,46 +97,7 @@ export function createRecallToolExecutor(options: {
   historyReader: SessionHistoryReader;
 }): ToolExecutor {
   return defineToolExecutor("recall", {
-    definition: {
-      name: "Recall",
-      description:
-        "Search or retrieve immutable model-visible history from the current session. Results are historical snapshots and may differ from the current workspace. Use search to find a source, get to retrieve exact content, and Read/Grep for current files.",
-      parameters: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          mode: { type: "string", enum: ["search", "get"] },
-          query: { type: "string", maxLength: 1024 },
-          roles: {
-            type: "array",
-            minItems: 1,
-            uniqueItems: true,
-            items: { type: "string", enum: ["user", "assistant", "tool"] },
-          },
-          tool_names: {
-            type: "array",
-            minItems: 1,
-            maxItems: 16,
-            uniqueItems: true,
-            items: { type: "string", minLength: 1 },
-          },
-          turn_from: { type: "integer", minimum: 1 },
-          turn_to: { type: "integer", minimum: 1 },
-          limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
-          offset: { type: "integer", minimum: 0, default: 0 },
-          snapshot_through_ordinal: { type: "integer", minimum: 1 },
-          source: { type: "string" },
-          byte_offset: { type: "integer", minimum: 0, default: 0 },
-          byte_limit: {
-            type: "integer",
-            minimum: 256,
-            maximum: 20_000,
-            default: 12_000,
-          },
-        },
-        required: ["mode"],
-      },
-    },
+    definition: RECALL_TOOL_DEFINITION,
     async execute(
       args,
       _call,

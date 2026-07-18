@@ -48,9 +48,10 @@ export type ContextUsageUpdatedData = {
 export type ContextRevisionStartedData =
   | {
       strategy: "swap";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       policyVersion: "swap-only-v1";
       rendererFormat: "swap-observation-v1";
+      qualificationId?: string;
     }
   | {
       strategy: "surface_refresh";
@@ -60,9 +61,10 @@ export type ContextRevisionStartedData =
     }
   | {
       strategy: "retire_prefix";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       policyVersion: "recall-first-retirement-v1";
       baseRevisionNumber: number;
+      qualificationId?: string;
     }
   | {
       strategy: "skills_update";
@@ -74,9 +76,10 @@ export type ContextRevisionStartedData =
 export type ContextRevisionFinishedData =
   | {
       strategy: "swap";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       policyVersion: "swap-only-v1";
       outcome:
+        | "below_trigger"
         | "below_target"
         | "no_eligible_candidates"
         | "target_reached"
@@ -94,6 +97,7 @@ export type ContextRevisionFinishedData =
       targetTokens: number;
       planHash?: string;
       durationMs: number;
+      qualificationId?: string;
     }
   | {
       strategy: "surface_refresh";
@@ -108,7 +112,7 @@ export type ContextRevisionFinishedData =
     }
   | {
       strategy: "retire_prefix";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       policyVersion: "recall-first-retirement-v1";
       outcome:
         | "below_target"
@@ -134,6 +138,7 @@ export type ContextRevisionFinishedData =
       transactionDurationMs?: number;
       activationDurationMs?: number;
       durationMs: number;
+      qualificationId?: string;
     }
   | {
       strategy: "skills_update";
@@ -152,10 +157,11 @@ export type ContextRevisionFinishedData =
 export type ContextRevisionFailedData =
   | {
       strategy: "swap";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
       errorCode: string;
       error: string;
+      qualificationId?: string;
     }
   | {
       strategy: "surface_refresh";
@@ -167,11 +173,12 @@ export type ContextRevisionFailedData =
     }
   | {
       strategy: "retire_prefix";
-      reason: "manual";
+      reason: "manual" | "runtime_pressure";
       stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
       errorCode: string;
       error: string;
       committed: boolean;
+      qualificationId?: string;
     }
   | {
       strategy: "skills_update";
