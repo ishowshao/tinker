@@ -43,8 +43,8 @@ history；退休历史仍由 `Recall search/get` 从原始消息和 FTS 索引�
    自动提交任何 revision。
 9. 退休过程不调用模型、不执行工具、不生成 checkpoint、不写自由文本摘要；只允许本地
    snapshot、编译、计量、校验和 SQLite transaction。
-10. active system surface 必须显式声明 `recall-retirement-v1` 常驻 Recall 契约，并包含
-    `Recall` tool definition；缺少任一条件时退休立即失败。
+10. active system surface 的 contract version 必须等于 current version（I3 阶段即
+    `recall-retirement-v1`），并包含 `Recall` tool definition；缺少任一条件时退休立即失败。
 11. I3 的 Recall 门槛只证明“显式要求查找历史时可以 search -> get 精确恢复原文”。模型能否
     在没有提醒时主动 Recall、任务质量是否足以允许自动退休，全部留给 I4。
 12. 任一 COMMIT 前失败都保持旧 active revision 和旧 measurement；COMMIT 后 revision
@@ -147,10 +147,15 @@ I3 必须继续维持四层事实分离：
 - decoder 遇到非 1 直接拒绝；
 - `ContextRevisionCompiler` 遇到非 1 直接报 `Unsupported active context revision`；
 - `CompiledContextValidator` 要求 compiled entries 与 canonical messages 数量完全相同；
+- `ContextProtocolValidator` 把输入定义为完整 canonical view，要求 message ordinal 从 1 严格
+  连续、frame range 从 ordinal 1 连续覆盖，不能直接接收 `{1} U [keep, tail]` 的 active view；
 - revision-chain trigger 只允许 swap/surface refresh 成为 active revision。
 
 I3 必须同步改变 schema、类型、decoder、compiler、validator、transaction trigger 和测试，不能
-只放宽其中一处。
+只放宽其中一处。其中 `ContextProtocolValidator` 的 canonical 连续性不放宽：它继续验证完整
+ledger；带退休 gap 的活动视图由 retirement-aware `CompiledContextValidator` 对照已验证的
+canonical view 单独校验。不能把 active view 直接传给现有 protocol validator，也不能为了退休
+而削弱 canonical 的 `ordinal_gap` 检查。
 
 ### 4.2 schema v6 的 override count 代表累计继承
 
@@ -245,11 +250,15 @@ active view 的 canonical ordinal 集合只能是：
 3. 边界之前的每个非 system frame 都已 closed，并完整属于一个已结束 turn。
 4. 边界之后的每个 frame 完整保留；tool exchange 的 assistant calls 和 tool messages 不拆分。
 5. 当前 session 必须没有 open turn、iteration 或 frame。
-6. 编译后 provider messages 必须通过 `ContextProtocolValidator`。
+6. 完整 canonical view 必须继续通过严格、ordinal 连续的 `ContextProtocolValidator`。
+7. 编译后的 active/provider messages 必须通过 `CompiledContextValidator` 的 active-view 协议
+   检查；该检查允许 system 后跳到 `keepFromOrdinal`，但 suffix 内 ordinal/frame 必须连续，
+   tool-call pairing 必须完整。
 
 ### 5.5 Recall 不变量
 
-1. active surface 包含版本 `recall-retirement-v1`。
+1. active surface 的 contract version 必须等于 current version（I3 阶段即
+   `recall-retirement-v1`）。
 2. active tool definitions 中恰好存在一个内建 `Recall`。
 3. Recall reader 仍使用 canonical `messages` / FTS，不读取 compiled entries。
 4. `ctx://message/<message-id>` 在退休前后返回相同 content 和 hash。
@@ -284,11 +293,18 @@ active view 的 canonical ordinal 集合只能是：
 
 ```sql
 recall_contract_version TEXT NOT NULL
-  CHECK (recall_contract_version = 'recall-retirement-v1')
+  CHECK (length(recall_contract_version) BETWEEN 1 AND 64)
 ```
 
-它参与 `surface_sha256`。`createContextSurface()` 必须从 runtime 提供的明确常量接收该版本，
-并验证 system prompt 已由同一 contract renderer 构造。不能通过 `includes()` 推断版本。
+它参与 `surface_sha256`。新 surface 的创建路径必须从同一个 runtime contract renderer 同时
+取得 current version 和 system prompt，不能通过 `includes()` 从任意 prompt 反推版本。历史
+surface 的 decoder 不用当前 renderer 重放旧 prompt；它验证 stored prompt/hash、surface hash
+和 supported version，避免同版本文案微调后误判 immutable 历史 surface。SQL 只保证字段存在
+且有界；未知版本在 surface decoder/validator 处 fast-fail。
+
+不把 `'recall-retirement-v1'` 焊进 SQL CHECK。ContextSurface 是 immutable revision history，
+未来 contract v2 出现后，loader 仍需解释旧 revision 引用的 v1 surface；因此代码必须区分
+“新 surface 使用的当前版本”和“仍可读取的历史版本”，而不是用 schema bump 删除旧版本。
 
 `Recall` tool definition 仍保存在 `tool_definitions_json`；退休 planner 和 transaction readback
 都必须验证它存在且 tool schema hash 与 prepared request 一致。
@@ -394,20 +410,41 @@ revision chain 和 ordinal 纯派生。
 - 边界前一 ordinal 是另一个已结束 turn 的最后 closed frame；
 - `sourceThroughOrdinal` 等于 canonical tail；
 - added override 为 0；
-- active count/manifest 等于边界过滤后的 stored overrides。
+- active count 等于 `ordinal >= NEW.keep_from_ordinal` 的已引入 stored overrides 数量。
+
+SQLite trigger 不负责计算 `active_override_manifest_sha256`。当前数据库没有 SHA-256 SQL
+function，且以 `trusted_schema = OFF` 运行；retirement manifest 是 parent override 的过滤子集，
+不能像 v6 `surface_refresh` 那样只与 parent hash 做等值比较。manifest 的完整性由
+`commitPrefixRetirementRevision()` 在 transaction 内 readback、用 TypeScript 现有稳定 hash
+函数复算并比较，随后由 full-chain loader/decoder 再验一次。
+
+`context_overrides_validate_insert` 同步增加：
+
+```sql
+NEW.ordinal >= cr.keep_from_ordinal
+AND NEW.ordinal <= cr.source_through_ordinal
+```
+
+这样 retirement 后的 `swap_only` 即使绕过 planner，也不能向已退休 prefix 插入 override；
+原有 closed tool frame、tool result、source/hash 和 byte-savings 检查全部保留。
 
 `session_meta_monotonic_update` 允许 active 前进到 `prefix_retirement`，并验证上述 parent/child
-关系、measurement 已清除和无新增 override。
+关系、measurement 已清除、无新增 override 和可由 SQL 复核的 active count。active manifest
+仍由同一 transaction 的 readback 与 full-chain validation 负责。
 
 ## 七、Recall 常驻契约
 
 ### 7.1 版本化常量
 
-新增单一常量：
+新增当前版本和历史支持集合：
 
 ```ts
-export const RECALL_RETIREMENT_CONTRACT_VERSION =
+export const CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION =
   "recall-retirement-v1" as const;
+
+export const SUPPORTED_RECALL_RETIREMENT_CONTRACT_VERSIONS = [
+  CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
+] as const;
 ```
 
 其英文模型指令表达以下稳定语义：
@@ -429,9 +466,15 @@ and task tools to verify current workspace and process state.
 - 新 session 创建时，初始 surface 保存当前 contract version。
 - `/resume` 仍按现有 surface refresh 规则加载当前 runtime instructions 和工具面。
 - schema v7 不存在没有 contract version 的合法 surface。
-- surface refresh 必须保持或更新为当前唯一支持版本；未知版本 fast-fail。
+- 新建或 surface refresh 后的新 surface 必须使用 current version；revision chain 中的历史
+  surface 可以使用 supported allowlist 内的旧版本，未知版本 fast-fail。
 - retirement planner 只接受 active surface 的 version、system prompt、Recall definition 和
   prepared tool schema 全部一致的 snapshot。
+
+如果只调整 contract 文案但语义版本仍为 v1，system prompt/surface hash 会变化，现有
+`surface_refresh` 会记录新 surface，I4 绑定的 system prompt hash 资格随之失效并要求重测，
+无需升级 session schema。只有 contract 语义或 renderer contract 发生不兼容变化时才发布 v2；
+发布时把 v2 设为 current，同时继续保留 v1 decoder，直到没有受支持 revision 再引用它。
 
 ### 7.3 安全边界
 
@@ -603,14 +646,18 @@ COMMIT 前必须重新读取并比较：
 compiler 不截断 canonical snapshot；它从完整 canonical 生成 active entries：
 
 ```ts
-const activeRecords = [
-  canonical.messages[0],
-  ...canonical.messages.filter((message) => message.ordinal >= keepFromOrdinal),
-];
+const activeRecords =
+  keepFromOrdinal === 1
+    ? canonical.messages
+    : [
+        canonical.messages[0],
+        ...canonical.messages.slice(keepFromOrdinal - 1),
+      ];
 ```
 
-实际实现不应先复制完整数组再 filter，而应通过 ordinal index/slice 构造有界输出。ordinal 1
-用 active surface 替换；suffix 中只对 active override 应用 `swap-observation-v1`。
+`keepFromOrdinal === 1` 必须走原完整序列，不能把 ordinal 1 重复两次。实际实现不应先复制完整
+数组再 filter，而应通过 ordinal index/slice 构造有界输出。ordinal 1 用 active surface 替换；
+suffix 中只对 active override 应用 `swap-observation-v1`。
 
 `CompiledContextEntry.representation` 继续为 `canonical | surface | swapped`。不增加
 `retired` entry，因为退休内容根本不属于 compiled context。
@@ -657,7 +704,14 @@ override 同样 fast-fail。
 - suffix frame 全部完整，没有 tool-call 配对被切开；
 - compiled active counts/hash 与 manifest 一致；
 - active override 全部且只在 suffix 中消费；
-- 最终 materialized messages 通过 protocol validator。
+- 从 canonical 中投影出的 active frames/messages/tool results 与 compiled entries 一致；
+- system 后只允许一次到 `keepFromOrdinal` 的边界跳转，suffix 内 ordinal 和 frame range 严格
+  连续，tool-call/tool-result 配对完整。
+
+这里不调用现有 `ContextProtocolValidator.validate(activeView)`。它继续只验证完整 canonical，
+因为其 `ordinal_gap`、system frame 和 frame coverage 规则有意从 ordinal 1 开始。active-view
+协议规则属于 `CompiledContextValidator`；`ContextRevisionCompiler` 的顺序固定为先验证完整
+canonical，再编译并验证 active projection。
 
 ### 10.5 prospective 编译
 
@@ -745,6 +799,10 @@ COMMIT
 transaction 不插入、更新或删除 `context_overrides`、canonical records、tool results、FTS 或
 surface。
 
+其中 active override count 可以在 SQLite trigger 中复核；active override manifest 必须由
+transaction readback 后的 TypeScript hash 复算。两者均通过后才能清 measurement 和切换 active
+revision。
+
 ### 12.3 fault injection
 
 至少覆盖：
@@ -794,6 +852,11 @@ retireContext(): Promise<ContextRetirementResult>;
 可用。进入现有 `compacting` 状态，完成后回到 `ready`；失败是否 fault session 继续依据
 ContextManager 的 fatal/committed 语义。
 
+`compacting` 是 RuntimeSession 内部互斥状态，不作为退休操作的用户文案。TUI 当前只暴露
+`isSessionOperation` 来禁用输入；events 和 notice 必须使用 `retire_prefix` / “prefix retired”
+区分退休。只有将来确有 UI 需要直接展示 RuntimeSession state 时，才另立状态命名改造；I3
+不为内部同类互斥操作增加 `retiring` 状态。
+
 禁止：
 
 - turn executing/cancelling 时退休；
@@ -819,6 +882,11 @@ Usage: /compact [retire]
 不增加 `--force`、自动 fallback、picker 或复杂 panel。benchmark-forced 只通过测试/脚本 API，
 不暴露给普通 TUI 用户。
 
+推荐人工顺序是先运行 `/compact`，再在仍高于 target 或需要消除线性历史地板时运行
+`/compact retire`。先 swap retained suffix 中的大 observation，可能让 retirement 保留更多旧
+turn。帮助文案和 `retirement_floor` notice 应提示这个顺序，但 `/compact retire` 不得隐式先
+提交 swap revision。
+
 ### 13.4 结果
 
 ```ts
@@ -826,6 +894,7 @@ type ContextRetirementResult =
   | {
       status: "unchanged";
       outcome: "below_target" | "no_complete_prefix";
+      revisionId: ContextRevisionId;
       revisionNumber: number;
       keepFromOrdinal: number;
       guardedTokensBefore: number;
@@ -835,6 +904,8 @@ type ContextRetirementResult =
   | {
       status: "retired";
       outcome: "target_reached" | "retirement_floor";
+      previousRevisionId: ContextRevisionId;
+      revisionId: ContextRevisionId;
       previousRevisionNumber: number;
       revisionNumber: number;
       previousKeepFromOrdinal: number;
@@ -938,8 +1009,11 @@ I3 不以以下结果作为自动化资格：
 
 - schema version/fingerprint 精确为 v7；v6 fast-fail。
 - 四种 revision kind 的 SQL CHECK 和 decoder 正反例。
+- contract version SQL 只验证非空/长度；surface decoder 接受 supported 历史版本、拒绝未知版本，
+  新 surface 只使用 current version。
 - 非 user boundary、倒退 boundary、跳 revision、错误 parent/surface/source tail 被拒绝。
 - active override count/manifest 与 boundary 过滤一致。
+- override trigger 拒绝 `ordinal < introduced revision.keepFromOrdinal` 的插入。
 - retirement 不写 override；swap 不改变 keep；surface refresh 不改变 keep。
 - active switch 只允许合法直接子 revision。
 
@@ -964,6 +1038,8 @@ I3 不以以下结果作为自动化资格：
 - suffix 中的 active overrides 正确渲染。
 - system surface、tool-call pairing、hash 和 counts 正确。
 - 在退休边界切开 user/tool frame、漏掉 suffix override、传入 retired override 均 fast-fail。
+- `ContextProtocolValidator` 继续拒绝 canonical ordinal gap；`CompiledContextValidator` 单独接受
+  唯一合法的 system-to-keep gap，并拒绝 suffix 内 gap。
 - retirement 后 append、swap、surface refresh、再次 retirement 全部稳定。
 
 ### 16.4 transaction/fault matrix
@@ -1041,7 +1117,7 @@ prompt hash 和 Recall tool schema hash 单独评估。
 ### I3.1：Recall contract 与 schema v7 类型
 
 - 增加版本化 contract renderer；
-- 更新 ContextSurface/schema fingerprint；
+- 增加 current/supported contract version，更新 ContextSurface/schema fingerprint；
 - 定义 v7 revision types 和 active override 语义；
 - v6 fast-fail；
 - 此小步仍不允许 `keepFromOrdinal > 1` 的生产提交。
@@ -1049,7 +1125,8 @@ prompt hash 和 Recall tool schema hash 单独评估。
 ### I3.2：retirement-aware compiler
 
 - compiler 支持 `{1} U [keep, tail]`；
-- validator、manifest/hash、ContextBuilder 更新；
+- 保持 `ContextProtocolValidator` 的完整 canonical 连续性，更新
+  `CompiledContextValidator`、manifest/hash、ContextBuilder 的 active-view 规则；
 - keep=1 parity 与纯 prospective tests；
 - 仍无写 revision API。
 
@@ -1064,7 +1141,8 @@ prompt hash 和 Recall tool schema hash 单独评估。
 
 - `commitPrefixRetirementRevision()`；
 - active override filtering；
-- triggers、transaction readback、fault injection；
+- revision/session_meta count triggers、override keep-boundary trigger、transaction manifest
+  readback、fault injection；
 - retirement 后 swap/surface refresh/re-retirement；
 - close/reopen exact resume。
 
@@ -1079,6 +1157,7 @@ prompt hash 和 Recall tool schema hash 单独评估。
 
 - slash parser/controller/App wiring；
 - bounded success/no-op/floor/failure notice；
+- 帮助文案说明先 `/compact`、后 `/compact retire` 的推荐顺序；
 - component tests 和真实 PTY；
 - 保持无参数 `/compact` 的 swap-only 行为。
 
@@ -1105,7 +1184,8 @@ I3 只有同时满足以下条件才算完成：
 6. retired history 的 Recall search/get 在 retirement、append、swap、surface refresh、再次
    retirement 和 resume 后返回相同 source/content/hash。
 7. 退休 override 留在数据库审计链中，但不进入 active manifest；后续 swap 只作用于 suffix。
-8. active surface 带 `recall-retirement-v1`，Recall tool/schema 缺失或漂移时 fast-fail。
+8. active surface 使用 current `recall-retirement-v1`；历史 surface version 必须在 supported
+   allowlist 内，Recall tool/schema 缺失或漂移时 fast-fail。
 9. manual/benchmark planner 不发 model request、不执行工具、不生成摘要或 checkpoint。
 10. candidate raw/guarded tokens 都严格下降；选择达到 target 的最小退休前缀，或明确报告
     `retirement_floor`。
@@ -1161,3 +1241,7 @@ I4 不得因为 I3 的结构和显式 Recall smoke 通过，就默认模型具�
 9. **COMMIT 是不可逆语义边界；之前失败保留旧视图，之后失败保留新 durable revision。**
 10. **I3 只证明结构正确、精确 Recall 和显式 search -> get；主动 Recall 与自动化资格属于
     I4。**
+11. **`ContextProtocolValidator` 保持严格 canonical 连续性；退休 gap 只由
+    `CompiledContextValidator` 的 active-view 模式接受。**
+12. **Recall contract 的 current/supported 版本由代码校验，不把具体版本焊进 SQL CHECK；prompt
+    hash 变化仍会使 I4 自动化资格失效。**
