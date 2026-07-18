@@ -28,6 +28,9 @@ import type {
 import type { ToolCall } from "../agent/types";
 import type { SessionHistoryReader } from "../session/session-history-reader";
 import { ToolExecutionFatalError } from "./types";
+import type { SkillCatalogSnapshot } from "../skills/skill-loader";
+import type { SkillActivationCoordinator } from "../skills/skill-context";
+import { createSkillToolExecutor } from "../skills/skill-tool";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
@@ -123,6 +126,8 @@ export function createDefaultTooling(options: {
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
   taskStopGraceMs?: number;
+  skillCatalog?: SkillCatalogSnapshot;
+  skillCoordinator?: SkillActivationCoordinator;
 }): DefaultTooling {
   const snapshots: ReadSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -154,6 +159,22 @@ export function createDefaultTooling(options: {
     }),
   );
   registry.register(createRecallToolExecutor({ historyReader: options.historyReader }));
+  if (options.skillCatalog !== undefined) {
+    if (options.skillCatalog.skills.size === 0) {
+      throw new Error("An empty Agent Skill catalog must not register tooling.");
+    }
+    if (options.skillCoordinator === undefined) {
+      throw new Error("Agent Skill tooling requires an activation coordinator.");
+    }
+    registry.register(
+      createSkillToolExecutor({
+        catalog: options.skillCatalog,
+        coordinator: options.skillCoordinator,
+      }),
+    );
+  } else if (options.skillCoordinator !== undefined) {
+    throw new Error("Agent Skill coordinator was provided without a catalog.");
+  }
   registry.register(
     createWriteToolExecutor({
       workspaceRoot: options.workspaceRoot,

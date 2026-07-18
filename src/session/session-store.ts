@@ -66,12 +66,12 @@ import {
   contextSurfaceChanges,
   validateStoredContextSurface,
   type ContextSurfaceChanges,
-  type StoredContextSurfaceV7,
+  type StoredContextSurfaceV8,
 } from "../context/context-surface";
 import type {
-  StoredContextRevisionV7,
-  StoredContextSnapshotV7,
-  StoredSwapOverrideV7,
+  StoredContextRevisionV8,
+  StoredContextSnapshotV8,
+  StoredContextOverrideV8,
   SwapOverride,
 } from "../context/context-revision";
 import type { IterationIdentity, ToolCall } from "../agent/types";
@@ -91,7 +91,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V7_FINGERPRINT,
+  SESSION_SCHEMA_V8_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -100,6 +100,21 @@ import {
   verifySessionSchema,
   verifySqliteIntegrity,
 } from "./session-schema";
+import {
+  SKILL_FILE_MAX_BYTES,
+  SKILL_RESOURCE_MAX_DEPTH,
+  SKILL_RESOURCE_MAX_ENTRIES,
+  type SkillScope,
+} from "../skills/skill-loader";
+import type {
+  ActiveSkillManifestEntry,
+  SkillCatalogManifestEntry,
+} from "../skills/skill-catalog";
+import {
+  SKILL_ACTIVATION_RECEIPT_FORMAT,
+  SKILL_POLICY_VERSION,
+  renderSkillActivationReceipt,
+} from "../skills/skill-context";
 
 export type SessionCompatibilityContract = {
   modelName: string;
@@ -109,8 +124,8 @@ export type SessionCompatibilityContract = {
   messageProtocol: ModelMessageProtocol;
 };
 
-export type StoredSessionMetaV7 = {
-  schemaVersion: 7;
+export type StoredSessionMetaV8 = {
+  schemaVersion: 8;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -137,7 +152,7 @@ export type StoredSessionMetaV7 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV7["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV8["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -184,7 +199,7 @@ export type CommitSurfaceRefreshInput = {
   expectedBaseRevisionNumber: number;
   expectedCanonicalThroughOrdinal: number;
   expectedBaseActiveOverrideManifestSha256: string;
-  surface: StoredContextSurfaceV7;
+  surface: StoredContextSurfaceV8;
   changes: ContextSurfaceChanges;
   changeManifestSha256: string;
   canonicalSequenceSha256: string;
@@ -234,6 +249,80 @@ export type CommitPrefixRetirementRevisionFaultStage =
 export type CommitPrefixRetirementRevisionOptions = {
   faultInjector?: (stage: CommitPrefixRetirementRevisionFaultStage) => void;
 };
+
+export type StoredSkillActivation = {
+  readonly activationMessageId: MessageId;
+  readonly toolCallId: ToolCallId;
+  readonly sessionId: SessionId;
+  readonly name: string;
+  readonly scope: SkillScope;
+  readonly skillFileSha256: string;
+  readonly state: "pending" | "dispatched" | "promoted" | "rejected";
+  readonly dispatchedIterationId?: IterationId;
+  readonly settledRevisionId?: ContextRevisionId;
+  readonly rejectionReason?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+};
+
+export type CommitSkillsUpdateInput = {
+  revisionId: ContextRevisionId;
+  expectedBaseRevisionId: ContextRevisionId;
+  expectedBaseRevisionNumber: number;
+  expectedCanonicalThroughOrdinal: number;
+  expectedBaseActiveOverrideManifestSha256: string;
+  surface: StoredContextSurfaceV8;
+  changes: ContextSurfaceChanges;
+  changeManifestSha256: string;
+  activationManifestSha256: string;
+  addedOverrides: readonly SwapOverride[];
+  nextActiveOverrideManifestSha256: string;
+  settlements: readonly {
+    activationMessageId: MessageId;
+    name: string;
+    state: "promoted" | "rejected";
+    rejectionReason?: string;
+  }[];
+  canonicalSequenceSha256: string;
+  renderedMessageSha256: string;
+};
+
+export type CommitSkillsUpdateFaultStage =
+  | "before_surface_insert"
+  | "after_surface_insert"
+  | "after_revision_insert"
+  | "after_first_override_insert"
+  | "after_overrides_insert"
+  | "after_activations_update"
+  | "after_measurement_delete"
+  | "after_active_update";
+
+export type CommitSkillsUpdateOptions = {
+  faultInjector?: (stage: CommitSkillsUpdateFaultStage) => void;
+};
+
+export function skillActivationManifestSha256(
+  settlements: CommitSkillsUpdateInput["settlements"],
+): string {
+  return sha256(
+    stableJsonStringify(
+      [...settlements]
+        .sort(
+          (left, right) =>
+            compareCanonicalText(left.name, right.name) ||
+            compareCanonicalText(left.activationMessageId, right.activationMessageId),
+        )
+        .map((settlement) => ({
+          activationMessageId: settlement.activationMessageId,
+          name: settlement.name,
+          state: settlement.state,
+          ...(settlement.rejectionReason === undefined
+            ? {}
+            : { rejectionReason: settlement.rejectionReason }),
+        })),
+    ),
+  );
+}
 
 export type CreateNewSessionStoreInput = {
   workspaceRoot: string;
@@ -340,7 +429,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V7_FINGERPRINT,
+            SESSION_SCHEMA_V8_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -597,7 +686,7 @@ export class SessionStore implements SessionLedgerCommitter {
 
   finalizeInitialization(input: {
     contract: SessionCompatibilityContract;
-    surface: StoredContextSurfaceV7;
+    surface: StoredContextSurfaceV8;
     revisionId: ContextRevisionId;
   }): void {
     this.requireOpen();
@@ -862,7 +951,7 @@ export class SessionStore implements SessionLedgerCommitter {
   commitSwapRevision(
     input: CommitSwapRevisionInput,
     options: CommitSwapRevisionOptions = {},
-  ): Extract<StoredContextRevisionV7, { kind: "swap_only" }> {
+  ): Extract<StoredContextRevisionV8, { kind: "swap_only" }> {
     this.requireOpen();
     assertCommitSwapRevisionInput(input);
     const now = this.clock();
@@ -1046,7 +1135,7 @@ export class SessionStore implements SessionLedgerCommitter {
   commitPrefixRetirementRevision(
     input: CommitPrefixRetirementRevisionInput,
     options: CommitPrefixRetirementRevisionOptions = {},
-  ): Extract<StoredContextRevisionV7, { kind: "prefix_retirement" }> {
+  ): Extract<StoredContextRevisionV8, { kind: "prefix_retirement" }> {
     this.requireOpen();
     assertCommitPrefixRetirementRevisionInput(input);
     const now = this.clock();
@@ -1220,7 +1309,7 @@ export class SessionStore implements SessionLedgerCommitter {
   commitSurfaceRefresh(
     input: CommitSurfaceRefreshInput,
     options: CommitSurfaceRefreshOptions = {},
-  ): Extract<StoredContextRevisionV7, { kind: "surface_refresh" }> {
+  ): Extract<StoredContextRevisionV8, { kind: "surface_refresh" }> {
     this.requireOpen();
     assertCommitSurfaceRefreshInput(input);
     const now = this.clock();
@@ -1348,6 +1437,310 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
+  commitSkillsUpdate(
+    input: CommitSkillsUpdateInput,
+    options: CommitSkillsUpdateOptions = {},
+  ): Extract<StoredContextRevisionV8, { kind: "skills_update" }> {
+    this.requireOpen();
+    assertCommitSkillsUpdateInput(input);
+    const now = this.clock();
+    try {
+      return runTransaction(this.database, () => {
+        const snapshot = this.loadContextSnapshot();
+        const baseRevision = snapshot.revision;
+        if (
+          baseRevision.revisionId !== input.expectedBaseRevisionId ||
+          baseRevision.revisionNumber !== input.expectedBaseRevisionNumber ||
+          snapshot.canonical.messages.length !==
+            input.expectedCanonicalThroughOrdinal ||
+          baseRevision.activeOverrideManifestSha256 !==
+            input.expectedBaseActiveOverrideManifestSha256
+        ) {
+          throw new Error("Agent Skills update base is stale.");
+        }
+        this.assertContextRevisionIdle();
+        validateStoredContextSurface(input.surface);
+
+        const surfaceChanged =
+          input.surface.surfaceSha256 !== snapshot.surface.surfaceSha256;
+        const actualChanges = contextSurfaceChanges(snapshot.surface, input.surface);
+        if (
+          input.surface.sessionId !== this.sessionId ||
+          stableJsonStringify(actualChanges) !== stableJsonStringify(input.changes) ||
+          contextSurfaceChangeManifestHash(actualChanges) !==
+            input.changeManifestSha256 ||
+          (surfaceChanged && input.surface.surfaceId === snapshot.surface.surfaceId) ||
+          (!surfaceChanged && input.surface.surfaceId !== snapshot.surface.surfaceId) ||
+          (!surfaceChanged && Object.values(actualChanges).some(Boolean))
+        ) {
+          throw new Error("Agent Skills surface change manifest is invalid.");
+        }
+
+        const unresolved = new Map(
+          this.loadSkillActivations(["pending", "dispatched"]).map((entry) => [
+            entry.activationMessageId,
+            entry,
+          ]),
+        );
+        if (
+          input.settlements.length !== input.addedOverrides.length ||
+          input.settlements.length !== unresolved.size ||
+          new Set(input.settlements.map((entry) => entry.activationMessageId)).size !==
+            input.settlements.length ||
+          skillActivationManifestSha256(input.settlements) !==
+            input.activationManifestSha256
+        ) {
+          throw new Error("Agent Skills settlement manifest is invalid.");
+        }
+        const canonicalMessages = new Map(
+          snapshot.canonical.messages.map((message) => [message.messageId, message]),
+        );
+        const providedOverrides = new Map(
+          input.addedOverrides.map((override) => [override.messageId, override]),
+        );
+        for (const settlement of input.settlements) {
+          const activation = unresolved.get(settlement.activationMessageId);
+          const message = canonicalMessages.get(settlement.activationMessageId);
+          const override = providedOverrides.get(settlement.activationMessageId);
+          if (
+            activation === undefined ||
+            message?.role !== "tool" ||
+            message.name !== "Skill" ||
+            override === undefined ||
+            settlement.name !== activation.name ||
+            (settlement.state === "promoted" &&
+              (activation.state !== "dispatched" ||
+                settlement.rejectionReason !== undefined)) ||
+            (settlement.state === "rejected" &&
+              (settlement.rejectionReason === undefined ||
+                settlement.rejectionReason.trim() === "" ||
+                settlement.rejectionReason.length > 256))
+          ) {
+            throw new Error(
+              `Agent Skill activation ${settlement.activationMessageId} cannot be settled.`,
+            );
+          }
+          const activeManifest = input.surface.activeSkills.find(
+            (entry) =>
+              entry.name === activation.name &&
+              entry.activationMessageId === activation.activationMessageId,
+          );
+          if (
+            (settlement.state === "promoted" && activeManifest === undefined) ||
+            (settlement.state === "rejected" && activeManifest !== undefined)
+          ) {
+            throw new Error("Agent Skills active manifest does not match settlements.");
+          }
+          const expected = renderSkillActivationReceipt({
+            message: {
+              messageId: message.messageId,
+              frameId: message.frameId,
+              ordinal: message.ordinal,
+              content: message.content,
+              contentSha256: message.contentSha256,
+            },
+            name: activation.name,
+            outcome:
+              settlement.state === "promoted"
+                ? "promoted"
+                : settlement.rejectionReason === "unavailable"
+                  ? "unavailable"
+                  : "rejected",
+          });
+          if (stableJsonStringify(expected) !== stableJsonStringify(override)) {
+            throw new Error("Agent Skill activation receipt is not deterministic.");
+          }
+        }
+
+        const active = this.revisionCompiler.compileActive(snapshot);
+        const candidateOverrides = [
+          ...snapshot.activeOverrides,
+          ...input.addedOverrides,
+        ];
+        if (
+          new Set(candidateOverrides.map((override) => override.messageId)).size !==
+            candidateOverrides.length ||
+          activeOverrideManifestHash(candidateOverrides) !==
+            input.nextActiveOverrideManifestSha256
+        ) {
+          throw new Error("Agent Skills override manifest is invalid.");
+        }
+        const candidate = this.revisionCompiler.compileProspective({
+          active,
+          canonical: snapshot.canonical,
+          activeOverrides: snapshot.activeOverrides,
+          addedOverrides: input.addedOverrides,
+          activeSurface: snapshot.surface,
+          ...(surfaceChanged ? { surface: input.surface } : {}),
+          allowCombinedSurfaceAndOverrides: true,
+        });
+        if (
+          canonicalSequenceHash(
+            snapshot.canonical,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.canonicalSequenceSha256 ||
+          renderedMessageHash(
+            candidate.entries,
+            input.expectedCanonicalThroughOrdinal,
+          ) !== input.renderedMessageSha256
+        ) {
+          throw new Error("Agent Skills compiled context hashes are invalid.");
+        }
+
+        options.faultInjector?.("before_surface_insert");
+        if (surfaceChanged) {
+          insertContextSurface(this.database, input.surface);
+        }
+        options.faultInjector?.("after_surface_insert");
+        const revisionNumber = baseRevision.revisionNumber + 1;
+        const activeOverrideCount =
+          baseRevision.activeOverrideCount + input.addedOverrides.length;
+        this.database
+          .query(
+            `INSERT INTO context_revisions (
+              revision_id, session_id, revision_number, parent_revision_id, kind,
+              surface_id, surface_sha256, keep_from_ordinal,
+              source_through_ordinal, added_override_count, active_override_count,
+              active_override_manifest_sha256, canonical_sequence_sha256,
+              rendered_message_sha256, policy_version, renderer_format,
+              plan_sha256, change_manifest_sha256, activation_manifest_sha256,
+              retired_through_ordinal, retired_turn_count, retired_frame_count,
+              retired_message_count, created_at
+            ) VALUES (?, ?, ?, ?, 'skills_update', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, ?)`,
+          )
+          .run(
+            input.revisionId,
+            this.sessionId,
+            revisionNumber,
+            baseRevision.revisionId,
+            input.surface.surfaceId,
+            input.surface.surfaceSha256,
+            baseRevision.keepFromOrdinal,
+            input.expectedCanonicalThroughOrdinal,
+            input.addedOverrides.length,
+            activeOverrideCount,
+            input.nextActiveOverrideManifestSha256,
+            input.canonicalSequenceSha256,
+            input.renderedMessageSha256,
+            SKILL_POLICY_VERSION,
+            SKILL_ACTIVATION_RECEIPT_FORMAT,
+            input.changeManifestSha256,
+            input.activationManifestSha256,
+            now,
+          );
+        options.faultInjector?.("after_revision_insert");
+
+        for (let index = 0; index < input.addedOverrides.length; index += 1) {
+          const override = requireItem(
+            input.addedOverrides,
+            index,
+            "Agent Skill receipt override",
+          );
+          this.database
+            .query(
+              `INSERT INTO context_overrides (
+                introduced_revision_id, session_id, message_id, frame_id, ordinal,
+                representation, renderer_format, source, original_content_sha256,
+                rendered_content, rendered_content_sha256, original_bytes,
+                rendered_bytes, byte_savings, created_at
+              ) VALUES (?, ?, ?, ?, ?, 'swapped', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              input.revisionId,
+              this.sessionId,
+              override.messageId,
+              override.frameId,
+              override.ordinal,
+              SKILL_ACTIVATION_RECEIPT_FORMAT,
+              override.source,
+              override.originalContentSha256,
+              override.renderedContent,
+              override.renderedContentSha256,
+              override.originalBytes,
+              override.renderedBytes,
+              override.byteSavings,
+              now,
+            );
+          if (index === 0) {
+            options.faultInjector?.("after_first_override_insert");
+          }
+        }
+        options.faultInjector?.("after_overrides_insert");
+
+        for (const settlement of input.settlements) {
+          const activation = unresolved.get(settlement.activationMessageId)!;
+          const updated =
+            settlement.state === "promoted"
+              ? this.database
+                  .query(
+                    `UPDATE skill_activations
+                     SET state = 'promoted', settled_revision_id = ?, updated_at = ?
+                     WHERE activation_message_id = ? AND state = 'dispatched'`,
+                  )
+                  .run(input.revisionId, now, settlement.activationMessageId)
+              : this.database
+                  .query(
+                    `UPDATE skill_activations
+                     SET state = 'rejected', settled_revision_id = ?, rejection_reason = ?, updated_at = ?
+                     WHERE activation_message_id = ? AND state = ?`,
+                  )
+                  .run(
+                    input.revisionId,
+                    settlement.rejectionReason!,
+                    now,
+                    settlement.activationMessageId,
+                    activation.state,
+                  );
+          requireSingleChange(
+            this.database,
+            updated.changes,
+            `settle Agent Skill activation ${settlement.activationMessageId}`,
+          );
+        }
+        options.faultInjector?.("after_activations_update");
+
+        this.database.query("DELETE FROM context_measurement_state").run();
+        options.faultInjector?.("after_measurement_delete");
+        const switched = this.database
+          .query(
+            `UPDATE session_meta SET active_revision_id = ?, updated_at = ?
+             WHERE singleton = 1 AND active_revision_id = ?`,
+          )
+          .run(input.revisionId, now, baseRevision.revisionId);
+        requireSingleChange(
+          this.database,
+          switched.changes,
+          "activate Agent Skills context revision",
+        );
+        options.faultInjector?.("after_active_update");
+
+        const readback = this.loadContextSnapshot();
+        if (
+          readback.revision.kind !== "skills_update" ||
+          readback.revision.revisionId !== input.revisionId ||
+          readback.surface.surfaceId !== input.surface.surfaceId ||
+          this.loadMeasuredContextState() !== undefined ||
+          this.loadSkillActivations(["pending", "dispatched"]).some((entry) =>
+            input.settlements.some(
+              (settlement) =>
+                settlement.activationMessageId === entry.activationMessageId,
+            ),
+          )
+        ) {
+          throw new Error("Committed Agent Skills update readback failed.");
+        }
+        return readback.revision;
+      });
+    } catch (error) {
+      if (requireActiveRevisionId(this.readMeta()) !== input.expectedBaseRevisionId) {
+        throw new Error("Failed Agent Skills transaction changed active state.", {
+          cause: error,
+        });
+      }
+      throw sessionWriteError("commit_skills_update", this.sessionId, error);
+    }
+  }
+
   private validateAddedOverrides(
     overrides: readonly SwapOverride[],
     canonical: ProtocolContextView,
@@ -1368,6 +1761,72 @@ export class SessionStore implements SessionLedgerCommitter {
       if (stableJsonStringify(expected) !== stableJsonStringify(override)) {
         throw new Error("Added context override is not deterministic.");
       }
+    }
+  }
+
+  loadSkillActivations(
+    states?: readonly StoredSkillActivation["state"][],
+  ): readonly StoredSkillActivation[] {
+    this.requireOpen();
+    const rows = this.database
+      .query(
+        `SELECT sa.*, m.ordinal AS activation_ordinal
+         FROM skill_activations sa
+         JOIN messages m ON m.message_id = sa.activation_message_id
+         ORDER BY m.ordinal`,
+      )
+      .all()
+      .map(decodeSkillActivation);
+    const filtered =
+      states === undefined ? rows : rows.filter((row) => states.includes(row.state));
+    return Object.freeze(filtered);
+  }
+
+  markSkillActivationsDispatched(input: {
+    iterationId: IterationId;
+    activationMessageIds: readonly MessageId[];
+  }): readonly StoredSkillActivation[] {
+    this.requireOpen();
+    if (input.activationMessageIds.length === 0) {
+      return Object.freeze([]);
+    }
+    if (
+      new Set(input.activationMessageIds).size !== input.activationMessageIds.length
+    ) {
+      throw new Error("Agent Skill dispatch contains duplicate activation messages.");
+    }
+    const now = this.clock();
+    try {
+      return runTransaction(this.database, () => {
+        const iteration = this.requireIterationRow(input.iterationId);
+        if (iteration.outcome !== "open") {
+          throw new Error(`Iteration ${input.iterationId} is not open for dispatch.`);
+        }
+        for (const messageId of input.activationMessageIds) {
+          const updated = this.database
+            .query(
+              `UPDATE skill_activations
+               SET state = 'dispatched', dispatched_iteration_id = ?, updated_at = ?
+               WHERE activation_message_id = ? AND session_id = ? AND state = 'pending'`,
+            )
+            .run(input.iterationId, now, messageId, this.sessionId);
+          requireSingleChange(
+            this.database,
+            updated.changes,
+            `dispatch Agent Skill activation ${messageId}`,
+          );
+        }
+        this.touch(now);
+        const dispatched = this.loadSkillActivations(["dispatched"]).filter((row) =>
+          input.activationMessageIds.includes(row.activationMessageId),
+        );
+        if (dispatched.length !== input.activationMessageIds.length) {
+          throw new Error("Agent Skill dispatch readback failed.");
+        }
+        return Object.freeze(dispatched);
+      });
+    } catch (error) {
+      throw sessionWriteError("dispatch_skill_activations", this.sessionId, error);
     }
   }
 
@@ -1599,13 +2058,13 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
-  loadContextSnapshot(): StoredContextSnapshotV7 {
+  loadContextSnapshot(): StoredContextSnapshotV8 {
     this.requireOpen();
     const meta = this.readMeta();
     try {
       if (
         meta.sessionId !== this.sessionId ||
-        meta.schemaFingerprint !== SESSION_SCHEMA_V7_FINGERPRINT
+        meta.schemaFingerprint !== SESSION_SCHEMA_V8_FINGERPRINT
       ) {
         throw new Error("Session metadata identity or schema fingerprint changed.");
       }
@@ -1651,7 +2110,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  readMeta(): StoredSessionMetaV7 {
+  readMeta(): StoredSessionMetaV8 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -1787,7 +2246,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V7_FINGERPRINT ||
+      meta.schemaFingerprint !== SESSION_SCHEMA_V8_FINGERPRINT ||
       meta.initializationState !== "ready" ||
       meta.activeRevisionId === null
     ) {
@@ -2012,14 +2471,11 @@ export class SessionStore implements SessionLedgerCommitter {
       throw new Error(`Frame ${mutation.frameBefore.frameId} is not open.`);
     }
     for (let index = 0; index < mutation.messages.length; index += 1) {
-      insertMessage(
-        this.database,
-        requireItem(mutation.messages, index, "tool message"),
-      );
-      insertToolResult(
-        this.database,
-        requireItem(mutation.toolResults, index, "tool result"),
-      );
+      const message = requireItem(mutation.messages, index, "tool message");
+      const result = requireItem(mutation.toolResults, index, "tool result");
+      insertMessage(this.database, message);
+      insertToolResult(this.database, result);
+      insertPendingSkillActivation(this.database, message, result, now);
     }
     if (mutation.frameAfter.state === "closed") {
       const updated = this.database
@@ -2129,15 +2585,15 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   private loadValidatedContextSnapshot(
-    meta: StoredSessionMetaV7,
+    meta: StoredSessionMetaV8,
     canonical: ProtocolContextView,
-  ): StoredContextSnapshotV7 {
+  ): StoredContextSnapshotV8 {
     const activeRevisionId = requireActiveRevisionId(meta);
     const surfaces = this.database
       .query("SELECT * FROM context_surfaces ORDER BY rowid")
       .all()
       .map(decodeContextSurface);
-    const surfacesById = new Map<ContextSurfaceId, StoredContextSurfaceV7>();
+    const surfacesById = new Map<ContextSurfaceId, StoredContextSurfaceV8>();
     for (const surface of surfaces) {
       validateStoredContextSurface(surface);
       if (surface.sessionId !== this.sessionId || surfacesById.has(surface.surfaceId)) {
@@ -2174,7 +2630,9 @@ export class SessionStore implements SessionLedgerCommitter {
           revision.surfaceId === previous?.surfaceId) ||
         (previous !== undefined &&
           (revision.keepFromOrdinal < previous.keepFromOrdinal ||
-            ((revision.kind === "swap_only" || revision.kind === "surface_refresh") &&
+            ((revision.kind === "swap_only" ||
+              revision.kind === "surface_refresh" ||
+              revision.kind === "skills_update") &&
               revision.keepFromOrdinal !== previous.keepFromOrdinal) ||
             (revision.kind === "prefix_retirement" &&
               revision.keepFromOrdinal <= previous.keepFromOrdinal)))
@@ -2195,12 +2653,15 @@ export class SessionStore implements SessionLedgerCommitter {
       revisionNumberById.set(revision.revisionId, revision.revisionNumber);
     }
     const introducedSurfaceIds = new Set(
-      revisions
-        .filter(
-          (revision) =>
-            revision.kind === "initial_full" || revision.kind === "surface_refresh",
-        )
-        .map((revision) => revision.surfaceId),
+      revisions.flatMap((revision, index) => {
+        const previous = revisions[index - 1];
+        return revision.kind === "initial_full" ||
+          revision.kind === "surface_refresh" ||
+          (revision.kind === "skills_update" &&
+            revision.surfaceId !== previous?.surfaceId)
+          ? [revision.surfaceId]
+          : [];
+      }),
     );
     if (
       introducedSurfaceIds.size !== surfaces.length ||
@@ -2232,6 +2693,7 @@ export class SessionStore implements SessionLedgerCommitter {
       .all()
       .map(decodeStoredSwapOverride);
     this.validateStoredOverrides(overrides, canonical, revisions, revisionNumberById);
+    this.validateSkillActivationRows(canonical, revisions, overrides, surfaces);
 
     for (const revision of revisions) {
       const surface = surfacesById.get(revision.surfaceId);
@@ -2265,6 +2727,35 @@ export class SessionStore implements SessionLedgerCommitter {
         throw new Error(
           `Context surface revision ${revision.revisionId} changed overrides.`,
         );
+      }
+      if (revision.kind === "skills_update") {
+        const parent = previousRevision(revisions, revision);
+        const parentSurface =
+          parent === undefined ? undefined : surfacesById.get(parent.surfaceId);
+        const settlements = this.loadSkillActivations().filter(
+          (activation) => activation.settledRevisionId === revision.revisionId,
+        );
+        if (
+          parentSurface === undefined ||
+          contextSurfaceChangeManifestHash(
+            contextSurfaceChanges(parentSurface, surface),
+          ) !== revision.changeManifestSha256 ||
+          settlements.length !== revision.addedOverrideCount ||
+          skillActivationManifestSha256(
+            settlements.map((activation) => ({
+              activationMessageId: activation.activationMessageId,
+              name: activation.name,
+              state: activation.state === "promoted" ? "promoted" : "rejected",
+              ...(activation.rejectionReason === undefined
+                ? {}
+                : { rejectionReason: activation.rejectionReason }),
+            })),
+          ) !== revision.activationManifestSha256
+        ) {
+          throw new Error(
+            `Agent Skills revision ${revision.revisionId} manifest is invalid.`,
+          );
+        }
       }
       if (revision.kind === "prefix_retirement") {
         const parent = previousRevision(revisions, revision);
@@ -2354,9 +2845,9 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   private validateStoredOverrides(
-    overrides: readonly StoredSwapOverrideV7[],
+    overrides: readonly StoredContextOverrideV8[],
     canonical: ProtocolContextView,
-    revisions: readonly StoredContextRevisionV7[],
+    revisions: readonly StoredContextRevisionV8[],
     revisionNumberById: ReadonlyMap<ContextRevisionId, number>,
   ): void {
     const messages = new Map(
@@ -2378,7 +2869,11 @@ export class SessionStore implements SessionLedgerCommitter {
       const frame = frames.get(override.frameId);
       const result = results.get(override.messageId);
       if (
-        revision?.kind !== "swap_only" ||
+        (revision?.kind !== "swap_only" && revision?.kind !== "skills_update") ||
+        (revision.kind === "swap_only" &&
+          override.rendererFormat !== SWAP_OBSERVATION_FORMAT) ||
+        (revision.kind === "skills_update" &&
+          override.rendererFormat !== SKILL_ACTIVATION_RECEIPT_FORMAT) ||
         revisionNumberById.get(revision.revisionId) === undefined ||
         override.ordinal < revision.keepFromOrdinal ||
         override.ordinal > revision.sourceThroughOrdinal ||
@@ -2392,7 +2887,10 @@ export class SessionStore implements SessionLedgerCommitter {
       ) {
         throw new Error("Stored context override canonical identity is invalid.");
       }
-      const rendered = this.swapRenderer.render({ message, result });
+      const rendered =
+        override.rendererFormat === SWAP_OBSERVATION_FORMAT
+          ? this.swapRenderer.render({ message, result })
+          : this.renderStoredSkillReceipt(message, result, revision.revisionId);
       if (
         stableJsonStringify(rendered) !==
         stableJsonStringify(stripStoredOverride(override))
@@ -2403,6 +2901,123 @@ export class SessionStore implements SessionLedgerCommitter {
       }
       seenMessages.add(override.messageId);
     }
+  }
+
+  private validateSkillActivationRows(
+    canonical: ProtocolContextView,
+    revisions: readonly StoredContextRevisionV8[],
+    overrides: readonly StoredContextOverrideV8[],
+    surfaces: readonly StoredContextSurfaceV8[],
+  ): void {
+    const activations = this.loadSkillActivations();
+    const activationByMessage = new Map(
+      activations.map((activation) => [activation.activationMessageId, activation]),
+    );
+    const messages = new Map(
+      canonical.messages.map((message) => [message.messageId, message]),
+    );
+    const results = new Map(
+      canonical.toolResults.map((result) => [result.toolMessageId, result]),
+    );
+    const loadedResults = canonical.toolResults.filter(
+      (result) =>
+        result.completion.kind === "returned" &&
+        result.completion.raw.kind === "skill" &&
+        result.completion.raw.ok &&
+        result.completion.raw.status === "loaded",
+    );
+    if (loadedResults.length !== activations.length) {
+      throw new Error("Loaded Agent Skill results and activation rows differ.");
+    }
+    const revisionsById = new Map(
+      revisions.map((revision) => [revision.revisionId, revision]),
+    );
+    const overridesByMessage = new Map(
+      overrides.map((override) => [override.messageId, override]),
+    );
+    for (const activation of activations) {
+      const message = messages.get(activation.activationMessageId);
+      const result = results.get(activation.activationMessageId);
+      const raw =
+        result?.completion.kind === "returned" ? result.completion.raw : undefined;
+      if (
+        activation.sessionId !== this.sessionId ||
+        message?.role !== "tool" ||
+        message.name !== "Skill" ||
+        message.toolCallId !== activation.toolCallId ||
+        raw?.kind !== "skill" ||
+        !raw.ok ||
+        raw.status !== "loaded" ||
+        raw.name !== activation.name ||
+        raw.scope !== activation.scope ||
+        raw.sha256 !== activation.skillFileSha256
+      ) {
+        throw new Error("Agent Skill activation canonical identity is invalid.");
+      }
+      if (activation.settledRevisionId !== undefined) {
+        const revision = revisionsById.get(activation.settledRevisionId);
+        const override = overridesByMessage.get(activation.activationMessageId);
+        if (
+          revision?.kind !== "skills_update" ||
+          override?.introducedRevisionId !== revision.revisionId ||
+          override.rendererFormat !== SKILL_ACTIVATION_RECEIPT_FORMAT
+        ) {
+          throw new Error("Settled Agent Skill activation receipt is invalid.");
+        }
+      }
+    }
+    for (const surface of surfaces) {
+      for (const active of surface.activeSkills) {
+        const activation = activationByMessage.get(active.activationMessageId);
+        if (activation?.state !== "promoted" || activation.name !== active.name) {
+          throw new Error(
+            "Context surface references an invalid Agent Skill activation.",
+          );
+        }
+      }
+    }
+  }
+
+  private renderStoredSkillReceipt(
+    message: Extract<CanonicalMessageRecord, { role: "tool" }>,
+    result: ToolResultRecord,
+    revisionId: ContextRevisionId,
+  ): SwapOverride {
+    if (
+      message.name !== "Skill" ||
+      result.completion.kind !== "returned" ||
+      result.completion.raw.kind !== "skill" ||
+      !result.completion.raw.ok ||
+      result.completion.raw.status !== "loaded"
+    ) {
+      throw new Error("Agent Skill receipt does not target a loaded Skill result.");
+    }
+    const activation = this.loadSkillActivations().find(
+      (entry) => entry.activationMessageId === message.messageId,
+    );
+    if (
+      activation === undefined ||
+      activation.settledRevisionId !== revisionId ||
+      (activation.state !== "promoted" && activation.state !== "rejected")
+    ) {
+      throw new Error("Agent Skill receipt has no matching settled activation.");
+    }
+    return renderSkillActivationReceipt({
+      message: {
+        messageId: message.messageId,
+        frameId: message.frameId,
+        ordinal: message.ordinal,
+        content: message.content,
+        contentSha256: message.contentSha256,
+      },
+      name: activation.name,
+      outcome:
+        activation.state === "promoted"
+          ? "promoted"
+          : activation.rejectionReason === "unavailable"
+            ? "unavailable"
+            : "rejected",
+    });
   }
 
   private loadMeasuredContextState(): StoredMeasuredContextState | undefined {
@@ -2418,7 +3033,7 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV7, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV8, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -2589,6 +3204,45 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 }
 
+function insertPendingSkillActivation(
+  database: Database,
+  message: CanonicalMessageRecord,
+  result: ToolResultRecord,
+  now: string,
+): void {
+  if (
+    message.role !== "tool" ||
+    result.completion.kind !== "returned" ||
+    result.completion.raw.kind !== "skill" ||
+    !result.completion.raw.ok ||
+    result.completion.raw.status !== "loaded"
+  ) {
+    return;
+  }
+  const raw = result.completion.raw;
+  if (message.name !== "Skill" || message.messageId !== result.toolMessageId) {
+    throw new Error("Loaded Agent Skill completion has invalid tool identity.");
+  }
+  database
+    .query(
+      `INSERT INTO skill_activations (
+        activation_message_id, tool_call_id, session_id, name, scope,
+        skill_file_sha256, state, dispatched_iteration_id, settled_revision_id,
+        rejection_reason, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, ?, ?)`,
+    )
+    .run(
+      message.messageId,
+      result.toolCallId,
+      result.sessionId,
+      raw.name,
+      raw.scope,
+      raw.sha256,
+      now,
+      now,
+    );
+}
+
 export function createSessionCompatibilityContract(input: {
   modelName: string;
   profileName?: string;
@@ -2733,7 +3387,7 @@ function insertToolResult(database: Database, result: ToolResultRecord): void {
 
 function insertContextSurface(
   database: Database,
-  surface: StoredContextSurfaceV7,
+  surface: StoredContextSurfaceV8,
 ): void {
   validateStoredContextSurface(surface);
   database
@@ -2741,10 +3395,11 @@ function insertContextSurface(
       `INSERT INTO context_surfaces (
         surface_id, session_id, system_prompt, system_prompt_sha256,
         recall_contract_version,
-        project_instruction_json, tool_definitions_json,
+        project_instruction_json, skill_catalog_json, skill_catalog_sha256,
+        active_skills_json, active_skills_sha256, tool_definitions_json,
         tool_definitions_sha256, tool_schema_sha256, request_config_sha256,
         request_max_output_tokens, surface_sha256, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       surface.surfaceId,
@@ -2755,6 +3410,10 @@ function insertContextSurface(
       surface.projectInstruction === undefined
         ? null
         : stableJsonStringify(surface.projectInstruction),
+      stableJsonStringify(surface.skillCatalog),
+      surface.skillCatalogSha256,
+      stableJsonStringify(surface.activeSkills),
+      surface.activeSkillsSha256,
       stableJsonStringify(surface.toolDefinitions),
       surface.toolDefinitionsSha256,
       surface.toolSchemaSha256,
@@ -2934,7 +3593,7 @@ function decodeToolResult(rowValue: unknown): ToolResultRecord {
   });
 }
 
-function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV7 {
+function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV8 {
   const row = recordFromSql(rowValue, "context surface");
   const projectInstruction =
     row.project_instruction_json === null
@@ -2951,6 +3610,18 @@ function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV7 {
       "tool_definitions_json",
     ),
   );
+  const skillCatalog = decodeSkillCatalogManifest(
+    parseJson(
+      stringFromSql(row.skill_catalog_json, "skill_catalog_json"),
+      "skill_catalog_json",
+    ),
+  );
+  const activeSkills = decodeActiveSkillsManifest(
+    parseJson(
+      stringFromSql(row.active_skills_json, "active_skills_json"),
+      "active_skills_json",
+    ),
+  );
   const surface = Object.freeze({
     surfaceId: stringFromSql(row.surface_id, "surface_id") as ContextSurfaceId,
     sessionId: stringFromSql(row.session_id, "session_id") as SessionId,
@@ -2962,6 +3633,10 @@ function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV7 {
       "recall_contract_version",
     ),
     ...(projectInstruction === undefined ? {} : { projectInstruction }),
+    skillCatalog,
+    skillCatalogSha256: sha256FromSql(row.skill_catalog_sha256, "skill_catalog_sha256"),
+    activeSkills,
+    activeSkillsSha256: sha256FromSql(row.active_skills_sha256, "active_skills_sha256"),
     toolDefinitions,
     toolDefinitionsSha256: sha256FromSql(
       row.tool_definitions_sha256,
@@ -2983,11 +3658,17 @@ function decodeContextSurface(rowValue: unknown): StoredContextSurfaceV7 {
   return surface;
 }
 
-function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
+function decodeContextRevision(rowValue: unknown): StoredContextRevisionV8 {
   const row = recordFromSql(rowValue, "context revision");
   const kind = enumFromSql(
     row.kind,
-    ["initial_full", "swap_only", "surface_refresh", "prefix_retirement"] as const,
+    [
+      "initial_full",
+      "swap_only",
+      "surface_refresh",
+      "prefix_retirement",
+      "skills_update",
+    ] as const,
     "context revision kind",
   );
   const common = {
@@ -3039,6 +3720,7 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
       row.renderer_format !== null ||
       row.plan_sha256 !== null ||
       row.change_manifest_sha256 !== null ||
+      row.activation_manifest_sha256 !== null ||
       !hasNoRetirementFields(row)
     ) {
       throw new Error("Initial context revision row is invalid.");
@@ -3064,7 +3746,11 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
     throw new Error("Swap context revision row is invalid.");
   }
   if (kind === "swap_only") {
-    if (row.change_manifest_sha256 !== null || !hasNoRetirementFields(row)) {
+    if (
+      row.change_manifest_sha256 !== null ||
+      row.activation_manifest_sha256 !== null ||
+      !hasNoRetirementFields(row)
+    ) {
       throw new Error("Swap context revision has a change manifest.");
     }
     return Object.freeze({
@@ -3083,6 +3769,42 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
         "context revision renderer format",
       ),
       planSha256: sha256FromSql(row.plan_sha256, "plan_sha256"),
+    });
+  }
+  if (kind === "skills_update") {
+    if (
+      revisionNumber < 2 ||
+      parentRevisionId === null ||
+      common.addedOverrideCount < 1 ||
+      common.activeOverrideCount < common.addedOverrideCount ||
+      row.plan_sha256 !== null ||
+      !hasNoRetirementFields(row)
+    ) {
+      throw new Error("Agent Skills context revision row is invalid.");
+    }
+    return Object.freeze({
+      ...common,
+      revisionNumber,
+      parentRevisionId,
+      kind,
+      policyVersion: enumFromSql(
+        row.policy_version,
+        [SKILL_POLICY_VERSION] as const,
+        "Agent Skills context revision policy",
+      ),
+      rendererFormat: enumFromSql(
+        row.renderer_format,
+        [SKILL_ACTIVATION_RECEIPT_FORMAT] as const,
+        "Agent Skills context revision renderer format",
+      ),
+      changeManifestSha256: sha256FromSql(
+        row.change_manifest_sha256,
+        "change_manifest_sha256",
+      ),
+      activationManifestSha256: sha256FromSql(
+        row.activation_manifest_sha256,
+        "activation_manifest_sha256",
+      ),
     });
   }
   if (kind === "prefix_retirement") {
@@ -3112,7 +3834,8 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
       retiredFrameCount < 1 ||
       retiredMessageCount < 1 ||
       row.renderer_format !== null ||
-      row.change_manifest_sha256 !== null
+      row.change_manifest_sha256 !== null ||
+      row.activation_manifest_sha256 !== null
     ) {
       throw new Error("Prefix retirement revision row is invalid.");
     }
@@ -3141,6 +3864,7 @@ function decodeContextRevision(rowValue: unknown): StoredContextRevisionV7 {
     row.policy_version !== null ||
     row.renderer_format !== null ||
     row.plan_sha256 !== null ||
+    row.activation_manifest_sha256 !== null ||
     !hasNoRetirementFields(row)
   ) {
     throw new Error("Surface context revision row is invalid.");
@@ -3167,7 +3891,7 @@ function hasNoRetirementFields(row: Record<string, unknown>): boolean {
   );
 }
 
-function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV7 {
+function decodeStoredSwapOverride(rowValue: unknown): StoredContextOverrideV8 {
   const row = recordFromSql(rowValue, "context override");
   if (row.representation !== "swapped") {
     throw new Error("Context override representation must be swapped.");
@@ -3182,10 +3906,10 @@ function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV7 {
     ordinal: numberFromSql(row.ordinal, "ordinal"),
     rendererFormat: enumFromSql(
       row.renderer_format,
-      [SWAP_OBSERVATION_FORMAT] as const,
+      [SWAP_OBSERVATION_FORMAT, SKILL_ACTIVATION_RECEIPT_FORMAT] as const,
       "context override renderer format",
     ),
-    source: stringFromSql(row.source, "source") as StoredSwapOverrideV7["source"],
+    source: stringFromSql(row.source, "source") as StoredContextOverrideV8["source"],
     originalContentSha256: sha256FromSql(
       row.original_content_sha256,
       "original_content_sha256",
@@ -3202,7 +3926,7 @@ function decodeStoredSwapOverride(rowValue: unknown): StoredSwapOverrideV7 {
   });
 }
 
-function stripStoredOverride(override: StoredSwapOverrideV7): SwapOverride {
+function stripStoredOverride(override: StoredContextOverrideV8): SwapOverride {
   return Object.freeze({
     frameId: override.frameId,
     messageId: override.messageId,
@@ -3214,6 +3938,71 @@ function stripStoredOverride(override: StoredSwapOverrideV7): SwapOverride {
     originalBytes: override.originalBytes,
     renderedBytes: override.renderedBytes,
     byteSavings: override.byteSavings,
+    ...(override.rendererFormat === SWAP_OBSERVATION_FORMAT
+      ? {}
+      : { rendererFormat: override.rendererFormat }),
+  });
+}
+
+function decodeSkillActivation(rowValue: unknown): StoredSkillActivation {
+  const row = recordFromSql(rowValue, "skill activation");
+  const state = enumFromSql(
+    row.state,
+    ["pending", "dispatched", "promoted", "rejected"] as const,
+    "skill activation state",
+  );
+  const dispatchedIterationId = nullableStringFromSql(
+    row.dispatched_iteration_id,
+    "dispatched_iteration_id",
+  ) as IterationId | null;
+  const settledRevisionId = nullableStringFromSql(
+    row.settled_revision_id,
+    "settled_revision_id",
+  ) as ContextRevisionId | null;
+  const rejectionReason = nullableStringFromSql(
+    row.rejection_reason,
+    "rejection_reason",
+  );
+  if (
+    (state === "pending" &&
+      (dispatchedIterationId !== null ||
+        settledRevisionId !== null ||
+        rejectionReason !== null)) ||
+    (state === "dispatched" &&
+      (dispatchedIterationId === null ||
+        settledRevisionId !== null ||
+        rejectionReason !== null)) ||
+    (state === "promoted" &&
+      (dispatchedIterationId === null ||
+        settledRevisionId === null ||
+        rejectionReason !== null)) ||
+    (state === "rejected" &&
+      (settledRevisionId === null ||
+        rejectionReason === null ||
+        rejectionReason.trim() === ""))
+  ) {
+    throw new Error("Skill activation lifecycle fields are invalid.");
+  }
+  return Object.freeze({
+    activationMessageId: stringFromSql(
+      row.activation_message_id,
+      "activation_message_id",
+    ) as MessageId,
+    toolCallId: stringFromSql(row.tool_call_id, "tool_call_id") as ToolCallId,
+    sessionId: stringFromSql(row.session_id, "session_id") as SessionId,
+    name: stringFromSql(row.name, "skill activation name"),
+    scope: enumFromSql(
+      row.scope,
+      ["project", "user"] as const,
+      "skill activation scope",
+    ),
+    skillFileSha256: sha256FromSql(row.skill_file_sha256, "skill_file_sha256"),
+    state,
+    ...(dispatchedIterationId === null ? {} : { dispatchedIterationId }),
+    ...(settledRevisionId === null ? {} : { settledRevisionId }),
+    ...(rejectionReason === null ? {} : { rejectionReason }),
+    createdAt: timestampFromSql(row.created_at, "created_at"),
+    updatedAt: timestampFromSql(row.updated_at, "updated_at"),
   });
 }
 
@@ -3324,6 +4113,105 @@ function decodeProjectInstructionManifest(value: unknown): ProjectInstructionMan
   });
 }
 
+function decodeSkillCatalogManifest(
+  value: unknown,
+): readonly SkillCatalogManifestEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error("skill_catalog_json must contain an array.");
+  }
+  return Object.freeze(
+    value.map((entry, index) => {
+      const record = recordFromSql(entry, `skill catalog entry ${index}`);
+      assertObjectKeys(
+        record,
+        [
+          "name",
+          "scope",
+          "directorySha256",
+          "descriptionSha256",
+          "skillFileSha256",
+          "byteLength",
+        ],
+        [
+          "name",
+          "scope",
+          "directorySha256",
+          "descriptionSha256",
+          "skillFileSha256",
+          "byteLength",
+        ],
+        `skill catalog entry ${index}`,
+      );
+      return Object.freeze({
+        name: stringFromSql(record.name, "skill name"),
+        scope: enumFromSql(record.scope, ["project", "user"] as const, "skill scope"),
+        directorySha256: sha256FromSql(record.directorySha256, "skill directorySha256"),
+        descriptionSha256: sha256FromSql(
+          record.descriptionSha256,
+          "skill descriptionSha256",
+        ),
+        skillFileSha256: sha256FromSql(record.skillFileSha256, "skill skillFileSha256"),
+        byteLength: numberFromJson(record.byteLength, "skill byteLength"),
+      });
+    }),
+  );
+}
+
+function decodeActiveSkillsManifest(
+  value: unknown,
+): readonly ActiveSkillManifestEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error("active_skills_json must contain an array.");
+  }
+  return Object.freeze(
+    value.map((entry, index) => {
+      const record = recordFromSql(entry, `active skill entry ${index}`);
+      assertObjectKeys(
+        record,
+        [
+          "name",
+          "scope",
+          "directorySha256",
+          "descriptionSha256",
+          "skillFileSha256",
+          "byteLength",
+          "activationMessageId",
+        ],
+        [
+          "name",
+          "scope",
+          "directorySha256",
+          "descriptionSha256",
+          "skillFileSha256",
+          "byteLength",
+          "activationMessageId",
+        ],
+        `active skill entry ${index}`,
+      );
+      const [catalogEntry] = decodeSkillCatalogManifest([
+        {
+          name: record.name,
+          scope: record.scope,
+          directorySha256: record.directorySha256,
+          descriptionSha256: record.descriptionSha256,
+          skillFileSha256: record.skillFileSha256,
+          byteLength: record.byteLength,
+        },
+      ]);
+      if (catalogEntry === undefined) {
+        throw new Error(`Active skill entry ${index} is missing.`);
+      }
+      return Object.freeze({
+        ...catalogEntry,
+        activationMessageId: stringFromSql(
+          record.activationMessageId,
+          "skill activationMessageId",
+        ) as MessageId,
+      });
+    }),
+  );
+}
+
 function decodeToolDefinitions(value: unknown): readonly ToolDefinition[] {
   if (!Array.isArray(value)) {
     throw new Error("tool_definitions_json must contain an array.");
@@ -3354,7 +4242,7 @@ function decodeToolDefinitions(value: unknown): readonly ToolDefinition[] {
 
 export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   const raw = recordFromSql(value, "tool raw result");
-  enumFromSql(
+  const kind = enumFromSql(
     raw.kind,
     [
       "read",
@@ -3369,6 +4257,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "web_search",
       "web_fetch",
       "recall",
+      "skill",
       "mcp",
       "generic",
     ] as const,
@@ -3377,7 +4266,204 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   if (typeof raw.ok !== "boolean") {
     throw new Error("tool raw result ok must be a boolean.");
   }
+  if (kind === "skill") {
+    return decodeStoredSkillRawResult(raw);
+  }
   return immutableCanonicalClone(raw) as ToolRawResult;
+}
+
+function decodeStoredSkillRawResult(
+  raw: Record<string, unknown>,
+): Extract<ToolRawResult, { kind: "skill" }> {
+  const status = enumFromSql(
+    raw.status,
+    ["loaded", "already_loaded", "already_active", "failed"] as const,
+    "Skill raw result status",
+  );
+  const name = stringFromSql(raw.name, "Skill raw result name");
+  if (status === "failed") {
+    if (raw.ok !== false) {
+      throw new Error("Failed Skill raw result must have ok=false.");
+    }
+    assertObjectKeys(
+      raw,
+      ["kind", "ok", "status", "name", "errorCode", "error"],
+      ["kind", "ok", "status", "name", "errorCode", "error"],
+      "failed Skill raw result",
+    );
+    const errorCode = stringFromSql(raw.errorCode, "Skill errorCode");
+    const error = stringFromSql(raw.error, "Skill error");
+    if (
+      (name !== "" && !isValidSkillName(name)) ||
+      !/^[A-Z][A-Z0-9_]{0,79}$/.test(errorCode) ||
+      error.trim() === ""
+    ) {
+      throw new Error("Failed Skill raw result fields are invalid.");
+    }
+    return immutableRecord({
+      kind: "skill" as const,
+      ok: false as const,
+      status,
+      name,
+      errorCode,
+      error,
+    });
+  }
+  if (raw.ok !== true) {
+    throw new Error("Successful Skill raw result must have ok=true.");
+  }
+  const scope = enumFromSql(
+    raw.scope,
+    ["project", "user"] as const,
+    "Skill raw result scope",
+  );
+  const skillFileSha256 = sha256FromSql(raw.sha256, "Skill raw result sha256");
+  if (!isValidSkillName(name)) {
+    throw new Error("Successful Skill raw result name is invalid.");
+  }
+  if (status === "already_loaded") {
+    assertObjectKeys(
+      raw,
+      ["kind", "ok", "status", "name", "scope", "lifecycle", "sha256"],
+      ["kind", "ok", "status", "name", "scope", "lifecycle", "sha256"],
+      "already loaded Skill raw result",
+    );
+    return immutableRecord({
+      kind: "skill" as const,
+      ok: true as const,
+      status,
+      name,
+      scope,
+      lifecycle: enumFromSql(
+        raw.lifecycle,
+        ["pending", "dispatched"] as const,
+        "Skill lifecycle",
+      ),
+      sha256: skillFileSha256,
+    });
+  }
+  if (status === "already_active") {
+    assertObjectKeys(
+      raw,
+      ["kind", "ok", "status", "name", "scope", "sha256"],
+      ["kind", "ok", "status", "name", "scope", "sha256"],
+      "already active Skill raw result",
+    );
+    return immutableRecord({
+      kind: "skill" as const,
+      ok: true as const,
+      status,
+      name,
+      scope,
+      sha256: skillFileSha256,
+    });
+  }
+  assertObjectKeys(
+    raw,
+    [
+      "kind",
+      "ok",
+      "status",
+      "name",
+      "scope",
+      "directory",
+      "skillFilePath",
+      "content",
+      "byteLength",
+      "sha256",
+      "resources",
+      "resourcesTruncated",
+    ],
+    [
+      "kind",
+      "ok",
+      "status",
+      "name",
+      "scope",
+      "directory",
+      "skillFilePath",
+      "content",
+      "byteLength",
+      "sha256",
+      "resources",
+      "resourcesTruncated",
+    ],
+    "loaded Skill raw result",
+  );
+  if (
+    !Array.isArray(raw.resources) ||
+    raw.resources.some((entry) => typeof entry !== "string") ||
+    raw.resources.length > SKILL_RESOURCE_MAX_ENTRIES ||
+    typeof raw.resourcesTruncated !== "boolean"
+  ) {
+    throw new Error("Loaded Skill resource manifest is invalid.");
+  }
+  const directory = stringFromSql(raw.directory, "Skill directory");
+  const skillFilePath = stringFromSql(raw.skillFilePath, "Skill file path");
+  const content = stringFromSql(raw.content, "Skill content");
+  const byteLength = numberFromJson(raw.byteLength, "Skill byteLength");
+  const resources = raw.resources as string[];
+  if (
+    !path.isAbsolute(directory) ||
+    !path.isAbsolute(skillFilePath) ||
+    !isPathWithin(directory, skillFilePath) ||
+    byteLength < 1 ||
+    byteLength > SKILL_FILE_MAX_BYTES ||
+    Buffer.byteLength(content, "utf8") !== byteLength ||
+    sha256(content) !== skillFileSha256 ||
+    !isValidResourceManifest(resources)
+  ) {
+    throw new Error("Loaded Skill raw result snapshot is invalid.");
+  }
+  return immutableRecord({
+    kind: "skill" as const,
+    ok: true as const,
+    status,
+    name,
+    scope,
+    directory,
+    skillFilePath,
+    content,
+    byteLength,
+    sha256: skillFileSha256,
+    resources: Object.freeze([...resources]),
+    resourcesTruncated: raw.resourcesTruncated,
+  });
+}
+
+function isValidSkillName(value: string): boolean {
+  return value.length <= 64 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function isValidResourceManifest(resources: readonly string[]): boolean {
+  let previous: string | undefined;
+  for (const resource of resources) {
+    const parts = resource.split("/");
+    if (
+      resource === "" ||
+      resource.includes("\\") ||
+      path.posix.isAbsolute(resource) ||
+      path.posix.normalize(resource) !== resource ||
+      !["assets", "references", "scripts"].includes(parts[0] ?? "") ||
+      parts.length < 2 ||
+      parts.length > SKILL_RESOURCE_MAX_DEPTH + 1 ||
+      (previous !== undefined && previous >= resource)
+    ) {
+      return false;
+    }
+    previous = resource;
+  }
+  return true;
 }
 
 function decodeMeasuredContextState(
@@ -3470,6 +4556,36 @@ function assertCommitSurfaceRefreshInput(input: CommitSurfaceRefreshInput): void
   }
 }
 
+function assertCommitSkillsUpdateInput(input: CommitSkillsUpdateInput): void {
+  if (
+    input.revisionId.trim() === "" ||
+    input.expectedBaseRevisionId.trim() === "" ||
+    !Number.isSafeInteger(input.expectedBaseRevisionNumber) ||
+    input.expectedBaseRevisionNumber < 1 ||
+    !Number.isSafeInteger(input.expectedCanonicalThroughOrdinal) ||
+    input.expectedCanonicalThroughOrdinal < 1 ||
+    input.addedOverrides.length < 1 ||
+    input.settlements.length !== input.addedOverrides.length
+  ) {
+    throw new Error("Commit Agent Skills update input is invalid.");
+  }
+  for (const [name, hash] of [
+    [
+      "expectedBaseActiveOverrideManifestSha256",
+      input.expectedBaseActiveOverrideManifestSha256,
+    ],
+    ["changeManifestSha256", input.changeManifestSha256],
+    ["activationManifestSha256", input.activationManifestSha256],
+    ["nextActiveOverrideManifestSha256", input.nextActiveOverrideManifestSha256],
+    ["canonicalSequenceSha256", input.canonicalSequenceSha256],
+    ["renderedMessageSha256", input.renderedMessageSha256],
+  ] as const) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new Error(`Commit Agent Skills update ${name} must be a SHA-256 hash.`);
+    }
+  }
+}
+
 function assertCommitPrefixRetirementRevisionInput(
   input: CommitPrefixRetirementRevisionInput,
 ): void {
@@ -3514,7 +4630,7 @@ function assertCommitPrefixRetirementRevisionInput(
   }
 }
 
-function requireActiveRevisionId(meta: StoredSessionMetaV7): ContextRevisionId {
+function requireActiveRevisionId(meta: StoredSessionMetaV8): ContextRevisionId {
   if (meta.initializationState !== "ready" || meta.activeRevisionId === null) {
     throw new Error("Session has no active context revision.");
   }
@@ -3522,22 +4638,22 @@ function requireActiveRevisionId(meta: StoredSessionMetaV7): ContextRevisionId {
 }
 
 function previousRevision(
-  revisions: readonly StoredContextRevisionV7[],
-  revision: StoredContextRevisionV7,
-): StoredContextRevisionV7 | undefined {
+  revisions: readonly StoredContextRevisionV8[],
+  revision: StoredContextRevisionV8,
+): StoredContextRevisionV8 | undefined {
   return revisions[revision.revisionNumber - 2];
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV7 {
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV8 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 7) {
+  if (schemaVersion !== 8) {
     throw new Error(
-      `Session metadata schema version must be 7; received ${schemaVersion}.`,
+      `Session metadata schema version must be 8; received ${schemaVersion}.`,
     );
   }
   const projectInstructionFile = nullableStringFromSql(
@@ -4138,6 +5254,10 @@ function requireItem<T>(items: readonly T[], index: number, name: string): T {
     throw new Error(`Missing ${name} at index ${index}.`);
   }
   return item;
+}
+
+function compareCanonicalText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function errorMessage(error: unknown): string {

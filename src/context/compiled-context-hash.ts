@@ -92,7 +92,7 @@ export function activeOverrideManifestHash(overrides: readonly SwapOverride[]): 
           ordinal: override.ordinal,
           originalContentSha256: override.originalContentSha256,
           renderedContentSha256: override.renderedContentSha256,
-          rendererFormat: "swap-observation-v1",
+          rendererFormat: override.rendererFormat ?? "swap-observation-v1",
         })),
     ),
   );

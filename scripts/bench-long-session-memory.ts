@@ -40,7 +40,7 @@ import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V7_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V8_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -365,7 +365,7 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 7 ||
+      database.schemaVersion !== 8 ||
       !database.schemaFingerprintMatches ||
       database.contextRevisionCount !==
         compactionResults.length + retirementResults.length + 1 ||
@@ -1174,7 +1174,7 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V7_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V8_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),

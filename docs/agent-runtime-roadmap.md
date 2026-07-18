@@ -15,8 +15,9 @@ Tinker 已经完成后台任务管理、turn cancellation、运行身份、资�
 preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
 地基阶段、G0 基准门禁、I1 Context Revision 影子规划、I2 温层确定性换出与手动
 `/compact`，以及 I3 Recall-first 冷前缀退休与手动 `/compact retire` 已经完成。活动视图
-现在可以原子换出 observation 或退休完整冷前缀并精确恢复；下一步是 I4 主动 Recall 评测与
-自动化门禁，runtime pressure 仍不得自动提交 revision。
+现在可以原子换出 observation 或退休完整冷前缀并精确恢复。Agent Skills 也已在 schema v8
+上完成严格发现、渐进披露、durable activation、resume 重绑定和 `/skills` 展示；下一步仍是
+I4 主动 Recall 评测与自动化门禁，runtime pressure 不得自动提交 revision。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -85,10 +86,11 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
-| 稳定来源与 `Recall` | 已完成 | 当前 schema v7 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
+| 稳定来源与 `Recall` | 已完成 | 当前 schema v8 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
 | 模型 profile 与兼容契约 | 已完成 | `SessionCompatibilityContract` 只冻结历史消息协议；request fingerprint、tool surface 与 activation policy 已分离 |
 | 项目指令与 active surface | 已完成 | creation system message 保持不可变；resume 加载当前 AGENTS.md/CLAUDE.md，并以 `surface_refresh` 留下 durable revision |
-| Context revision、确定性换出与冷前缀退休 | 已完成 | schema v7 使用 immutable `ContextSurface`、线性 revision、active override manifest、原子 active switch、手动 `/compact` 与 `/compact retire`；active view 为 `{1} U [keep, tail]` |
+| Context revision、确定性换出与冷前缀退休 | 已完成 | schema v8 延续 immutable `ContextSurface`、线性 revision、active override manifest、原子 active switch、手动 `/compact` 与 `/compact retire`；active view 为 `{1} U [keep, tail]` |
+| Agent Skills | 已完成 | 严格加载 project/user `.agents/skills`，条件注册 `Skill`，以 `skills_update` 持久化 promotion/rejection，并在 resume 重绑定当前版本；`/skills` 只读展示 |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -97,6 +99,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 - [`session-turn-iteration-identity-design.md`](session-turn-iteration-identity-design.md)
 - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
 - [`runtime-contract-context-surface-refresh-design.md`](runtime-contract-context-surface-refresh-design.md)
+- [`agent-skills-support-design.md`](agent-skills-support-design.md)
 
 ### 3.2 部分具备，但不能当成已完成
 

@@ -8,6 +8,7 @@ import type {
   McpToolRawResult,
   ReadFileRawResult,
   RecallRawResult,
+  SkillRawResult,
   TaskListRawResult,
   TaskOutputRawResult,
   TaskStopRawResult,
@@ -32,6 +33,8 @@ export class ObservationBuilder {
         return { content: renderReadObservation(input.raw) };
       case "recall":
         return { content: renderRecallObservation(input.raw) };
+      case "skill":
+        return { content: renderSkillObservation(input.raw) };
       case "write":
         return { content: renderWriteObservation(input.raw) };
       case "edit":
@@ -222,6 +225,32 @@ function renderRecallObservation(raw: RecallRawResult): string {
       .join("\n"),
   );
   return [header, ...hits].join("\n\n");
+}
+
+export function renderSkillObservation(raw: SkillRawResult): string {
+  if (!raw.ok) {
+    return `Skill failed for ${raw.name || "(unknown skill)"} (${raw.errorCode}): ${raw.error}`;
+  }
+  if (raw.status === "already_loaded") {
+    return `Agent Skill ${raw.name} is already loaded for this turn (lifecycle=${raw.lifecycle}).`;
+  }
+  if (raw.status === "already_active") {
+    return `Agent Skill ${raw.name} is already active in the current system surface.`;
+  }
+
+  const content = raw.content + (raw.content.endsWith("\n") ? "" : "\n");
+  return `<agent_skill name=${JSON.stringify(raw.name)} scope=${JSON.stringify(raw.scope)}>
+Skill directory: ${raw.directory}
+Relative paths in this skill resolve from that directory.
+Do not modify the skill itself unless the user explicitly asks.
+
+<skill_file>
+${content}</skill_file>
+
+<skill_resources truncated=${JSON.stringify(String(raw.resourcesTruncated))}>
+${raw.resources.length === 0 ? "(no listed resources)" : raw.resources.join("\n")}
+</skill_resources>
+</agent_skill>`;
 }
 
 function renderWriteObservation(raw: WriteFileRawResult): string {

@@ -264,4 +264,49 @@ describe("stdout event printer", () => {
     expect(output).toContain("task.stop task=task-1 status=killed signal=SIGTERM");
     expect(stderr).toEqual([]);
   });
+
+  test("bounds Skill failures and prints unavailable resume updates", async () => {
+    const stdout: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: () => undefined },
+    );
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      name: "Skill",
+      args: { name: "removed-skill" },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...call,
+      data: {
+        call,
+        raw: {
+          kind: "skill",
+          ok: false,
+          status: "failed",
+          name: "removed-skill",
+          errorCode: "SKILL_NOT_FOUND",
+          error: "x".repeat(2_000),
+        },
+      },
+    });
+    await runtime.runtimeSession.append({
+      type: "skills.updated",
+      sessionId: runtime.runtimeSession.sessionId,
+      data: {
+        reason: "resume",
+        activated: [],
+        refreshed: [],
+        deactivated: [],
+        unavailable: ["removed-skill"],
+        revisionNumber: 2,
+      },
+    });
+
+    expect(stdout[0]).toBe(`skill removed-skill failed -> ${"x".repeat(1_000)}…\n`);
+    expect(stdout[1]).toBe(
+      "skills.updated reason=resume activated= refreshed= deactivated= unavailable=removed-skill\n",
+    );
+  });
 });

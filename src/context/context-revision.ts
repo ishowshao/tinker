@@ -8,10 +8,10 @@ import type {
 } from "../ids/runtime-id";
 import type { ModelRequestInput } from "../model/model-client";
 import type { MessageSource } from "./context-source";
-import type { ContextSurfaceChanges, StoredContextSurfaceV7 } from "./context-surface";
+import type { ContextSurfaceChanges, StoredContextSurfaceV8 } from "./context-surface";
 import type { ProtocolContextView } from "./protocol-frame";
 
-export type StoredInitialContextRevisionV7 = {
+export type StoredInitialContextRevisionV8 = {
   readonly revisionId: ContextRevisionId;
   readonly sessionId: SessionId;
   readonly revisionNumber: 1;
@@ -29,7 +29,7 @@ export type StoredInitialContextRevisionV7 = {
   readonly createdAt: string;
 };
 
-export type StoredSwapContextRevisionV7 = {
+export type StoredSwapContextRevisionV8 = {
   readonly revisionId: ContextRevisionId;
   readonly sessionId: SessionId;
   readonly revisionNumber: number;
@@ -50,7 +50,7 @@ export type StoredSwapContextRevisionV7 = {
   readonly createdAt: string;
 };
 
-export type StoredSurfaceRefreshContextRevisionV7 = {
+export type StoredSurfaceRefreshContextRevisionV8 = {
   readonly revisionId: ContextRevisionId;
   readonly sessionId: SessionId;
   readonly revisionNumber: number;
@@ -69,7 +69,7 @@ export type StoredSurfaceRefreshContextRevisionV7 = {
   readonly createdAt: string;
 };
 
-export type StoredPrefixRetirementContextRevisionV7 = {
+export type StoredPrefixRetirementContextRevisionV8 = {
   readonly revisionId: ContextRevisionId;
   readonly sessionId: SessionId;
   readonly revisionNumber: number;
@@ -93,11 +93,34 @@ export type StoredPrefixRetirementContextRevisionV7 = {
   readonly createdAt: string;
 };
 
-export type StoredContextRevisionV7 =
-  | StoredInitialContextRevisionV7
-  | StoredSwapContextRevisionV7
-  | StoredSurfaceRefreshContextRevisionV7
-  | StoredPrefixRetirementContextRevisionV7;
+export type StoredSkillsUpdateContextRevisionV8 = {
+  readonly revisionId: ContextRevisionId;
+  readonly sessionId: SessionId;
+  readonly revisionNumber: number;
+  readonly parentRevisionId: ContextRevisionId;
+  readonly kind: "skills_update";
+  readonly surfaceId: ContextSurfaceId;
+  readonly surfaceSha256: string;
+  readonly keepFromOrdinal: number;
+  readonly sourceThroughOrdinal: number;
+  readonly addedOverrideCount: number;
+  readonly activeOverrideCount: number;
+  readonly activeOverrideManifestSha256: string;
+  readonly canonicalSequenceSha256: string;
+  readonly renderedMessageSha256: string;
+  readonly policyVersion: "agent-skills-v1";
+  readonly rendererFormat: "skill-activation-receipt-v1";
+  readonly changeManifestSha256: string;
+  readonly activationManifestSha256: string;
+  readonly createdAt: string;
+};
+
+export type StoredContextRevisionV8 =
+  | StoredInitialContextRevisionV8
+  | StoredSwapContextRevisionV8
+  | StoredSurfaceRefreshContextRevisionV8
+  | StoredPrefixRetirementContextRevisionV8
+  | StoredSkillsUpdateContextRevisionV8;
 
 export type SwapOverride = {
   readonly frameId: ProtocolFrameId;
@@ -110,22 +133,23 @@ export type SwapOverride = {
   readonly originalBytes: number;
   readonly renderedBytes: number;
   readonly byteSavings: number;
+  readonly rendererFormat?: "swap-observation-v1" | "skill-activation-receipt-v1";
 };
 
-export type StoredSwapOverrideV7 = SwapOverride & {
+export type StoredContextOverrideV8 = SwapOverride & {
   readonly introducedRevisionId: ContextRevisionId;
-  readonly rendererFormat: "swap-observation-v1";
+  readonly rendererFormat: "swap-observation-v1" | "skill-activation-receipt-v1";
   readonly createdAt: string;
 };
 
-export type StoredContextSnapshotV7 = {
+export type StoredContextSnapshotV8 = {
   readonly meta: {
     readonly sessionId: SessionId;
     readonly activeRevisionId: ContextRevisionId;
   };
-  readonly revision: StoredContextRevisionV7;
-  readonly surface: StoredContextSurfaceV7;
-  readonly activeOverrides: readonly StoredSwapOverrideV7[];
+  readonly revision: StoredContextRevisionV8;
+  readonly surface: StoredContextSurfaceV8;
+  readonly activeOverrides: readonly StoredContextOverrideV8[];
   readonly canonical: ProtocolContextView;
 };
 
@@ -159,8 +183,8 @@ export type CompiledRevisionContext = {
 
 export type BuiltContextRequest = {
   readonly canonical: ProtocolContextView;
-  readonly revision: StoredContextRevisionV7;
-  readonly surface: StoredContextSurfaceV7;
+  readonly revision: StoredContextRevisionV8;
+  readonly surface: StoredContextSurfaceV8;
   readonly activeOverrides: readonly SwapOverride[];
   readonly compiled: CompiledRevisionContext;
   readonly request: ModelRequestInput;
@@ -168,6 +192,6 @@ export type BuiltContextRequest = {
 };
 
 export type SurfaceRefreshPlan = {
-  readonly surface: StoredContextSurfaceV7;
+  readonly surface: StoredContextSurfaceV8;
   readonly changes: ContextSurfaceChanges;
 };

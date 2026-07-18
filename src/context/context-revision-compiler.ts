@@ -11,11 +11,11 @@ import { ContextProtocolValidator } from "./context-protocol-validator";
 import type {
   CompiledContextEntry,
   CompiledRevisionContext,
-  StoredContextSnapshotV7,
-  StoredInitialContextRevisionV7,
+  StoredContextSnapshotV8,
+  StoredInitialContextRevisionV8,
   SwapOverride,
 } from "./context-revision";
-import type { StoredContextSurfaceV7 } from "./context-surface";
+import type { StoredContextSurfaceV8 } from "./context-surface";
 import {
   immutableRecord,
   materializeAgentMessages,
@@ -35,7 +35,7 @@ export class ContextRevisionCompiler {
     private readonly compiledValidator = new CompiledContextValidator(),
   ) {}
 
-  compileActive(snapshot: StoredContextSnapshotV7): CompiledRevisionContext {
+  compileActive(snapshot: StoredContextSnapshotV8): CompiledRevisionContext {
     validateSnapshotIdentity(snapshot);
     this.protocolValidator.validate(snapshot.canonical);
     const overrides = overrideMap(snapshot.activeOverrides);
@@ -75,9 +75,10 @@ export class ContextRevisionCompiler {
     canonical: ProtocolContextView;
     activeOverrides: readonly SwapOverride[];
     addedOverrides: readonly SwapOverride[];
-    activeSurface: StoredContextSurfaceV7;
-    surface?: StoredContextSurfaceV7;
+    activeSurface: StoredContextSurfaceV8;
+    surface?: StoredContextSurfaceV8;
     keepFromOrdinal?: number;
+    allowCombinedSurfaceAndOverrides?: boolean;
   }): CompiledRevisionContext {
     this.protocolValidator.validate(input.canonical);
     if (
@@ -112,7 +113,7 @@ export class ContextRevisionCompiler {
         input.surface.surfaceSha256 !== input.activeSurface.surfaceSha256,
       keepFromOrdinal > input.active.manifest.keepFromOrdinal,
     ].filter(Boolean).length;
-    if (changes > 1) {
+    if (changes > 1 && input.allowCombinedSurfaceAndOverrides !== true) {
       throw new ContextRevisionError(
         "A prospective context revision cannot combine revision semantics.",
       );
@@ -241,7 +242,7 @@ function swappedToolMessage(
   };
 }
 
-function validateSnapshotIdentity(snapshot: StoredContextSnapshotV7): void {
+function validateSnapshotIdentity(snapshot: StoredContextSnapshotV8): void {
   if (
     snapshot.meta.sessionId !== snapshot.canonical.sessionId ||
     snapshot.revision.sessionId !== snapshot.canonical.sessionId ||
@@ -328,6 +329,16 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV7): void {
       snapshot.activeOverrides.length !== snapshot.revision.activeOverrideCount)
   ) {
     throw new ContextRevisionError("Prefix retirement revision invariant failed.");
+  } else if (
+    snapshot.revision.kind === "skills_update" &&
+    (snapshot.revision.revisionNumber < 2 ||
+      snapshot.revision.addedOverrideCount < 1 ||
+      snapshot.revision.activeOverrideCount < snapshot.revision.addedOverrideCount ||
+      snapshot.revision.policyVersion !== "agent-skills-v1" ||
+      snapshot.revision.rendererFormat !== "skill-activation-receipt-v1" ||
+      snapshot.activeOverrides.length !== snapshot.revision.activeOverrideCount)
+  ) {
+    throw new ContextRevisionError("Agent Skills context revision invariant failed.");
   }
 
   if (
@@ -353,9 +364,9 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV7): void {
 export function createInitialContextRevision(input: {
   revisionId: ContextRevisionId;
   canonical: ProtocolContextView;
-  surface: StoredContextSurfaceV7;
+  surface: StoredContextSurfaceV8;
   createdAt: string;
-}): StoredInitialContextRevisionV7 {
+}): StoredInitialContextRevisionV8 {
   const firstFrame = input.canonical.frames[0];
   const firstMessage = input.canonical.messages[0];
   if (

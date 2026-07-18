@@ -249,6 +249,32 @@ describe("TuiProjectionStore", () => {
       ),
     ).toHaveLength(1);
   });
+
+  test("shows unavailable Agent Skills as a session notice", async () => {
+    const store = createStore();
+    await store.append({
+      type: "skills.updated",
+      sessionId,
+      eventSequence: 1,
+      timestamp: timestamp(1),
+      data: {
+        reason: "resume",
+        activated: [],
+        refreshed: [],
+        deactivated: [],
+        unavailable: ["removed-skill"],
+        revisionNumber: 2,
+      },
+    });
+
+    expect(store.getSnapshot().notices).toMatchObject([
+      {
+        label: "skills",
+        text: "skills updated -> unavailable removed-skill",
+        status: "info",
+      },
+    ]);
+  });
 });
 
 function createStore(policy?: TuiProjectionPolicy): TuiProjectionStore {

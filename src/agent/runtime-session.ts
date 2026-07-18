@@ -20,6 +20,7 @@ import type { ModelClient } from "../model/model-client";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
 import { SwapPlanner } from "../context/swap-planner";
 import {
+  commitAgentSkillsContextUpdate,
   ContextManager,
   ContextManagerError,
   type ContextCompactionResult,
@@ -46,7 +47,7 @@ import {
   createContextSurface,
   sameContextSurface,
   type ContextSurfaceComponent,
-  type StoredContextSurfaceV7,
+  type StoredContextSurfaceV8,
 } from "../context/context-surface";
 import {
   canonicalSequenceHash,
@@ -59,12 +60,16 @@ import {
   SessionStore,
   createSessionCompatibilityContract,
   type SessionRecoveryResult,
+  type StoredSkillActivation,
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { SessionError } from "../session/session-errors";
 import { FatalAgentTurnError, runAgent, type RunAgentInput } from "./loop";
 import { SessionLedgerWriteError, type SessionLedger } from "./session-ledger";
 import { TurnCancelledError } from "./turn-cancellation";
+import type { ToolCompletionInput } from "../context/protocol-frame";
+import type { BuiltContextRequest } from "../context/context-revision";
+import type { CommittedToolCompletion } from "./session-ledger";
 import type {
   IterationIdentity,
   RunAgentResult,
@@ -73,6 +78,18 @@ import type {
 } from "./types";
 import { ContextMeter } from "./context-meter";
 import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
+import type { SkillCatalogSnapshot } from "../skills/skill-loader";
+import {
+  activeSkillManifestEntry,
+  createSkillCatalogSnapshot,
+  skillCatalogManifest,
+} from "../skills/skill-catalog";
+import {
+  buildActiveSystemPrompt,
+  rebindActiveSkills,
+  renderSkillActivationReceipt,
+  SkillActivationCoordinator,
+} from "../skills/skill-context";
 
 export type ExecuteTurnInput = {
   userPrompt: string;
@@ -90,11 +107,22 @@ export type RuntimeSession = {
   readonly sessionId: SessionId;
   readonly resumed: boolean;
   readonly recovery: SessionRecoveryResult;
+  skills(): RuntimeSkillsSnapshot;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
   retireContext(): Promise<ContextRetirementResult>;
   canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
+};
+
+export type RuntimeSkillsSnapshot = {
+  readonly skills: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly scope: "project" | "user";
+    readonly active: boolean;
+  }[];
+  readonly shadowedNames: readonly string[];
 };
 
 export type RuntimeSessionContext = {
@@ -106,6 +134,14 @@ export type RuntimeSessionContext = {
   ): ToolCallIdentity;
   finishIterationForContinuation(iteration: IterationIdentity): void;
   append(input: AgentEventInput): Promise<void>;
+  onToolCompletionsCommitted?(input: {
+    completions: readonly ToolCompletionInput[];
+    committed: readonly CommittedToolCompletion[];
+  }): void;
+  prepareModelDispatch?(input: {
+    iteration: IterationIdentity;
+    built: BuiltContextRequest;
+  }): void;
 };
 
 export type ContextSurfaceRefreshSummary = {
@@ -114,6 +150,16 @@ export type ContextSurfaceRefreshSummary = {
   readonly changed: readonly ContextSurfaceComponent[];
   readonly toolCountBefore: number;
   readonly toolCountAfter: number;
+};
+
+export type SkillsUpdateSummary = {
+  readonly previousRevisionNumber: number;
+  readonly revisionNumber: number;
+  readonly activated: readonly string[];
+  readonly refreshed: readonly string[];
+  readonly deactivated: readonly string[];
+  readonly unavailable: readonly string[];
+  readonly addedOverrideCount: number;
 };
 
 type CommonRuntimeSessionInput = {
@@ -127,6 +173,7 @@ type CommonRuntimeSessionInput = {
   modelClient: ModelClient;
   systemPrompt: string;
   projectInstruction?: ProjectInstructionManifest;
+  skillCatalog?: SkillCatalogSnapshot;
   presentationSinks?: EventSink[];
   persistence?:
     | false
@@ -247,6 +294,8 @@ class DefaultRuntimeSession implements RuntimeSession {
   private readonly committedPrefixAuditor = new CommittedPrefixAuditor();
   private readonly shadowPlanner: SwapPlanner;
   private contextManager?: ContextManager;
+  private readonly skillCatalog: SkillCatalogSnapshot;
+  private skillCoordinator = new SkillActivationCoordinator();
 
   private readonly context: RuntimeSessionContext;
 
@@ -259,6 +308,14 @@ class DefaultRuntimeSession implements RuntimeSession {
   ) {
     this.sessionId = input.selection.sessionId;
     this.resumed = input.selection.mode === "resume";
+    this.skillCatalog =
+      input.skillCatalog ??
+      createSkillCatalogSnapshot({
+        workspaceRoot: input.workspaceRoot,
+        homeRoot: input.workspaceRoot,
+        skills: [],
+        shadowed: [],
+      });
     this.nextTurnNumber = store.nextTurnNumber();
     this.contextMeter = new ContextMeter(input.contextBudget, {
       onMeasuredAnchor: (anchor) => store.writeMeasuredContextAnchor(anchor),
@@ -273,6 +330,9 @@ class DefaultRuntimeSession implements RuntimeSession {
       finishIterationForContinuation: (iteration) =>
         this.finishIterationForContinuation(iteration),
       append: (event) => this.append(event),
+      onToolCompletionsCommitted: (completion) =>
+        this.onToolCompletionsCommitted(completion),
+      prepareModelDispatch: (dispatch) => this.prepareModelDispatch(dispatch),
     };
   }
 
@@ -315,6 +375,46 @@ class DefaultRuntimeSession implements RuntimeSession {
         store.assertSessionCompatibility(compatibility);
       }
 
+      let resumeSkills:
+        | {
+            unresolved: readonly StoredSkillActivation[];
+            activated: readonly string[];
+            refreshed: readonly string[];
+            deactivated: readonly string[];
+          }
+        | undefined;
+      if (input.selection.mode === "resume") {
+        session.recovery = store.recoverInterruptedState(dependencies.idFactory);
+        const storedSurface = store.loadContextSnapshot().surface;
+        const unresolved = store.loadSkillActivations(["pending", "dispatched"]);
+        const promotionNames = unresolved
+          .filter((activation) => activation.state === "dispatched")
+          .map((activation) => ({
+            name: activation.name,
+            activationMessageId: activation.activationMessageId,
+          }));
+        const rebound = rebindActiveSkills({
+          catalog: session.skillCatalog,
+          active: storedSurface.activeSkills,
+          promotionNames,
+        });
+        session.skillCoordinator = new SkillActivationCoordinator({
+          active: rebound.active,
+        });
+        const activated = promotionNames
+          .filter((entry) => session.skillCatalog.skills.has(entry.name))
+          .map((entry) => entry.name)
+          .sort();
+        resumeSkills = {
+          unresolved,
+          activated: Object.freeze(activated),
+          refreshed: Object.freeze(
+            rebound.refreshed.filter((name) => !activated.includes(name)).sort(),
+          ),
+          deactivated: rebound.deactivated,
+        };
+      }
+
       if (isNewSessionInput(input)) {
         await session.append({
           type: "session.started",
@@ -344,6 +444,12 @@ class DefaultRuntimeSession implements RuntimeSession {
         runtimeSession: session.context,
         historyReader: store.historyReader(),
         webFetchRefiner: input.webFetchRefiner,
+        ...(session.skillCatalog.skills.size === 0
+          ? {}
+          : {
+              skillCatalog: session.skillCatalog,
+              skillCoordinator: session.skillCoordinator,
+            }),
       });
 
       const mcpConfig = await dependencies.loadMcpConfig(input.workspaceRoot);
@@ -358,18 +464,24 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
 
       const definitions = session.requireTooling().registry.definitions();
+      const activeSystemPrompt = buildActiveSystemPrompt({
+        baseSystemPrompt: input.systemPrompt,
+        activeSkills: session.skillCoordinator.activeEntries(),
+      });
       const surfacePrepared = input.modelClient.prepare({
-        messages: [{ role: "system", content: input.systemPrompt }],
+        messages: [{ role: "system", content: activeSystemPrompt }],
         tools: definitions,
       });
       const candidateSurface = createContextSurface({
         surfaceId: dependencies.idFactory.createContextSurfaceId(),
         sessionId: session.sessionId,
-        systemPrompt: input.systemPrompt,
+        systemPrompt: activeSystemPrompt,
         recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
         ...(input.projectInstruction === undefined
           ? {}
           : { projectInstruction: input.projectInstruction }),
+        skillCatalog: skillCatalogManifest(session.skillCatalog.skills.values()),
+        activeSkills: session.skillCoordinator.activeManifest(),
         toolDefinitions: definitions,
         prepared: surfacePrepared,
         createdAt: new Date().toISOString(),
@@ -381,8 +493,24 @@ class DefaultRuntimeSession implements RuntimeSession {
           revisionId: dependencies.idFactory.createContextRevisionId(),
         });
       } else {
-        session.recovery = store.recoverInterruptedState(dependencies.idFactory);
-        const refresh = await session.refreshContextSurface(candidateSurface);
+        if (resumeSkills === undefined) {
+          throw new Error("Resume Agent Skills staging state is missing.");
+        }
+        let skillsUpdate: SkillsUpdateSummary | undefined;
+        const refresh =
+          resumeSkills.unresolved.length === 0
+            ? await session.refreshContextSurface(candidateSurface)
+            : undefined;
+        if (resumeSkills.unresolved.length > 0) {
+          skillsUpdate = await session.commitSkillSettlements({
+            reason: "resume",
+            candidateSurface,
+            unresolved: resumeSkills.unresolved,
+            activated: resumeSkills.activated,
+            refreshed: resumeSkills.refreshed,
+            deactivated: resumeSkills.deactivated,
+          });
+        }
         const openCount = store.markResumed();
         if (
           session.recovery.recoveredTurnId !== undefined &&
@@ -414,7 +542,41 @@ class DefaultRuntimeSession implements RuntimeSession {
             ...(refresh === undefined ? {} : { contextRefresh: refresh }),
           },
         });
+        if (skillsUpdate !== undefined) {
+          await session.append({
+            type: "skills.updated",
+            sessionId: session.sessionId,
+            data: {
+              reason: "resume",
+              activated: skillsUpdate.activated,
+              refreshed: skillsUpdate.refreshed,
+              deactivated: skillsUpdate.deactivated,
+              unavailable: skillsUpdate.unavailable,
+              revisionNumber: skillsUpdate.revisionNumber,
+            },
+          });
+        } else if (
+          resumeSkills.refreshed.length > 0 ||
+          resumeSkills.deactivated.length > 0
+        ) {
+          await session.append({
+            type: "skills.updated",
+            sessionId: session.sessionId,
+            data: {
+              reason: "resume",
+              activated: [],
+              refreshed: resumeSkills.refreshed,
+              deactivated: resumeSkills.deactivated,
+              unavailable: [],
+              ...(refresh === undefined
+                ? {}
+                : { revisionNumber: refresh.revisionNumber }),
+            },
+          });
+        }
       }
+
+      await session.appendSkillsCatalogLoaded();
 
       session.ledger = dependencies.createLedger(store, dependencies.idFactory);
       session.contextManager = new ContextManager({
@@ -465,7 +627,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   }
 
   private async refreshContextSurface(
-    candidateSurface: StoredContextSurfaceV7,
+    candidateSurface: StoredContextSurfaceV8,
   ): Promise<ContextSurfaceRefreshSummary | undefined> {
     const snapshot = this.store.loadContextSnapshot();
     if (sameContextSurface(snapshot.surface, candidateSurface)) {
@@ -569,6 +731,337 @@ class DefaultRuntimeSession implements RuntimeSession {
                 : "CONTEXT_SURFACE_REFRESH_FAILED",
           ),
           error: `Context surface refresh failed at ${stage}.`,
+          committed,
+        },
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  skills(): RuntimeSkillsSnapshot {
+    const activeNames = new Set(
+      this.skillCoordinator.activeEntries().map((entry) => entry.skill.name),
+    );
+    return Object.freeze({
+      skills: Object.freeze(
+        [...this.skillCatalog.skills.values()]
+          .sort((left, right) => compareText(left.name, right.name))
+          .map((skill) =>
+            Object.freeze({
+              name: skill.name,
+              description: skill.description,
+              scope: skill.scope,
+              active: activeNames.has(skill.name),
+            }),
+          ),
+      ),
+      shadowedNames: Object.freeze(
+        this.skillCatalog.shadowed.map((entry) => entry.name),
+      ),
+    });
+  }
+
+  private appendSkillsCatalogLoaded(): Promise<void> {
+    const activeNames = this.skillCoordinator
+      .activeEntries()
+      .map((entry) => entry.skill.name);
+    if (
+      this.skillCatalog.skills.size === 0 &&
+      activeNames.length === 0 &&
+      this.skillCatalog.shadowed.length === 0
+    ) {
+      return Promise.resolve();
+    }
+    const skills = [...this.skillCatalog.skills.values()];
+    return this.append({
+      type: "skills.catalog.loaded",
+      sessionId: this.sessionId,
+      data: {
+        availableCount: skills.length,
+        projectCount: skills.filter((skill) => skill.scope === "project").length,
+        userCount: skills.filter((skill) => skill.scope === "user").length,
+        activeNames: Object.freeze(activeNames),
+        shadowedNames: Object.freeze(
+          this.skillCatalog.shadowed.map((entry) => entry.name),
+        ),
+      },
+    });
+  }
+
+  private onToolCompletionsCommitted(input: {
+    completions: readonly ToolCompletionInput[];
+    committed: readonly CommittedToolCompletion[];
+  }): void {
+    if (input.completions.length !== input.committed.length) {
+      throw new Error("Committed tool completion identity count does not match.");
+    }
+    for (let index = 0; index < input.completions.length; index += 1) {
+      const completion = input.completions[index];
+      const committed = input.committed[index];
+      if (
+        completion === undefined ||
+        committed === undefined ||
+        completion.call.toolCallId !== committed.toolCallId
+      ) {
+        throw new Error("Committed tool completion identity is invalid.");
+      }
+      if (
+        completion.kind === "returned" &&
+        completion.raw.kind === "skill" &&
+        completion.raw.ok &&
+        completion.raw.status === "loaded"
+      ) {
+        this.skillCoordinator.markPending(completion.raw.name);
+      }
+    }
+  }
+
+  private prepareModelDispatch(input: {
+    iteration: IterationIdentity;
+    built: BuiltContextRequest;
+  }): void {
+    const pending = this.store.loadSkillActivations(["pending"]);
+    if (pending.length === 0) {
+      return;
+    }
+    const visibleCanonicalMessageIds = new Set(
+      input.built.compiled.entries
+        .filter(
+          (entry) =>
+            entry.representation === "canonical" && entry.message.role === "tool",
+        )
+        .map((entry) => entry.messageId),
+    );
+    const included = pending.filter((activation) =>
+      visibleCanonicalMessageIds.has(activation.activationMessageId),
+    );
+    if (included.length === 0) {
+      return;
+    }
+    const dispatched = this.store.markSkillActivationsDispatched({
+      iterationId: input.iteration.iterationId,
+      activationMessageIds: included.map(
+        (activation) => activation.activationMessageId,
+      ),
+    });
+    this.skillCoordinator.markDispatched(
+      dispatched.map((activation) => activation.name),
+    );
+  }
+
+  private async commitSkillSettlements(input: {
+    reason: "activation" | "resume";
+    unresolved: readonly StoredSkillActivation[];
+    candidateSurface?: StoredContextSurfaceV8;
+    activated?: readonly string[];
+    refreshed?: readonly string[];
+    deactivated?: readonly string[];
+  }): Promise<SkillsUpdateSummary> {
+    if (input.unresolved.length === 0) {
+      throw new Error("Agent Skills update requires unresolved activations.");
+    }
+    const snapshot = this.store.loadContextSnapshot();
+    const canonicalMessages = new Map(
+      snapshot.canonical.messages.map((message) => [message.messageId, message]),
+    );
+    const activeByName = new Map(
+      this.skillCoordinator
+        .activeEntries()
+        .map((entry) => [entry.skill.name, entry] as const),
+    );
+    const activated = new Set(input.activated ?? []);
+    const unavailable = new Set<string>();
+    const settlements: Array<{
+      activationMessageId: StoredSkillActivation["activationMessageId"];
+      name: string;
+      state: "promoted" | "rejected";
+      rejectionReason?: string;
+    }> = [];
+    const receipts = [];
+    for (const activation of [...input.unresolved].sort((left, right) =>
+      compareText(left.name, right.name),
+    )) {
+      const skill = this.skillCatalog.skills.get(activation.name);
+      const canPromote = activation.state === "dispatched" && skill !== undefined;
+      if (canPromote) {
+        const existing = activeByName.get(activation.name);
+        if (
+          existing !== undefined &&
+          existing.activationMessageId !== activation.activationMessageId
+        ) {
+          throw new Error(
+            `Agent Skill ${activation.name} already has another active activation.`,
+          );
+        }
+        activeByName.set(activation.name, {
+          skill,
+          activationMessageId: activation.activationMessageId,
+        });
+        activated.add(activation.name);
+      }
+      const state = canPromote ? "promoted" : "rejected";
+      const rejectionReason =
+        state === "promoted"
+          ? undefined
+          : activation.state === "pending"
+            ? "not_dispatched"
+            : "unavailable";
+      if (rejectionReason === "unavailable") {
+        unavailable.add(activation.name);
+      }
+      settlements.push({
+        activationMessageId: activation.activationMessageId,
+        name: activation.name,
+        state,
+        ...(rejectionReason === undefined ? {} : { rejectionReason }),
+      });
+      const message = canonicalMessages.get(activation.activationMessageId);
+      if (message?.role !== "tool") {
+        throw new Error(
+          `Agent Skill activation message ${activation.activationMessageId} is missing.`,
+        );
+      }
+      receipts.push(
+        renderSkillActivationReceipt({
+          message: {
+            messageId: message.messageId,
+            frameId: message.frameId,
+            ordinal: message.ordinal,
+            content: message.content,
+            contentSha256: message.contentSha256,
+          },
+          name: activation.name,
+          outcome:
+            state === "promoted"
+              ? "promoted"
+              : rejectionReason === "unavailable"
+                ? "unavailable"
+                : "rejected",
+        }),
+      );
+    }
+    const nextActive = Object.freeze(
+      [...activeByName.values()].sort((left, right) =>
+        compareText(left.skill.name, right.skill.name),
+      ),
+    );
+    const createdAt = new Date().toISOString();
+    const definitions = this.requireTooling().registry.definitions();
+    const renderedSystemPrompt = buildActiveSystemPrompt({
+      baseSystemPrompt: this.input.systemPrompt,
+      activeSkills: nextActive,
+    });
+    const surfacePrepared = this.input.modelClient.prepare({
+      messages: [{ role: "system", content: renderedSystemPrompt }],
+      tools: definitions,
+    });
+    const generatedSurface =
+      input.candidateSurface ??
+      createContextSurface({
+        surfaceId: this.dependencies.idFactory.createContextSurfaceId(),
+        sessionId: this.sessionId,
+        systemPrompt: renderedSystemPrompt,
+        recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
+        ...(this.input.projectInstruction === undefined
+          ? {}
+          : { projectInstruction: this.input.projectInstruction }),
+        skillCatalog: skillCatalogManifest(this.skillCatalog.skills.values()),
+        activeSkills: nextActive.map((entry) =>
+          activeSkillManifestEntry(entry.skill, entry.activationMessageId),
+        ),
+        toolDefinitions: definitions,
+        prepared: surfacePrepared,
+        createdAt,
+      });
+    assertPreparedMatchesSurface(surfacePrepared, generatedSurface);
+    const surface = sameContextSurface(snapshot.surface, generatedSurface)
+      ? snapshot.surface
+      : generatedSurface;
+    const startedAt = performance.now();
+    await this.append({
+      type: "context.revision.started",
+      sessionId: this.sessionId,
+      data: {
+        strategy: "skills_update",
+        reason: input.reason,
+        baseRevisionNumber: snapshot.revision.revisionNumber,
+        names: Object.freeze(
+          input.unresolved.map((entry) => entry.name).sort(compareText),
+        ),
+      },
+    });
+    let stage: "prepare" | "commit" | "activate" = "prepare";
+    let committed = false;
+    try {
+      const revision = commitAgentSkillsContextUpdate({
+        store: this.store,
+        contextMeter: this.contextMeter,
+        idFactory: this.dependencies.idFactory,
+        snapshot,
+        surface,
+        addedOverrides: receipts,
+        settlements,
+      });
+      committed = true;
+      stage = "activate";
+      this.skillCoordinator.replaceActive(nextActive);
+      this.skillCoordinator.settle(
+        input.unresolved.map((activation) => activation.name),
+      );
+      const summary = Object.freeze({
+        previousRevisionNumber: snapshot.revision.revisionNumber,
+        revisionNumber: revision.revisionNumber,
+        activated: Object.freeze([...activated].sort()),
+        refreshed: Object.freeze([...(input.refreshed ?? [])].sort()),
+        deactivated: Object.freeze([...(input.deactivated ?? [])].sort()),
+        unavailable: Object.freeze([...unavailable].sort()),
+        addedOverrideCount: receipts.length,
+      });
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "skills_update",
+          reason: input.reason,
+          baseRevisionNumber: summary.previousRevisionNumber,
+          revisionNumber: summary.revisionNumber,
+          activated: summary.activated,
+          refreshed: summary.refreshed,
+          deactivated: summary.deactivated,
+          unavailable: summary.unavailable,
+          addedOverrideCount: summary.addedOverrideCount,
+          measuredAnchorCleared: true,
+          durationMs: elapsedMs(startedAt),
+        },
+      });
+      return summary;
+    } catch (error) {
+      if (error instanceof ContextManagerError) {
+        committed = error.committed;
+        stage =
+          error.stage === "commit"
+            ? "commit"
+            : error.stage === "activate"
+              ? "activate"
+              : "prepare";
+      }
+      await this.append({
+        type: "context.revision.failed",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "skills_update",
+          reason: input.reason,
+          stage,
+          errorCode: boundedContextErrorCode(
+            error instanceof ContextManagerError
+              ? error.code
+              : error instanceof SessionError
+                ? error.code
+                : error instanceof Error
+                  ? error.name
+                  : "SKILLS_UPDATE_VALIDATION_FAILED",
+          ),
+          error: `Agent Skills update failed at ${stage}.`,
           committed,
         },
       }).catch(() => undefined);
@@ -887,6 +1380,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           );
           pendingLedgerTurn.finish(error.result);
           settled = true;
+          await this.settleClosedTurnSkills();
           throw error;
         }
 
@@ -902,6 +1396,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       await this.appendTerminalEvent(turn, result, projectedMessageCount);
       pendingLedgerTurn.finish(result);
       settled = true;
+      await this.settleClosedTurnSkills();
       return result;
     } catch (error) {
       if (!settled) {
@@ -916,6 +1411,29 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.state = "ready";
       }
     }
+  }
+
+  private async settleClosedTurnSkills(): Promise<void> {
+    const unresolved = this.store.loadSkillActivations(["pending", "dispatched"]);
+    if (unresolved.length === 0) {
+      return;
+    }
+    const summary = await this.commitSkillSettlements({
+      reason: "activation",
+      unresolved,
+    });
+    await this.append({
+      type: "skills.updated",
+      sessionId: this.sessionId,
+      data: {
+        reason: "activation",
+        activated: summary.activated,
+        refreshed: summary.refreshed,
+        deactivated: summary.deactivated,
+        unavailable: summary.unavailable,
+        revisionNumber: summary.revisionNumber,
+      },
+    });
   }
 
   private async appendTerminalEvent(
@@ -1332,6 +1850,12 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
   if (!path.isAbsolute(input.workspaceRoot)) {
     throw new Error("RuntimeSession workspaceRoot must be an absolute path.");
   }
+  if (
+    input.skillCatalog !== undefined &&
+    input.skillCatalog.workspaceRoot !== input.workspaceRoot
+  ) {
+    throw new Error("RuntimeSession Agent Skill catalog belongs to another workspace.");
+  }
   if (input.modelName.trim() === "") {
     throw new Error("RuntimeSession modelName must not be empty.");
   }
@@ -1356,7 +1880,7 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
 
 function assertPreparedMatchesSurface(
   prepared: ReturnType<ModelClient["prepare"]>,
-  surface: StoredContextSurfaceV7,
+  surface: StoredContextSurfaceV8,
 ): void {
   if (
     prepared.requestConfigHash !== surface.requestConfigSha256 ||
@@ -1525,6 +2049,10 @@ function requirePositiveNumber(value: number, name: string): void {
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer; received ${value}.`);
   }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isCanonicalRuntimeFault(error: unknown): boolean {

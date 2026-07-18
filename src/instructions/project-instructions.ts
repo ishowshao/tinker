@@ -44,7 +44,7 @@ export async function loadProjectInstructions(
   return { workspaceRoot: canonicalRoot };
 }
 
-export function buildSystemPrompt(input: {
+export function buildBaseSystemPrompt(input: {
   workspaceRoot: string;
   runtimeInstructions: string;
   projectInstructions: ProjectInstructionsSnapshot;
@@ -78,6 +78,9 @@ ${content}</instruction_file>
 </project_instructions>`;
   return `${runtime}\n\n${project}`;
 }
+
+export const buildSystemPrompt = buildBaseSystemPrompt;
+export { buildActiveSystemPrompt } from "../skills/skill-context";
 
 export function projectInstructionManifest(
   snapshot: ProjectInstructionsSnapshot,

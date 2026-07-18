@@ -64,6 +64,7 @@ function createSessionController(
     modelName: "model",
     workspaceRoot: "/tmp/tinker",
     projectionStore,
+    skills: () => ({ skills: [], shadowedNames: [] }),
     executeTurn: run,
   };
   return {
@@ -241,6 +242,54 @@ describe("tui components", () => {
     await submitInput(stdin, "/nope");
     await Bun.sleep(25);
     expect(lastFrame()).not.toContain("Estimator");
+    cleanup();
+  });
+
+  test("shows /skills from the current runtime snapshot without running the agent", async () => {
+    const projectionStore = createProjectionStore();
+    let runCalls = 0;
+    const baseController = createSessionController(projectionStore, async () => {
+      runCalls += 1;
+      return completedResult();
+    });
+    const baseBinding = baseController.getBinding();
+    const skillsBinding = {
+      ...baseBinding,
+      skills: () => ({
+        skills: [
+          {
+            name: "code-review",
+            description: "Review changes for correctness and regressions.",
+            scope: "project" as const,
+            active: true,
+          },
+          {
+            name: "pdf-processing",
+            description: "Read and create PDF artifacts.",
+            scope: "user" as const,
+            active: false,
+          },
+        ],
+        shadowedNames: ["code-review"],
+      }),
+    };
+    const sessionController: TuiSessionController = {
+      ...baseController,
+      getBinding: () => skillsBinding,
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={sessionController} />,
+    );
+
+    await submitInput(stdin, "/skills");
+    await Bun.sleep(25);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Agent Skills");
+    expect(frame).toContain("code-review (project, active)");
+    expect(frame).toContain("Review changes for correctness and regressions.");
+    expect(frame).toContain("pdf-processing (user)");
+    expect(frame).toContain("Shadowed user skills");
+    expect(runCalls).toBe(0);
     cleanup();
   });
 

@@ -2,7 +2,7 @@ import type { AgentMessage } from "../agent/types";
 import { stableJsonStringify } from "../model/model-request-preflight";
 import { formatMessageSource } from "./context-source";
 import type { CompiledRevisionContext, SwapOverride } from "./context-revision";
-import type { StoredContextSurfaceV7 } from "./context-surface";
+import type { StoredContextSurfaceV8 } from "./context-surface";
 import {
   contentHash,
   type CanonicalMessageRecord,
@@ -22,7 +22,7 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
-    surface: StoredContextSurfaceV7,
+    surface: StoredContextSurfaceV8,
   ): void {
     const byMessageId = overrideMap(overrides, "Active");
     this.validate(compiled, canonical, byMessageId, surface);
@@ -32,7 +32,7 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
-    surface: StoredContextSurfaceV7,
+    surface: StoredContextSurfaceV8,
   ): void {
     const byMessageId = overrideMap(overrides, "Prospective");
     this.validate(compiled, canonical, byMessageId, surface);
@@ -42,7 +42,7 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: ReadonlyMap<string, SwapOverride>,
-    surface: StoredContextSurfaceV7,
+    surface: StoredContextSurfaceV8,
   ): void {
     if (compiled.sessionId !== canonical.sessionId) {
       fail("Compiled context belongs to another session.");
@@ -201,13 +201,16 @@ function validateOverrideIdentity(
     "utf8",
   );
   const renderedBytes = Buffer.byteLength(override.renderedContent, "utf8");
+  const rendererFormat = override.rendererFormat ?? "swap-observation-v1";
   if (
     override.source !== formatMessageSource(record.messageId) ||
     override.renderedContentSha256 !== contentHash(override.renderedContent) ||
     override.originalBytes !== originalBytes ||
     override.renderedBytes !== renderedBytes ||
     override.byteSavings !== originalBytes - renderedBytes ||
-    override.byteSavings <= 0
+    (rendererFormat === "swap-observation-v1" && override.byteSavings <= 0) ||
+    (rendererFormat !== "swap-observation-v1" &&
+      rendererFormat !== "skill-activation-receipt-v1")
   ) {
     fail(`Swap override metadata is invalid at ordinal ${record.ordinal}.`);
   }

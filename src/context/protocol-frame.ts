@@ -9,8 +9,9 @@ import type {
   TurnIdentity,
 } from "../agent/types";
 
-export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v2" as const;
+export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v3" as const;
 export const SUPPORTED_TOOL_OBSERVATION_FORMATS = [
+  "tool-observation-v2",
   CURRENT_TOOL_OBSERVATION_FORMAT,
 ] as const;
 export type SupportedToolObservationFormat =

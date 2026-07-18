@@ -10,16 +10,30 @@ import type { ModelClient } from "../model/model-client";
 import { promptPrefixFingerprint } from "../model/prompt-prefix-hash";
 import { estimatePromptSegments } from "../model/token-estimator";
 import { SessionError } from "../session/session-errors";
-import type { SessionStore } from "../session/session-store";
+import {
+  skillActivationManifestSha256,
+  type CommitSkillsUpdateInput,
+  type SessionStore,
+} from "../session/session-store";
 import type { ToolDefinition } from "../tools/types";
-import { canonicalSequenceHash, renderedMessageHash } from "./compiled-context-hash";
+import {
+  activeOverrideManifestHash,
+  canonicalSequenceHash,
+  renderedMessageHash,
+} from "./compiled-context-hash";
 import { CompiledContextError } from "./compiled-context-validator";
 import { recallFirstRetirementPolicyV1, swapOnlyPolicyV1 } from "./context-policy";
 import { ContextProtocolError } from "./context-protocol-validator";
+import type { StoredContextSnapshotV8, SwapOverride } from "./context-revision";
 import {
   ContextRevisionCompiler,
   ContextRevisionError,
 } from "./context-revision-compiler";
+import {
+  contextSurfaceChangeManifestHash,
+  contextSurfaceChanges,
+  type StoredContextSurfaceV8,
+} from "./context-surface";
 import {
   assertPlanBaseCurrent,
   SwapPlanner,
@@ -134,6 +148,80 @@ export class ContextManagerError extends Error {
 }
 
 type ModelPreparer = Pick<ModelClient, "prepare">;
+
+export function commitAgentSkillsContextUpdate(input: {
+  store: SessionStore;
+  contextMeter: ContextMeter;
+  idFactory: RuntimeIdFactory;
+  snapshot: StoredContextSnapshotV8;
+  surface: StoredContextSurfaceV8;
+  addedOverrides: readonly SwapOverride[];
+  settlements: CommitSkillsUpdateInput["settlements"];
+}): ReturnType<SessionStore["commitSkillsUpdate"]> {
+  const compiler = new ContextRevisionCompiler();
+  let candidateCompiled: ReturnType<ContextRevisionCompiler["compileProspective"]>;
+  let changes: ReturnType<typeof contextSurfaceChanges>;
+  try {
+    input.store.assertContextRevisionIdle();
+    const active = compiler.compileActive(input.snapshot);
+    changes = contextSurfaceChanges(input.snapshot.surface, input.surface);
+    candidateCompiled = compiler.compileProspective({
+      active,
+      canonical: input.snapshot.canonical,
+      activeOverrides: input.snapshot.activeOverrides,
+      addedOverrides: input.addedOverrides,
+      activeSurface: input.snapshot.surface,
+      ...(input.surface === input.snapshot.surface ? {} : { surface: input.surface }),
+      allowCombinedSurfaceAndOverrides: true,
+    });
+  } catch (error) {
+    throw managerError("validate", error);
+  }
+
+  let revision: ReturnType<SessionStore["commitSkillsUpdate"]>;
+  try {
+    revision = input.store.commitSkillsUpdate({
+      revisionId: input.idFactory.createContextRevisionId(),
+      expectedBaseRevisionId: input.snapshot.revision.revisionId,
+      expectedBaseRevisionNumber: input.snapshot.revision.revisionNumber,
+      expectedCanonicalThroughOrdinal: input.snapshot.canonical.messages.length,
+      expectedBaseActiveOverrideManifestSha256:
+        input.snapshot.revision.activeOverrideManifestSha256,
+      surface: input.surface,
+      changes,
+      changeManifestSha256: contextSurfaceChangeManifestHash(changes),
+      activationManifestSha256: skillActivationManifestSha256(input.settlements),
+      addedOverrides: input.addedOverrides,
+      nextActiveOverrideManifestSha256: activeOverrideManifestHash([
+        ...input.snapshot.activeOverrides,
+        ...input.addedOverrides,
+      ]),
+      settlements: input.settlements,
+      canonicalSequenceSha256: canonicalSequenceHash(input.snapshot.canonical),
+      renderedMessageSha256: renderedMessageHash(candidateCompiled.entries),
+    });
+  } catch (error) {
+    throw managerError("commit", error);
+  }
+
+  try {
+    input.contextMeter.startRevision({
+      reason: "context_rebuilt",
+      requestConfigHash: input.surface.requestConfigSha256,
+      toolSchemaHash: input.surface.toolSchemaSha256,
+    });
+  } catch (error) {
+    throw new ContextManagerError(
+      "activate",
+      errorCode(error),
+      true,
+      true,
+      "Agent Skills context revision committed but runtime activation failed.",
+      { cause: error },
+    );
+  }
+  return revision;
+}
 
 export class ContextManager {
   private readonly planner: SwapPlanner;

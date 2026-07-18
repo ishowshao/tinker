@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 7;
+export const SESSION_SCHEMA_VERSION = 8;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 7),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 8),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -207,6 +207,10 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       system_prompt_sha256 TEXT NOT NULL CHECK (length(system_prompt_sha256) = 64),
       recall_contract_version TEXT NOT NULL CHECK (length(recall_contract_version) BETWEEN 1 AND 64),
       project_instruction_json TEXT CHECK (project_instruction_json IS NULL OR json_valid(project_instruction_json)),
+      skill_catalog_json TEXT NOT NULL CHECK (json_valid(skill_catalog_json)),
+      skill_catalog_sha256 TEXT NOT NULL CHECK (length(skill_catalog_sha256) = 64),
+      active_skills_json TEXT NOT NULL CHECK (json_valid(active_skills_json)),
+      active_skills_sha256 TEXT NOT NULL CHECK (length(active_skills_sha256) = 64),
       tool_definitions_json TEXT NOT NULL CHECK (json_valid(tool_definitions_json)),
       tool_definitions_sha256 TEXT NOT NULL CHECK (length(tool_definitions_sha256) = 64),
       tool_schema_sha256 TEXT NOT NULL CHECK (length(tool_schema_sha256) = 64),
@@ -226,7 +230,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       session_id TEXT NOT NULL,
       revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
       parent_revision_id TEXT,
-      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only', 'surface_refresh', 'prefix_retirement')),
+      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only', 'surface_refresh', 'prefix_retirement', 'skills_update')),
       surface_id TEXT NOT NULL,
       surface_sha256 TEXT NOT NULL CHECK (length(surface_sha256) = 64),
       keep_from_ordinal INTEGER NOT NULL CHECK (keep_from_ordinal >= 1),
@@ -240,6 +244,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       renderer_format TEXT,
       plan_sha256 TEXT CHECK (plan_sha256 IS NULL OR length(plan_sha256) = 64),
       change_manifest_sha256 TEXT CHECK (change_manifest_sha256 IS NULL OR length(change_manifest_sha256) = 64),
+      activation_manifest_sha256 TEXT CHECK (activation_manifest_sha256 IS NULL OR length(activation_manifest_sha256) = 64),
       retired_through_ordinal INTEGER CHECK (retired_through_ordinal IS NULL OR retired_through_ordinal >= 2),
       retired_turn_count INTEGER CHECK (retired_turn_count IS NULL OR retired_turn_count >= 1),
       retired_frame_count INTEGER CHECK (retired_frame_count IS NULL OR retired_frame_count >= 1),
@@ -253,27 +258,35 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
         (kind = 'initial_full' AND revision_number = 1 AND parent_revision_id IS NULL AND
           source_through_ordinal = 1 AND added_override_count = 0 AND
           active_override_count = 0 AND policy_version IS NULL AND
-          renderer_format IS NULL AND plan_sha256 IS NULL AND change_manifest_sha256 IS NULL AND
+          renderer_format IS NULL AND plan_sha256 IS NULL AND change_manifest_sha256 IS NULL AND activation_manifest_sha256 IS NULL AND
           retired_through_ordinal IS NULL AND retired_turn_count IS NULL AND
           retired_frame_count IS NULL AND retired_message_count IS NULL) OR
         (kind = 'swap_only' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
           added_override_count >= 1 AND active_override_count >= added_override_count AND
           policy_version = 'swap-only-v1' AND
           renderer_format = 'swap-observation-v1' AND plan_sha256 IS NOT NULL AND
-          change_manifest_sha256 IS NULL AND retired_through_ordinal IS NULL AND
+          change_manifest_sha256 IS NULL AND activation_manifest_sha256 IS NULL AND retired_through_ordinal IS NULL AND
           retired_turn_count IS NULL AND retired_frame_count IS NULL AND
           retired_message_count IS NULL) OR
         (kind = 'surface_refresh' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
           added_override_count = 0 AND policy_version IS NULL AND renderer_format IS NULL AND
-          plan_sha256 IS NULL AND change_manifest_sha256 IS NOT NULL AND
+          plan_sha256 IS NULL AND change_manifest_sha256 IS NOT NULL AND activation_manifest_sha256 IS NULL AND
           retired_through_ordinal IS NULL AND retired_turn_count IS NULL AND
           retired_frame_count IS NULL AND retired_message_count IS NULL) OR
         (kind = 'prefix_retirement' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
           keep_from_ordinal > 1 AND retired_through_ordinal = keep_from_ordinal - 1 AND
           added_override_count = 0 AND policy_version = 'recall-first-retirement-v1' AND
           renderer_format IS NULL AND plan_sha256 IS NOT NULL AND
-          change_manifest_sha256 IS NULL AND retired_turn_count >= 1 AND
+          change_manifest_sha256 IS NULL AND activation_manifest_sha256 IS NULL AND retired_turn_count >= 1 AND
           retired_frame_count >= 1 AND retired_message_count >= 1)
+        OR
+        (kind = 'skills_update' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
+          added_override_count >= 1 AND active_override_count >= added_override_count AND
+          policy_version = 'agent-skills-v1' AND
+          renderer_format = 'skill-activation-receipt-v1' AND plan_sha256 IS NULL AND
+          change_manifest_sha256 IS NOT NULL AND activation_manifest_sha256 IS NOT NULL AND
+          retired_through_ordinal IS NULL AND retired_turn_count IS NULL AND
+          retired_frame_count IS NULL AND retired_message_count IS NULL)
       )
     ) STRICT`,
   },
@@ -287,14 +300,14 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       frame_id TEXT NOT NULL,
       ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
       representation TEXT NOT NULL CHECK (representation = 'swapped'),
-      renderer_format TEXT NOT NULL CHECK (renderer_format = 'swap-observation-v1'),
+      renderer_format TEXT NOT NULL CHECK (renderer_format IN ('swap-observation-v1', 'skill-activation-receipt-v1')),
       source TEXT NOT NULL,
       original_content_sha256 TEXT NOT NULL CHECK (length(original_content_sha256) = 64),
       rendered_content TEXT NOT NULL CHECK (length(rendered_content) > 0),
       rendered_content_sha256 TEXT NOT NULL CHECK (length(rendered_content_sha256) = 64),
       original_bytes INTEGER NOT NULL CHECK (original_bytes > 0),
       rendered_bytes INTEGER NOT NULL CHECK (rendered_bytes > 0),
-      byte_savings INTEGER NOT NULL CHECK (byte_savings > 0),
+      byte_savings INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       PRIMARY KEY (introduced_revision_id, message_id),
       UNIQUE (session_id, message_id),
@@ -303,7 +316,32 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
       FOREIGN KEY (message_id) REFERENCES messages(message_id),
       FOREIGN KEY (frame_id) REFERENCES protocol_frames(frame_id),
-      CHECK (original_bytes = rendered_bytes + byte_savings)
+      CHECK (original_bytes = rendered_bytes + byte_savings),
+      CHECK (renderer_format <> 'swap-observation-v1' OR byte_savings > 0)
+    ) STRICT`,
+  },
+  {
+    type: "table",
+    name: "skill_activations",
+    sql: `CREATE TABLE skill_activations (
+      activation_message_id TEXT PRIMARY KEY REFERENCES messages(message_id),
+      tool_call_id TEXT NOT NULL UNIQUE REFERENCES tool_results(tool_call_id),
+      session_id TEXT NOT NULL REFERENCES session_meta(session_id),
+      name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('project', 'user')),
+      skill_file_sha256 TEXT NOT NULL CHECK (length(skill_file_sha256) = 64),
+      state TEXT NOT NULL CHECK (state IN ('pending', 'dispatched', 'promoted', 'rejected')),
+      dispatched_iteration_id TEXT REFERENCES iterations(iteration_id),
+      settled_revision_id TEXT REFERENCES context_revisions(revision_id),
+      rejection_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (state = 'pending' AND dispatched_iteration_id IS NULL AND settled_revision_id IS NULL AND rejection_reason IS NULL) OR
+        (state = 'dispatched' AND dispatched_iteration_id IS NOT NULL AND settled_revision_id IS NULL AND rejection_reason IS NULL) OR
+        (state = 'promoted' AND dispatched_iteration_id IS NOT NULL AND settled_revision_id IS NOT NULL AND rejection_reason IS NULL) OR
+        (state = 'rejected' AND settled_revision_id IS NOT NULL AND rejection_reason IS NOT NULL)
+      )
     ) STRICT`,
   },
   {
@@ -335,6 +373,11 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     type: "index",
     name: "idx_context_overrides_revision_ordinal",
     sql: "CREATE INDEX idx_context_overrides_revision_ordinal ON context_overrides(introduced_revision_id, ordinal)",
+  },
+  {
+    type: "index",
+    name: "idx_skill_activations_session_state",
+    sql: "CREATE INDEX idx_skill_activations_session_state ON skill_activations(session_id, state, activation_message_id)",
   },
   {
     type: "index",
@@ -393,6 +436,59 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   ...immutableTriggers("context_overrides"),
   {
     type: "trigger",
+    name: "skill_activations_no_delete",
+    sql: `CREATE TRIGGER skill_activations_no_delete BEFORE DELETE ON skill_activations
+      BEGIN SELECT RAISE(ABORT, 'skill_activations cannot be deleted'); END`,
+  },
+  {
+    type: "trigger",
+    name: "skill_activations_validate_insert",
+    sql: `CREATE TRIGGER skill_activations_validate_insert BEFORE INSERT ON skill_activations
+      WHEN NOT (
+        NEW.session_id = (SELECT session_id FROM session_meta WHERE singleton = 1) AND
+        NEW.state = 'pending' AND NEW.dispatched_iteration_id IS NULL AND
+        NEW.settled_revision_id IS NULL AND NEW.rejection_reason IS NULL AND
+        EXISTS (
+          SELECT 1 FROM messages m
+          JOIN tool_results tr ON tr.tool_message_id = m.message_id
+          WHERE m.message_id = NEW.activation_message_id
+            AND m.session_id = NEW.session_id AND m.tool_call_id = NEW.tool_call_id
+            AND m.name = 'Skill' AND m.role = 'tool' AND m.origin = 'tool'
+            AND tr.tool_call_id = NEW.tool_call_id AND tr.session_id = NEW.session_id
+            AND tr.completion_kind = 'returned'
+            AND json_extract(tr.raw_json, '$.kind') = 'skill'
+            AND json_extract(tr.raw_json, '$.ok') = 1
+            AND json_extract(tr.raw_json, '$.status') = 'loaded'
+            AND json_extract(tr.raw_json, '$.name') = NEW.name
+            AND json_extract(tr.raw_json, '$.scope') = NEW.scope
+            AND json_extract(tr.raw_json, '$.sha256') = NEW.skill_file_sha256
+        )
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid skill activation insert'); END`,
+  },
+  {
+    type: "trigger",
+    name: "skill_activations_monotonic_update",
+    sql: `CREATE TRIGGER skill_activations_monotonic_update BEFORE UPDATE ON skill_activations
+      WHEN NOT (
+        OLD.activation_message_id = NEW.activation_message_id AND
+        OLD.tool_call_id = NEW.tool_call_id AND OLD.session_id = NEW.session_id AND
+        OLD.name = NEW.name AND OLD.scope = NEW.scope AND
+        OLD.skill_file_sha256 = NEW.skill_file_sha256 AND OLD.created_at = NEW.created_at AND
+        ((OLD.state = 'pending' AND NEW.state = 'dispatched' AND
+          NEW.dispatched_iteration_id IS NOT NULL AND NEW.settled_revision_id IS NULL AND NEW.rejection_reason IS NULL) OR
+         (OLD.state = 'pending' AND NEW.state = 'rejected' AND
+          NEW.dispatched_iteration_id IS NULL AND NEW.settled_revision_id IS NOT NULL AND NEW.rejection_reason IS NOT NULL) OR
+         (OLD.state = 'dispatched' AND NEW.state IN ('promoted', 'rejected') AND
+          NEW.dispatched_iteration_id = OLD.dispatched_iteration_id AND
+          NEW.settled_revision_id IS NOT NULL AND
+          ((NEW.state = 'promoted' AND NEW.rejection_reason IS NULL) OR
+           (NEW.state = 'rejected' AND NEW.rejection_reason IS NOT NULL))))
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid skill activation transition'); END`,
+  },
+  {
+    type: "trigger",
     name: "context_revisions_validate_insert",
     sql: `CREATE TRIGGER context_revisions_validate_insert
       BEFORE INSERT ON context_revisions
@@ -428,6 +524,17 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           NEW.keep_from_ordinal = (SELECT keep_from_ordinal FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
           NEW.active_override_count = (SELECT active_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
           NEW.active_override_manifest_sha256 = (SELECT active_override_manifest_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)) OR
+         (NEW.kind = 'skills_update' AND
+          NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
+          NEW.revision_number = 1 + COALESCE((
+            SELECT revision_number FROM context_revisions
+            WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
+          ), 0) AND
+          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'closed' AND last_ordinal = NEW.source_through_ordinal) AND
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_surfaces WHERE surface_id = NEW.surface_id) AND
+          NEW.keep_from_ordinal = (SELECT keep_from_ordinal FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.active_override_count = (SELECT active_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) + NEW.added_override_count) OR
          (NEW.kind = 'prefix_retirement' AND
           NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
           NEW.revision_number = 1 + COALESCE((
@@ -479,7 +586,8 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           SELECT 1 FROM context_revisions cr
           WHERE cr.revision_id = NEW.introduced_revision_id
             AND cr.session_id = NEW.session_id
-            AND cr.kind = 'swap_only'
+            AND ((cr.kind = 'swap_only' AND NEW.renderer_format = 'swap-observation-v1') OR
+                 (cr.kind = 'skills_update' AND NEW.renderer_format = 'skill-activation-receipt-v1'))
             AND NEW.ordinal >= cr.keep_from_ordinal
             AND NEW.ordinal <= cr.source_through_ordinal
         ) AND
@@ -501,10 +609,15 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
             AND tr.session_id = NEW.session_id
             AND tr.frame_id = NEW.frame_id
             AND tr.observation_sha256 = NEW.original_content_sha256
+            AND (NEW.renderer_format <> 'skill-activation-receipt-v1' OR
+                 (m.name = 'Skill' AND tr.completion_kind = 'returned' AND
+                  json_extract(tr.raw_json, '$.kind') = 'skill' AND
+                  json_extract(tr.raw_json, '$.ok') = 1 AND
+                  json_extract(tr.raw_json, '$.status') = 'loaded'))
         ) AND
         NEW.source = 'ctx://message/' || NEW.message_id AND
         length(CAST(NEW.rendered_content AS BLOB)) = NEW.rendered_bytes AND
-        NEW.rendered_bytes < NEW.original_bytes
+        (NEW.renderer_format <> 'swap-observation-v1' OR NEW.rendered_bytes < NEW.original_bytes)
       )
       BEGIN SELECT RAISE(ABORT, 'invalid context override insert'); END`,
   },
@@ -645,7 +758,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           WHERE previous.revision_id = OLD.active_revision_id
             AND next.revision_id = NEW.active_revision_id
             AND next.session_id = OLD.session_id
-            AND next.kind IN ('swap_only', 'surface_refresh', 'prefix_retirement')
+            AND next.kind IN ('swap_only', 'surface_refresh', 'prefix_retirement', 'skills_update')
             AND next.added_override_count = (
               SELECT COUNT(*) FROM context_overrides
               WHERE introduced_revision_id = next.revision_id
@@ -660,6 +773,10 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
                   next.added_override_count = 0 AND
                   next.active_override_manifest_sha256 = previous.active_override_manifest_sha256 AND
                   next.surface_id <> previous.surface_id) OR
+                 (next.kind = 'skills_update' AND
+                  next.keep_from_ordinal = previous.keep_from_ordinal AND
+                  next.active_override_count = previous.active_override_count + next.added_override_count AND
+                  next.surface_sha256 = (SELECT surface_sha256 FROM context_surfaces WHERE surface_id = next.surface_id)) OR
                  (next.kind = 'prefix_retirement' AND
                   next.keep_from_ordinal > previous.keep_from_ordinal AND
                   next.added_override_count = 0 AND
@@ -678,7 +795,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V7_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V8_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -788,7 +905,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v7.",
+      "Session FTS configuration does not match schema v8.",
       { sessionId },
     );
   }

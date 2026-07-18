@@ -17,10 +17,10 @@ import {
 import type { RecallFirstRetirementPolicyV1 } from "./context-policy";
 import type {
   CompiledRevisionContext,
-  StoredContextRevisionV7,
+  StoredContextRevisionV8,
   SwapOverride,
 } from "./context-revision";
-import type { StoredContextSurfaceV7 } from "./context-surface";
+import type { StoredContextSurfaceV8 } from "./context-surface";
 import {
   ContextRevisionCompiler,
   ContextRevisionError,
@@ -72,8 +72,8 @@ export type PrefixRetirementPlan = {
 
 export type PrefixRetirementPlanningInput = {
   readonly active: CompiledRevisionContext;
-  readonly revision: StoredContextRevisionV7;
-  readonly surface: StoredContextSurfaceV7;
+  readonly revision: StoredContextRevisionV8;
+  readonly surface: StoredContextSurfaceV8;
   readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
   readonly closedTurns: readonly ClosedTurnBoundary[];

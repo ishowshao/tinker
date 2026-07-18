@@ -62,6 +62,7 @@ function fakeRuntime(sessionId: SessionId): {
     sessionId,
     resumed: false,
     recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
+    skills: () => ({ skills: [], shadowedNames: [] }),
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

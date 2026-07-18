@@ -16,6 +16,9 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
   - `WebSearch` — Search the web via Exa API
   - `WebFetch` — Fetch and refine web page content (local, browser, or Exa backend)
   - `Recall` — Search or retrieve model-visible history from the current session
+- **Agent Skills**: Discover compatible `SKILL.md` packages at project and user
+  scope, disclose their catalog progressively, and keep activated instructions
+  durable across context compaction and session resume.
 - **MCP integration**: Connect external [Model Context Protocol](https://modelcontextprotocol.io) servers — their tools are dynamically registered as `mcp__<server>__<tool>`.
 - **Session persistence**: Sessions are persisted via SQLite, supporting session resume, history recall, and a catalog to browse and switch between sessions.
 - **Observation system**: Tool execution results are formatted into structured text that the model sees, with separate raw results for event logs and TUI display.
@@ -45,6 +48,8 @@ bun run tinker run "explain the project structure"
   paths must remain inside the workspace; absolute paths may point outside it. Use
   the keyboard or mouse wheel to scroll and press `Esc` to close the viewer.
 - `/status` — Show session and context details.
+- `/skills` — Show available skills, their scope and active state, plus user skills
+  shadowed by a project skill.
 - `/compact` — Deterministically compact eligible historical tool output while the
   session is idle.
 - `/compact retire` — Retire a complete cold history prefix from the active request;
@@ -53,6 +58,26 @@ bun run tinker run "explain the project structure"
 - `/resume [session-id]` — Choose or directly resume a stored session.
 - `/session delete <session-id> --confirm` — Delete a stored session.
 - `/quit` — Exit the TUI.
+
+### Agent Skills
+
+Tinker scans `<workspace>/.agents/skills/` and `~/.agents/skills/` once when a new
+or resumed runtime starts. Each direct child skill must contain a strictly valid
+`SKILL.md`; an invalid discovered skill stops activation with a clear error. A
+project skill wins when both scopes define the same name.
+
+Only skill names and descriptions are initially exposed to the model. When the
+model selects a matching skill through the conditional `Skill` tool, Tinker sends
+the complete snapshotted `SKILL.md` and a bounded listing of its standard resource
+directories. Relative resource paths are resolved from that skill's directory and
+are read or executed only through Tinker's existing tools. Activated instructions
+remain in the current system surface across later turns and compaction; resume
+rebinds them to the current validated files.
+
+Skill content is not local-only after activation: it is sent to the configured
+model provider and persisted in the private session SQLite database, event log,
+and observation log, just like other model-visible file content. `/skills` is
+read-only and does not rescan, install, activate, or remove skills.
 
 ## Configuration
 
@@ -149,6 +174,7 @@ tinker/
 │   ├── model/         # Model clients (OpenAI-compatible, fake), chat mapping, preflight
 │   ├── mcp/           # MCP server management, tool executor adapter
 │   ├── observation/   # Tool result → model-visible text
+│   ├── skills/        # Agent Skills discovery, catalog, activation, and context
 │   ├── session/       # SQLite session store, catalog, history reader, resume
 │   ├── events/        # Event sinks, JSONL log, stdout printer
 │   ├── tui/           # Ink/React UI components, projection store, session controller

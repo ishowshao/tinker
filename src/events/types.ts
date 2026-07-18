@@ -63,6 +63,12 @@ export type ContextRevisionStartedData =
       reason: "manual";
       policyVersion: "recall-first-retirement-v1";
       baseRevisionNumber: number;
+    }
+  | {
+      strategy: "skills_update";
+      reason: "activation" | "resume";
+      baseRevisionNumber: number;
+      names: readonly string[];
     };
 
 export type ContextRevisionFinishedData =
@@ -128,6 +134,19 @@ export type ContextRevisionFinishedData =
       transactionDurationMs?: number;
       activationDurationMs?: number;
       durationMs: number;
+    }
+  | {
+      strategy: "skills_update";
+      reason: "activation" | "resume";
+      baseRevisionNumber: number;
+      revisionNumber: number;
+      activated: readonly string[];
+      refreshed: readonly string[];
+      deactivated: readonly string[];
+      unavailable: readonly string[];
+      addedOverrideCount: number;
+      measuredAnchorCleared: true;
+      durationMs: number;
     };
 
 export type ContextRevisionFailedData =
@@ -153,7 +172,32 @@ export type ContextRevisionFailedData =
       errorCode: string;
       error: string;
       committed: boolean;
+    }
+  | {
+      strategy: "skills_update";
+      reason: "activation" | "resume";
+      stage: "prepare" | "commit" | "activate";
+      errorCode: string;
+      error: string;
+      committed: boolean;
     };
+
+export type SkillsCatalogLoadedData = {
+  availableCount: number;
+  projectCount: number;
+  userCount: number;
+  activeNames: readonly string[];
+  shadowedNames: readonly string[];
+};
+
+export type SkillsUpdatedData = {
+  reason: "activation" | "resume";
+  activated: readonly string[];
+  refreshed: readonly string[];
+  deactivated: readonly string[];
+  unavailable: readonly string[];
+  revisionNumber?: number;
+};
 
 export type ContextShadowPlannedData = {
   policyVersion: "swap-only-v1";
@@ -246,6 +290,8 @@ export type AgentEventDataMap = {
   "context.revision.failed": ContextRevisionFailedData;
   "context.shadow.planned": ContextShadowPlannedData;
   "context.shadow.failed": ContextShadowFailedData;
+  "skills.catalog.loaded": SkillsCatalogLoadedData;
+  "skills.updated": SkillsUpdatedData;
   "assistant.progress": { content: string };
   "tool.started": { call: ToolCall };
   "tool.raw_result": { call: ToolCall; raw: ToolRawResult };
@@ -318,6 +364,8 @@ export type AgentEventInput =
       | "context.revision.started"
       | "context.revision.finished"
       | "context.revision.failed"
+      | "skills.catalog.loaded"
+      | "skills.updated"
     >
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">

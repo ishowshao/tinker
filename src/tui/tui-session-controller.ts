@@ -5,6 +5,7 @@ import type {
 import type {
   ExecuteTurnInput,
   RuntimeSession,
+  RuntimeSkillsSnapshot,
   SessionDisposeReason,
 } from "../agent/runtime-session";
 import type { RunAgentResult } from "../agent/types";
@@ -19,6 +20,7 @@ export type TuiSessionBinding = {
   workspaceRoot: string;
   profileName?: string;
   projectionStore: TuiProjectionStore;
+  skills(): RuntimeSkillsSnapshot;
   executeTurn(userPrompt: string, signal: AbortSignal): Promise<RunAgentResult>;
 };
 
@@ -165,6 +167,7 @@ export function managedTuiBinding(input: {
     profileName: input.profileName,
     projectionStore: input.projectionStore,
     runtimeSession: input.runtimeSession,
+    skills: () => input.runtimeSession.skills(),
     executeTurn: (userPrompt, signal) =>
       input.runtimeSession.executeTurn({
         userPrompt,

@@ -53,7 +53,7 @@ describe("runner config", () => {
         TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: undefined,
       },
       () => {
-        expect(() => readRunnerConfig()).toThrow(
+        expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
           "TINKER_CONTEXT_WINDOW_TOKENS is required",
         );
       },
@@ -67,7 +67,9 @@ describe("runner config", () => {
         TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "393216",
       },
       () => {
-        expect(readRunnerConfig().contextBudget).toMatchObject({
+        expect(
+          readRunnerConfig({ modelName: "test-model" }).contextBudget,
+        ).toMatchObject({
           requestMaxOutputTokens: 131_072,
           inputBudgetTokens: 917_504,
           triggerTokens: 734_003,
@@ -82,7 +84,9 @@ describe("runner config", () => {
         TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: String(64 * 1_024),
       },
       () => {
-        expect(readRunnerConfig().contextBudget).toMatchObject({
+        expect(
+          readRunnerConfig({ modelName: "test-model" }).contextBudget,
+        ).toMatchObject({
           requestMaxOutputTokens: 65_536,
           inputBudgetTokens: 196_608,
           triggerTokens: 157_286,
@@ -99,7 +103,9 @@ describe("runner config", () => {
           TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "1",
         },
         () => {
-          expect(() => readRunnerConfig()).toThrow("TINKER_CONTEXT_WINDOW_TOKENS");
+          expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
+            "TINKER_CONTEXT_WINDOW_TOKENS",
+          );
         },
       );
     }
@@ -110,7 +116,7 @@ describe("runner config", () => {
         TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "101",
       },
       () => {
-        expect(() => readRunnerConfig()).toThrow(
+        expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
           "maxSupportedOutputTokens must not exceed contextWindowTokens",
         );
       },
@@ -131,8 +137,10 @@ describe("runner config", () => {
   test("does not include reasoning content by default", () => {
     withEnv("TINKER_INCLUDE_REASONING_CONTENT", undefined, () => {
       expect(
-        readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })
-          .includeReasoningContent,
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).includeReasoningContent,
       ).toBe(false);
     });
   });
@@ -140,48 +148,65 @@ describe("runner config", () => {
   test("enables reasoning content with env flag", () => {
     withEnv("TINKER_INCLUDE_REASONING_CONTENT", "true", () => {
       expect(
-        readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })
-          .includeReasoningContent,
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).includeReasoningContent,
       ).toBe(true);
     });
   });
 
   test("rejects invalid reasoning content env flag", () => {
     withEnv("TINKER_INCLUDE_REASONING_CONTENT", "maybe", () => {
-      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
-        "TINKER_INCLUDE_REASONING_CONTENT must be one of",
-      );
+      expect(() =>
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }),
+      ).toThrow("TINKER_INCLUDE_REASONING_CONTENT must be one of");
     });
   });
 
   test("streams by default", () => {
     withEnv("TINKER_STREAM", undefined, () => {
-      expect(readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).stream).toBe(
-        true,
-      );
+      expect(
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).stream,
+      ).toBe(true);
     });
   });
 
   test("disables streaming with env flag", () => {
     withEnv("TINKER_STREAM", "false", () => {
-      expect(readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).stream).toBe(
-        false,
-      );
+      expect(
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).stream,
+      ).toBe(false);
     });
   });
 
   test("rejects invalid stream env flag", () => {
     withEnv("TINKER_STREAM", "maybe", () => {
-      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
-        "TINKER_STREAM must be one of",
-      );
+      expect(() =>
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }),
+      ).toThrow("TINKER_STREAM must be one of");
     });
   });
 
   test("reads max iterations from the new environment variable", () => {
     withEnv("TINKER_MAX_ITERATIONS", "7", () => {
       expect(
-        readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).maxIterations,
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).maxIterations,
       ).toBe(7);
     });
   });
@@ -190,16 +215,22 @@ describe("runner config", () => {
     withEnv("TINKER_MAX_ITERATIONS", undefined, () => {
       expect(DEFAULT_MAX_ITERATIONS).toBe(512);
       expect(
-        readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).maxIterations,
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }).maxIterations,
       ).toBe(512);
     });
   });
 
   test("fast-fails an invalid max iterations value", () => {
     withEnv("TINKER_MAX_ITERATIONS", "0", () => {
-      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
-        "TINKER_MAX_ITERATIONS must be a positive integer",
-      );
+      expect(() =>
+        readRunnerConfig({
+          modelName: "test-model",
+          contextProfile: TEST_CONTEXT_PROFILE,
+        }),
+      ).toThrow("TINKER_MAX_ITERATIONS must be a positive integer");
     });
   });
 });

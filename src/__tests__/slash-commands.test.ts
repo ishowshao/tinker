@@ -65,6 +65,11 @@ describe("findSlashCommand", () => {
 });
 
 describe("parseSlashCommand", () => {
+  test("parses the read-only skills panel command", () => {
+    expect(parseSlashCommand("/skills")).toEqual({ type: "skills" });
+    expect(() => parseSlashCommand("/skills activate")).toThrow("Unknown command");
+  });
+
   test("keeps /compact swap-only and parses explicit prefix retirement", () => {
     expect(parseSlashCommand("/compact")).toEqual({ type: "compact" });
     expect(parseSlashCommand("/compact retire")).toEqual({

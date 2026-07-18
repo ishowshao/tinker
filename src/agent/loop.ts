@@ -144,6 +144,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     let modelOutput;
     try {
       throwIfTurnCancelled(input.signal);
+      input.runtimeSession.prepareModelDispatch?.({ iteration, built });
       modelOutput = await input.model.request(prepared, {
         signal: input.signal,
         identity: {
@@ -259,14 +260,29 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
 
       const observation = input.observationBuilder.build({ call, raw });
-      input.ledger.commitToolCompletions([
+      const completions = [
         {
           call,
           kind: "returned",
           raw,
           observation: observation.content,
         },
-      ]);
+      ] as const;
+      const committed = input.ledger.commitToolCompletions(completions);
+      if (
+        raw.kind === "skill" &&
+        raw.ok &&
+        raw.status === "loaded" &&
+        input.runtimeSession.onToolCompletionsCommitted === undefined
+      ) {
+        throw new Error(
+          "Loaded Agent Skill completion has no runtime activation coordinator.",
+        );
+      }
+      input.runtimeSession.onToolCompletionsCommitted?.({
+        completions,
+        committed,
+      });
 
       await input.runtimeSession.append({
         type: "tool.raw_result",

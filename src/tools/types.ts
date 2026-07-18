@@ -6,6 +6,7 @@ import type {
   RecallSearchPage,
 } from "../session/session-history-reader";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "./bash-task";
+import type { SkillScope } from "../skills/skill-loader";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -244,6 +245,43 @@ export type RecallGetRawResult =
 
 export type RecallRawResult = RecallSearchRawResult | RecallGetRawResult;
 
+export type SkillRawResult =
+  | {
+      ok: true;
+      status: "loaded";
+      name: string;
+      scope: SkillScope;
+      directory: string;
+      skillFilePath: string;
+      content: string;
+      byteLength: number;
+      sha256: string;
+      resources: readonly string[];
+      resourcesTruncated: boolean;
+    }
+  | {
+      ok: true;
+      status: "already_loaded";
+      name: string;
+      scope: SkillScope;
+      lifecycle: "pending" | "dispatched";
+      sha256: string;
+    }
+  | {
+      ok: true;
+      status: "already_active";
+      name: string;
+      scope: SkillScope;
+      sha256: string;
+    }
+  | {
+      ok: false;
+      status: "failed";
+      name: string;
+      errorCode: string;
+      error: string;
+    };
+
 export type McpToolRawResult = {
   ok: boolean;
   toolName: string;
@@ -269,6 +307,7 @@ export type ToolRawResultByKind = {
   web_search: WebSearchRawResult;
   web_fetch: WebFetchRawResult;
   recall: RecallRawResult;
+  skill: SkillRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;
 };

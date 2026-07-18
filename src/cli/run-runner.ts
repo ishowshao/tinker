@@ -19,6 +19,7 @@ import {
 } from "./config";
 import { loadModelProfiles } from "./model-profiles";
 import { realpath } from "node:fs/promises";
+import { loadSkillCatalog } from "../skills/skill-loader";
 
 export type RunOneShotOptions = RunnerConfigOverrides & {
   modelClient?: ModelClient;
@@ -44,6 +45,7 @@ export async function runOneShot(
     const config = readRunnerConfig(options, profiles);
     const workspaceRoot = await realpath(config.workspaceRoot);
     const projectInstructions = await loadProjectInstructions(workspaceRoot);
+    const skillCatalog = await loadSkillCatalog({ workspaceRoot });
     const systemPrompt = buildSystemPrompt({
       workspaceRoot,
       runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
@@ -61,6 +63,7 @@ export async function runOneShot(
       contextBudget: config.contextBudget,
       systemPrompt,
       projectInstruction: projectInstructionManifest(projectInstructions),
+      skillCatalog,
       modelClient,
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:

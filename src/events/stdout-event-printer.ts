@@ -71,7 +71,9 @@ export class StdoutEventPrinter implements EventSink {
             ? `context.revision.started reason=${event.data.reason} policy=${event.data.policyVersion}\n`
             : event.data.strategy === "surface_refresh"
               ? `context.revision.started reason=${event.data.reason} strategy=surface_refresh changed=${event.data.changed.join(",")}\n`
-              : `context.revision.started reason=${event.data.reason} strategy=retire_prefix policy=${event.data.policyVersion}\n`,
+              : event.data.strategy === "skills_update"
+                ? `context.revision.started reason=${event.data.reason} strategy=skills_update names=${event.data.names.join(",")}\n`
+                : `context.revision.started reason=${event.data.reason} strategy=retire_prefix policy=${event.data.policyVersion}\n`,
         );
         break;
       case "context.revision.finished":
@@ -80,7 +82,9 @@ export class StdoutEventPrinter implements EventSink {
             ? `context.revision.finished outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} added=${event.data.addedOverrideCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`
             : event.data.strategy === "surface_refresh"
               ? `context.revision.finished strategy=surface_refresh revision=${event.data.revisionNumber} changed=${event.data.changed.join(",")} tools=${event.data.toolCountBefore}->${event.data.toolCountAfter}\n`
-              : `context.revision.finished strategy=retire_prefix outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} retired_turns=${event.data.retiredTurnCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
+              : event.data.strategy === "skills_update"
+                ? `context.revision.finished strategy=skills_update revision=${event.data.revisionNumber} activated=${event.data.activated.join(",")} refreshed=${event.data.refreshed.join(",")} deactivated=${event.data.deactivated.join(",")} unavailable=${event.data.unavailable.join(",")}\n`
+                : `context.revision.finished strategy=retire_prefix outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} retired_turns=${event.data.retiredTurnCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
         );
         break;
       case "context.revision.failed":
@@ -159,6 +163,16 @@ export class StdoutEventPrinter implements EventSink {
       case "session.finished":
         this.stdout.write(`session.finished reason=${event.data.reason}\n`);
         break;
+      case "skills.catalog.loaded":
+        this.stdout.write(
+          `skills.catalog.loaded available=${event.data.availableCount} active=${event.data.activeNames.join(",")} shadowed=${event.data.shadowedNames.join(",")}\n`,
+        );
+        break;
+      case "skills.updated":
+        this.stdout.write(
+          `skills.updated reason=${event.data.reason} activated=${event.data.activated.join(",")} refreshed=${event.data.refreshed.join(",")} deactivated=${event.data.deactivated.join(",")} unavailable=${event.data.unavailable.join(",")}\n`,
+        );
+        break;
       default:
         break;
     }
@@ -176,6 +190,8 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "task_list":
     case "task_stop":
       return optionalLine(formatTaskResult(call, raw));
+    case "skill":
+      return [formatSkillResult(raw)];
     case "read":
     case "glob":
     case "grep":
@@ -188,6 +204,18 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     default:
       return assertNever(raw);
   }
+}
+
+function formatSkillResult(raw: Extract<ToolRawResult, { kind: "skill" }>): string {
+  if (!raw.ok) {
+    return `skill ${raw.name || "(unknown)"} failed -> ${boundedToolError(raw.error)}\n`;
+  }
+  return `skill ${raw.name} ${raw.status.replaceAll("_", " ")}\n`;
+}
+
+function boundedToolError(error: string): string {
+  const limit = 1_000;
+  return error.length <= limit ? error : `${error.slice(0, limit)}…`;
 }
 
 function optionalLine(line: string | undefined): string[] {

@@ -16,7 +16,7 @@ import { ContextProtocolError } from "./context-protocol-validator";
 import type {
   BuiltContextRequest,
   CompiledRevisionContext,
-  StoredContextRevisionV7,
+  StoredContextRevisionV8,
   SwapOverride,
 } from "./context-revision";
 import {
@@ -68,7 +68,7 @@ export type SwapRevisionPlan = {
 
 export type SwapPlanningInput = {
   readonly active: CompiledRevisionContext;
-  readonly revision: StoredContextRevisionV7;
+  readonly revision: StoredContextRevisionV8;
   readonly surface: BuiltContextRequest["surface"];
   readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
@@ -439,7 +439,7 @@ export function assertPlanBaseCurrent(
   plan: SwapRevisionPlan,
   current: {
     readonly active: CompiledRevisionContext;
-    readonly revision: StoredContextRevisionV7;
+    readonly revision: StoredContextRevisionV8;
     readonly activeOverrides: readonly SwapOverride[];
     readonly activePrepared: PreparedModelRequest;
   },

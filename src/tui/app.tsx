@@ -16,6 +16,7 @@ import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
 import { FileViewer, FileViewerLoading } from "./components/file-viewer";
 import { PromptInput } from "./components/prompt-input";
+import { SkillsPanel } from "./components/skills-panel";
 import {
   ResumeSessionPicker,
   ResumeSessionPickerLoading,
@@ -76,6 +77,7 @@ export function App(props: AppProps) {
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [showStatus, setShowStatus] = useState(false);
+  const [showSkills, setShowSkills] = useState(false);
   const [resumePicker, setResumePicker] = useState<ResumePickerState | undefined>(
     undefined,
   );
@@ -273,6 +275,7 @@ export function App(props: AppProps) {
   const onSubmit = (prompt: string) => {
     const trimmed = prompt.trim();
     setShowStatus(false);
+    setShowSkills(false);
     setViewError(undefined);
 
     if (trimmed.startsWith("/")) {
@@ -292,6 +295,10 @@ export function App(props: AppProps) {
       }
       if (command.type === "status") {
         setShowStatus(true);
+        return;
+      }
+      if (command.type === "skills") {
+        setShowSkills(true);
         return;
       }
       if (command.type === "compact") {
@@ -431,6 +438,11 @@ export function App(props: AppProps) {
           {showStatus ? (
             <Box marginTop={1}>
               <ContextStatus state={state} />
+            </Box>
+          ) : null}
+          {showSkills ? (
+            <Box marginTop={1}>
+              <SkillsPanel snapshot={binding.skills()} />
             </Box>
           ) : null}
           <Box marginTop={1}>

@@ -228,6 +228,47 @@ export function reduceTuiProjection(
         },
         policy.sessionNoticeLimit,
       );
+    case "skills.catalog.loaded":
+      return event.data.shadowedNames.length === 0
+        ? state
+        : appendNotice(
+            state,
+            {
+              id: `notice-skills-catalog-${event.eventSequence}`,
+              label: "skills",
+              text: `project skills shadowed user skills -> ${event.data.shadowedNames.join(", ")}`,
+              status: "info",
+            },
+            policy.sessionNoticeLimit,
+          );
+    case "skills.updated": {
+      const changes = [
+        event.data.activated.length === 0
+          ? undefined
+          : `activated ${event.data.activated.join(", ")}`,
+        event.data.refreshed.length === 0
+          ? undefined
+          : `refreshed ${event.data.refreshed.join(", ")}`,
+        event.data.deactivated.length === 0
+          ? undefined
+          : `deactivated ${event.data.deactivated.join(", ")}`,
+        event.data.unavailable.length === 0
+          ? undefined
+          : `unavailable ${event.data.unavailable.join(", ")}`,
+      ].filter((entry): entry is string => entry !== undefined);
+      return changes.length === 0
+        ? state
+        : appendNotice(
+            state,
+            {
+              id: `notice-skills-updated-${event.eventSequence}`,
+              label: "skills",
+              text: `skills updated -> ${changes.join("; ")}`,
+              status: "info",
+            },
+            policy.sessionNoticeLimit,
+          );
+    }
     case "diagnostic.sink_failed":
       return appendNotice(
         state,
@@ -640,6 +681,9 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "TaskList") {
     return "TaskList";
   }
+  if (input.name === "Skill") {
+    return `Skill ${stringProperty(asRecord(input.args), "name") ?? ""}`.trim();
+  }
 
   const filePath = toolPath(input.args);
   return `${input.name}${filePath === undefined ? "" : ` ${filePath}`}`;
@@ -707,6 +751,11 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       return raw.mode === "search"
         ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}`
         : `${base} -> ${raw.page.returnedBytes} historical bytes`;
+    case "skill":
+      if (!raw.ok) {
+        return `${base} failed -> ${boundedToolError(raw.error)}`;
+      }
+      return `skill ${raw.name} ${raw.status.replaceAll("_", " ")}`;
     case "task_list":
       return `${base} -> ${raw.tasks.length} task${raw.tasks.length === 1 ? "" : "s"}, ${raw.runningCount} running`;
     case "task_output":
@@ -769,6 +818,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "skill":
     case "mcp":
     case "generic":
       return {};
@@ -802,6 +852,7 @@ function toolRawResultDiff(
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "skill":
     case "mcp":
     case "generic":
       return {};

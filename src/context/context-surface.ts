@@ -3,6 +3,12 @@ import type { ContextSurfaceId, SessionId } from "../ids/runtime-id";
 import type { PreparedModelRequest } from "../model/model-client";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import type { ToolDefinition } from "../tools/types";
+import {
+  activeSkillManifestSha256,
+  skillManifestSha256,
+  type ActiveSkillManifestEntry,
+  type SkillCatalogManifestEntry,
+} from "../skills/skill-catalog";
 import { immutableCanonicalClone } from "./protocol-frame";
 import {
   CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
@@ -13,23 +19,31 @@ import {
 export type ContextSurfaceComponent =
   | "system_prompt"
   | "project_instruction"
+  | "skill_catalog"
+  | "active_skills"
   | "tool_definitions"
   | "request_config";
 
 export type ContextSurfaceChanges = {
   readonly systemPrompt: boolean;
   readonly projectInstruction: boolean;
+  readonly skillCatalog: boolean;
+  readonly activeSkills: boolean;
   readonly toolDefinitions: boolean;
   readonly requestConfig: boolean;
 };
 
-export type StoredContextSurfaceV7 = {
+export type StoredContextSurfaceV8 = {
   readonly surfaceId: ContextSurfaceId;
   readonly sessionId: SessionId;
   readonly systemPrompt: string;
   readonly systemPromptSha256: string;
   readonly recallContractVersion: RecallRetirementContractVersion;
   readonly projectInstruction?: ProjectInstructionManifest;
+  readonly skillCatalog: readonly SkillCatalogManifestEntry[];
+  readonly skillCatalogSha256: string;
+  readonly activeSkills: readonly ActiveSkillManifestEntry[];
+  readonly activeSkillsSha256: string;
   readonly toolDefinitions: readonly ToolDefinition[];
   readonly toolDefinitionsSha256: string;
   readonly toolSchemaSha256: string;
@@ -45,13 +59,15 @@ export function createContextSurface(input: {
   systemPrompt: string;
   recallContractVersion: RecallRetirementContractVersion;
   projectInstruction?: ProjectInstructionManifest;
+  skillCatalog?: readonly SkillCatalogManifestEntry[];
+  activeSkills?: readonly ActiveSkillManifestEntry[];
   toolDefinitions: readonly ToolDefinition[];
   prepared: Pick<
     PreparedModelRequest,
     "requestConfigHash" | "requestMaxOutputTokens" | "toolSchemaHash"
   >;
   createdAt: string;
-}): StoredContextSurfaceV7 {
+}): StoredContextSurfaceV8 {
   if (input.surfaceId.trim() === "" || input.sessionId.trim() === "") {
     throw new Error("Context surface identity must not be empty.");
   }
@@ -72,6 +88,14 @@ export function createContextSurface(input: {
   validateProjectInstruction(input.projectInstruction);
   validateToolDefinitions(input.toolDefinitions);
 
+  const skillCatalog = Object.freeze(
+    immutableCanonicalClone([...(input.skillCatalog ?? [])]),
+  );
+  const activeSkills = Object.freeze(
+    immutableCanonicalClone([...(input.activeSkills ?? [])]),
+  );
+  validateSkillManifests(skillCatalog, activeSkills);
+
   const toolDefinitions = Object.freeze(
     immutableCanonicalClone([...input.toolDefinitions]),
   );
@@ -81,10 +105,14 @@ export function createContextSurface(input: {
       : Object.freeze(immutableCanonicalClone(input.projectInstruction));
   const systemPromptSha256 = sha256(input.systemPrompt);
   const toolDefinitionsSha256 = sha256(stableJsonStringify(toolDefinitions));
+  const skillCatalogSha256 = skillManifestSha256(skillCatalog);
+  const activeSkillsSha256 = activeSkillManifestSha256(activeSkills);
   const manifest = {
     systemPromptSha256,
     recallContractVersion: input.recallContractVersion,
     ...(projectInstruction === undefined ? {} : { projectInstruction }),
+    skillCatalogSha256,
+    activeSkillsSha256,
     toolDefinitionsSha256,
     toolSchemaSha256: input.prepared.toolSchemaHash,
     requestConfigSha256: input.prepared.requestConfigHash,
@@ -98,6 +126,10 @@ export function createContextSurface(input: {
     systemPromptSha256,
     recallContractVersion: input.recallContractVersion,
     ...(projectInstruction === undefined ? {} : { projectInstruction }),
+    skillCatalog,
+    skillCatalogSha256,
+    activeSkills,
+    activeSkillsSha256,
     toolDefinitions,
     toolDefinitionsSha256,
     toolSchemaSha256: input.prepared.toolSchemaHash,
@@ -109,8 +141,8 @@ export function createContextSurface(input: {
 }
 
 export function contextSurfaceChanges(
-  previous: StoredContextSurfaceV7,
-  current: StoredContextSurfaceV7,
+  previous: StoredContextSurfaceV8,
+  current: StoredContextSurfaceV8,
 ): ContextSurfaceChanges {
   return Object.freeze({
     systemPrompt:
@@ -119,6 +151,8 @@ export function contextSurfaceChanges(
     projectInstruction:
       stableJsonStringify(previous.projectInstruction ?? null) !==
       stableJsonStringify(current.projectInstruction ?? null),
+    skillCatalog: previous.skillCatalogSha256 !== current.skillCatalogSha256,
+    activeSkills: previous.activeSkillsSha256 !== current.activeSkillsSha256,
     toolDefinitions:
       previous.toolDefinitionsSha256 !== current.toolDefinitionsSha256 ||
       previous.toolSchemaSha256 !== current.toolSchemaSha256,
@@ -134,6 +168,8 @@ export function changedContextSurfaceComponents(
   const changed: ContextSurfaceComponent[] = [];
   if (changes.systemPrompt) changed.push("system_prompt");
   if (changes.projectInstruction) changed.push("project_instruction");
+  if (changes.skillCatalog) changed.push("skill_catalog");
+  if (changes.activeSkills) changed.push("active_skills");
   if (changes.toolDefinitions) changed.push("tool_definitions");
   if (changes.requestConfig) changed.push("request_config");
   return Object.freeze(changed);
@@ -146,13 +182,13 @@ export function contextSurfaceChangeManifestHash(
 }
 
 export function sameContextSurface(
-  previous: StoredContextSurfaceV7,
-  current: StoredContextSurfaceV7,
+  previous: StoredContextSurfaceV8,
+  current: StoredContextSurfaceV8,
 ): boolean {
   return previous.surfaceSha256 === current.surfaceSha256;
 }
 
-export function validateStoredContextSurface(surface: StoredContextSurfaceV7): void {
+export function validateStoredContextSurface(surface: StoredContextSurfaceV8): void {
   if (surface.systemPromptSha256 !== sha256(surface.systemPrompt)) {
     throw new Error("Context surface system prompt hash does not match.");
   }
@@ -160,6 +196,13 @@ export function validateStoredContextSurface(surface: StoredContextSurfaceV7): v
     throw new Error("Context surface Recall contract version is unsupported.");
   }
   validateToolDefinitions(surface.toolDefinitions);
+  validateSkillManifests(surface.skillCatalog, surface.activeSkills);
+  if (surface.skillCatalogSha256 !== skillManifestSha256(surface.skillCatalog)) {
+    throw new Error("Context surface Agent Skill catalog hash does not match.");
+  }
+  if (surface.activeSkillsSha256 !== activeSkillManifestSha256(surface.activeSkills)) {
+    throw new Error("Context surface active Agent Skills hash does not match.");
+  }
   if (
     surface.toolDefinitionsSha256 !==
     sha256(stableJsonStringify(surface.toolDefinitions))
@@ -179,6 +222,8 @@ export function validateStoredContextSurface(surface: StoredContextSurfaceV7): v
     ...(surface.projectInstruction === undefined
       ? {}
       : { projectInstruction: surface.projectInstruction }),
+    skillCatalogSha256: surface.skillCatalogSha256,
+    activeSkillsSha256: surface.activeSkillsSha256,
     toolDefinitionsSha256: surface.toolDefinitionsSha256,
     toolSchemaSha256: surface.toolSchemaSha256,
     requestConfigSha256: surface.requestConfigSha256,
@@ -187,6 +232,64 @@ export function validateStoredContextSurface(surface: StoredContextSurfaceV7): v
   if (sha256(stableJsonStringify(expectedManifest)) !== surface.surfaceSha256) {
     throw new Error("Context surface manifest hash does not match.");
   }
+}
+
+function validateSkillManifests(
+  catalog: readonly SkillCatalogManifestEntry[],
+  active: readonly ActiveSkillManifestEntry[],
+): void {
+  const catalogNames = new Set<string>();
+  let previousName: string | undefined;
+  for (const entry of catalog) {
+    validateSkillManifestEntry(entry);
+    if (
+      catalogNames.has(entry.name) ||
+      (previousName !== undefined && previousName >= entry.name)
+    ) {
+      throw new Error("Context surface Agent Skill catalog order is invalid.");
+    }
+    catalogNames.add(entry.name);
+    previousName = entry.name;
+  }
+  const activeNames = new Set<string>();
+  previousName = undefined;
+  for (const entry of active) {
+    validateSkillManifestEntry(entry);
+    const catalogEntry = catalog.find((candidate) => candidate.name === entry.name);
+    if (
+      catalogEntry === undefined ||
+      activeNames.has(entry.name) ||
+      (previousName !== undefined && previousName >= entry.name) ||
+      entry.activationMessageId.trim() === "" ||
+      stableJsonStringify(catalogEntry) !==
+        stableJsonStringify({
+          name: entry.name,
+          scope: entry.scope,
+          directorySha256: entry.directorySha256,
+          descriptionSha256: entry.descriptionSha256,
+          skillFileSha256: entry.skillFileSha256,
+          byteLength: entry.byteLength,
+        })
+    ) {
+      throw new Error("Context surface active Agent Skills manifest is invalid.");
+    }
+    activeNames.add(entry.name);
+    previousName = entry.name;
+  }
+}
+
+function validateSkillManifestEntry(entry: SkillCatalogManifestEntry): void {
+  if (
+    entry.name.trim() === "" ||
+    (entry.scope !== "project" && entry.scope !== "user") ||
+    !Number.isSafeInteger(entry.byteLength) ||
+    entry.byteLength < 1
+  ) {
+    throw new Error("Context surface Agent Skill manifest entry is invalid.");
+  }
+  assertSha256(entry.directorySha256, "skill.directorySha256");
+  assertSha256(entry.descriptionSha256, "skill.descriptionSha256");
+  assertSha256(entry.skillFileSha256, "skill.skillFileSha256");
 }
 
 function validateToolDefinitions(definitions: readonly ToolDefinition[]): void {

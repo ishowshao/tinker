@@ -1,14 +1,20 @@
-import type { ContextRevisionId, RuntimeIdFactory, SessionId } from "../ids/runtime-id";
+import type {
+  ContextRevisionId,
+  MessageId,
+  RuntimeIdFactory,
+  SessionId,
+  ToolCallId,
+} from "../ids/runtime-id";
 import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
-  StoredContextRevisionV7,
-  StoredContextSnapshotV7,
-  StoredSwapOverrideV7,
+  StoredContextRevisionV8,
+  StoredContextSnapshotV8,
+  StoredContextOverrideV8,
 } from "../context/context-revision";
 import {
   createContextSurface,
-  type StoredContextSurfaceV7,
+  type StoredContextSurfaceV8,
 } from "../context/context-surface";
 import {
   ContextRevisionCompiler,
@@ -74,8 +80,16 @@ export type AgentTurnLedger = {
     model: string;
   }): void;
   assertCanExecuteTool(call: ToolCall): void;
-  commitToolCompletions(completions: readonly ToolCompletionInput[]): void;
+  commitToolCompletions(
+    completions: readonly ToolCompletionInput[],
+  ): readonly CommittedToolCompletion[];
   buildModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
+};
+
+export type CommittedToolCompletion = {
+  readonly toolCallId: ToolCallId;
+  readonly toolMessageId: MessageId;
+  readonly ordinal: number;
 };
 
 export type LedgerMutation =
@@ -128,8 +142,8 @@ export type CreateInMemorySessionLedgerInput = {
   idFactory: RuntimeIdFactory;
   systemPrompt?: string;
   initialView?: ProtocolContextView;
-  initialSnapshot?: StoredContextSnapshotV7;
-  initialSurface?: StoredContextSurfaceV7;
+  initialSnapshot?: StoredContextSnapshotV8;
+  initialSurface?: StoredContextSurfaceV8;
   initialToolDefinitions?: readonly ToolDefinition[];
   initialRevisionId?: ContextRevisionId;
   contextBuilder?: ContextBuilder;
@@ -146,9 +160,9 @@ export class InMemorySessionLedger implements SessionLedger {
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
   private readonly revisionCompiler: ContextRevisionCompiler;
-  private readonly revision: StoredContextRevisionV7;
-  private readonly surface: StoredContextSurfaceV7;
-  private readonly activeOverrides: readonly StoredSwapOverrideV7[];
+  private readonly revision: StoredContextRevisionV8;
+  private readonly surface: StoredContextSurfaceV8;
+  private readonly activeOverrides: readonly StoredContextOverrideV8[];
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
@@ -400,7 +414,7 @@ export class InMemorySessionLedger implements SessionLedger {
   commitToolCompletions(
     pending: InMemoryPendingLedgerTurn,
     completions: readonly ToolCompletionInput[],
-  ): void {
+  ): readonly CommittedToolCompletion[] {
     this.requirePending(pending, "commit tool completions");
     if (completions.length === 0) {
       throw new Error("Tool completion batch must not be empty.");
@@ -484,6 +498,13 @@ export class InMemorySessionLedger implements SessionLedger {
       toolResults: Object.freeze(toolResults),
       next,
     });
+    return Object.freeze(
+      toolResults.map((result, index) => ({
+        toolCallId: result.toolCallId,
+        toolMessageId: result.toolMessageId,
+        ordinal: requireItem(messages, index, "committed tool message").ordinal,
+      })),
+    );
   }
 
   buildTurnModelRequest(
@@ -624,10 +645,10 @@ export class InMemorySessionLedger implements SessionLedger {
 
 function snapshotFor(
   canonical: ProtocolContextView,
-  revision: StoredContextRevisionV7,
-  surface: StoredContextSurfaceV7,
-  activeOverrides: readonly StoredSwapOverrideV7[],
-): StoredContextSnapshotV7 {
+  revision: StoredContextRevisionV8,
+  surface: StoredContextSurfaceV8,
+  activeOverrides: readonly StoredContextOverrideV8[],
+): StoredContextSnapshotV8 {
   return Object.freeze({
     meta: Object.freeze({
       sessionId: canonical.sessionId,
@@ -646,7 +667,7 @@ function createInMemoryContextSurface(input: {
   tools: readonly ToolDefinition[];
   idFactory: RuntimeIdFactory;
   createdAt: string;
-}): StoredContextSurfaceV7 {
+}): StoredContextSurfaceV8 {
   const serializedTools = input.tools.map((tool) => stableJsonStringify(tool));
   return createContextSurface({
     surfaceId: input.idFactory.createContextSurfaceId(),

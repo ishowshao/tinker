@@ -162,7 +162,7 @@ describe("ContextRevisionCompiler", () => {
 });
 
 describe("SessionStore context snapshot", () => {
-  test("decodes the initial v7 revision without changing durable state", async () => {
+  test("decodes the initial v8 revision without changing durable state", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -188,14 +188,14 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(7);
+      expect(store.readMeta().schemaVersion).toBe(8);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 
-  test("fast-fails when active revision metadata no longer matches v7", async () => {
+  test("fast-fails when active revision metadata no longer matches v8", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-bad-"));
     const sessionId = runtimeIdFactory.createSessionId();
     let store: SessionStore | undefined;

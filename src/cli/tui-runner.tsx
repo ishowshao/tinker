@@ -39,6 +39,7 @@ import {
   resolveSessionProfileName,
   type ModelProfile,
 } from "./model-profiles";
+import { loadSkillCatalog } from "../skills/skill-loader";
 
 export async function runTui(options: { profileName?: string } = {}): Promise<void> {
   const profiles = await loadModelProfiles();
@@ -62,6 +63,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
     ): Promise<RuntimeSession> => {
       const modelClient = createRunnerModelClient(sessionConfig);
       const projectInstructions = await loadProjectInstructions(workspaceRoot);
+      const skillCatalog = await loadSkillCatalog({ workspaceRoot });
       const common = {
         workspaceRoot,
         modelName: sessionConfig.modelName,
@@ -77,6 +79,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
           projectInstructions,
         }),
         projectInstruction: projectInstructionManifest(projectInstructions),
+        skillCatalog,
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefinerFromEnv(sessionConfig),
       };
