@@ -40,10 +40,10 @@ With Grep, start with output_mode="files_with_matches" to narrow scope, then use
 Use head_limit and offset to page through large Grep result sets instead of requesting unlimited output.
 Use Read to open specific files returned by Grep.
 Use Edit to replace exact strings in existing files. Set old_string="" to create a file or write to an empty file.
-Use Read before Write when modifying an existing file.
+Use Read before the first Write of an existing file in the current runtime.
 Write creates missing parent directories when creating a file.
-Write may fail if the file was not read first or changed after it was read. If that happens, call Read again and retry with the updated content.
-Use Read at least once before an exact-string Edit of an existing file. A successful paginated Read is sufficient. Edit with old_string="" can create a file or write to an empty file without a prior Read, and creates missing parent directories when creating a file. Exact-string Edit may fail if the file was not read first, changed after it was read, old_string is missing, or old_string matches multiple places without replace_all=true.
+Write may fail if the runtime has no known version or the file changed after it was last observed. If that happens, call Read again and retry with the updated content.
+Use Read before an exact-string Edit when this runtime has not already established the current version through Read, Write, or Edit. A successful paginated Read is sufficient. Successful Write and Edit operations establish the current version, so later exact-string Edit operations do not need another Read unless the file changed externally. Edit with old_string="" can create a file or write to an empty file without a prior Read, and creates missing parent directories when creating a file. Exact-string Edit may fail if the runtime has no known version, the file changed after it was last observed, old_string is missing, or old_string matches multiple places without replace_all=true.
 Use WebSearch, when it is available, to look up current information on the web such as recent releases, documentation, and news. Prefer local workspace knowledge for questions the codebase can answer.
 Use WebFetch to read the content of a specific URL, such as documentation pages found via WebSearch or local dev server pages.
 Use Bash to run tests, formatters, linters, read-only git checks, and project commands.

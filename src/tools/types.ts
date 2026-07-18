@@ -50,7 +50,7 @@ export type WriteFileRawResult = {
   patchTruncated?: boolean;
   requiredReadBeforeWrite?: boolean;
   currentSha256?: string;
-  lastReadSha256?: string;
+  lastObservedSha256?: string;
   error?: string;
 };
 
@@ -67,8 +67,8 @@ export type EditFileRawResult = {
   patch?: DiffHunk[];
   patchTruncated?: boolean;
   requiredReadBeforeEdit?: boolean;
-  currentMtimeMs?: number;
-  lastObservedMtimeMs?: number;
+  currentSha256?: string;
+  lastObservedSha256?: string;
   error?: string;
 };
 
@@ -366,4 +366,4 @@ export type FileSnapshot = {
   source: "read" | "write" | "edit";
 };
 
-export type ReadSnapshotStore = Map<string, FileSnapshot>;
+export type FileSnapshotStore = Map<string, FileSnapshot>;

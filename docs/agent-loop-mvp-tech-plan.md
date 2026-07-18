@@ -367,7 +367,8 @@ runtime 内部可以继续使用 `readFile`、`writeFile`、`ReadFileRawResult` 
 - 单行超过 262144 bytes 时明确说明行分页无法读取该行。
 - 非空文件的 `offset > totalLines` 返回失败；空文件只有无分页参数的 Read 成功。
 - 每次成功 Read 都记录 sha256、mtime 和 `source=read`，不累计分页覆盖范围。
-- 任意成功 Read（包括分页 Read）都能解锁 Edit；sha256 供 Write 判断版本是否变化。
+- 任意成功 Read（包括分页 Read）都会建立当前文件的已知版本；sha256 供后续 Write
+  和 Edit 判断磁盘内容是否仍与该版本一致。
 
 raw result：
 
@@ -404,12 +405,17 @@ export type ReadFileRawResult = {
 - 拒绝路径逃逸 workspace。
 - 如果目标文件不存在，允许创建文件。
 - 如果目标文件已存在，必须满足：
-  - 当前 run 内曾经成功 `Read` 过同一个 normalized absolute path。
-  - 当前文件 sha256 与最近一次 successful `Read` snapshot 一致。
-- 如果目标文件已存在但没有 read snapshot，拒绝写入，并通过 observation 提醒模型先调用 `Read`。
-- 如果目标文件在 `Read` 后发生变化，拒绝写入，并通过 observation 提醒模型重新读取。
-- 自动创建父目录可以暂不支持，第一版更保守：父目录不存在则失败。
+  - 当前 runtime 内存在同一个 normalized absolute path 的已知版本；首次接触既有文件时
+    由成功 `Read` 建立，后续成功 `Write` / `Edit` 会刷新。
+  - 当前文件 sha256 与最近一次已知版本一致。
+- 如果目标文件已存在但没有已知版本，拒绝写入，并通过 observation 提醒模型先调用
+  `Read`。
+- 如果目标文件内容在最近一次成功 Read/Write/Edit 后发生变化，拒绝写入，并通过
+  observation 提醒模型重新读取。
+- 父目录不存在时自动递归创建；父路径组件不是目录时 fast-fail。
 - 写入成功后返回 old sha256、new sha256、写入字节数。
+- 写入成功后刷新 sha256、mtime 并记录 `source=write`。该快照是准确的已知版本，不会
+  额外锁住后续 Edit。
 
 raw result：
 
@@ -423,25 +429,30 @@ export type WriteFileRawResult = {
   newSha256?: string;
   requiredReadBeforeWrite?: boolean;
   currentSha256?: string;
-  lastReadSha256?: string;
+  lastObservedSha256?: string;
   error?: string;
 };
 ```
 
 ### Edit
 
-Edit 是精确字符串替换工具，不消费 Read 返回的正文作为待修改内容。执行时重新读取
-目标文件全文，并按以下顺序 fast-fail：
+Edit 是精确字符串替换工具，不消费 Read 返回的正文快照作为待修改内容。执行时重新
+读取目标文件全文，并按以下顺序 fast-fail：
 
-- 目标文件必须至少有一次成功 Read；分页 Read 即可，不要求读取全文。
-- 最近快照若来自 Write，则必须重新 Read 后才能 Edit。
-- 当前文件 mtime 晚于最近一次成功 Read/Edit 的 mtime 时拒绝修改。
+- 普通精确替换要求当前 runtime 内存在目标路径的已知版本。首次直接 Edit 既有文件时
+  必须先 Read；分页 Read 即可，不要求读取全文。
+- 成功 Read、Write、Edit 建立的已知版本具有相同授权能力；`source` 只记录来源，不参与
+  是否允许 Edit 的判断。
+- 当前文件 sha256 与已知版本不一致时拒绝修改并要求重新 Read。相同内容即使 mtime
+  变化也不构成陈旧版本。
 - `old_string` 必须存在；匹配多处且 `replace_all=false` 时拒绝修改。
 - `replace_all=true` 使用全量精确替换，否则替换唯一匹配。
-- 写入前再次检查 mtime，避免覆盖 Edit 准备期间出现的较新版本。
+- 写入前再次读取并比较 sha256，避免覆盖 Edit 准备期间出现的其他内容版本。
 
-成功 Edit 更新 sha256、mtime 和 `source=edit`，因此后续 Edit 可以连续执行。分页
-覆盖范围不保存、不合并，也不参与 Edit 授权。
+成功 Edit 更新 sha256、mtime 和 `source=edit`，因此后续 Edit 可以连续执行；成功
+Write 后也可以直接 Edit。新 runtime（包括恢复 session 后重新创建 runtime）不会从历史
+消息恢复这份内存版本状态，因此没有当前快照时仍要求 Read。分页覆盖范围不保存、不合并，
+也不参与 Edit 授权。
 
 ## EventSink 与 EventLog
 

@@ -855,7 +855,7 @@ describe("Edit tool", () => {
     }
   });
 
-  test("requires another Read after Write before Edit", async () => {
+  test("allows Edit after Write refreshes the known version", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
 
     try {
@@ -884,17 +884,126 @@ describe("Edit tool", () => {
           new_string: "delta",
         },
       });
-      expect(edit.ok).toBe(false);
-      expect(
-        "requiredReadBeforeEdit" in edit ? edit.requiredReadBeforeEdit : false,
-      ).toBe(true);
-      expect(await readFile(filePath, "utf8")).toBe("alpha\nbeta\ngamma\n");
+      expect(edit.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("alpha\ndelta\ngamma\n");
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 
-  test("rejects Edit when file mtime is newer than the Read snapshot", async () => {
+  test("allows Edit immediately after Write creates a file", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const filePath = path.join(workspace, "notes.txt");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      const write = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: { file_path: "notes.txt", content: "alpha\nbeta\n" },
+      });
+      expect(write.ok).toBe(true);
+
+      const edit = await tooling.runtime.execute({
+        providerToolCallId: "call_2",
+        name: "Edit",
+        args: {
+          file_path: "notes.txt",
+          old_string: "beta",
+          new_string: "delta",
+        },
+      });
+
+      expect(edit.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("alpha\ndelta\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("rejects Edit after a file written by Write changes externally", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const filePath = path.join(workspace, "notes.txt");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      const write = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: { file_path: "notes.txt", content: "alpha\nbeta\n" },
+      });
+      expect(write.ok).toBe(true);
+      const snapshot = tooling.snapshots.get(filePath);
+      if (snapshot === undefined) {
+        throw new Error("Write did not record a file snapshot.");
+      }
+
+      await writeFile(filePath, "alpha\nbeta\nexternal\n", "utf8");
+      const earlier = new Date(snapshot.mtimeMs - 60_000);
+      await utimes(filePath, earlier, earlier);
+      expect((await stat(filePath)).mtimeMs).toBeLessThan(snapshot.mtimeMs);
+
+      const edit = await tooling.runtime.execute({
+        providerToolCallId: "call_2",
+        name: "Edit",
+        args: {
+          file_path: "notes.txt",
+          old_string: "beta",
+          new_string: "delta",
+        },
+      });
+
+      expect(edit.ok).toBe(false);
+      expect("currentSha256" in edit ? edit.currentSha256 : undefined).toBeString();
+      expect("lastObservedSha256" in edit ? edit.lastObservedSha256 : undefined).toBe(
+        snapshot.sha256,
+      );
+      expect("error" in edit ? edit.error : "").toBe(
+        "File changed after it was last observed. Read it again before Edit.",
+      );
+      expect(await readFile(filePath, "utf8")).toBe("alpha\nbeta\nexternal\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("requires Read when a new runtime has no snapshot from an earlier Write", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const filePath = path.join(workspace, "notes.txt");
+      const firstTooling = createDefaultTooling({ workspaceRoot: workspace });
+      const write = await firstTooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Write",
+        args: { file_path: "notes.txt", content: "alpha\nbeta\n" },
+      });
+      expect(write.ok).toBe(true);
+
+      const nextTooling = createDefaultTooling({ workspaceRoot: workspace });
+      const edit = await nextTooling.runtime.execute({
+        providerToolCallId: "call_2",
+        name: "Edit",
+        args: {
+          file_path: "notes.txt",
+          old_string: "beta",
+          new_string: "delta",
+        },
+      });
+
+      expect(edit.ok).toBe(false);
+      expect(
+        "requiredReadBeforeEdit" in edit ? edit.requiredReadBeforeEdit : false,
+      ).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("alpha\nbeta\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("rejects Edit when content changed even with an older mtime", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
 
     try {
@@ -907,9 +1016,14 @@ describe("Edit tool", () => {
         name: "Read",
         args: { file_path: "notes.txt" },
       });
+      const snapshot = tooling.snapshots.get(filePath);
+      if (snapshot === undefined) {
+        throw new Error("Read did not record a file snapshot.");
+      }
       await writeFile(filePath, "alpha\nbeta\nexternal\n", "utf8");
-      const future = new Date(Date.now() + 60_000);
-      await utimes(filePath, future, future);
+      const earlier = new Date(snapshot.mtimeMs - 60_000);
+      await utimes(filePath, earlier, earlier);
+      expect((await stat(filePath)).mtimeMs).toBeLessThan(snapshot.mtimeMs);
 
       const raw = await tooling.runtime.execute({
         providerToolCallId: "call_2",
@@ -922,8 +1036,43 @@ describe("Edit tool", () => {
       });
 
       expect(raw.ok).toBe(false);
-      expect("error" in raw ? raw.error : "").toContain("changed");
+      expect("error" in raw ? raw.error : "").toBe(
+        "File changed after it was last observed. Read it again before Edit.",
+      );
       expect(await readFile(filePath, "utf8")).toBe("alpha\nbeta\nexternal\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("allows Edit when only mtime changed after Read", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-edit-"));
+
+    try {
+      const filePath = path.join(workspace, "notes.txt");
+      await writeFile(filePath, "alpha\nbeta\n", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+
+      await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Read",
+        args: { file_path: "notes.txt" },
+      });
+      const future = new Date(Date.now() + 60_000);
+      await utimes(filePath, future, future);
+
+      const edit = await tooling.runtime.execute({
+        providerToolCallId: "call_2",
+        name: "Edit",
+        args: {
+          file_path: "notes.txt",
+          old_string: "beta",
+          new_string: "delta",
+        },
+      });
+
+      expect(edit.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("alpha\ndelta\n");
     } finally {
       await rm(workspace, { recursive: true });
     }

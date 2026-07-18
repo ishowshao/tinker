@@ -375,6 +375,9 @@ describe("system prompt", () => {
       "Write creates missing parent directories when creating a file.",
     );
     expect(prompt).toContain("A successful paginated Read is sufficient.");
+    expect(prompt).toContain(
+      "Successful Write and Edit operations establish the current version",
+    );
     expect(prompt).toContain("Use Bash to run tests");
     expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v1");
     expect(prompt).toContain(renderRecallRetirementContract());

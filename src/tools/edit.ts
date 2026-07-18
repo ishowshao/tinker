@@ -3,12 +3,12 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { ensureParentDirectory } from "./ensure-parent-directory";
-import { sha256Text } from "./hash";
+import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import { defineToolExecutor } from "./types";
 import type {
   EditFileRawResult,
-  ReadSnapshotStore,
+  FileSnapshotStore,
   ToolExecutionContext,
   ToolExecutor,
 } from "./types";
@@ -22,7 +22,7 @@ type EditArgs = {
 
 export type EditToolOptions = {
   workspaceRoot: string;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
 };
 
 export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
@@ -30,7 +30,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
     definition: {
       name: "Edit",
       description:
-        "Replace an exact string in an existing file. Exact replacement requires a prior Read; a successful paginated Read is sufficient. Set old_string='' to create a file or write to an empty file; missing parent directories are created when creating a file.",
+        "Replace an exact string in an existing file. Exact replacement requires a current version established by a successful Read, Write, or Edit; when none exists, call Read first, and a successful paginated Read is sufficient. Set old_string='' to create a file or write to an empty file; missing parent directories are created when creating a file.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -116,7 +116,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
       }
 
       const snapshot = options.snapshots.get(absolutePath);
-      if (snapshot === undefined || snapshot.source === "write") {
+      if (snapshot === undefined) {
         return {
           ok: false,
           filePath: input.file_path,
@@ -126,15 +126,14 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         };
       }
 
-      if (target.mtimeMs > snapshot.mtimeMs) {
+      if (target.sha256 !== snapshot.sha256) {
         return {
           ok: false,
           filePath: input.file_path,
           absolutePath,
-          currentMtimeMs: target.mtimeMs,
-          lastObservedMtimeMs: snapshot.mtimeMs,
-          error:
-            "File changed after it was last read or edited. Read it again before Edit.",
+          currentSha256: target.sha256,
+          lastObservedSha256: snapshot.sha256,
+          error: "File changed after it was last observed. Read it again before Edit.",
         };
       }
 
@@ -171,7 +170,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         replacementCount: input.replace_all ? replacementCount : 1,
         replaceAll: input.replace_all,
         created: false,
-        expectedMtimeMs: target.mtimeMs,
+        expectedSha256: target.sha256,
         readRequiredOnChange: true,
         snapshots: options.snapshots,
         signal: context.signal,
@@ -219,7 +218,7 @@ async function writeEmptyTarget(input: {
   absolutePath: string;
   target: TargetFileState;
   newContent: string;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
   signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   if (input.target.exists && input.target.content.length > 0) {
@@ -240,7 +239,7 @@ async function writeEmptyTarget(input: {
     replacementCount: 0,
     replaceAll: false,
     created: !input.target.exists,
-    expectedMtimeMs: input.target.exists ? input.target.mtimeMs : undefined,
+    expectedSha256: input.target.exists ? input.target.sha256 : undefined,
     readRequiredOnChange: false,
     snapshots: input.snapshots,
     signal: input.signal,
@@ -256,15 +255,15 @@ async function writeEditedContent(input: {
   replacementCount: number;
   replaceAll: boolean;
   created: boolean;
-  expectedMtimeMs?: number;
+  expectedSha256?: string;
   readRequiredOnChange: boolean;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
   signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   throwIfTurnCancelled(input.signal);
 
-  if (input.expectedMtimeMs !== undefined) {
-    const currentState = await fileMtime(input.absolutePath);
+  if (input.expectedSha256 !== undefined) {
+    const currentState = await targetFileState(input.absolutePath);
     throwIfTurnCancelled(input.signal);
 
     if (!currentState.ok) {
@@ -276,13 +275,22 @@ async function writeEditedContent(input: {
       };
     }
 
-    if (currentState.mtimeMs > input.expectedMtimeMs) {
+    if (!currentState.exists) {
       return {
         ok: false,
         filePath: input.filePath,
         absolutePath: input.absolutePath,
-        currentMtimeMs: currentState.mtimeMs,
-        lastObservedMtimeMs: input.expectedMtimeMs,
+        error: "File changed while Edit was being prepared: File does not exist.",
+      };
+    }
+
+    if (currentState.sha256 !== input.expectedSha256) {
+      return {
+        ok: false,
+        filePath: input.filePath,
+        absolutePath: input.absolutePath,
+        currentSha256: currentState.sha256,
+        lastObservedSha256: input.expectedSha256,
         error: input.readRequiredOnChange
           ? "File changed while Edit was being prepared. Read it again before Edit."
           : "File changed while Edit was being prepared. Retry Edit with the current file state.",
@@ -334,20 +342,6 @@ async function writeEditedContent(input: {
   };
 }
 
-async function fileMtime(
-  filePath: string,
-): Promise<{ ok: true; mtimeMs: number } | { ok: false; error: string }> {
-  try {
-    const info = await stat(filePath);
-    if (!info.isFile()) {
-      return { ok: false, error: "Path is not a file." };
-    }
-    return { ok: true, mtimeMs: info.mtimeMs };
-  } catch (error) {
-    return { ok: false, error: errorMessage(error) };
-  }
-}
-
 type TargetFileState =
   | { ok: true; exists: false }
   | {
@@ -367,7 +361,7 @@ async function targetFileState(
       return { ok: false, error: "Path is not a file." };
     }
 
-    const content = await readFile(absolutePath, "utf8");
+    const bytes = await readFile(absolutePath);
     const currentInfo = await stat(absolutePath);
     if (currentInfo.mtimeMs > info.mtimeMs) {
       return { ok: false, error: "File changed while it was being read." };
@@ -376,8 +370,8 @@ async function targetFileState(
     return {
       ok: true,
       exists: true,
-      content,
-      sha256: sha256Text(content),
+      content: bytes.toString("utf8"),
+      sha256: sha256Bytes(bytes),
       mtimeMs: currentInfo.mtimeMs,
     };
   } catch (error) {

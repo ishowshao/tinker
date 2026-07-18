@@ -19,7 +19,7 @@ import type {
   SessionDisposeReason,
 } from "../agent/runtime-session";
 import type {
-  ReadSnapshotStore,
+  FileSnapshotStore,
   ToolDefinition,
   ToolExecutionContext,
   ToolExecutor,
@@ -106,7 +106,7 @@ export class ToolRuntime {
 export type DefaultTooling = {
   registry: ToolRegistry;
   runtime: ToolRuntime;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
   bashState: BashToolingState;
   taskManager: ShellTaskManager;
   dispose(reason?: SessionDisposeReason["type"]): Promise<void>;
@@ -129,7 +129,7 @@ export function createDefaultTooling(options: {
   skillCatalog?: SkillCatalogSnapshot;
   skillCoordinator?: SkillActivationCoordinator;
 }): DefaultTooling {
-  const snapshots: ReadSnapshotStore = new Map();
+  const snapshots: FileSnapshotStore = new Map();
   const registry = new ToolRegistry();
   const runtimeSession = options.runtimeSession;
   const cwdState = createCwdState(options.workspaceRoot);

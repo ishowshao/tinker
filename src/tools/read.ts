@@ -5,8 +5,8 @@ import { sha256Bytes } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import { defineToolExecutor } from "./types";
 import type {
+  FileSnapshotStore,
   ReadFileRawResult,
-  ReadSnapshotStore,
   ToolExecutionContext,
   ToolExecutor,
 } from "./types";
@@ -19,7 +19,7 @@ type ReadArgs = {
 
 export type ReadToolOptions = {
   workspaceRoot: string;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
   maxContentBytes?: number;
 };
 

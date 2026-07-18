@@ -7,7 +7,7 @@ import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
 import { defineToolExecutor } from "./types";
 import type {
-  ReadSnapshotStore,
+  FileSnapshotStore,
   ToolExecutionContext,
   ToolExecutor,
   WriteFileRawResult,
@@ -20,7 +20,7 @@ type WriteArgs = {
 
 export type WriteToolOptions = {
   workspaceRoot: string;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
 };
 
 export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor {
@@ -108,9 +108,9 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
             filePath: input.file_path,
             absolutePath,
             currentSha256,
-            lastReadSha256: lastSnapshot.sha256,
+            lastObservedSha256: lastSnapshot.sha256,
             error:
-              "File changed after the last successful Read. Read it again before Write.",
+              "File changed after it was last observed. Read it again before Write.",
           };
         }
 

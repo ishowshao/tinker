@@ -243,11 +243,11 @@ newSha256=bbbb...
 Write failed for src/app.ts: Existing file must be read before Write. Call Read on this file before trying Write again.
 ```
 
-文件在上次 Read 后发生变化时，executor 自己的错误已经包含重新读取指引，因此不会
+文件在最近一次已知版本后发生变化时，executor 自己的错误已经包含重新读取指引，因此不会
 再追加上述固定提示：
 
 ```text
-Write failed for src/app.ts: File changed after the last successful Read. Read it again before Write.
+Write failed for src/app.ts: File changed after it was last observed. Read it again before Write.
 ```
 
 其他失败也不会追加该指引：
@@ -270,20 +270,22 @@ oldSha256=aaaa...
 newSha256=bbbb...
 ```
 
-目标文件必须至少成功 Read 一次；分页 Read 足以解锁 Edit：
+普通精确替换需要当前 runtime 持有目标文件的已知版本。首次直接 Edit 既有文件时必须
+先成功 Read；分页 Read 足以建立该版本：
 
 ```text
 Edit failed for src/app.ts: File must be read before Edit. Call Read on this file before trying Edit again.
 ```
 
-Edit 不依赖 Read 返回的正文快照，而是在执行时重新读取磁盘全文，再检查当前 mtime
-是否晚于上一次成功 Read/Edit 记录的 mtime。文件已变化时要求重新 Read。写入前还会
-再次检查 mtime，减少准备替换期间的并发覆盖窗口。
+Edit 不依赖 Read 返回的正文快照，而是在执行时重新读取磁盘全文，再检查当前 sha256
+是否等于最近一次成功 Read/Write/Edit 建立的已知版本。文件内容已变化时要求重新 Read；
+只有 mtime 变化而内容相同仍可继续。写入前还会再次读取并比较 sha256，减少准备替换期间
+覆盖其他内容版本的窗口。
 
-成功 Edit 更新 sha256、mtime 并记录 `source=edit`，因此连续 Edit 保持授权；成功
-Write 记录 `source=write`，下一次 Edit 必须重新 Read。旧字符串找不到、不唯一但未
-启用 `replace_all`、参数错误或路径错误，也使用 `Edit failed for <path>: <error>`，
-但不附加固定 Read 指引。
+成功 Write 和 Edit 都会更新 sha256、mtime 及各自的 `source`，因此 `Write -> Edit`
+和连续 Edit 都保持授权；`source` 只记录版本来源。新 runtime 不从历史消息恢复内存版本
+状态，没有快照时仍要求 Read。旧字符串找不到、不唯一但未启用 `replace_all`、参数错误
+或路径错误，也使用 `Edit failed for <path>: <error>`，但不附加固定 Read 指引。
 
 ### 4.6 Bash
 

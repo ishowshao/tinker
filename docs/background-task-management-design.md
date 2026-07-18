@@ -650,7 +650,7 @@ manager-owned task。
 type DefaultTooling = {
   registry: ToolRegistry;
   runtime: ToolRuntime;
-  snapshots: ReadSnapshotStore;
+  snapshots: FileSnapshotStore;
   bashState: BashToolingState;
   dispose(): Promise<void>;
 };
