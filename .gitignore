@@ -3,5 +3,4 @@
 node_modules/
 .tinker/
 .data/
-.mcp.json
 .playwright-mcp/
