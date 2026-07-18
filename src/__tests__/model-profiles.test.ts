@@ -48,6 +48,7 @@ describe("parseModelProfiles", () => {
       contextWindowTokens: 128000,
       maxSupportedOutputTokens: 8192,
       includeReasoningContent: false,
+      stream: true,
     });
 
     const gpt4o = result.profiles.get("gpt-4o");
@@ -105,6 +106,43 @@ describe("parseModelProfiles", () => {
     });
     expect(() => parseModelProfiles(json, "/test/models.json")).toThrow(
       '"apiKey" must be a non-empty string',
+    );
+  });
+
+  test("parses an explicit stream=false", () => {
+    const json = JSON.stringify({
+      default: "deepseek",
+      profiles: {
+        deepseek: {
+          model: "deepseek-chat",
+          apiBase: "https://api.deepseek.com/v1",
+          apiKey: "sk-xxx",
+          contextWindowTokens: 128000,
+          maxSupportedOutputTokens: 8192,
+          stream: false,
+        },
+      },
+    });
+    const result = parseModelProfiles(json, "/test/models.json");
+    expect(result.profiles.get("deepseek")?.stream).toBe(false);
+  });
+
+  test("rejects a non-boolean stream flag", () => {
+    const json = JSON.stringify({
+      default: "deepseek",
+      profiles: {
+        deepseek: {
+          model: "deepseek-chat",
+          apiBase: "https://api.deepseek.com/v1",
+          apiKey: "sk-xxx",
+          contextWindowTokens: 128000,
+          maxSupportedOutputTokens: 8192,
+          stream: "no",
+        },
+      },
+    });
+    expect(() => parseModelProfiles(json, "/test/models.json")).toThrow(
+      '"stream" must be a boolean',
     );
   });
 

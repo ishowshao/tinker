@@ -128,6 +128,10 @@ describe("runtime compatibility boundary", () => {
     expect(second.requestConfigHash).toBe(first.requestConfigHash);
     expect(second.toolSchemaHash).toBe(first.toolSchemaHash);
     expect(
+      openAiClient({ stream: false, fetch: stubFetch() }).prepare(input)
+        .requestConfigHash,
+    ).toBe(first.requestConfigHash);
+    expect(
       openAiClient({ model: "other-model" }).prepare(input).requestConfigHash,
     ).not.toBe(first.requestConfigHash);
     expect(

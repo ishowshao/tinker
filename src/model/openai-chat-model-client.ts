@@ -1,5 +1,8 @@
 import OpenAI from "openai";
-import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions";
+import type {
+  ChatCompletionCreateParamsNonStreaming,
+  ChatCompletionCreateParamsStreaming,
+} from "openai/resources/chat/completions";
 import type { AssistantMessage } from "../agent/types";
 import type { ModelContextBudget } from "./model-context-profile";
 import type {
@@ -16,6 +19,7 @@ import {
   toOpenAIChatMessages,
   toOpenAIChatTools,
 } from "./openai-chat-mapping";
+import { accumulateOpenAIChatCompletionChunks } from "./openai-chat-stream";
 import {
   canonicalJsonValue,
   sha256,
@@ -33,6 +37,7 @@ export class OpenAIChatModelClient implements ModelClient {
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
   private readonly provider: string;
+  private readonly stream: boolean;
 
   constructor(
     private readonly options: {
@@ -42,11 +47,13 @@ export class OpenAIChatModelClient implements ModelClient {
       includeReasoningContent?: boolean;
       model: string;
       providerName?: string;
+      stream?: boolean;
       timeoutMs?: number;
       fetch?: typeof fetch;
     },
   ) {
     this.provider = options.providerName ?? "openai-compatible";
+    this.stream = options.stream ?? true;
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -128,13 +135,37 @@ export class OpenAIChatModelClient implements ModelClient {
       );
     }
 
-    const response = await this.client.chat.completions.create(
-      prepared.payload as ChatCompletionCreateParamsNonStreaming,
-      { signal: options.signal },
-    );
+    const response = this.stream
+      ? await this.requestStreaming(prepared, options.signal)
+      : await this.client.chat.completions.create(
+          prepared.payload as ChatCompletionCreateParamsNonStreaming,
+          { signal: options.signal },
+        );
 
     return fromOpenAIChatCompletion(response, {
       identity: options.identity,
+      provider: this.provider,
+      model: this.options.model,
+    });
+  }
+
+  private async requestStreaming(
+    prepared: PreparedModelRequest,
+    signal: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    // The prepared payload is frozen and hashed without stream flags; the
+    // streaming transport is layered on at request time only.
+    const payload: ChatCompletionCreateParamsStreaming = {
+      ...(prepared.payload as ChatCompletionCreateParamsNonStreaming),
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    const stream = await this.client.chat.completions.create(payload, { signal });
+    const chunks: unknown[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    return accumulateOpenAIChatCompletionChunks(chunks, {
       provider: this.provider,
       model: this.options.model,
     });

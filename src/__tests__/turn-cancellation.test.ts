@@ -133,6 +133,7 @@ describe("turn cancellation", () => {
       apiKey: "test-key",
       model: "test-model",
       contextBudget: TEST_CONTEXT_BUDGET,
+      stream: false,
       fetch: fetchImpl,
     });
 
@@ -145,6 +146,117 @@ describe("turn cancellation", () => {
     expect(receivedSignal).toBeDefined();
     controller.abort(new TurnCancelledError("user"));
     expect(receivedSignal?.aborted).toBe(true);
+  });
+
+  test("cancels a streaming OpenAI request after receiving a partial chunk", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-cancel-openai-stream-"),
+    );
+    const controller = new AbortController();
+    let publishPartialChunk!: () => void;
+    const partialChunkPublished = new Promise<void>((resolve) => {
+      publishPartialChunk = resolve;
+    });
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal === null || signal === undefined) {
+        throw new Error("Expected an OpenAI request signal.");
+      }
+
+      const encoder = new TextEncoder();
+      let sent = false;
+      const body = new ReadableStream<Uint8Array>({
+        pull(streamController) {
+          if (sent) {
+            return;
+          }
+          sent = true;
+          streamController.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({
+                id: "chatcmpl_partial",
+                object: "chat.completion.chunk",
+                created: 0,
+                model: "test-model",
+                choices: [
+                  {
+                    index: 0,
+                    delta: { role: "assistant", content: "partial" },
+                    finish_reason: null,
+                  },
+                ],
+              })}\n\n`,
+            ),
+          );
+          publishPartialChunk();
+          signal.addEventListener(
+            "abort",
+            () => streamController.error(signal.reason),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as typeof fetch;
+    const model = new OpenAIChatModelClient({
+      apiKey: "test-key",
+      model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
+      fetch: fetchImpl,
+    });
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const runtimeSession = identity.runtimeSession;
+    const turn = identity.turn;
+    const tooling = createDefaultTooling({
+      workspaceRoot: workspace,
+      runtimeSession,
+      historyReader: createTestHistoryReader(runtimeSession.sessionId),
+    });
+
+    try {
+      const ledger = new InMemorySessionLedger({
+        sessionId: runtimeSession.sessionId,
+        systemPrompt: "system",
+        idFactory: deterministicIdFactory("cancel-openai-stream"),
+        initialToolDefinitions: tooling.registry.definitions(),
+      });
+      const pendingTurn = ledger.beginTurn({ turn, userPrompt: "wait" });
+      const pending = runAgent({
+        ledger: pendingTurn.agent,
+        maxIterations: 2,
+        model,
+        contextMeter: createTestContextMeter(),
+        tools: tooling.registry,
+        toolRuntime: tooling.runtime,
+        observationBuilder: new ObservationBuilder(),
+        runtimeSession,
+        turn,
+        signal: controller.signal,
+      });
+
+      await partialChunkPublished;
+      controller.abort(new TurnCancelledError("user"));
+      const result = await pending;
+
+      expect(result.status).toBe("cancelled");
+      expect(result.status === "cancelled" ? result.cancellation.phase : "").toBe(
+        "model_request",
+      );
+      expect(pendingTurn.projectedMessageCount()).toBe(2);
+      pendingTurn.finish(result);
+      expect(events.events.map((event) => event.type)).toEqual([
+        "agent.iteration.started",
+        "context.usage.updated",
+        "model.request.started",
+      ]);
+    } finally {
+      await tooling.dispose();
+      await rm(workspace, { recursive: true });
+    }
   });
 
   test("cancels an in-flight model request without recording a failure", async () => {

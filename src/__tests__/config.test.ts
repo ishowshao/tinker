@@ -150,6 +150,30 @@ describe("runner config", () => {
     });
   });
 
+  test("streams by default", () => {
+    withEnv("TINKER_STREAM", undefined, () => {
+      expect(readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).stream).toBe(
+        true,
+      );
+    });
+  });
+
+  test("disables streaming with env flag", () => {
+    withEnv("TINKER_STREAM", "false", () => {
+      expect(readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE }).stream).toBe(
+        false,
+      );
+    });
+  });
+
+  test("rejects invalid stream env flag", () => {
+    withEnv("TINKER_STREAM", "maybe", () => {
+      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
+        "TINKER_STREAM must be one of",
+      );
+    });
+  });
+
   test("reads max iterations from the new environment variable", () => {
     withEnv("TINKER_MAX_ITERATIONS", "7", () => {
       expect(
@@ -215,6 +239,28 @@ describe("profile resolution", () => {
     });
   });
 
+  test("passes the stream flag from the resolved profile", () => {
+    const profiles = parseModelProfiles(
+      JSON.stringify({
+        default: "legacy",
+        profiles: {
+          legacy: {
+            model: "legacy-model",
+            apiBase: "https://legacy.example/v1",
+            apiKey: "sk-legacy",
+            contextWindowTokens: 256 * 1024,
+            maxSupportedOutputTokens: 64 * 1024,
+            stream: false,
+          },
+        },
+      }),
+      "/test/models.json",
+    );
+
+    expect(readRunnerConfig({}, TEST_PROFILES).stream).toBe(true);
+    expect(readRunnerConfig({}, profiles).stream).toBe(false);
+  });
+
   test("falls back to env vars when profiles is undefined", () => {
     withEnvValues(
       {
@@ -242,6 +288,7 @@ describe("model client config", () => {
     const config = {
       modelName: "test-model",
       includeReasoningContent: false,
+      stream: true,
       contextBudget: readRunnerConfig({
         modelName: "test-model",
         contextProfile: TEST_CONTEXT_PROFILE,

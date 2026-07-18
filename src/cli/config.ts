@@ -20,6 +20,7 @@ import {
 
 export const DEFAULT_MAX_ITERATIONS = 512;
 export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
+export const DEFAULT_STREAM = true;
 
 export const RUNTIME_INSTRUCTIONS = (
   workspaceRoot: string,
@@ -69,6 +70,7 @@ export type RunnerConfig = {
   apiBase?: string;
   maxIterations: number;
   includeReasoningContent: boolean;
+  stream: boolean;
   contextProfile: ModelContextProfile;
   contextBudget: ModelContextBudget;
   profileName?: string;
@@ -122,6 +124,7 @@ function runnerConfigFromProfile(
         "TINKER_MAX_ITERATIONS",
       ),
     includeReasoningContent: profile.includeReasoningContent,
+    stream: profile.stream,
     contextProfile,
     contextBudget,
     profileName: profile.name,
@@ -155,6 +158,9 @@ function runnerConfigFromEnv(overrides: RunnerConfigOverrides): RunnerConfig {
         DEFAULT_INCLUDE_REASONING_CONTENT,
         "TINKER_INCLUDE_REASONING_CONTENT",
       ),
+    stream:
+      overrides.stream ??
+      parseBoolean(process.env.TINKER_STREAM, DEFAULT_STREAM, "TINKER_STREAM"),
     contextProfile,
     contextBudget,
   };
@@ -163,7 +169,12 @@ function runnerConfigFromEnv(overrides: RunnerConfigOverrides): RunnerConfig {
 export function createModelClientFromEnv(
   config: Pick<
     RunnerConfig,
-    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+    | "modelName"
+    | "includeReasoningContent"
+    | "stream"
+    | "contextBudget"
+    | "apiKey"
+    | "apiBase"
   >,
 ): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
@@ -182,6 +193,7 @@ export function createModelClientFromEnv(
     baseURL,
     includeReasoningContent: config.includeReasoningContent,
     model: config.modelName,
+    stream: config.stream,
     contextBudget: config.contextBudget,
   });
 }
@@ -189,7 +201,12 @@ export function createModelClientFromEnv(
 export function createRunnerModelClient(
   config: Pick<
     RunnerConfig,
-    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+    | "modelName"
+    | "includeReasoningContent"
+    | "stream"
+    | "contextBudget"
+    | "apiKey"
+    | "apiBase"
   >,
   injected?: ModelClient,
 ): ModelClient {
@@ -199,7 +216,12 @@ export function createRunnerModelClient(
 export function createWebFetchRefinerFromEnv(
   config: Pick<
     RunnerConfig,
-    "modelName" | "includeReasoningContent" | "contextBudget" | "apiKey" | "apiBase"
+    | "modelName"
+    | "includeReasoningContent"
+    | "stream"
+    | "contextBudget"
+    | "apiKey"
+    | "apiBase"
   >,
 ): Refiner {
   return createModelRefiner({

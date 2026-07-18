@@ -13,6 +13,7 @@ export type ModelProfile = {
   readonly contextWindowTokens: number;
   readonly maxSupportedOutputTokens: number;
   readonly includeReasoningContent: boolean;
+  readonly stream: boolean;
 };
 
 export type ModelProfiles = {
@@ -243,6 +244,11 @@ function parseProfile(
           `${where}: "includeReasoningContent"`,
         );
 
+  const stream =
+    value.stream === undefined
+      ? true
+      : parseBoolean(value.stream, `${where}: "stream"`);
+
   createModelContextProfile({
     contextWindowTokens,
     maxSupportedOutputTokens,
@@ -256,6 +262,7 @@ function parseProfile(
     contextWindowTokens,
     maxSupportedOutputTokens,
     includeReasoningContent,
+    stream,
   });
 }
 

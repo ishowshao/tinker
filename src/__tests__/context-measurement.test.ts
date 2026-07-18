@@ -33,6 +33,7 @@ describe("prepared model requests", () => {
       apiKey: "test-key",
       model: "test-model",
       contextBudget: TEST_CONTEXT_BUDGET,
+      stream: false,
       fetch: fetchImpl,
     });
     const input: ModelRequestInput = {
