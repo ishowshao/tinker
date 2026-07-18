@@ -2,7 +2,7 @@ import type { AgentMessage } from "../agent/types";
 import { stableJsonStringify } from "../model/model-request-preflight";
 import { formatMessageSource } from "./context-source";
 import type { CompiledRevisionContext, SwapOverride } from "./context-revision";
-import type { StoredContextSurfaceV6 } from "./context-surface";
+import type { StoredContextSurfaceV7 } from "./context-surface";
 import {
   contentHash,
   type CanonicalMessageRecord,
@@ -22,7 +22,7 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
-    surface: StoredContextSurfaceV6,
+    surface: StoredContextSurfaceV7,
   ): void {
     const byMessageId = overrideMap(overrides, "Active");
     this.validate(compiled, canonical, byMessageId, surface);
@@ -32,7 +32,7 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: readonly SwapOverride[],
-    surface: StoredContextSurfaceV6,
+    surface: StoredContextSurfaceV7,
   ): void {
     const byMessageId = overrideMap(overrides, "Prospective");
     this.validate(compiled, canonical, byMessageId, surface);
@@ -42,20 +42,68 @@ export class CompiledContextValidator {
     compiled: CompiledRevisionContext,
     canonical: ProtocolContextView,
     overrides: ReadonlyMap<string, SwapOverride>,
-    surface: StoredContextSurfaceV6,
+    surface: StoredContextSurfaceV7,
   ): void {
     if (compiled.sessionId !== canonical.sessionId) {
       fail("Compiled context belongs to another session.");
     }
-    if (compiled.entries.length !== canonical.messages.length) {
-      fail("Compiled context changed the canonical message count.");
+    const keepFromOrdinal = compiled.manifest.keepFromOrdinal;
+    if (
+      !Number.isSafeInteger(keepFromOrdinal) ||
+      keepFromOrdinal < 1 ||
+      keepFromOrdinal > canonical.messages.length
+    ) {
+      fail("Compiled context keep boundary is invalid.");
+    }
+    const activeRecords =
+      keepFromOrdinal === 1
+        ? canonical.messages
+        : [
+            requireItem(canonical.messages, 0, "canonical system message"),
+            ...canonical.messages.slice(keepFromOrdinal - 1),
+          ];
+    const activeFrames =
+      keepFromOrdinal === 1
+        ? canonical.frames
+        : [
+            requireItem(canonical.frames, 0, "canonical system frame"),
+            ...canonical.frames.filter(
+              (frame) => frame.firstOrdinal >= keepFromOrdinal,
+            ),
+          ];
+    if (keepFromOrdinal > 1) {
+      const boundaryMessage = canonical.messages[keepFromOrdinal - 1];
+      const boundaryFrame = canonical.frames.find(
+        (frame) => frame.firstOrdinal === keepFromOrdinal,
+      );
+      if (
+        boundaryMessage?.ordinal !== keepFromOrdinal ||
+        boundaryMessage.role !== "user" ||
+        boundaryFrame?.kind !== "user" ||
+        boundaryFrame.state !== "closed" ||
+        boundaryFrame.lastOrdinal !== keepFromOrdinal
+      ) {
+        fail("Compiled context keep boundary does not start a closed user frame.");
+      }
+    }
+    if (compiled.entries.length !== activeRecords.length) {
+      fail("Compiled context does not match the active message projection.");
     }
     if (
       compiled.canonicalThroughOrdinal !== canonical.messages.length ||
-      compiled.manifest.frameCount !== canonical.frames.length ||
-      compiled.manifest.messageCount !== compiled.entries.length
+      compiled.manifest.canonicalFrameCount !== canonical.frames.length ||
+      compiled.manifest.canonicalMessageCount !== canonical.messages.length ||
+      compiled.manifest.activeFrameCount !== activeFrames.length ||
+      compiled.manifest.activeMessageCount !== compiled.entries.length
     ) {
       fail("Compiled context manifest counts do not match canonical history.");
+    }
+    if (overrides.size > 0) {
+      for (const override of overrides.values()) {
+        if (override.ordinal < keepFromOrdinal) {
+          fail("Compiled context contains an override before its keep boundary.");
+        }
+      }
     }
 
     const seenFrames = new Set<string>();
@@ -65,7 +113,7 @@ export class CompiledContextValidator {
 
     for (let index = 0; index < compiled.entries.length; index += 1) {
       const entry = requireItem(compiled.entries, index, "compiled entry");
-      const record = requireItem(canonical.messages, index, "canonical message");
+      const record = requireItem(activeRecords, index, "active canonical message");
       if (
         entry.frameId !== record.frameId ||
         entry.messageId !== record.messageId ||
@@ -117,8 +165,11 @@ export class CompiledContextValidator {
       }
     }
 
-    if (seenFrames.size !== canonical.frames.length) {
-      fail("Compiled entries do not preserve every protocol frame.");
+    if (
+      seenFrames.size !== activeFrames.length ||
+      activeFrames.some((frame) => !seenFrames.has(frame.frameId))
+    ) {
+      fail("Compiled entries do not preserve every active protocol frame.");
     }
     if (consumedOverrides.size !== overrides.size) {
       fail("A prospective override does not reference canonical history.");

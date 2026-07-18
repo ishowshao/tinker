@@ -45,7 +45,10 @@ bun run tinker run "explain the project structure"
   paths must remain inside the workspace; absolute paths may point outside it. Use
   the keyboard or mouse wheel to scroll and press `Esc` to close the viewer.
 - `/status` — Show session and context details.
-- `/compact` — Deterministically compact eligible historical tool output while the session is idle.
+- `/compact` — Deterministically compact eligible historical tool output while the
+  session is idle.
+- `/compact retire` — Retire a complete cold history prefix from the active request;
+  the original history remains available through `Recall`.
 - `/model [profile-name]` — Choose a model profile for a new session.
 - `/resume [session-id]` — Choose or directly resume a stored session.
 - `/session delete <session-id> --confirm` — Delete a stored session.

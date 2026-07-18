@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 6;
+export const SESSION_SCHEMA_VERSION = 7;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 6),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 7),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -205,6 +205,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       session_id TEXT NOT NULL,
       system_prompt TEXT NOT NULL CHECK (length(system_prompt) > 0),
       system_prompt_sha256 TEXT NOT NULL CHECK (length(system_prompt_sha256) = 64),
+      recall_contract_version TEXT NOT NULL CHECK (length(recall_contract_version) BETWEEN 1 AND 64),
       project_instruction_json TEXT CHECK (project_instruction_json IS NULL OR json_valid(project_instruction_json)),
       tool_definitions_json TEXT NOT NULL CHECK (json_valid(tool_definitions_json)),
       tool_definitions_sha256 TEXT NOT NULL CHECK (length(tool_definitions_sha256) = 64),
@@ -225,20 +226,24 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       session_id TEXT NOT NULL,
       revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
       parent_revision_id TEXT,
-      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only', 'surface_refresh')),
+      kind TEXT NOT NULL CHECK (kind IN ('initial_full', 'swap_only', 'surface_refresh', 'prefix_retirement')),
       surface_id TEXT NOT NULL,
       surface_sha256 TEXT NOT NULL CHECK (length(surface_sha256) = 64),
-      keep_from_ordinal INTEGER NOT NULL CHECK (keep_from_ordinal = 1),
+      keep_from_ordinal INTEGER NOT NULL CHECK (keep_from_ordinal >= 1),
       source_through_ordinal INTEGER NOT NULL CHECK (source_through_ordinal >= 1),
       added_override_count INTEGER NOT NULL CHECK (added_override_count >= 0),
-      total_override_count INTEGER NOT NULL CHECK (total_override_count >= 0),
-      override_manifest_sha256 TEXT NOT NULL CHECK (length(override_manifest_sha256) = 64),
+      active_override_count INTEGER NOT NULL CHECK (active_override_count >= 0),
+      active_override_manifest_sha256 TEXT NOT NULL CHECK (length(active_override_manifest_sha256) = 64),
       canonical_sequence_sha256 TEXT NOT NULL CHECK (length(canonical_sequence_sha256) = 64),
       rendered_message_sha256 TEXT NOT NULL CHECK (length(rendered_message_sha256) = 64),
       policy_version TEXT,
       renderer_format TEXT,
       plan_sha256 TEXT CHECK (plan_sha256 IS NULL OR length(plan_sha256) = 64),
       change_manifest_sha256 TEXT CHECK (change_manifest_sha256 IS NULL OR length(change_manifest_sha256) = 64),
+      retired_through_ordinal INTEGER CHECK (retired_through_ordinal IS NULL OR retired_through_ordinal >= 2),
+      retired_turn_count INTEGER CHECK (retired_turn_count IS NULL OR retired_turn_count >= 1),
+      retired_frame_count INTEGER CHECK (retired_frame_count IS NULL OR retired_frame_count >= 1),
+      retired_message_count INTEGER CHECK (retired_message_count IS NULL OR retired_message_count >= 1),
       created_at TEXT NOT NULL,
       UNIQUE (session_id, revision_number),
       FOREIGN KEY (session_id) REFERENCES session_meta(session_id),
@@ -247,16 +252,28 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       CHECK (
         (kind = 'initial_full' AND revision_number = 1 AND parent_revision_id IS NULL AND
           source_through_ordinal = 1 AND added_override_count = 0 AND
-          total_override_count = 0 AND policy_version IS NULL AND
-          renderer_format IS NULL AND plan_sha256 IS NULL AND change_manifest_sha256 IS NULL) OR
+          active_override_count = 0 AND policy_version IS NULL AND
+          renderer_format IS NULL AND plan_sha256 IS NULL AND change_manifest_sha256 IS NULL AND
+          retired_through_ordinal IS NULL AND retired_turn_count IS NULL AND
+          retired_frame_count IS NULL AND retired_message_count IS NULL) OR
         (kind = 'swap_only' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
-          added_override_count >= 1 AND total_override_count >= added_override_count AND
+          added_override_count >= 1 AND active_override_count >= added_override_count AND
           policy_version = 'swap-only-v1' AND
           renderer_format = 'swap-observation-v1' AND plan_sha256 IS NOT NULL AND
-          change_manifest_sha256 IS NULL) OR
+          change_manifest_sha256 IS NULL AND retired_through_ordinal IS NULL AND
+          retired_turn_count IS NULL AND retired_frame_count IS NULL AND
+          retired_message_count IS NULL) OR
         (kind = 'surface_refresh' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
           added_override_count = 0 AND policy_version IS NULL AND renderer_format IS NULL AND
-          plan_sha256 IS NULL AND change_manifest_sha256 IS NOT NULL)
+          plan_sha256 IS NULL AND change_manifest_sha256 IS NOT NULL AND
+          retired_through_ordinal IS NULL AND retired_turn_count IS NULL AND
+          retired_frame_count IS NULL AND retired_message_count IS NULL) OR
+        (kind = 'prefix_retirement' AND revision_number >= 2 AND parent_revision_id IS NOT NULL AND
+          keep_from_ordinal > 1 AND retired_through_ordinal = keep_from_ordinal - 1 AND
+          added_override_count = 0 AND policy_version = 'recall-first-retirement-v1' AND
+          renderer_format IS NULL AND plan_sha256 IS NOT NULL AND
+          change_manifest_sha256 IS NULL AND retired_turn_count >= 1 AND
+          retired_frame_count >= 1 AND retired_message_count >= 1)
       )
     ) STRICT`,
   },
@@ -393,8 +410,11 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
             WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
           ), 0) AND
           NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'closed' AND last_ordinal = NEW.source_through_ordinal) AND
           NEW.surface_id = (SELECT surface_id FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
-          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)) OR
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.keep_from_ordinal = (SELECT keep_from_ordinal FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.active_override_count = (SELECT active_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) + NEW.added_override_count) OR
          (NEW.kind = 'surface_refresh' AND
           NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
           NEW.revision_number = 1 + COALESCE((
@@ -402,10 +422,50 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
             WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
           ), 0) AND
           NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'closed' AND last_ordinal = NEW.source_through_ordinal) AND
           NEW.surface_id <> (SELECT surface_id FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
           NEW.surface_sha256 = (SELECT surface_sha256 FROM context_surfaces WHERE surface_id = NEW.surface_id) AND
-          NEW.total_override_count = (SELECT total_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
-          NEW.override_manifest_sha256 = (SELECT override_manifest_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)))
+          NEW.keep_from_ordinal = (SELECT keep_from_ordinal FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.active_override_count = (SELECT active_override_count FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.active_override_manifest_sha256 = (SELECT active_override_manifest_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id)) OR
+         (NEW.kind = 'prefix_retirement' AND
+          NEW.parent_revision_id = (SELECT active_revision_id FROM session_meta WHERE singleton = 1) AND
+          NEW.revision_number = 1 + COALESCE((
+            SELECT revision_number FROM context_revisions
+            WHERE revision_id = NEW.parent_revision_id AND session_id = NEW.session_id
+          ), 0) AND
+          NEW.source_through_ordinal = COALESCE((SELECT MAX(ordinal) FROM messages), 0) AND
+          EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'closed' AND last_ordinal = NEW.source_through_ordinal) AND
+          NEW.surface_id = (SELECT surface_id FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.surface_sha256 = (SELECT surface_sha256 FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          NEW.keep_from_ordinal > (SELECT keep_from_ordinal FROM context_revisions WHERE revision_id = NEW.parent_revision_id) AND
+          EXISTS (
+            SELECT 1 FROM messages m
+            JOIN protocol_frames pf ON pf.frame_id = m.frame_id
+            JOIN turns t ON t.turn_id = m.turn_id
+            WHERE m.ordinal = NEW.keep_from_ordinal AND m.role = 'user'
+              AND pf.kind = 'user' AND pf.state = 'closed'
+              AND pf.first_ordinal = NEW.keep_from_ordinal
+              AND pf.last_ordinal = NEW.keep_from_ordinal
+              AND t.status <> 'open'
+          ) AND
+          EXISTS (
+            SELECT 1 FROM messages m
+            JOIN protocol_frames pf ON pf.frame_id = m.frame_id
+            JOIN turns t ON t.turn_id = m.turn_id
+            WHERE m.ordinal = NEW.keep_from_ordinal - 1
+              AND pf.state = 'closed' AND pf.last_ordinal = NEW.keep_from_ordinal - 1
+              AND t.status <> 'open'
+          ) AND
+          NEW.active_override_count = (
+            SELECT COUNT(*) FROM context_overrides co
+            JOIN context_revisions introduced
+              ON introduced.revision_id = co.introduced_revision_id
+            JOIN context_revisions parent
+              ON parent.revision_id = NEW.parent_revision_id
+            WHERE introduced.revision_number <= parent.revision_number
+              AND co.ordinal >= NEW.keep_from_ordinal
+          )))
       )
       BEGIN SELECT RAISE(ABORT, 'invalid context revision insert'); END`,
   },
@@ -420,6 +480,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           WHERE cr.revision_id = NEW.introduced_revision_id
             AND cr.session_id = NEW.session_id
             AND cr.kind = 'swap_only'
+            AND NEW.ordinal >= cr.keep_from_ordinal
             AND NEW.ordinal <= cr.source_through_ordinal
         ) AND
         EXISTS (
@@ -584,19 +645,32 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           WHERE previous.revision_id = OLD.active_revision_id
             AND next.revision_id = NEW.active_revision_id
             AND next.session_id = OLD.session_id
-            AND next.kind IN ('swap_only', 'surface_refresh')
+            AND next.kind IN ('swap_only', 'surface_refresh', 'prefix_retirement')
             AND next.added_override_count = (
               SELECT COUNT(*) FROM context_overrides
               WHERE introduced_revision_id = next.revision_id
             )
             AND ((next.kind = 'swap_only' AND
-                  next.total_override_count = previous.total_override_count + next.added_override_count AND
+                  next.keep_from_ordinal = previous.keep_from_ordinal AND
+                  next.active_override_count = previous.active_override_count + next.added_override_count AND
                   next.surface_id = previous.surface_id) OR
                  (next.kind = 'surface_refresh' AND
-                  next.total_override_count = previous.total_override_count AND
+                  next.keep_from_ordinal = previous.keep_from_ordinal AND
+                  next.active_override_count = previous.active_override_count AND
                   next.added_override_count = 0 AND
-                  next.override_manifest_sha256 = previous.override_manifest_sha256 AND
-                  next.surface_id <> previous.surface_id))
+                  next.active_override_manifest_sha256 = previous.active_override_manifest_sha256 AND
+                  next.surface_id <> previous.surface_id) OR
+                 (next.kind = 'prefix_retirement' AND
+                  next.keep_from_ordinal > previous.keep_from_ordinal AND
+                  next.added_override_count = 0 AND
+                  next.surface_id = previous.surface_id AND
+                  next.active_override_count = (
+                    SELECT COUNT(*) FROM context_overrides co
+                    JOIN context_revisions introduced
+                      ON introduced.revision_id = co.introduced_revision_id
+                    WHERE introduced.revision_number <= previous.revision_number
+                      AND co.ordinal >= next.keep_from_ordinal
+                  )))
             AND NOT EXISTS (SELECT 1 FROM context_measurement_state)
         ))
       )
@@ -604,7 +678,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V6_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V7_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -714,7 +788,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v6.",
+      "Session FTS configuration does not match schema v7.",
       { sessionId },
     );
   }

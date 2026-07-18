@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 日期：2026-07-17
+- 日期：2026-07-18
 - 性质：实施路线图，不替代阶段技术设计
 - 目标方案：[`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)
 - 当前依据：仓库现有源码、测试与已完成的 runtime 设计
@@ -13,9 +13,10 @@
 
 Tinker 已经完成后台任务管理、turn cancellation、运行身份、资源生命周期、context
 preflight、协议安全账本、可恢复 SessionStore，以及稳定历史来源与 `Recall`。F1 至 F5
-地基阶段、G0 基准门禁、I1 Context Revision 影子规划，以及 I2 温层确定性换出与手动
-`/compact` 已经完成。活动视图现在可以原子切换并精确恢复；下一步只能在独立设计和门禁
-下进入 I3 Recall-first 冷前缀退休，runtime pressure 仍不得自动提交 revision。
+地基阶段、G0 基准门禁、I1 Context Revision 影子规划、I2 温层确定性换出与手动
+`/compact`，以及 I3 Recall-first 冷前缀退休与手动 `/compact retire` 已经完成。活动视图
+现在可以原子换出 observation 或退休完整冷前缀并精确恢复；下一步是 I4 主动 Recall 评测与
+自动化门禁，runtime pressure 仍不得自动提交 revision。
 
 如果此时直接开发自动 compaction，会同时改动 agent loop、持久化格式、provider 协议、
 TUI 和检索路径，出现问题时很难判断是计量、存储、协议还是摘要策略造成的。
@@ -84,10 +85,10 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 | 失败/取消后的 tool 协议补齐 | 已完成 | 当前 agent loop 会补齐未完成 tool message，避免下一 turn 直接携带悬空调用 |
 | 协议安全会话账本 | 已完成 | canonical message/frame/tool result 由统一 ledger 追加，请求前执行完整协议校验 |
 | SessionStore 与 `/resume` | 已完成 | SQLite 是 durable source of truth，支持 single-writer、恢复、TUI 切换与显式删除 |
-| 稳定来源与 `Recall` | 已完成 | 当前 schema v6 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
+| 稳定来源与 `Recall` | 已完成 | 当前 schema v7 保留 `ctx://message/...`、scoped reader、FTS5/substring search 和精确 get |
 | 模型 profile 与兼容契约 | 已完成 | `SessionCompatibilityContract` 只冻结历史消息协议；request fingerprint、tool surface 与 activation policy 已分离 |
 | 项目指令与 active surface | 已完成 | creation system message 保持不可变；resume 加载当前 AGENTS.md/CLAUDE.md，并以 `surface_refresh` 留下 durable revision |
-| Context revision 与确定性换出 | 已完成 | schema v6 使用 immutable `ContextSurface`、线性 revision、单调 override、原子 active switch 和手动 `/compact`；`keepFromOrdinal=1` |
+| Context revision、确定性换出与冷前缀退休 | 已完成 | schema v7 使用 immutable `ContextSurface`、线性 revision、active override manifest、原子 active switch、手动 `/compact` 与 `/compact retire`；active view 为 `{1} U [keep, tail]` |
 
 已完成项继续作为回归基线，不在后续阶段重新设计。详细设计见：
 
@@ -101,12 +102,11 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 
 | 能力 | 已有部分 | 仍缺少 |
 | --- | --- | --- |
-| 自动 context 管理 | I1 pressure shadow planning 与 I2 手动 swap-only 已完成 | 尚未实施 I3 冷前缀退休、I4 主动 Recall 评测或任何自动 revision commit |
+| 自动 context 管理 | I1 pressure shadow planning、I2 手动 swap-only 与 I3 手动冷前缀退休已完成 | 尚未实施 I4 主动 Recall 评测或任何自动 revision commit |
 
 ### 3.3 尚未开始
 
-- Recall-first 冷前缀退休、主动 Recall 评测、可选结构化 checkpoint 和自动
-  compaction。
+- 主动 Recall 评测、可选结构化 checkpoint 和自动 compaction。
 
 ### 3.4 旧路线图如何迁移
 
@@ -415,7 +415,7 @@ revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement�
 
 ### I3：Recall-first 冷前缀退休
 
-**状态：技术方案已形成，尚未实施（2026-07-17）。**
+**状态：已完成（2026-07-18）。**
 
 详细设计见
 [`context-revision-i3-recall-first-prefix-retirement-design.md`](context-revision-i3-recall-first-prefix-retirement-design.md)。
@@ -437,6 +437,27 @@ revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement�
 验收门槛：退休前后 canonical/FTS 不变，provider payload 不含退休 frame 或其旧
 placeholder，协议骨架完整，resume 恢复同一 active revision，并且明确提示的历史
 问题可经 search -> get 找回原文。
+
+实际结果：
+
+- SessionStore 已切换到 schema v7；新增版本化 `recall-retirement-v1` surface contract、
+  独立 `prefix_retirement` revision、active override manifest 和 `{1} U [keep, tail]`
+  compiler。v6 不迁移、不 dual-read，直接 fast-fail。
+- 50-turn formal benchmark 在两次 swap 后提交 retirement revision 4/5。第一次 keep
+  1 -> 170，退休 42 turns / 126 frames / 168 messages，guarded token 从 86,150 降到
+  35,720；第二次 keep 170 -> 174，再退休 1 turn，guarded token 从 35,746 降到
+  30,853。两次 database + WAL 增量均为 32,960 bytes，provider request 仍精确为 104。
+- 历史 28 条 override 全部保留为审计行并退出 active manifest；canonical messages、frames、
+  tool results、FTS source/content/hash 在 retirement、append、swap、surface refresh、重复
+  retirement 和 resume 后保持一致。六个 transaction fault point 全部回滚；COMMIT 后
+  activation fault 保留新 revision。
+- 真实 provider smoke 的 retirement request count 为 1 -> 1；首个新 payload 不含 marker，
+  cache hit/miss 从第一次 rewrite 的 0/3,267 变为同 revision append 的 3,200/91 tokens，
+  随后真实模型完成 Recall search -> get。真实 TUI PTY 将 10,103 降到 4,105 estimated
+  tokens，直接 `/resume` 后取回 9,020-byte 退休消息，再 `/compact` 并正常 `/quit`。
+- schema v7 的 10,000-message Recall benchmark trigram p95 为 0.27ms；formal benchmark、
+  fault matrix、component tests、真实 PTY、provider cache/protocol/Recall smoke 和
+  `bun run check` 全部通过；最终为 512 项测试、3,350 个断言。
 
 ### I4：主动 Recall 评测与自动化门禁
 
@@ -485,6 +506,7 @@ Recall-only 显著改善主动恢复和任务成功率，否则不进入默认�
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前已完成 **I2：温层确定性换出与手动 `/compact`**。下一项是 **I3：Recall-first 冷前缀
-退休**，但必须先独立定稿合法退休边界、active compiler 语义、Recall 质量门禁和失败恢复；
-在 I3 门槛满足前，`keepFromOrdinal` 继续固定为 1，也不启用自动 revision commit。
+当前已完成 **I3：Recall-first 冷前缀退休与手动 `/compact retire`**。下一项是 **I4：主动
+Recall 评测与自动化门禁**；在 I4 对具体 model profile、system prompt hash 与 Recall tool
+schema hash 给出足够证据前，runtime pressure 仍只做 shadow planning，不启用 automatic
+revision commit。

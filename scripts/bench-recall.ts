@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatMessageSource } from "../src/context/context-source";
 import { createContextSurface } from "../src/context/context-surface";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../src/context/recall-retirement-contract";
 import { contentHash } from "../src/context/protocol-frame";
 import { runtimeIdFactory, type MessageId } from "../src/ids/runtime-id";
 import {
@@ -84,6 +85,7 @@ export async function runRecallBenchmark(
       surfaceId: runtimeIdFactory.createContextSurfaceId(),
       sessionId,
       systemPrompt: benchmarkSystemPrompt,
+      recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
       toolDefinitions: [],
       prepared: {
         requestConfigHash: sha256("g0-recall-benchmark-request"),

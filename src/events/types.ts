@@ -57,6 +57,12 @@ export type ContextRevisionStartedData =
       reason: "resume";
       baseRevisionNumber: number;
       changed: readonly ContextSurfaceComponent[];
+    }
+  | {
+      strategy: "retire_prefix";
+      reason: "manual";
+      policyVersion: "recall-first-retirement-v1";
+      baseRevisionNumber: number;
     };
 
 export type ContextRevisionFinishedData =
@@ -72,7 +78,7 @@ export type ContextRevisionFinishedData =
       baseRevisionNumber: number;
       revisionNumber?: number;
       addedOverrideCount: number;
-      totalOverrideCount: number;
+      activeOverrideCount: number;
       originalObservationBytes: number;
       projectedObservationBytes: number;
       rawTokensBefore: number;
@@ -93,6 +99,35 @@ export type ContextRevisionFinishedData =
       toolCountAfter: number;
       measuredAnchorCleared: true;
       durationMs: number;
+    }
+  | {
+      strategy: "retire_prefix";
+      reason: "manual";
+      policyVersion: "recall-first-retirement-v1";
+      outcome:
+        | "below_target"
+        | "no_complete_prefix"
+        | "target_reached"
+        | "retirement_floor";
+      baseRevisionNumber: number;
+      revisionNumber?: number;
+      previousKeepFromOrdinal: number;
+      keepFromOrdinal: number;
+      retiredTurnCount: number;
+      retiredFrameCount: number;
+      retiredMessageCount: number;
+      activeOverrideCount: number;
+      rawTokensBefore?: number;
+      rawTokensAfter?: number;
+      guardedTokensBefore: number;
+      guardedTokensAfter?: number;
+      targetTokens: number;
+      planHash?: string;
+      planningDurationMs: number;
+      validationDurationMs?: number;
+      transactionDurationMs?: number;
+      activationDurationMs?: number;
+      durationMs: number;
     };
 
 export type ContextRevisionFailedData =
@@ -107,6 +142,14 @@ export type ContextRevisionFailedData =
       strategy: "surface_refresh";
       reason: "resume";
       stage: "prepare" | "commit" | "activate";
+      errorCode: string;
+      error: string;
+      committed: boolean;
+    }
+  | {
+      strategy: "retire_prefix";
+      reason: "manual";
+      stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
       errorCode: string;
       error: string;
       committed: boolean;

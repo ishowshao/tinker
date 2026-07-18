@@ -4,6 +4,7 @@ import { TurnCancelledError } from "../agent/turn-cancellation";
 import {
   ContextManagerError,
   type ContextCompactionResult,
+  type ContextRetirementResult,
 } from "../context/context-manager";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { visibleTimelineItems } from "./event-store";
@@ -304,6 +305,17 @@ export function App(props: AppProps) {
           .finally(() => setIsSessionOperation(false));
         return;
       }
+      if (command.type === "compact_retire") {
+        setIsSessionOperation(true);
+        void props.sessionController
+          .retire()
+          .then((result) => setNotice(formatContextRetirementNotice(result)))
+          .catch((error: unknown) => {
+            setNotice(formatContextRetirementFailureNotice(error));
+          })
+          .finally(() => setIsSessionOperation(false));
+        return;
+      }
       if (command.type === "quit") {
         props.onQuit?.();
         exit();
@@ -494,4 +506,37 @@ export function formatContextCompactionFailureNotice(error: unknown): string {
     ? error.code
     : "CONTEXT_COMPACTION_FAILED";
   return `Context compaction failed at ${error.stage} (${code}).`;
+}
+
+export function formatContextRetirementNotice(result: ContextRetirementResult): string {
+  if (result.status === "unchanged") {
+    if (result.outcome === "below_target") {
+      return `Context is already below the retirement target (${result.guardedTokensBefore.toLocaleString("en-US")} <= ${result.targetTokens.toLocaleString("en-US")} estimated tokens).`;
+    }
+    return "No complete cold prefix can be retired; the most recent 8 completed turns are protected.";
+  }
+  const before = result.guardedTokensBefore.toLocaleString("en-US");
+  const after = result.guardedTokensAfter.toLocaleString("en-US");
+  if (result.outcome === "retirement_floor") {
+    return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens; target ${result.targetTokens.toLocaleString("en-US")} was not reached. Run /compact first when retained tool output is still eligible. Older history remains available through Recall.`;
+  }
+  const reduction =
+    result.guardedTokensBefore === 0
+      ? "0.0"
+      : (
+          ((result.guardedTokensBefore - result.guardedTokensAfter) /
+            result.guardedTokensBefore) *
+          100
+        ).toFixed(1);
+  return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens (-${reduction}%). Older history remains available through Recall.`;
+}
+
+export function formatContextRetirementFailureNotice(error: unknown): string {
+  if (!(error instanceof ContextManagerError)) {
+    return "Context prefix retirement failed.";
+  }
+  const code = /^[A-Za-z0-9_]+$/.test(error.code)
+    ? error.code
+    : "CONTEXT_RETIREMENT_FAILED";
+  return `Context prefix retirement failed at ${error.stage} (${code}).`;
 }

@@ -69,14 +69,18 @@ export class StdoutEventPrinter implements EventSink {
         this.stdout.write(
           event.data.strategy === "swap"
             ? `context.revision.started reason=${event.data.reason} policy=${event.data.policyVersion}\n`
-            : `context.revision.started reason=${event.data.reason} strategy=surface_refresh changed=${event.data.changed.join(",")}\n`,
+            : event.data.strategy === "surface_refresh"
+              ? `context.revision.started reason=${event.data.reason} strategy=surface_refresh changed=${event.data.changed.join(",")}\n`
+              : `context.revision.started reason=${event.data.reason} strategy=retire_prefix policy=${event.data.policyVersion}\n`,
         );
         break;
       case "context.revision.finished":
         this.stdout.write(
           event.data.strategy === "swap"
             ? `context.revision.finished outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} added=${event.data.addedOverrideCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`
-            : `context.revision.finished strategy=surface_refresh revision=${event.data.revisionNumber} changed=${event.data.changed.join(",")} tools=${event.data.toolCountBefore}->${event.data.toolCountAfter}\n`,
+            : event.data.strategy === "surface_refresh"
+              ? `context.revision.finished strategy=surface_refresh revision=${event.data.revisionNumber} changed=${event.data.changed.join(",")} tools=${event.data.toolCountBefore}->${event.data.toolCountAfter}\n`
+              : `context.revision.finished strategy=retire_prefix outcome=${event.data.outcome} revision=${event.data.revisionNumber ?? event.data.baseRevisionNumber} retired_turns=${event.data.retiredTurnCount} before=${event.data.guardedTokensBefore} after=${event.data.guardedTokensAfter ?? "n/a"}\n`,
         );
         break;
       case "context.revision.failed":

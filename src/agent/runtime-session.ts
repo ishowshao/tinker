@@ -24,6 +24,8 @@ import {
   ContextManagerError,
   type ContextCompactionResult,
   type ContextCompactionTrigger,
+  type ContextRetirementResult,
+  type ContextRetirementTrigger,
 } from "../context/context-manager";
 import {
   assertMatchingContextBudget,
@@ -44,7 +46,7 @@ import {
   createContextSurface,
   sameContextSurface,
   type ContextSurfaceComponent,
-  type StoredContextSurfaceV6,
+  type StoredContextSurfaceV7,
 } from "../context/context-surface";
 import {
   canonicalSequenceHash,
@@ -70,6 +72,7 @@ import type {
   TurnIdentity,
 } from "./types";
 import { ContextMeter } from "./context-meter";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
 
 export type ExecuteTurnInput = {
   userPrompt: string;
@@ -89,6 +92,7 @@ export type RuntimeSession = {
   readonly recovery: SessionRecoveryResult;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
+  retireContext(): Promise<ContextRetirementResult>;
   canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
@@ -160,6 +164,7 @@ export type RuntimeSessionFactoryDependencies = {
   selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
   onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
   manualCompactionTrigger: () => ContextCompactionTrigger;
+  manualRetirementTrigger: () => ContextRetirementTrigger;
 };
 
 export class RuntimeEventAppendError extends Error {
@@ -211,6 +216,7 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   selectShadowPlanning: ({ preflight }) =>
     preflight.pressure === "normal" ? undefined : { trigger: "runtime_pressure" },
   manualCompactionTrigger: () => ({ kind: "manual" }),
+  manualRetirementTrigger: () => ({ kind: "manual" }),
 };
 
 class DefaultRuntimeSession implements RuntimeSession {
@@ -232,7 +238,9 @@ class DefaultRuntimeSession implements RuntimeSession {
   private mcpManager?: McpManager;
   private ledger?: SessionLedger;
   private activeTurn?: ActiveTurn;
-  private activeCompaction?: Promise<ContextCompactionResult>;
+  private activeContextRevision?: Promise<
+    ContextCompactionResult | ContextRetirementResult
+  >;
   private disposePromise?: Promise<void>;
   private faultCause?: unknown;
   private readonly contextMeter: ContextMeter;
@@ -358,6 +366,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         surfaceId: dependencies.idFactory.createContextSurfaceId(),
         sessionId: session.sessionId,
         systemPrompt: input.systemPrompt,
+        recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
         ...(input.projectInstruction === undefined
           ? {}
           : { projectInstruction: input.projectInstruction }),
@@ -456,7 +465,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   }
 
   private async refreshContextSurface(
-    candidateSurface: StoredContextSurfaceV6,
+    candidateSurface: StoredContextSurfaceV7,
   ): Promise<ContextSurfaceRefreshSummary | undefined> {
     const snapshot = this.store.loadContextSnapshot();
     if (sameContextSurface(snapshot.surface, candidateSurface)) {
@@ -505,7 +514,8 @@ class DefaultRuntimeSession implements RuntimeSession {
         expectedBaseRevisionId: snapshot.revision.revisionId,
         expectedBaseRevisionNumber: snapshot.revision.revisionNumber,
         expectedCanonicalThroughOrdinal: snapshot.canonical.messages.length,
-        expectedBaseOverrideManifestSha256: snapshot.revision.overrideManifestSha256,
+        expectedBaseActiveOverrideManifestSha256:
+          snapshot.revision.activeOverrideManifestSha256,
         surface: candidateSurface,
         changes,
         changeManifestSha256: contextSurfaceChangeManifestHash(changes),
@@ -628,16 +638,16 @@ class DefaultRuntimeSession implements RuntimeSession {
       throw new Error("Cannot compact context while a turn is active.");
     }
     const completion = this.performCompactContext();
-    this.activeCompaction = completion;
+    this.activeContextRevision = completion;
     void completion.then(
       () => {
-        if (this.activeCompaction === completion) {
-          this.activeCompaction = undefined;
+        if (this.activeContextRevision === completion) {
+          this.activeContextRevision = undefined;
         }
       },
       () => {
-        if (this.activeCompaction === completion) {
-          this.activeCompaction = undefined;
+        if (this.activeContextRevision === completion) {
+          this.activeContextRevision = undefined;
         }
       },
     );
@@ -700,6 +710,104 @@ class DefaultRuntimeSession implements RuntimeSession {
             stage: failure.stage,
             errorCode: boundedContextErrorCode(failure.code),
             error: `Context compaction failed at ${failure.stage}.`,
+          },
+        }).catch(() => undefined);
+      }
+      if (!(error instanceof ContextManagerError) || error.fatal) {
+        this.fault(error);
+      } else if (this.state === "compacting") {
+        this.state = "ready";
+      }
+      throw error;
+    }
+  }
+
+  retireContext(): Promise<ContextRetirementResult> {
+    if (this.state !== "ready") {
+      throw new Error(
+        `Cannot retire context prefix while RuntimeSession is ${this.state}.`,
+      );
+    }
+    if (this.activeTurn !== undefined) {
+      throw new Error("Cannot retire context prefix while a turn is active.");
+    }
+    const completion = this.performRetireContext();
+    this.activeContextRevision = completion;
+    void completion.then(
+      () => {
+        if (this.activeContextRevision === completion) {
+          this.activeContextRevision = undefined;
+        }
+      },
+      () => {
+        if (this.activeContextRevision === completion) {
+          this.activeContextRevision = undefined;
+        }
+      },
+    );
+    return completion;
+  }
+
+  private async performRetireContext(): Promise<ContextRetirementResult> {
+    if (this.state !== "ready") {
+      throw new Error(
+        `Cannot retire context prefix while RuntimeSession is ${this.state}.`,
+      );
+    }
+    if (this.activeTurn !== undefined) {
+      throw new Error("Cannot retire context prefix while a turn is active.");
+    }
+    this.store.assertContextRevisionIdle();
+    const baseRevisionNumber = this.store.loadContextSnapshot().revision.revisionNumber;
+    this.state = "compacting";
+    let started = false;
+    try {
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "retire_prefix",
+          reason: "manual",
+          policyVersion: "recall-first-retirement-v1",
+          baseRevisionNumber,
+        },
+      });
+      started = true;
+      const result = await this.requireContextManager().retirePrefix(
+        this.dependencies.manualRetirementTrigger(),
+      );
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: contextRetirementFinishedData(result),
+      });
+      if (this.state === "compacting") {
+        this.state = "ready";
+      }
+      return result;
+    } catch (error) {
+      if (started && !(error instanceof RuntimeEventAppendError)) {
+        const failure =
+          error instanceof ContextManagerError
+            ? error
+            : new ContextManagerError(
+                "activate",
+                error instanceof Error ? error.name : "CONTEXT_RETIREMENT_FAILED",
+                true,
+                false,
+                "Context prefix retirement failed.",
+                { cause: error },
+              );
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "retire_prefix",
+            reason: "manual",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Context prefix retirement failed at ${failure.stage}.`,
+            committed: failure.committed,
           },
         }).catch(() => undefined);
       }
@@ -852,10 +960,10 @@ class DefaultRuntimeSession implements RuntimeSession {
 
     this.state = "disposing";
     const errors: unknown[] = this.faultCause === undefined ? [] : [this.faultCause];
-    const activeCompaction = this.activeCompaction;
-    if (activeCompaction !== undefined) {
+    const activeContextRevision = this.activeContextRevision;
+    if (activeContextRevision !== undefined) {
       try {
-        await activeCompaction;
+        await activeContextRevision;
       } catch {
         // The compactContext caller owns its primary error. Disposal still continues.
       }
@@ -1248,7 +1356,7 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
 
 function assertPreparedMatchesSurface(
   prepared: ReturnType<ModelClient["prepare"]>,
-  surface: StoredContextSurfaceV6,
+  surface: StoredContextSurfaceV7,
 ): void {
   if (
     prepared.requestConfigHash !== surface.requestConfigSha256 ||
@@ -1328,7 +1436,7 @@ function contextRevisionFinishedData(
       outcome: result.outcome,
       baseRevisionNumber: result.revisionNumber,
       addedOverrideCount: 0,
-      totalOverrideCount: result.totalOverrideCount,
+      activeOverrideCount: result.activeOverrideCount,
       originalObservationBytes: 0,
       projectedObservationBytes: 0,
       rawTokensBefore: result.rawTokensBefore,
@@ -1345,7 +1453,7 @@ function contextRevisionFinishedData(
     baseRevisionNumber: result.previousRevisionNumber,
     revisionNumber: result.revisionNumber,
     addedOverrideCount: result.addedOverrideCount,
-    totalOverrideCount: result.totalOverrideCount,
+    activeOverrideCount: result.activeOverrideCount,
     originalObservationBytes: result.originalObservationBytes,
     projectedObservationBytes: result.projectedObservationBytes,
     rawTokensBefore: result.rawTokensBefore,
@@ -1354,6 +1462,55 @@ function contextRevisionFinishedData(
     guardedTokensAfter: result.guardedTokensAfter,
     targetTokens: result.targetTokens,
     planHash: result.planHash,
+    durationMs: result.durationMs,
+  };
+}
+
+function contextRetirementFinishedData(
+  result: ContextRetirementResult,
+): ContextRevisionFinishedData {
+  if (result.status === "unchanged") {
+    return {
+      strategy: "retire_prefix",
+      reason: "manual",
+      policyVersion: "recall-first-retirement-v1",
+      outcome: result.outcome,
+      baseRevisionNumber: result.revisionNumber,
+      previousKeepFromOrdinal: result.keepFromOrdinal,
+      keepFromOrdinal: result.keepFromOrdinal,
+      retiredTurnCount: 0,
+      retiredFrameCount: 0,
+      retiredMessageCount: 0,
+      activeOverrideCount: result.activeOverrideCount,
+      guardedTokensBefore: result.guardedTokensBefore,
+      targetTokens: result.targetTokens,
+      planningDurationMs: result.planningDurationMs,
+      durationMs: result.durationMs,
+    };
+  }
+  return {
+    strategy: "retire_prefix",
+    reason: "manual",
+    policyVersion: "recall-first-retirement-v1",
+    outcome: result.outcome,
+    baseRevisionNumber: result.previousRevisionNumber,
+    revisionNumber: result.revisionNumber,
+    previousKeepFromOrdinal: result.previousKeepFromOrdinal,
+    keepFromOrdinal: result.keepFromOrdinal,
+    retiredTurnCount: result.retiredTurnCount,
+    retiredFrameCount: result.retiredFrameCount,
+    retiredMessageCount: result.retiredMessageCount,
+    activeOverrideCount: result.activeOverrideCount,
+    rawTokensBefore: result.rawTokensBefore,
+    rawTokensAfter: result.rawTokensAfter,
+    guardedTokensBefore: result.guardedTokensBefore,
+    guardedTokensAfter: result.guardedTokensAfter,
+    targetTokens: result.targetTokens,
+    planHash: result.planHash,
+    planningDurationMs: result.planningDurationMs,
+    validationDurationMs: result.validationDurationMs,
+    transactionDurationMs: result.transactionDurationMs,
+    activationDurationMs: result.activationDurationMs,
     durationMs: result.durationMs,
   };
 }

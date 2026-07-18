@@ -2,12 +2,13 @@
 
 ## 文档状态
 
-- 日期：2026-07-17
-- 状态：技术方案已形成，尚未实施
+- 日期：2026-07-18
+- 状态：已实施并通过 I3 门禁
 - 所属阶段：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I3
 - 前置阶段：I1 Context Revision 影子规划、I2 温层确定性换出与手动 `/compact`
-- 当前基线：SessionStore schema v6、immutable `ContextSurface`、线性
-  `ContextRevision`、`swap-only-v1`、手动 `/compact`、稳定来源与 `Recall`
+- 当前基线：SessionStore schema v7、immutable `ContextSurface`、线性
+  `ContextRevision`、`swap-only-v1`、`recall-first-retirement-v1`、手动 `/compact`、
+  手动 `/compact retire`、稳定来源与 `Recall`
 - 后继阶段：I4 主动 Recall 评测与自动化门禁
 - 相关设计：
   [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)、
@@ -1203,7 +1204,59 @@ I3 只有同时满足以下条件才算完成：
 任一门槛未满足，`keepFromOrdinal > 1` 不得进入生产提交路径，也不得增加 automatic
 retirement flag。
 
-## 二十、交给 I4 的明确输出
+## 二十、实施结果（2026-07-18）
+
+I3 已按本文边界落地，automatic retirement 仍未启用：
+
+- SessionStore 已一次性切换为 schema v7；v6 无 migration、dual-read 或 fallback，直接
+  `SESSION_SCHEMA_UNSUPPORTED`。`prefix_retirement`、active override manifest、
+  `recall_contract_version`、revision-chain trigger 和 decoder 由同一 schema fingerprint
+  固定。
+- compiler 的 active ordinals 现在严格为 `{1} U [keep, tail]`；planner 固定保护最近 8 个
+  closed turns，以 60% input budget 为生产 target，并用确定性二分查找与相邻 boundary
+  复验选择最小达标前缀。退休自身不调用 provider、不执行工具。
+- `commitPrefixRetirementRevision()` 在单个 transaction 中校验 boundary、canonical hash、
+  active override manifest、measurement 清除和 active CAS；六个 transaction fault point
+  全部回滚，COMMIT 后 activation fault 保留新 revision 且 measurement 为空。
+- `RuntimeSession.retireContext()`、bounded revision events、`/compact retire`、TUI notice 和
+  controller 串行化已接通；无参数 `/compact` 仍只走 swap-only。
+
+50-turn deterministic formal benchmark 先提交两次 swap，再提交两次 retirement：
+
+- revision 2/3 共新增 28 条 override；revision 4 将 `keepFromOrdinal` 从 1 前移到 170，
+  退休 42 turns / 126 frames / 168 messages，并将 28 条历史 override 全部退出 active
+  manifest、保留数据库审计行。
+- 第一次 retirement 的 raw token 从 78,318 降到 32,472，guarded token 从 86,150 降到
+  35,720；planning/validation/transaction/activation/total 为
+  37.80/21.38/39.20/1.68/100.09ms，database + WAL 增加 32,960 bytes。
+- cancellation append 后 revision 5 再退休 1 turn / 3 frames / 4 messages，keep 170 -> 174；
+  guarded token 35,746 -> 30,853，database + WAL 再增加 32,960 bytes。
+- provider request 保持精确的 104 次；retirement 两次均为零 provider request。最终数据库有
+  52 turns、208 messages、156 frames、5 revisions、28 条历史 override 和 0 条 active
+  override；resume、取消、退休 payload marker 缺席及 Recall search/get 均通过。
+- request build p50/p95 为 2.44/12.40ms；本轮观测 RSS/heap 增量为
+  242,106,368/63,061,314 bytes，仅作为回归事实，不作为稳定 SLA。
+
+外部验证结果：
+
+- 10,000-message Recall benchmark 在 schema v7 上的 trigram p50/p95 为 0.24/0.27ms，
+  dense trigram p95 为 11.27ms，单 code-point substring p95 为 9.92ms；FTS verify/rebuild、
+  精确 get 和 reopen 全部通过。
+- `deepseek-v4-flash` 真实 provider smoke 中，retirement 前后 provider request count 保持
+  1 -> 1；首个 post-retirement payload 不含退休 marker。pre-retirement、第一次 rewrite、
+  同 revision append 的 cache hit/miss 分别为 0/3,322、0/3,267、3,200/91 tokens；随后
+  真实模型各执行一次 Recall search/get 并恢复 marker。该可复跑入口为
+  `bun run bench:i3-provider-smoke -- deepseek-v4-flash`。
+- 真实 TUI PTY 中 `/compact retire` 将 10,103 降到 4,105 estimated tokens（下降 59.4%），
+  revision 1 -> 2；随后通过直接 `/resume <UUID>` 恢复同一退休 revision，Recall
+  search -> get 取回 9,020-byte 退休消息，继续 `/compact` 并正常 `/quit`。
+- 最终 `bun run check` 通过 512 项测试、3,350 个断言，并包含 schema/type/lint/format、
+  fault matrix、TUI component 和 I3 deterministic benchmark smoke。
+
+这些结果只证明 deterministic retirement、精确 Recall 和显式 search -> get；不构成模型主动
+Recall 或 automatic revision commit 的资格，后者仍属于 I4。
+
+## 二十一、交给 I4 的明确输出
 
 I3 完成后，I4 可以依赖：
 
@@ -1226,7 +1279,7 @@ I4 才负责：
 
 I4 不得因为 I3 的结构和显式 Recall smoke 通过，就默认模型具备可靠的主动长期记忆。
 
-## 二十一、最终设计决策
+## 二十二、最终设计决策
 
 1. **I3 一次性切换 schema v7；不迁移、不兼容读取 v6 session。**
 2. **冷退休使用独立 `prefix_retirement` revision，不与 swap 或 surface refresh 复合提交。**

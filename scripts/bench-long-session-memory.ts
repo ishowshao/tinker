@@ -8,7 +8,10 @@ import {
   type RuntimeSession,
   type RuntimeSessionFactoryDependencies,
 } from "../src/agent/runtime-session";
-import type { ContextCompactionResult } from "../src/context/context-manager";
+import type {
+  ContextCompactionResult,
+  ContextRetirementResult,
+} from "../src/context/context-manager";
 import type {
   AgentTurnLedger,
   PendingLedgerTurn,
@@ -37,7 +40,7 @@ import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V6_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V7_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -92,9 +95,19 @@ export type LongSessionBenchmarkResult = {
       totalDelta: number;
     };
     addedOverrideCount: number;
-    totalOverrideCount: number;
+    activeOverrideCount: number;
     activeRevisionNumber: number;
     providerRequestCountUnchanged: boolean;
+  };
+  retirement: {
+    count: number;
+    results: readonly Extract<ContextRetirementResult, { status: "retired" }>[];
+    databaseAndWalBytes: {
+      samples: readonly RetirementStorageSample[];
+      totalDelta: number;
+    };
+    providerRequestCountUnchanged: boolean;
+    retiredPayloadVerified: boolean;
   };
   database: {
     schemaVersion: number;
@@ -105,7 +118,7 @@ export type LongSessionBenchmarkResult = {
     toolResultCount: number;
     contextRevisionCount: number;
     contextOverrideCount: number;
-    totalOverrideCount: number;
+    activeOverrideCount: number;
     revisionNumber: number;
     revisionKind: string;
     keepFromOrdinal: number;
@@ -178,6 +191,9 @@ export async function runLongSessionBenchmark(
   const turnDurations: number[] = [];
   const compactionResults: ContextCompactionResult[] = [];
   const compactionStorageSamples: CompactionStorageSample[] = [];
+  const retirementResults: Extract<ContextRetirementResult, { status: "retired" }>[] =
+    [];
+  const retirementStorageSamples: RetirementStorageSample[] = [];
   const samples: LongSessionSample[] = [];
   let session: RuntimeSession | undefined;
   let completedWorkloadTurns = 0;
@@ -274,6 +290,26 @@ export async function runLongSessionBenchmark(
       }
     }
 
+    const providerRequestsBeforeRetirement = model.requestCount;
+    const retirementStorageBefore = await sqliteStorageSize(databasePath);
+    const retirement = await session.retireContext();
+    const retirementStorageAfter = await sqliteStorageSize(databasePath);
+    if (retirement.status !== "retired") {
+      throw new Error(
+        `Long-session prefix retirement did not commit: ${retirement.outcome}.`,
+      );
+    }
+    if (model.requestCount !== providerRequestsBeforeRetirement) {
+      throw new Error("Long-session prefix retirement requested the provider.");
+    }
+    retirementResults.push(retirement);
+    retirementStorageSamples.push({
+      revisionNumber: retirement.revisionNumber,
+      before: retirementStorageBefore,
+      after: retirementStorageAfter,
+      delta: retirementStorageAfter - retirementStorageBefore,
+    });
+
     const cancellationController = new AbortController();
     const cancellationStartedAt = performance.now();
     const cancellation = session.executeTurn({
@@ -287,6 +323,28 @@ export async function runLongSessionBenchmark(
     if (cancelledResult.status !== "cancelled") {
       throw new Error("Long-session benchmark cancellation turn was not cancelled.");
     }
+
+    const providerRequestsBeforeSecondRetirement = model.requestCount;
+    const secondRetirementStorageBefore = await sqliteStorageSize(databasePath);
+    const secondRetirement = await session.retireContext();
+    const secondRetirementStorageAfter = await sqliteStorageSize(databasePath);
+    if (secondRetirement.status !== "retired") {
+      throw new Error(
+        `Long-session repeated prefix retirement did not commit: ${secondRetirement.outcome}.`,
+      );
+    }
+    if (model.requestCount !== providerRequestsBeforeSecondRetirement) {
+      throw new Error(
+        "Long-session repeated prefix retirement requested the provider.",
+      );
+    }
+    retirementResults.push(secondRetirement);
+    retirementStorageSamples.push({
+      revisionNumber: secondRetirement.revisionNumber,
+      before: secondRetirementStorageBefore,
+      after: secondRetirementStorageAfter,
+      delta: secondRetirementStorageAfter - secondRetirementStorageBefore,
+    });
 
     const recallStartedAt = performance.now();
     const recallResult = await session.executeTurn({
@@ -307,13 +365,15 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 6 ||
+      database.schemaVersion !== 7 ||
       !database.schemaFingerprintMatches ||
-      database.contextRevisionCount !== compactionResults.length + 1 ||
+      database.contextRevisionCount !==
+        compactionResults.length + retirementResults.length + 1 ||
       database.contextOverrideCount < compactionResults.length ||
-      database.revisionNumber !== compactionResults.length + 1 ||
-      database.revisionKind !== "swap_only" ||
-      database.keepFromOrdinal !== 1 ||
+      database.revisionNumber !==
+        compactionResults.length + retirementResults.length + 1 ||
+      database.revisionKind !== "prefix_retirement" ||
+      database.keepFromOrdinal <= 1 ||
       !database.activeRevisionMatches ||
       !database.measuredRevisionMatches
     ) {
@@ -328,6 +388,13 @@ export async function runLongSessionBenchmark(
         `Long-session provider request count changed: expected ${expectedProviderRequests}, received ${model.requestCount}.`,
       );
     }
+    if (
+      retirementResults.length !== 2 ||
+      retirementStorageSamples.length !== retirementResults.length ||
+      !model.retiredPayloadVerified
+    ) {
+      throw new Error("Long-session prefix retirement verification is incomplete.");
+    }
 
     return {
       workloadTurnCount,
@@ -337,11 +404,20 @@ export async function runLongSessionBenchmark(
       resumeVerified: true,
       recallVerified: true,
       shadow: shadowSummary,
-      compaction: summarizeCompactions(
-        compactionResults,
-        compactionStorageSamples,
-        database,
-      ),
+      compaction: summarizeCompactions(compactionResults, compactionStorageSamples),
+      retirement: {
+        count: retirementResults.length,
+        results: Object.freeze([...retirementResults]),
+        databaseAndWalBytes: {
+          samples: Object.freeze([...retirementStorageSamples]),
+          totalDelta: retirementStorageSamples.reduce(
+            (total, sample) => total + sample.delta,
+            0,
+          ),
+        },
+        providerRequestCountUnchanged: true,
+        retiredPayloadVerified: true,
+      },
       database,
       projection: {
         policy: defaultTuiProjectionPolicy,
@@ -410,6 +486,7 @@ class BenchmarkModelClient implements ModelClient {
   readonly prepareDurations: number[] = [];
   maxPromptSegmentCount = 0;
   requestCount = 0;
+  retiredPayloadVerified = false;
   private readonly inputs = new WeakMap<object, ModelRequestInput>();
   private readonly serializer = new OpenAIChatModelClient({
     apiKey: "g0-benchmark-no-network",
@@ -450,6 +527,14 @@ class BenchmarkModelClient implements ModelClient {
     }
     const userPrompt = lastUserPrompt(input.messages);
     if (userPrompt === "benchmark cancellation turn") {
+      if (
+        input.messages.some((message) =>
+          JSON.stringify(message).includes(historicalMarker),
+        )
+      ) {
+        throw new Error("Retired marker remained in the provider payload.");
+      }
+      this.retiredPayloadVerified = true;
       this.cancellationRequestResolve();
       return waitForAbort(options.signal);
     }
@@ -805,7 +890,6 @@ class BenchmarkShadowController {
 function summarizeCompactions(
   results: readonly ContextCompactionResult[],
   storageSamples: readonly CompactionStorageSample[],
-  database: LongSessionBenchmarkResult["database"],
 ): LongSessionBenchmarkResult["compaction"] {
   if (results.length < 1 || results.some((result) => result.status !== "compacted")) {
     throw new Error("Long-session benchmark did not commit its context revisions.");
@@ -815,12 +899,8 @@ function summarizeCompactions(
     { status: "compacted" }
   >[];
   const last = compacted.at(-1);
-  if (
-    last === undefined ||
-    last.revisionNumber !== database.revisionNumber ||
-    last.totalOverrideCount !== database.totalOverrideCount
-  ) {
-    throw new Error("Long-session compaction summary does not match durable state.");
+  if (last === undefined) {
+    throw new Error("Long-session compaction summary is empty.");
   }
   if (
     storageSamples.length !== compacted.length ||
@@ -841,7 +921,7 @@ function summarizeCompactions(
       (total, result) => total + result.addedOverrideCount,
       0,
     ),
-    totalOverrideCount: last.totalOverrideCount,
+    activeOverrideCount: last.activeOverrideCount,
     activeRevisionNumber: last.revisionNumber,
     providerRequestCountUnchanged: true,
   };
@@ -893,6 +973,10 @@ async function createBenchmarkSession(input: {
     manualCompactionTrigger: () => ({
       kind: "benchmark_forced",
       targetTokens: 0,
+    }),
+    manualRetirementTrigger: () => ({
+      kind: "benchmark_forced",
+      targetTokens: 1,
     }),
   };
   return createRuntimeSession(sessionInput, dependencies);
@@ -1058,7 +1142,7 @@ function readDatabaseSummary(
     const revision = database
       .query(
         `SELECT cr.revision_number, cr.kind, cr.keep_from_ordinal,
-                cr.total_override_count,
+                cr.active_override_count,
                 sm.active_revision_id = cr.revision_id AS active_matches,
                 cms.revision_id = cr.revision_id AS measured_matches
          FROM session_meta sm
@@ -1090,15 +1174,15 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V6_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V7_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),
       toolResultCount: numberFromDatabase(counts.tool_result_count),
       contextRevisionCount: numberFromDatabase(counts.context_revision_count),
       contextOverrideCount: numberFromDatabase(counts.context_override_count),
-      totalOverrideCount: numberFromDatabase(
-        revision.total_override_count as number | bigint,
+      activeOverrideCount: numberFromDatabase(
+        revision.active_override_count as number | bigint,
       ),
       revisionNumber: numberFromDatabase(revision.revision_number as number | bigint),
       revisionKind: String(revision.kind),
@@ -1256,6 +1340,13 @@ type LongSessionSample = MemorySnapshot & {
 };
 
 type CompactionStorageSample = {
+  revisionNumber: number;
+  before: number;
+  after: number;
+  delta: number;
+};
+
+type RetirementStorageSample = {
   revisionNumber: number;
   before: number;
   after: number;

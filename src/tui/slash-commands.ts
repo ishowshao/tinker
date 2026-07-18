@@ -5,7 +5,10 @@ export type SlashCommand = {
 
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "status", description: "Show session and context details" },
-  { name: "compact", description: "Compact eligible historical tool output" },
+  {
+    name: "compact",
+    description: "Swap tool output or retire a cold history prefix",
+  },
   { name: "view", description: "View a local UTF-8 text file" },
   { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
@@ -16,6 +19,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 export type ParsedSlashCommand =
   | { type: "status" }
   | { type: "compact" }
+  | { type: "compact_retire" }
   | { type: "view"; filePath: string }
   | { type: "quit" }
   | { type: "model" }
@@ -53,7 +57,10 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     if (tokens.length === 1) {
       return { type: "compact" };
     }
-    throw new SlashCommandError("Usage: /compact");
+    if (tokens.length === 2 && tokens[1] === "retire") {
+      return { type: "compact_retire" };
+    }
+    throw new SlashCommandError("Usage: /compact [retire]");
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };

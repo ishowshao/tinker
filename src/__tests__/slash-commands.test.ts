@@ -65,10 +65,15 @@ describe("findSlashCommand", () => {
 });
 
 describe("parseSlashCommand", () => {
-  test("parses only the zero-argument /compact command", () => {
+  test("keeps /compact swap-only and parses explicit prefix retirement", () => {
     expect(parseSlashCommand("/compact")).toEqual({ type: "compact" });
-    expect(() => parseSlashCommand("/compact now")).toThrow("Usage: /compact");
-    expect(() => parseSlashCommand("/compact --force")).toThrow("Usage: /compact");
+    expect(parseSlashCommand("/compact retire")).toEqual({
+      type: "compact_retire",
+    });
+    expect(() => parseSlashCommand("/compact now")).toThrow("Usage: /compact [retire]");
+    expect(() => parseSlashCommand("/compact --force")).toThrow(
+      "Usage: /compact [retire]",
+    );
   });
 
   test("parses /view with relative, absolute, and space-containing paths", () => {

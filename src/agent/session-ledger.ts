@@ -2,13 +2,13 @@ import type { ContextRevisionId, RuntimeIdFactory, SessionId } from "../ids/runt
 import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
-  StoredContextRevisionV6,
-  StoredContextSnapshotV6,
-  StoredSwapOverrideV6,
+  StoredContextRevisionV7,
+  StoredContextSnapshotV7,
+  StoredSwapOverrideV7,
 } from "../context/context-revision";
 import {
   createContextSurface,
-  type StoredContextSurfaceV6,
+  type StoredContextSurfaceV7,
 } from "../context/context-surface";
 import {
   ContextRevisionCompiler,
@@ -33,6 +33,7 @@ import {
   type ToolResultRecord,
 } from "../context/protocol-frame";
 import { ContextBuilder } from "./context-builder";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
 import type {
   AssistantMessage,
   IterationIdentity,
@@ -127,8 +128,8 @@ export type CreateInMemorySessionLedgerInput = {
   idFactory: RuntimeIdFactory;
   systemPrompt?: string;
   initialView?: ProtocolContextView;
-  initialSnapshot?: StoredContextSnapshotV6;
-  initialSurface?: StoredContextSurfaceV6;
+  initialSnapshot?: StoredContextSnapshotV7;
+  initialSurface?: StoredContextSurfaceV7;
   initialToolDefinitions?: readonly ToolDefinition[];
   initialRevisionId?: ContextRevisionId;
   contextBuilder?: ContextBuilder;
@@ -145,9 +146,9 @@ export class InMemorySessionLedger implements SessionLedger {
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
   private readonly revisionCompiler: ContextRevisionCompiler;
-  private readonly revision: StoredContextRevisionV6;
-  private readonly surface: StoredContextSurfaceV6;
-  private readonly activeOverrides: readonly StoredSwapOverrideV6[];
+  private readonly revision: StoredContextRevisionV7;
+  private readonly surface: StoredContextSurfaceV7;
+  private readonly activeOverrides: readonly StoredSwapOverrideV7[];
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
@@ -623,10 +624,10 @@ export class InMemorySessionLedger implements SessionLedger {
 
 function snapshotFor(
   canonical: ProtocolContextView,
-  revision: StoredContextRevisionV6,
-  surface: StoredContextSurfaceV6,
-  activeOverrides: readonly StoredSwapOverrideV6[],
-): StoredContextSnapshotV6 {
+  revision: StoredContextRevisionV7,
+  surface: StoredContextSurfaceV7,
+  activeOverrides: readonly StoredSwapOverrideV7[],
+): StoredContextSnapshotV7 {
   return Object.freeze({
     meta: Object.freeze({
       sessionId: canonical.sessionId,
@@ -645,12 +646,13 @@ function createInMemoryContextSurface(input: {
   tools: readonly ToolDefinition[];
   idFactory: RuntimeIdFactory;
   createdAt: string;
-}): StoredContextSurfaceV6 {
+}): StoredContextSurfaceV7 {
   const serializedTools = input.tools.map((tool) => stableJsonStringify(tool));
   return createContextSurface({
     surfaceId: input.idFactory.createContextSurfaceId(),
     sessionId: input.sessionId,
     systemPrompt: input.systemPrompt,
+    recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
     toolDefinitions: input.tools,
     prepared: {
       requestConfigHash: sha256("in-memory-model-request-v1"),

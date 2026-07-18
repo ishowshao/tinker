@@ -11,11 +11,11 @@ import { ContextProtocolValidator } from "./context-protocol-validator";
 import type {
   CompiledContextEntry,
   CompiledRevisionContext,
-  StoredContextSnapshotV6,
-  StoredInitialContextRevisionV6,
+  StoredContextSnapshotV7,
+  StoredInitialContextRevisionV7,
   SwapOverride,
 } from "./context-revision";
-import type { StoredContextSurfaceV6 } from "./context-surface";
+import type { StoredContextSurfaceV7 } from "./context-surface";
 import {
   immutableRecord,
   materializeAgentMessages,
@@ -35,7 +35,7 @@ export class ContextRevisionCompiler {
     private readonly compiledValidator = new CompiledContextValidator(),
   ) {}
 
-  compileActive(snapshot: StoredContextSnapshotV6): CompiledRevisionContext {
+  compileActive(snapshot: StoredContextSnapshotV7): CompiledRevisionContext {
     validateSnapshotIdentity(snapshot);
     this.protocolValidator.validate(snapshot.canonical);
     const overrides = overrideMap(snapshot.activeOverrides);
@@ -43,6 +43,7 @@ export class ContextRevisionCompiler {
       canonical: snapshot.canonical,
       revisionId: snapshot.revision.revisionId,
       overrides,
+      keepFromOrdinal: snapshot.revision.keepFromOrdinal,
       systemPrompt: snapshot.surface.systemPrompt,
       surfaceSha256: snapshot.surface.surfaceSha256,
     });
@@ -74,8 +75,9 @@ export class ContextRevisionCompiler {
     canonical: ProtocolContextView;
     activeOverrides: readonly SwapOverride[];
     addedOverrides: readonly SwapOverride[];
-    activeSurface: StoredContextSurfaceV6;
-    surface?: StoredContextSurfaceV6;
+    activeSurface: StoredContextSurfaceV7;
+    surface?: StoredContextSurfaceV7;
+    keepFromOrdinal?: number;
   }): CompiledRevisionContext {
     this.protocolValidator.validate(input.canonical);
     if (
@@ -94,7 +96,33 @@ export class ContextRevisionCompiler {
       input.activeOverrides,
       input.activeSurface,
     );
-    const candidateOverrides = [...input.activeOverrides, ...input.addedOverrides];
+    const keepFromOrdinal =
+      input.keepFromOrdinal ?? input.active.manifest.keepFromOrdinal;
+    if (
+      !Number.isSafeInteger(keepFromOrdinal) ||
+      keepFromOrdinal < input.active.manifest.keepFromOrdinal
+    ) {
+      throw new ContextRevisionError(
+        "Prospective keep boundary must move monotonically forward.",
+      );
+    }
+    const changes = [
+      input.addedOverrides.length > 0,
+      input.surface !== undefined &&
+        input.surface.surfaceSha256 !== input.activeSurface.surfaceSha256,
+      keepFromOrdinal > input.active.manifest.keepFromOrdinal,
+    ].filter(Boolean).length;
+    if (changes > 1) {
+      throw new ContextRevisionError(
+        "A prospective context revision cannot combine revision semantics.",
+      );
+    }
+    const candidateOverrides =
+      keepFromOrdinal > input.active.manifest.keepFromOrdinal
+        ? input.activeOverrides.filter(
+            (override) => override.ordinal >= keepFromOrdinal,
+          )
+        : [...input.activeOverrides, ...input.addedOverrides];
     const overrides = overrideMap(candidateOverrides);
     if (overrides.size !== candidateOverrides.length) {
       throw new ContextRevisionError("Prospective overrides contain duplicate IDs.");
@@ -104,6 +132,7 @@ export class ContextRevisionCompiler {
       canonical: input.canonical,
       revisionId: input.active.revisionId,
       overrides,
+      keepFromOrdinal,
       systemPrompt: surface.systemPrompt,
       surfaceSha256: surface.surfaceSha256,
     });
@@ -121,11 +150,19 @@ function compileEntries(input: {
   canonical: ProtocolContextView;
   revisionId: CompiledRevisionContext["revisionId"];
   overrides: ReadonlyMap<string, SwapOverride>;
+  keepFromOrdinal: number;
   systemPrompt: string;
   surfaceSha256: string;
 }): CompiledRevisionContext {
-  const materialized = materializeAgentMessages(input.canonical.messages);
-  const entries = input.canonical.messages.map((record, index) => {
+  const records =
+    input.keepFromOrdinal === 1
+      ? input.canonical.messages
+      : [
+          requireItem(input.canonical.messages, 0, "canonical system message"),
+          ...input.canonical.messages.slice(input.keepFromOrdinal - 1),
+        ];
+  const materialized = materializeAgentMessages(records);
+  const entries = records.map((record, index) => {
     const canonicalMessage = requireItem(materialized, index, "canonical message");
     const override = input.overrides.get(record.messageId);
     const surfacedMessage =
@@ -152,8 +189,17 @@ function compileEntries(input: {
     });
   });
   const manifest = Object.freeze({
-    frameCount: input.canonical.frames.length,
-    messageCount: entries.length,
+    canonicalFrameCount: input.canonical.frames.length,
+    canonicalMessageCount: input.canonical.messages.length,
+    activeFrameCount:
+      input.keepFromOrdinal === 1
+        ? input.canonical.frames.length
+        : 1 +
+          input.canonical.frames.filter(
+            (frame) => frame.firstOrdinal >= input.keepFromOrdinal,
+          ).length,
+    activeMessageCount: entries.length,
+    keepFromOrdinal: input.keepFromOrdinal,
     canonicalSequenceHash: canonicalSequenceHash(input.canonical),
     renderedMessageHash: renderedMessageHash(entries),
     surfaceSha256: input.surfaceSha256,
@@ -195,7 +241,7 @@ function swappedToolMessage(
   };
 }
 
-function validateSnapshotIdentity(snapshot: StoredContextSnapshotV6): void {
+function validateSnapshotIdentity(snapshot: StoredContextSnapshotV7): void {
   if (
     snapshot.meta.sessionId !== snapshot.canonical.sessionId ||
     snapshot.revision.sessionId !== snapshot.canonical.sessionId ||
@@ -208,8 +254,12 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV6): void {
       "Active context revision identity does not match canonical history.",
     );
   }
-  if (snapshot.revision.keepFromOrdinal !== 1) {
-    throw new ContextRevisionError("Unsupported active context revision.");
+  if (
+    !Number.isSafeInteger(snapshot.revision.keepFromOrdinal) ||
+    snapshot.revision.keepFromOrdinal < 1 ||
+    snapshot.revision.keepFromOrdinal > snapshot.revision.sourceThroughOrdinal
+  ) {
+    throw new ContextRevisionError("Active context revision boundary is invalid.");
   }
   const firstFrame = snapshot.canonical.frames[0];
   const firstMessage = snapshot.canonical.messages[0];
@@ -242,7 +292,8 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV6): void {
       snapshot.revision.parentRevisionId !== null ||
       snapshot.revision.sourceThroughOrdinal !== 1 ||
       snapshot.revision.addedOverrideCount !== 0 ||
-      snapshot.revision.totalOverrideCount !== 0 ||
+      snapshot.revision.keepFromOrdinal !== 1 ||
+      snapshot.revision.activeOverrideCount !== 0 ||
       snapshot.activeOverrides.length !== 0
     ) {
       throw new ContextRevisionError("Initial context revision invariant failed.");
@@ -251,24 +302,47 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV6): void {
     snapshot.revision.kind === "swap_only" &&
     (snapshot.revision.revisionNumber < 2 ||
       snapshot.revision.addedOverrideCount < 1 ||
-      snapshot.revision.totalOverrideCount < snapshot.revision.addedOverrideCount ||
+      snapshot.revision.activeOverrideCount < snapshot.revision.addedOverrideCount ||
       snapshot.revision.policyVersion !== "swap-only-v1" ||
       snapshot.revision.rendererFormat !== "swap-observation-v1" ||
-      snapshot.activeOverrides.length !== snapshot.revision.totalOverrideCount)
+      snapshot.activeOverrides.length !== snapshot.revision.activeOverrideCount)
   ) {
     throw new ContextRevisionError("Swap context revision invariant failed.");
   } else if (
     snapshot.revision.kind === "surface_refresh" &&
     (snapshot.revision.revisionNumber < 2 ||
       snapshot.revision.addedOverrideCount !== 0 ||
-      snapshot.activeOverrides.length !== snapshot.revision.totalOverrideCount)
+      snapshot.activeOverrides.length !== snapshot.revision.activeOverrideCount)
   ) {
     throw new ContextRevisionError("Surface context revision invariant failed.");
+  } else if (
+    snapshot.revision.kind === "prefix_retirement" &&
+    (snapshot.revision.revisionNumber < 2 ||
+      snapshot.revision.keepFromOrdinal <= 1 ||
+      snapshot.revision.addedOverrideCount !== 0 ||
+      snapshot.revision.retiredThroughOrdinal !==
+        snapshot.revision.keepFromOrdinal - 1 ||
+      snapshot.revision.retiredTurnCount < 1 ||
+      snapshot.revision.retiredFrameCount < 1 ||
+      snapshot.revision.retiredMessageCount < 1 ||
+      snapshot.activeOverrides.length !== snapshot.revision.activeOverrideCount)
+  ) {
+    throw new ContextRevisionError("Prefix retirement revision invariant failed.");
+  }
+
+  if (
+    snapshot.activeOverrides.some(
+      (override) => override.ordinal < snapshot.revision.keepFromOrdinal,
+    )
+  ) {
+    throw new ContextRevisionError(
+      "Active context revision contains an override before its keep boundary.",
+    );
   }
 
   if (
     activeOverrideManifestHash(snapshot.activeOverrides) !==
-    snapshot.revision.overrideManifestSha256
+    snapshot.revision.activeOverrideManifestSha256
   ) {
     throw new ContextRevisionError(
       "Active context revision override manifest does not match stored overrides.",
@@ -279,9 +353,9 @@ function validateSnapshotIdentity(snapshot: StoredContextSnapshotV6): void {
 export function createInitialContextRevision(input: {
   revisionId: ContextRevisionId;
   canonical: ProtocolContextView;
-  surface: StoredContextSurfaceV6;
+  surface: StoredContextSurfaceV7;
   createdAt: string;
-}): StoredInitialContextRevisionV6 {
+}): StoredInitialContextRevisionV7 {
   const firstFrame = input.canonical.frames[0];
   const firstMessage = input.canonical.messages[0];
   if (
@@ -311,8 +385,8 @@ export function createInitialContextRevision(input: {
     keepFromOrdinal: 1,
     sourceThroughOrdinal: 1,
     addedOverrideCount: 0,
-    totalOverrideCount: 0,
-    overrideManifestSha256: activeOverrideManifestHash([]),
+    activeOverrideCount: 0,
+    activeOverrideManifestSha256: activeOverrideManifestHash([]),
     canonicalSequenceSha256: canonicalSequenceHash(input.canonical, 1),
     renderedMessageSha256: canonicalRenderedMessageHash(input.canonical, 1),
     createdAt: input.createdAt,

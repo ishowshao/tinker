@@ -20,6 +20,7 @@ import {
   createContextSurface,
 } from "../context/context-surface";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
 import { swapOnlyPolicyV1 } from "../context/context-policy";
 import { SwapPlanner } from "../context/swap-planner";
 import { runtimeIdFactory } from "../ids/runtime-id";
@@ -82,7 +83,7 @@ describe("I2 deterministic context compaction", () => {
         previousRevisionNumber: 1,
         revisionNumber: 2,
         addedOverrideCount: 1,
-        totalOverrideCount: 1,
+        activeOverrideCount: 1,
       });
       if (first.status !== "compacted") {
         throw new Error("Expected the first compaction to commit revision 2.");
@@ -94,7 +95,7 @@ describe("I2 deterministic context compaction", () => {
       expect(firstSnapshot.revision).toMatchObject({
         kind: "swap_only",
         revisionNumber: 2,
-        totalOverrideCount: 1,
+        activeOverrideCount: 1,
       });
       expect(firstSnapshot.activeOverrides).toHaveLength(1);
       expect(readCanonicalStorage(fixture.store.databasePath)).toEqual(
@@ -141,7 +142,7 @@ describe("I2 deterministic context compaction", () => {
         previousRevisionNumber: 2,
         revisionNumber: 3,
         addedOverrideCount: 1,
-        totalOverrideCount: 2,
+        activeOverrideCount: 2,
       });
 
       const secondSnapshot = fixture.store.loadContextSnapshot();
@@ -286,12 +287,13 @@ describe("I2 deterministic context compaction", () => {
               expectedBaseRevisionId: baseRevisionId,
               expectedBaseRevisionNumber: built.revision.revisionNumber,
               expectedCanonicalThroughOrdinal: built.compiled.canonicalThroughOrdinal,
-              expectedBaseOverrideManifestSha256: built.revision.overrideManifestSha256,
+              expectedBaseActiveOverrideManifestSha256:
+                built.revision.activeOverrideManifestSha256,
               policyVersion: "swap-only-v1",
               rendererFormat: "swap-observation-v1",
               planHash: plan.planHash,
               addedOverrides: plan.addedOverrides,
-              nextOverrideManifestSha256: plan.nextOverrideManifestSha256,
+              nextActiveOverrideManifestSha256: plan.nextActiveOverrideManifestSha256,
               canonicalSequenceSha256: canonicalSequenceHash(built.canonical),
               renderedMessageSha256: renderedMessageHash(candidate.entries),
             },
@@ -338,7 +340,7 @@ describe("I2 deterministic context compaction", () => {
       expect(compacted).toMatchObject({
         status: "compacted",
         revisionNumber: 2,
-        totalOverrideCount: 1,
+        activeOverrideCount: 1,
       });
 
       const base = fixture.store.loadContextSnapshot();
@@ -351,6 +353,7 @@ describe("I2 deterministic context compaction", () => {
         surfaceId: runtimeIdFactory.createContextSurfaceId(),
         sessionId: fixture.sessionId,
         systemPrompt: "system-v2",
+        recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
         toolDefinitions: tools,
         prepared,
         createdAt: "2026-07-17T00:00:00.000Z",
@@ -369,7 +372,8 @@ describe("I2 deterministic context compaction", () => {
         expectedBaseRevisionId: base.revision.revisionId,
         expectedBaseRevisionNumber: base.revision.revisionNumber,
         expectedCanonicalThroughOrdinal: base.canonical.messages.length,
-        expectedBaseOverrideManifestSha256: base.revision.overrideManifestSha256,
+        expectedBaseActiveOverrideManifestSha256:
+          base.revision.activeOverrideManifestSha256,
         surface,
         changes,
         changeManifestSha256: contextSurfaceChangeManifestHash(changes),
@@ -426,8 +430,8 @@ describe("I2 deterministic context compaction", () => {
       expect(committed).toMatchObject({
         kind: "surface_refresh",
         revisionNumber: 3,
-        totalOverrideCount: 1,
-        overrideManifestSha256: base.revision.overrideManifestSha256,
+        activeOverrideCount: 1,
+        activeOverrideManifestSha256: base.revision.activeOverrideManifestSha256,
       });
       const afterCommit = fixture.store.loadContextSnapshot();
       expect(afterCommit.surface).toEqual(surface);
@@ -451,7 +455,7 @@ describe("I2 deterministic context compaction", () => {
         status: "unchanged",
         outcome: "below_target",
         revisionNumber: 1,
-        totalOverrideCount: 0,
+        activeOverrideCount: 0,
       });
       const noCandidates = await fixture.manager.compact({
         kind: "benchmark_forced",
@@ -461,7 +465,7 @@ describe("I2 deterministic context compaction", () => {
         status: "unchanged",
         outcome: "no_eligible_candidates",
         revisionNumber: 1,
-        totalOverrideCount: 0,
+        activeOverrideCount: 0,
       });
       expect(fixture.store.readActiveMeasuredContextAnchor()).toEqual(measuredAnchor());
       const inspection = new Database(fixture.store.databasePath, {
@@ -507,7 +511,7 @@ describe("I2 deterministic context compaction", () => {
       expect(committed.revision).toMatchObject({
         kind: "swap_only",
         revisionNumber: 2,
-        totalOverrideCount: 1,
+        activeOverrideCount: 1,
       });
       expect(fixture.store.readActiveMeasuredContextAnchor()).toBeUndefined();
       const requestBeforeResume =
@@ -684,7 +688,7 @@ describe("I2 deterministic context compaction", () => {
       expect(reopened.loadContextSnapshot().revision).toMatchObject({
         kind: "swap_only",
         revisionNumber: 2,
-        totalOverrideCount: 1,
+        activeOverrideCount: 1,
       });
       expect(reopened.readActiveMeasuredContextAnchor()).toBeUndefined();
     } finally {

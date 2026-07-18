@@ -16,6 +16,7 @@ import type { ContextUsageSnapshot } from "../agent/context-meter";
 import {
   ContextManagerError,
   type ContextCompactionResult,
+  type ContextRetirementResult,
 } from "../context/context-manager";
 import type { RunAgentResult } from "../agent/types";
 import type { TuiSessionController } from "../tui/tui-session-controller";
@@ -54,6 +55,9 @@ function createSessionController(
   compact: () => Promise<ContextCompactionResult> = async () => {
     throw new Error("not used");
   },
+  retire: () => Promise<ContextRetirementResult> = async () => {
+    throw new Error("not used");
+  },
 ): TuiSessionController {
   const binding = {
     sessionId: "session-1" as SessionId,
@@ -67,6 +71,7 @@ function createSessionController(
     subscribe: () => () => undefined,
     listSessions: async () => [],
     compact,
+    retire,
     resume: async () => {
       throw new Error("not used");
     },
@@ -260,7 +265,7 @@ describe("tui components", () => {
               previousRevisionNumber: 1,
               revisionNumber: 2,
               addedOverrideCount: 3,
-              totalOverrideCount: 3,
+              activeOverrideCount: 3,
               originalObservationBytes: 42_762,
               projectedObservationBytes: 1_665,
               rawTokensBefore: 43_964,
@@ -316,6 +321,62 @@ describe("tui components", () => {
     );
     expect(lastFrame()).not.toContain("/tmp/private");
     expect(lastFrame()).not.toContain("ctx://message/private");
+    cleanup();
+  });
+
+  test("runs /compact retire explicitly and reports Recall availability", async () => {
+    let runCalls = 0;
+    let retireCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+          undefined,
+          async () => {
+            retireCalls += 1;
+            return {
+              status: "retired",
+              outcome: "target_reached",
+              previousRevisionId: runtimeIdFactory.createContextRevisionId(),
+              revisionId: runtimeIdFactory.createContextRevisionId(),
+              previousRevisionNumber: 2,
+              revisionNumber: 3,
+              previousKeepFromOrdinal: 1,
+              keepFromOrdinal: 42,
+              retiredTurnCount: 17,
+              retiredFrameCount: 40,
+              retiredMessageCount: 41,
+              activeOverrideCount: 2,
+              rawTokensBefore: 78_248,
+              rawTokensAfter: 37_473,
+              guardedTokensBefore: 86_073,
+              guardedTokensAfter: 41_220,
+              targetTokens: 50_000,
+              planHash: "b".repeat(64),
+              planningDurationMs: 1.1,
+              validationDurationMs: 1.2,
+              transactionDurationMs: 1.3,
+              activationDurationMs: 0.7,
+              durationMs: 4.3,
+            };
+          },
+        )}
+      />,
+    );
+
+    await submitInput(stdin, "/compact retire");
+    await Bun.sleep(30);
+    expect(lastFrame()).toContain("Context prefix retired: revision 2 -> 3");
+    expect(lastFrame()).toContain("17 turns removed from the active request");
+    expect(lastFrame()).toContain("86,073 -> 41,220");
+    expect(lastFrame()).toContain("estimated tokens (-52.1%)");
+    expect(lastFrame()).toContain("available through Recall");
+    expect(retireCalls).toBe(1);
+    expect(runCalls).toBe(0);
     cleanup();
   });
 

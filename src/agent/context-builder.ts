@@ -2,20 +2,20 @@ import type { ToolDefinition } from "../tools/types";
 import type {
   BuiltContextRequest,
   CompiledRevisionContext,
-  StoredContextRevisionV6,
+  StoredContextRevisionV7,
   SwapOverride,
 } from "../context/context-revision";
 import type { ProtocolContextView } from "../context/protocol-frame";
-import type { StoredContextSurfaceV6 } from "../context/context-surface";
+import type { StoredContextSurfaceV7 } from "../context/context-surface";
 import { stableJsonStringify } from "../model/model-request-preflight";
 
 export class ContextBuilder {
   build(input: {
     canonical: ProtocolContextView;
-    revision: StoredContextRevisionV6;
+    revision: StoredContextRevisionV7;
     activeOverrides: readonly SwapOverride[];
     compiled: CompiledRevisionContext;
-    surface: StoredContextSurfaceV6;
+    surface: StoredContextSurfaceV7;
     tools: readonly ToolDefinition[];
     candidateUserPrompt?: string;
   }): BuiltContextRequest {

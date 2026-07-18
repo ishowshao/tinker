@@ -1,4 +1,7 @@
-import type { ContextCompactionResult } from "../context/context-manager";
+import type {
+  ContextCompactionResult,
+  ContextRetirementResult,
+} from "../context/context-manager";
 import type {
   ExecuteTurnInput,
   RuntimeSession,
@@ -24,6 +27,7 @@ export type TuiSessionController = {
   subscribe: (listener: () => void) => () => void;
   listSessions: () => Promise<readonly SessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
+  retire: () => Promise<ContextRetirementResult>;
   resume: (sessionId: SessionId) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
   switchModel: (profile: ModelProfile) => Promise<void>;
@@ -66,6 +70,10 @@ export class DefaultTuiSessionController implements TuiSessionController {
 
   compact(): Promise<ContextCompactionResult> {
     return this.serialize(() => this.binding.runtimeSession.compactContext());
+  }
+
+  retire(): Promise<ContextRetirementResult> {
+    return this.serialize(() => this.binding.runtimeSession.retireContext());
   }
 
   resume(sessionId: SessionId): Promise<void> {

@@ -6,6 +6,10 @@ import {
   RUNTIME_INSTRUCTIONS,
 } from "../cli/config";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
+import {
+  CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
+  renderRecallRetirementContract,
+} from "../context/recall-retirement-contract";
 import { TEST_CONTEXT_PROFILE } from "./test-runtime";
 
 const TEST_PROFILES_JSON = JSON.stringify({
@@ -341,15 +345,10 @@ describe("system prompt", () => {
     );
     expect(prompt).toContain("A successful paginated Read is sufficient.");
     expect(prompt).toContain("Use Bash to run tests");
-    expect(prompt).toContain(
-      "Use Recall to search or retrieve model-visible history from the current session.",
-    );
-    expect(prompt).toContain(
-      "Recall results are historical snapshots, not current workspace state.",
-    );
-    expect(prompt).toContain(
-      "Use Read and Grep to verify current files, and TaskOutput for current task output.",
-    );
+    expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v1");
+    expect(prompt).toContain(renderRecallRetirementContract());
+    expect(prompt).toContain("use Recall search and then Recall get");
+    expect(prompt).toContain("Recall is historical session state");
     expect(prompt).toContain(
       "An empty Recall search does not prove that information does not exist.",
     );

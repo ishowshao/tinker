@@ -7,6 +7,7 @@ import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
 import { ContextSwapRenderer } from "../context/context-swap-renderer";
+import { validateStoredContextSurface } from "../context/context-surface";
 import {
   materializeAgentMessages,
   rawResultHash,
@@ -44,8 +45,11 @@ describe("ContextRevisionCompiler", () => {
       built.compiled.entries.every((entry) => entry.representation === "canonical"),
     ).toBe(true);
     expect(built.compiled.manifest).toMatchObject({
-      frameCount: built.canonical.frames.length,
-      messageCount: legacyMessages.length,
+      canonicalFrameCount: built.canonical.frames.length,
+      canonicalMessageCount: legacyMessages.length,
+      activeFrameCount: built.canonical.frames.length,
+      activeMessageCount: legacyMessages.length,
+      keepFromOrdinal: 1,
     });
 
     const client = openAiSerializer();
@@ -144,10 +148,21 @@ describe("ContextRevisionCompiler", () => {
       new ContextRevisionCompiler().compileActive(snapshot as never),
     ).toThrow("Active context revision");
   });
+
+  test("rejects an unknown stored Recall retirement contract version", () => {
+    const fixture = completedReadFixture("x".repeat(9_000));
+    const surface = fixture.ledger.buildCommittedModelRequest([]).surface;
+    expect(() =>
+      validateStoredContextSurface({
+        ...surface,
+        recallContractVersion: "recall-retirement-unknown",
+      } as never),
+    ).toThrow("Recall contract version is unsupported");
+  });
 });
 
 describe("SessionStore context snapshot", () => {
-  test("decodes the initial v6 revision without changing durable state", async () => {
+  test("decodes the initial v7 revision without changing durable state", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-"));
     const sessionId = runtimeIdFactory.createSessionId();
     try {
@@ -173,14 +188,14 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(6);
+      expect(store.readMeta().schemaVersion).toBe(7);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 
-  test("fast-fails when active revision metadata no longer matches v6", async () => {
+  test("fast-fails when active revision metadata no longer matches v7", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-revision-bad-"));
     const sessionId = runtimeIdFactory.createSessionId();
     let store: SessionStore | undefined;

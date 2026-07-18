@@ -16,7 +16,7 @@ import { ContextProtocolError } from "./context-protocol-validator";
 import type {
   BuiltContextRequest,
   CompiledRevisionContext,
-  StoredContextRevisionV6,
+  StoredContextRevisionV7,
   SwapOverride,
 } from "./context-revision";
 import {
@@ -49,13 +49,14 @@ export type SwapRevisionPlan = {
   readonly policyVersion: "swap-only-v1";
   readonly baseRevisionId: CompiledRevisionContext["revisionId"];
   readonly baseRevisionNumber: number;
+  readonly baseKeepFromOrdinal: number;
   readonly baseCanonicalThroughOrdinal: number;
-  readonly baseOverrideManifestSha256: string;
+  readonly baseActiveOverrideManifestSha256: string;
   readonly basePrefixHash: string;
   readonly requestConfigHash: string;
   readonly toolSchemaHash: string;
   readonly addedOverrides: readonly SwapOverride[];
-  readonly nextOverrideManifestSha256: string;
+  readonly nextActiveOverrideManifestSha256: string;
   readonly targetTokens: number;
   readonly rawTokensBefore: number;
   readonly rawTokensAfter: number;
@@ -67,7 +68,7 @@ export type SwapRevisionPlan = {
 
 export type SwapPlanningInput = {
   readonly active: CompiledRevisionContext;
-  readonly revision: StoredContextRevisionV6;
+  readonly revision: StoredContextRevisionV7;
   readonly surface: BuiltContextRequest["surface"];
   readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
@@ -178,6 +179,7 @@ export class SwapPlanner {
       input.canonical,
       input.activeOverrides,
       input.policy,
+      input.revision.keepFromOrdinal,
     );
     if (scan.eligible.length === 0) {
       return {
@@ -348,6 +350,7 @@ export class SwapPlanner {
     canonical: ProtocolContextView,
     activeOverrides: readonly SwapOverride[],
     policy: SwapOnlyPolicyV1,
+    keepFromOrdinal: number,
   ): CandidateScan {
     const alreadySwapped = new Set(
       activeOverrides.map((override) => override.messageId),
@@ -369,6 +372,10 @@ export class SwapPlanner {
 
     for (const message of canonical.messages) {
       if (message.role !== "tool") {
+        continue;
+      }
+      if (message.ordinal < keepFromOrdinal) {
+        increment(exclusions, "retired_prefix");
         continue;
       }
       if (alreadySwapped.has(message.messageId)) {
@@ -432,7 +439,7 @@ export function assertPlanBaseCurrent(
   plan: SwapRevisionPlan,
   current: {
     readonly active: CompiledRevisionContext;
-    readonly revision: StoredContextRevisionV6;
+    readonly revision: StoredContextRevisionV7;
     readonly activeOverrides: readonly SwapOverride[];
     readonly activePrepared: PreparedModelRequest;
   },
@@ -442,8 +449,9 @@ export function assertPlanBaseCurrent(
     plan.baseRevisionId !== current.active.revisionId ||
     plan.baseRevisionId !== current.revision.revisionId ||
     plan.baseRevisionNumber !== current.revision.revisionNumber ||
+    plan.baseKeepFromOrdinal !== current.revision.keepFromOrdinal ||
     plan.baseCanonicalThroughOrdinal !== current.active.canonicalThroughOrdinal ||
-    plan.baseOverrideManifestSha256 !==
+    plan.baseActiveOverrideManifestSha256 !==
       activeOverrideManifestHash(current.activeOverrides) ||
     plan.basePrefixHash !== fingerprint.prefixHash ||
     plan.requestConfigHash !== fingerprint.requestConfigHash ||
@@ -467,12 +475,22 @@ function validatePlanningInput(input: SwapPlanningInput): void {
     input.active.sessionId !== input.canonical.sessionId ||
     input.revision.sessionId !== input.canonical.sessionId ||
     input.revision.revisionId !== input.active.revisionId ||
+    input.revision.keepFromOrdinal !== input.active.manifest.keepFromOrdinal ||
     input.active.canonicalThroughOrdinal !== input.canonical.messages.length ||
-    input.revision.overrideManifestSha256 !==
+    input.revision.activeOverrideManifestSha256 !==
       activeOverrideManifestHash(input.activeOverrides)
   ) {
     throw new ContextRevisionError(
       "Active revision does not match canonical planning input.",
+    );
+  }
+  if (
+    input.activeOverrides.some(
+      (override) => override.ordinal < input.revision.keepFromOrdinal,
+    )
+  ) {
+    throw new ContextRevisionError(
+      "Active swap planning input contains a retired override.",
     );
   }
   if (
@@ -658,7 +676,7 @@ function createPlan(input: {
   guardedTokensAfter: number;
 }): SwapRevisionPlan {
   const planningInput = input.input;
-  const nextOverrideManifestSha256 = activeOverrideManifestHash([
+  const nextActiveOverrideManifestSha256 = activeOverrideManifestHash([
     ...planningInput.activeOverrides,
     ...input.addedOverrides,
   ]);
@@ -667,8 +685,10 @@ function createPlan(input: {
     policyVersion: "swap-only-v1",
     baseRevisionId: planningInput.active.revisionId,
     baseRevisionNumber: planningInput.revision.revisionNumber,
+    baseKeepFromOrdinal: planningInput.revision.keepFromOrdinal,
     baseCanonicalThroughOrdinal: planningInput.active.canonicalThroughOrdinal,
-    baseOverrideManifestSha256: planningInput.revision.overrideManifestSha256,
+    baseActiveOverrideManifestSha256:
+      planningInput.revision.activeOverrideManifestSha256,
     basePrefixHash: input.activeFingerprint.prefixHash,
     requestConfigHash: input.activeFingerprint.requestConfigHash,
     toolSchemaHash: input.activeFingerprint.toolSchemaHash,
@@ -677,7 +697,7 @@ function createPlan(input: {
       originalContentSha256: override.originalContentSha256,
       renderedContentSha256: override.renderedContentSha256,
     })),
-    nextOverrideManifestSha256,
+    nextActiveOverrideManifestSha256,
     targetTokens: input.targetTokens,
     projectedPrefixHash: input.projectedFingerprint.prefixHash,
   } as const;

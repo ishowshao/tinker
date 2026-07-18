@@ -8,7 +8,7 @@ import type { IterationIdentity, TurnIdentity } from "../agent/types";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
-  SESSION_SCHEMA_V6_FINGERPRINT,
+  SESSION_SCHEMA_V7_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   verifySessionSchema,
 } from "../session/session-schema";
@@ -34,7 +34,7 @@ describe("session schema identity", () => {
             schema_fingerprint: string;
           }
         ).schema_fingerprint,
-      ).toBe(SESSION_SCHEMA_V6_FINGERPRINT);
+      ).toBe(SESSION_SCHEMA_V7_FINGERPRINT);
       expect(
         database
           .query(
@@ -114,7 +114,7 @@ describe("session schema identity", () => {
   });
 
   test("rejects older schemas without migration", () => {
-    for (const version of [1, 2, 4, 5]) {
+    for (const version of [1, 2, 4, 5, 6]) {
       const sessionId = runtimeIdFactory.createSessionId();
       const database = new Database(":memory:");
       try {

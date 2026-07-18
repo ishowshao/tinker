@@ -36,6 +36,7 @@ import {
   type TurnId,
 } from "../ids/runtime-id";
 import { createContextSurface } from "../context/context-surface";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
 import {
   createSessionCompatibilityContract,
   type SessionStore,
@@ -78,6 +79,7 @@ export function finalizeTestSessionStore(
     surfaceId: runtimeIdFactory.createContextSurfaceId(),
     sessionId: store.sessionId,
     systemPrompt: input.systemPrompt,
+    recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
     ...(input.projectInstruction === undefined
       ? {}
       : { projectInstruction: input.projectInstruction }),
