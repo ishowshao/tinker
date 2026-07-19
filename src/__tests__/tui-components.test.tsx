@@ -816,6 +816,37 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("separates markdown table body rows without splitting wrapped rows", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "assistant-table-rows-1",
+            label: "assistant",
+            text: [
+              "| Name | Value |",
+              "| --- | --- |",
+              "| first | src/tui/components/assistant-markdown.tsx |",
+              "| second | complete |",
+            ].join("\n"),
+            status: "text",
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame() ?? "";
+    const tableLines = frame.split("\n").filter((line) => /^[┌├└│]/.test(line));
+    const separators = tableLines.filter((line) => line.startsWith("├"));
+    const bodyLines = tableLines.filter((line) => line.startsWith("│")).slice(1);
+
+    expect(separators).toHaveLength(2);
+    expect(bodyLines.length).toBeGreaterThan(2);
+    expect(frame).toContain("first");
+    expect(frame).toContain("second");
+    cleanup();
+  });
+
   test("submits /quit to the app quit handler and exits the Ink app", async () => {
     let quitCount = 0;
     let runCount = 0;

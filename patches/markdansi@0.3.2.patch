@@ -1,5 +1,5 @@
 diff --git a/dist/render.js b/dist/render.js
-index 5de3a5d5c1e0c8bfe8dec992ca3d57987f2ba6ee..53237b86315dc56fdb2e6295aea698ee033350ce 100644
+index 5de3a5d5c1e0c8bfe8dec992ca3d57987f2ba6ee..9aff5e7c5553e53c92d3f1b8295e3a5995650767 100644
 --- a/dist/render.js
 +++ b/dist/render.js
 @@ -572,7 +572,7 @@ function renderTable(node, ctx) {
@@ -11,7 +11,27 @@ index 5de3a5d5c1e0c8bfe8dec992ca3d57987f2ba6ee..53237b86315dc56fdb2e6295aea698ee
              return wrapped.map((l) => {
                  const aligned = padCell(l, target, aligns[idx] ?? "left");
                  const padded = `${padStr}${aligned}${padStr}`;
-@@ -627,6 +627,23 @@ function sliceCellContent(text, width) {
+@@ -595,8 +595,8 @@ function renderTable(node, ctx) {
+     };
+     const headerRows = renderRow(header.children.map((c) => renderInline(c.children, ctx)), true);
+-    const bodyRows = rows.flatMap((r) => renderRow(r.children.map((c) => renderInline(c.children, ctx))));
++    const bodyRows = rows.map((r) => renderRow(r.children.map((c) => renderInline(c.children, ctx))));
+     if (ctx.options.tableBorder === "none") {
+-        const lines = [...headerRows, ...bodyRows].map((row) => row.join(" | ")).join("\n");
++        const lines = [...headerRows, ...bodyRows.flat()].map((row) => row.join(" | ")).join("\n");
+         return [`${lines}\n\n`];
+     }
+     const box = TABLE_BOX[ctx.options.tableBorder] || TABLE_BOX.unicode;
+@@ -607,6 +607,7 @@ function renderTable(node, ctx) {
+     const renderFlat = (rowsArr) => rowsArr.map((r) => `${box.vSep}${r.map((c) => c).join(box.vSep)}${box.vSep}\n`).join("");
+     const dense = ctx.options.tableDense;
+-    const out = [top, renderFlat(headerRows), dense ? "" : mid, renderFlat(bodyRows), bottom, "\n"];
++    const renderedBody = bodyRows.map((row) => renderFlat(row)).join(dense ? "" : mid);
++    const out = [top, renderFlat(headerRows), dense ? "" : mid, renderedBody, bottom, "\n"];
+     return out;
+ }
+ function truncateCell(text, width, ellipsis) {
+@@ -627,6 +628,23 @@ function sliceCellContent(text, width) {
      }
      return sliced;
  }
