@@ -47,6 +47,8 @@ bun run tinker run "explain the project structure"
 - `/view <path>` — Open a readable UTF-8 text file in a full-window viewer. Relative
   paths must remain inside the workspace; absolute paths may point outside it. Use
   the keyboard or mouse wheel to scroll and press `Esc` to close the viewer.
+- `/copy` — Copy the current session's last completed assistant response to the
+  system clipboard as raw Markdown.
 - `/status` — Show session and context details.
 - `/skills` — Show available skills, their scope and active state, plus user skills
   shadowed by a project skill.

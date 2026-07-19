@@ -12,6 +12,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   { name: "clear", description: "Start a new session and clear conversation" },
   { name: "view", description: "View a local UTF-8 text file" },
+  { name: "copy", description: "Copy the last response as Markdown" },
   { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
   { name: "session", description: "Manage stored sessions" },
@@ -25,6 +26,7 @@ export type ParsedSlashCommand =
   | { type: "compact_retire" }
   | { type: "clear" }
   | { type: "view"; filePath: string }
+  | { type: "copy" }
   | { type: "quit" }
   | { type: "model" }
   | { type: "model_switch"; profileName: string }
@@ -74,6 +76,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "clear" };
     }
     throw new SlashCommandError("Usage: /clear");
+  }
+  if (command === "/copy") {
+    if (tokens.length === 1) {
+      return { type: "copy" };
+    }
+    throw new SlashCommandError("Usage: /copy");
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };

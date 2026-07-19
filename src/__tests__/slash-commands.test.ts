@@ -86,6 +86,11 @@ describe("parseSlashCommand", () => {
     expect(() => parseSlashCommand("/clear now")).toThrow("Usage: /clear");
   });
 
+  test("parses /copy without arguments", () => {
+    expect(parseSlashCommand("/copy")).toEqual({ type: "copy" });
+    expect(() => parseSlashCommand("/copy now")).toThrow("Usage: /copy");
+  });
+
   test("parses /view with relative, absolute, and space-containing paths", () => {
     expect(parseSlashCommand("/view src/tui/app.tsx")).toEqual({
       type: "view",

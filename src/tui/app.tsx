@@ -7,6 +7,8 @@ import {
   type ContextRetirementResult,
 } from "../context/context-manager";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import type { SessionId } from "../ids/runtime-id";
+import { readLastAssistantResponse } from "../session/session-last-response-reader";
 import { visibleTimelineItems } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
@@ -31,6 +33,7 @@ import type { TuiSessionController } from "./tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { loadViewFile, type ViewFile } from "./view-file";
+import { writeClipboardText } from "./clipboard";
 
 export type AppProps = {
   sessionController: TuiSessionController;
@@ -40,6 +43,11 @@ export type AppProps = {
   profiles?: ModelProfiles;
   persistDefaultProfile?: (profileName: string) => Promise<void>;
   readViewFile?: (workspaceRoot: string, filePath: string) => Promise<ViewFile>;
+  readLastResponse?: (
+    workspaceRoot: string,
+    sessionId: SessionId,
+  ) => Promise<string | undefined>;
+  writeClipboard?: (markdown: string) => Promise<void>;
   onQuit?: () => void;
 };
 
@@ -79,6 +87,7 @@ export function App(props: AppProps) {
   );
   const [isRunning, setIsRunning] = useState(false);
   const [isSessionOperation, setIsSessionOperation] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [showStatus, setShowStatus] = useState(false);
@@ -278,6 +287,31 @@ export function App(props: AppProps) {
       });
   };
 
+  const copyLastResponse = () => {
+    setIsCopying(true);
+    void Promise.resolve()
+      .then(() =>
+        props.readLastResponse === undefined
+          ? readLastAssistantResponse({
+              workspaceRoot,
+              sessionId: binding.sessionId,
+            })
+          : props.readLastResponse(workspaceRoot, binding.sessionId),
+      )
+      .then(async (markdown) => {
+        if (markdown === undefined) {
+          setNotice("No assistant response is available to copy.");
+          return;
+        }
+        await (props.writeClipboard ?? writeClipboardText)(markdown);
+        setNotice("Copied last response as Markdown.");
+      })
+      .catch((error: unknown) => {
+        setNotice(`Copy failed: ${errorMessage(error)}`);
+      })
+      .finally(() => setIsCopying(false));
+  };
+
   const submitAgentPrompt = (prompt: string) => {
     const trimmed = prompt.trim();
     if (trimmed === "" || isRunning) {
@@ -336,6 +370,10 @@ export function App(props: AppProps) {
 
         if (command.type === "view") {
           openFileView(command.filePath);
+          return;
+        }
+        if (command.type === "copy") {
+          copyLastResponse();
           return;
         }
         if (command.type === "status") {
@@ -500,7 +538,7 @@ export function App(props: AppProps) {
                 workspaceRoot={binding.workspaceRoot}
                 gitBranch={gitBranch}
                 contextUsage={state.contextUsage}
-                isDisabled={isRunning || isSessionOperation}
+                isDisabled={isRunning || isSessionOperation || isCopying}
                 history={props.history}
                 commands={availableCommands}
                 onSubmit={onSubmit}

@@ -250,6 +250,87 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("copies the canonical last response as exact Markdown without running the agent", async () => {
+    const markdown = "# Result\n\n```ts\nconst copied = true;\n```\n\n";
+    const reads: Array<{ workspaceRoot: string; sessionId: SessionId }> = [];
+    const copied: string[] = [];
+    const history = new PromptHistory();
+    let runCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+        )}
+        history={history}
+        readLastResponse={async (workspaceRoot, sessionId) => {
+          reads.push({ workspaceRoot, sessionId });
+          return markdown;
+        }}
+        writeClipboard={async (text) => {
+          copied.push(text);
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/copy");
+    await Bun.sleep(25);
+
+    expect(reads).toEqual([
+      { workspaceRoot: "/tmp/tinker", sessionId: "session-1" as SessionId },
+    ]);
+    expect(copied).toEqual([markdown]);
+    expect(runCalls).toBe(0);
+    expect(history.entries).toEqual([]);
+    expect(lastFrame()).toContain("Copied last response as Markdown.");
+    cleanup();
+  });
+
+  test("reports when /copy has no assistant response", async () => {
+    let clipboardCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+        readLastResponse={async () => undefined}
+        writeClipboard={async () => {
+          clipboardCalls += 1;
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/copy");
+    await Bun.sleep(25);
+
+    expect(clipboardCalls).toBe(0);
+    expect(lastFrame()).toContain("No assistant response is available to copy.");
+    cleanup();
+  });
+
+  test("reports clipboard failures from /copy", async () => {
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+        readLastResponse={async () => "answer"}
+        writeClipboard={async () => {
+          throw new Error("clipboard unavailable");
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/copy");
+    await Bun.sleep(25);
+
+    expect(lastFrame()).toContain("Copy failed: clipboard unavailable");
+    cleanup();
+  });
+
   test("shows /skills from the current runtime snapshot without running the agent", async () => {
     const projectionStore = createProjectionStore();
     let runCalls = 0;
