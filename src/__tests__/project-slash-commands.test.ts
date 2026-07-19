@@ -88,6 +88,12 @@ describe("project slash command configuration", () => {
         "/workspace/.tinker.json",
       ),
     ).toThrow("conflicts with built-in command /resume");
+    expect(() =>
+      parseProjectSlashCommands(
+        config([{ ...validCommand, name: "clear" }]),
+        "/workspace/.tinker.json",
+      ),
+    ).toThrow("conflicts with built-in command /clear");
   });
 
   test("accepts a valid file at the 1 MiB limit and rejects a larger file", async () => {

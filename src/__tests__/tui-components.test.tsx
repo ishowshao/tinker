@@ -75,6 +75,9 @@ function createSessionController(
     listSessions: async () => [],
     compact,
     retire,
+    clear: async () => {
+      throw new Error("not used");
+    },
     resume: async () => {
       throw new Error("not used");
     },
@@ -700,6 +703,85 @@ describe("tui components", () => {
 
     expect(quitCount).toBe(1);
     expect(runCount).toBe(0);
+    cleanup();
+  });
+
+  test("starts a new empty session with /clear without running the agent", async () => {
+    const currentStore = createProjectionStore();
+    await currentStore.append({
+      type: "turn.started",
+      ...testRuntime.turn,
+      eventSequence: 1,
+      timestamp: "2026-07-19T00:00:00.000Z",
+      data: { userPrompt: "old session prompt" },
+    });
+    await currentStore.append({
+      type: "turn.finished",
+      ...testRuntime.turn,
+      eventSequence: 2,
+      timestamp: "2026-07-19T00:00:01.000Z",
+      data: {
+        status: "completed",
+        finalText: "old session answer",
+        lastIteration: testRuntime.iteration,
+        messageCount: 2,
+      },
+    });
+
+    const newSessionId = runtimeIdFactory.createSessionId();
+    const freshStore = new TuiProjectionStore({
+      sessionId: newSessionId,
+      modelName: "model",
+      workspaceRoot: "/tmp/tinker",
+    });
+    let runCount = 0;
+    let clearCount = 0;
+    const listeners = new Set<() => void>();
+    const baseController = createSessionController(currentStore, async () => {
+      runCount += 1;
+      return completedResult();
+    });
+    const currentBinding = baseController.getBinding();
+    const freshBinding = {
+      ...currentBinding,
+      sessionId: newSessionId,
+      projectionStore: freshStore,
+    };
+    let activeBinding = currentBinding;
+    const controller: TuiSessionController = {
+      ...baseController,
+      getBinding: () => activeBinding,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      clear: async () => {
+        clearCount += 1;
+        activeBinding = freshBinding;
+        for (const listener of listeners) {
+          listener();
+        }
+      },
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={controller} />,
+    );
+
+    expect(lastFrame()).toContain("old session prompt");
+    await submitInput(stdin, "/clear");
+    await Bun.sleep(25);
+
+    const frame = lastFrame() ?? "";
+    const normalizedFrame = frame.replace(/\s+/g, " ");
+    expect(clearCount).toBe(1);
+    expect(runCount).toBe(0);
+    expect(frame).toContain(newSessionId);
+    expect(frame).toContain("Started new session");
+    expect(normalizedFrame).toContain(
+      "Previous session remains available via /resume.",
+    );
+    expect(frame).not.toContain("old session prompt");
+    expect(frame).not.toContain("old session answer");
     cleanup();
   });
 

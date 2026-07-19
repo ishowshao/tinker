@@ -30,6 +30,7 @@ export type TuiSessionController = {
   listSessions: () => Promise<readonly SessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
+  clear: () => Promise<void>;
   resume: (sessionId: SessionId) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
   switchModel: (profile: ModelProfile) => Promise<void>;
@@ -52,6 +53,9 @@ export class DefaultTuiSessionController implements TuiSessionController {
     ) => Promise<ManagedTuiSessionBinding>,
     private readonly createSessionWithProfile: (
       profile: ModelProfile,
+    ) => Promise<ManagedTuiSessionBinding>,
+    private readonly createFreshSession: (
+      current: TuiSessionBinding,
     ) => Promise<ManagedTuiSessionBinding>,
   ) {
     this.binding = initial;
@@ -78,31 +82,24 @@ export class DefaultTuiSessionController implements TuiSessionController {
     return this.serialize(() => this.binding.runtimeSession.retireContext());
   }
 
+  clear(): Promise<void> {
+    return this.serialize(() =>
+      this.replaceSession(
+        "Cannot clear the session while a turn, context operation, or background task is active.",
+        (current) => this.createFreshSession(current),
+      ),
+    );
+  }
+
   resume(sessionId: SessionId): Promise<void> {
     return this.serialize(async () => {
-      const current = this.binding;
-      if (sessionId === current.sessionId) {
+      if (sessionId === this.binding.sessionId) {
         throw new Error(`Session ${sessionId} is already current.`);
       }
-      if (!current.runtimeSession.canSwitchSession()) {
-        throw new Error(
-          "Cannot switch sessions while a turn or background task is active.",
-        );
-      }
-
-      const target = await this.openSession(sessionId);
-      try {
-        await current.runtimeSession.dispose({ type: "session_switch" });
-      } catch (error) {
-        await target.runtimeSession
-          .dispose({ type: "runner_failed", error: errorMessage(error) })
-          .catch(() => undefined);
-        throw error;
-      }
-      this.binding = target;
-      for (const listener of this.listeners) {
-        listener();
-      }
+      await this.replaceSession(
+        "Cannot switch sessions while a turn or background task is active.",
+        () => this.openSession(sessionId),
+      );
     });
   }
 
@@ -111,32 +108,42 @@ export class DefaultTuiSessionController implements TuiSessionController {
   }
 
   switchModel(profile: ModelProfile): Promise<void> {
-    return this.serialize(async () => {
-      const current = this.binding;
-      if (!current.runtimeSession.canSwitchSession()) {
-        throw new Error(
-          "Cannot switch models while a turn or background task is active.",
-        );
-      }
-
-      const target = await this.createSessionWithProfile(profile);
-      try {
-        await current.runtimeSession.dispose({ type: "session_switch" });
-      } catch (error) {
-        await target.runtimeSession
-          .dispose({ type: "runner_failed", error: errorMessage(error) })
-          .catch(() => undefined);
-        throw error;
-      }
-      this.binding = target;
-      for (const listener of this.listeners) {
-        listener();
-      }
-    });
+    return this.serialize(() =>
+      this.replaceSession(
+        "Cannot switch models while a turn or background task is active.",
+        () => this.createSessionWithProfile(profile),
+      ),
+    );
   }
 
   dispose(reason: SessionDisposeReason): Promise<void> {
     return this.binding.runtimeSession.dispose(reason);
+  }
+
+  private async replaceSession(
+    unavailableMessage: string,
+    createTarget: (
+      current: ManagedTuiSessionBinding,
+    ) => Promise<ManagedTuiSessionBinding>,
+  ): Promise<void> {
+    const current = this.binding;
+    if (!current.runtimeSession.canSwitchSession()) {
+      throw new Error(unavailableMessage);
+    }
+
+    const target = await createTarget(current);
+    try {
+      await current.runtimeSession.dispose({ type: "session_switch" });
+    } catch (error) {
+      await target.runtimeSession
+        .dispose({ type: "runner_failed", error: errorMessage(error) })
+        .catch(() => undefined);
+      throw error;
+    }
+    this.binding = target;
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 
   private serialize<T>(operation: () => Promise<T>): Promise<T> {

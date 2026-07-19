@@ -10,6 +10,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     name: "compact",
     description: "Swap tool output or retire a cold history prefix",
   },
+  { name: "clear", description: "Start a new session and clear conversation" },
   { name: "view", description: "View a local UTF-8 text file" },
   { name: "model", description: "Switch model profile (new session)" },
   { name: "resume", description: "Choose or resume a session" },
@@ -22,6 +23,7 @@ export type ParsedSlashCommand =
   | { type: "skills" }
   | { type: "compact" }
   | { type: "compact_retire" }
+  | { type: "clear" }
   | { type: "view"; filePath: string }
   | { type: "quit" }
   | { type: "model" }
@@ -66,6 +68,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "compact_retire" };
     }
     throw new SlashCommandError("Usage: /compact [retire]");
+  }
+  if (command === "/clear") {
+    if (tokens.length === 1) {
+      return { type: "clear" };
+    }
+    throw new SlashCommandError("Usage: /clear");
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };

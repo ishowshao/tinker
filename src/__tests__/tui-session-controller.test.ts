@@ -21,6 +21,9 @@ describe("DefaultTuiSessionController", () => {
       async () => {
         throw new Error("not used");
       },
+      async () => {
+        throw new Error("not used");
+      },
     );
     const error = await controller
       .resume("target-session" as SessionId)
@@ -41,6 +44,9 @@ describe("DefaultTuiSessionController", () => {
       async () => {
         throw new Error("not used");
       },
+      async () => {
+        throw new Error("not used");
+      },
     );
     controller.subscribe(() => {
       notifications += 1;
@@ -51,9 +57,92 @@ describe("DefaultTuiSessionController", () => {
     expect(controller.getBinding().sessionId).toBe(target.runtime.sessionId);
     expect(notifications).toBe(1);
   });
+
+  test("clears into a fresh session while preserving the current profile", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    const target = fakeRuntime("fresh-session" as SessionId);
+    const currentBinding = binding(current.runtime, "deepseek");
+    const targetBinding = binding(target.runtime, "deepseek");
+    let receivedProfile: string | undefined;
+    let notifications = 0;
+    const controller = new DefaultTuiSessionController(
+      currentBinding,
+      emptyCatalog(),
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async (active) => {
+        receivedProfile = active.profileName;
+        return targetBinding;
+      },
+    );
+    controller.subscribe(() => {
+      notifications += 1;
+    });
+
+    await controller.clear();
+
+    expect(receivedProfile).toBe("deepseek");
+    expect(current.disposals).toEqual([{ type: "session_switch" }]);
+    expect(target.disposals).toEqual([]);
+    expect(controller.getBinding().sessionId).toBe(target.runtime.sessionId);
+    expect(notifications).toBe(1);
+  });
+
+  test("keeps the current session when fresh session creation fails", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("fresh session failed");
+      },
+    );
+
+    expect(controller.clear()).rejects.toThrow("fresh session failed");
+    expect(controller.getBinding().sessionId).toBe(current.runtime.sessionId);
+    expect(current.disposals).toEqual([]);
+  });
+
+  test("rejects clear while the current runtime cannot switch sessions", async () => {
+    const current = fakeRuntime("current-session" as SessionId, false);
+    let createCount = 0;
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        createCount += 1;
+        throw new Error("must not create");
+      },
+    );
+
+    expect(controller.clear()).rejects.toThrow(
+      "Cannot clear the session while a turn, context operation, or background task is active.",
+    );
+    expect(createCount).toBe(0);
+    expect(current.disposals).toEqual([]);
+  });
 });
 
-function fakeRuntime(sessionId: SessionId): {
+function fakeRuntime(
+  sessionId: SessionId,
+  canSwitchSession = true,
+): {
   runtime: RuntimeSession;
   disposals: SessionDisposeReason[];
 } {
@@ -74,7 +163,7 @@ function fakeRuntime(sessionId: SessionId): {
     retireContext: async () => {
       throw new Error("not used");
     },
-    canSwitchSession: () => true,
+    canSwitchSession: () => canSwitchSession,
     dispose: async (reason) => {
       disposals.push(reason);
     },
@@ -82,11 +171,12 @@ function fakeRuntime(sessionId: SessionId): {
   return { runtime, disposals };
 }
 
-function binding(runtime: RuntimeSession) {
+function binding(runtime: RuntimeSession, profileName?: string) {
   return managedTuiBinding({
     runtimeSession: runtime,
     modelName: "test-model",
     workspaceRoot: "/tmp/tinker",
+    ...(profileName === undefined ? {} : { profileName }),
     projectionStore: new TuiProjectionStore({
       sessionId: runtime.sessionId,
       modelName: "test-model",

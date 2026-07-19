@@ -368,6 +368,23 @@ export function App(props: AppProps) {
             .finally(() => setIsSessionOperation(false));
           return;
         }
+        if (command.type === "clear") {
+          setIsSessionOperation(true);
+          void props.sessionController
+            .clear()
+            .then(() => {
+              const sessionId = props.sessionController.getBinding().sessionId;
+              setGitBranchRefresh((current) => current + 1);
+              setNotice(
+                `Started new session ${sessionId}. Previous session remains available via /resume.`,
+              );
+            })
+            .catch((error: unknown) => {
+              setNotice(`Clear failed: ${errorMessage(error)}`);
+            })
+            .finally(() => setIsSessionOperation(false));
+          return;
+        }
         if (command.type === "quit") {
           props.onQuit?.();
           exit();

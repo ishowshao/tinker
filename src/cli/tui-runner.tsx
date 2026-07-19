@@ -24,6 +24,7 @@ import {
   DefaultTuiSessionController,
   managedTuiBinding,
   type ManagedTuiSessionBinding,
+  type TuiSessionBinding,
 } from "../tui/tui-session-controller";
 import {
   createRunnerModelClient,
@@ -164,39 +165,69 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
       });
     };
 
+    const createNewSessionBinding = async (
+      sessionConfig: RunnerConfig,
+    ): Promise<ManagedTuiSessionBinding> => {
+      const freshProjectionStore = new TuiProjectionStore({
+        sessionId: sessionConfig.sessionId,
+        modelName: sessionConfig.modelName,
+        workspaceRoot,
+      });
+      const runtimeSession = await createSessionForConfig(
+        sessionConfig,
+        "new",
+        sessionConfig.sessionId,
+        freshProjectionStore,
+      );
+      return managedTuiBinding({
+        runtimeSession,
+        modelName: sessionConfig.modelName,
+        workspaceRoot,
+        profileName: sessionConfig.profileName,
+        projectionStore: freshProjectionStore,
+      });
+    };
+
     const createSessionWithProfile = async (
       profile: ModelProfile,
     ): Promise<ManagedTuiSessionBinding> => {
       if (profiles === undefined) {
         throw new Error("Model profiles are not configured.");
       }
-      const profileConfig = readRunnerConfig(
-        {
-          sessionId: createUuidV7() as SessionId,
-          workspaceRoot: config.workspaceRoot,
-          profileName: profile.name,
-          maxIterations: config.maxIterations,
-        },
-        profiles,
+      return createNewSessionBinding(
+        readRunnerConfig(
+          {
+            sessionId: createUuidV7() as SessionId,
+            workspaceRoot: config.workspaceRoot,
+            profileName: profile.name,
+            maxIterations: config.maxIterations,
+          },
+          profiles,
+        ),
       );
-      const profileProjectionStore = new TuiProjectionStore({
-        sessionId: profileConfig.sessionId,
-        modelName: profileConfig.modelName,
-        workspaceRoot,
-      });
-      const runtimeSession = await createSessionForConfig(
-        profileConfig,
-        "new",
-        profileConfig.sessionId,
-        profileProjectionStore,
+    };
+
+    const createFreshSession = async (
+      current: TuiSessionBinding,
+    ): Promise<ManagedTuiSessionBinding> => {
+      const sessionId = createUuidV7() as SessionId;
+      if (profiles === undefined) {
+        return createNewSessionBinding({ ...config, sessionId });
+      }
+      if (current.profileName === undefined) {
+        throw new Error("Current session does not have a model profile.");
+      }
+      return createNewSessionBinding(
+        readRunnerConfig(
+          {
+            sessionId,
+            workspaceRoot: config.workspaceRoot,
+            profileName: current.profileName,
+            maxIterations: config.maxIterations,
+          },
+          profiles,
+        ),
       );
-      return managedTuiBinding({
-        runtimeSession,
-        modelName: profileConfig.modelName,
-        workspaceRoot,
-        profileName: profile.name,
-        projectionStore: profileProjectionStore,
-      });
     };
 
     controller = new DefaultTuiSessionController(
@@ -210,6 +241,7 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
       catalog,
       openStoredSession,
       createSessionWithProfile,
+      createFreshSession,
     );
 
     instance = render(
