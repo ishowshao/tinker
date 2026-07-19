@@ -19,6 +19,7 @@ import { ModelPicker } from "./components/model-picker";
 import { FileViewer, FileViewerLoading } from "./components/file-viewer";
 import { PromptInput } from "./components/prompt-input";
 import { SkillsPanel } from "./components/skills-panel";
+import { McpPanel } from "./components/mcp-panel";
 import {
   ResumeSessionPicker,
   ResumeSessionPickerLoading,
@@ -92,6 +93,7 @@ export function App(props: AppProps) {
   const [notice, setNotice] = useState<string | undefined>(undefined);
   const [showStatus, setShowStatus] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
+  const [showMcp, setShowMcp] = useState(false);
   const [resumePicker, setResumePicker] = useState<ResumePickerState | undefined>(
     undefined,
   );
@@ -352,6 +354,7 @@ export function App(props: AppProps) {
     const trimmed = prompt.trim();
     setShowStatus(false);
     setShowSkills(false);
+    setShowMcp(false);
     setViewError(undefined);
 
     if (trimmed.startsWith("/")) {
@@ -382,6 +385,10 @@ export function App(props: AppProps) {
         }
         if (command.type === "skills") {
           setShowSkills(true);
+          return;
+        }
+        if (command.type === "mcp") {
+          setShowMcp(true);
           return;
         }
         if (command.type === "compact") {
@@ -514,6 +521,11 @@ export function App(props: AppProps) {
           {showSkills ? (
             <Box marginTop={1}>
               <SkillsPanel snapshot={binding.skills()} />
+            </Box>
+          ) : null}
+          {showMcp ? (
+            <Box marginTop={1}>
+              <McpPanel snapshot={binding.mcp()} />
             </Box>
           ) : null}
           <Box marginTop={1}>

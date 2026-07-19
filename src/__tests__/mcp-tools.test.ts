@@ -381,7 +381,7 @@ describe("mcp manager", () => {
     expect(closed).toBe(true);
   });
 
-  test("sorts final model-visible definitions independent of server tool order", async () => {
+  test("exposes sorted runtime inventory independent of server and tool order", async () => {
     const client = await connectTestClient({
       tools: [
         { ...ECHO_TOOL, name: "zeta" },
@@ -392,16 +392,30 @@ describe("mcp manager", () => {
     const runtimeSession = createTestRuntime().runtimeSession;
     const manager = await createMcpManager({
       config: {
-        servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
+        servers: new Map([
+          ["z-server", { command: "unused", args: [], env: {} }],
+          ["a-server", { command: "unused", args: [], env: {} }],
+        ]),
       },
       runtimeSession,
       clientFactory: async () => ({ client, close: () => client.close() }),
     });
     try {
       expect(manager.executors.map((tool) => tool.definition.name)).toEqual([
-        "mcp__srv__alpha",
-        "mcp__srv__zeta",
+        "mcp__a-server__alpha",
+        "mcp__a-server__zeta",
+        "mcp__z-server__alpha",
+        "mcp__z-server__zeta",
       ]);
+      expect(manager.inventory).toEqual({
+        servers: [
+          { name: "a-server", tools: ["alpha", "zeta"] },
+          { name: "z-server", tools: ["alpha", "zeta"] },
+        ],
+      });
+      expect(Object.isFrozen(manager.inventory)).toBe(true);
+      expect(Object.isFrozen(manager.inventory.servers)).toBe(true);
+      expect(Object.isFrozen(manager.inventory.servers[0]?.tools)).toBe(true);
     } finally {
       await manager.dispose();
     }

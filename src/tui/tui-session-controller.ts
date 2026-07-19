@@ -11,6 +11,7 @@ import type {
 import type { RunAgentResult } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
 import type { ModelProfile } from "../cli/model-profiles";
+import type { McpInventorySnapshot } from "../mcp/mcp-manager";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
 import type { TuiProjectionStore } from "./tui-projection-store";
 
@@ -21,6 +22,7 @@ export type TuiSessionBinding = {
   profileName?: string;
   projectionStore: TuiProjectionStore;
   skills(): RuntimeSkillsSnapshot;
+  mcp(): McpInventorySnapshot;
   executeTurn(userPrompt: string, signal: AbortSignal): Promise<RunAgentResult>;
 };
 
@@ -175,6 +177,7 @@ export function managedTuiBinding(input: {
     projectionStore: input.projectionStore,
     runtimeSession: input.runtimeSession,
     skills: () => input.runtimeSession.skills(),
+    mcp: () => input.runtimeSession.mcp(),
     executeTurn: (userPrompt, signal) =>
       input.runtimeSession.executeTurn({
         userPrompt,

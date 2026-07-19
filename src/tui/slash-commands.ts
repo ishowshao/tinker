@@ -6,6 +6,7 @@ export type SlashCommand = {
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "status", description: "Show session and context details" },
   { name: "skills", description: "Show available and active Agent Skills" },
+  { name: "mcp", description: "Show MCP servers and runtime tools" },
   {
     name: "compact",
     description: "Swap tool output or retire a cold history prefix",
@@ -22,6 +23,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 export type ParsedSlashCommand =
   | { type: "status" }
   | { type: "skills" }
+  | { type: "mcp" }
   | { type: "compact" }
   | { type: "compact_retire" }
   | { type: "clear" }
@@ -61,6 +63,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
   }
   if (command === "/skills" && tokens.length === 1) {
     return { type: "skills" };
+  }
+  if (command === "/mcp") {
+    if (tokens.length === 1) {
+      return { type: "mcp" };
+    }
+    throw new SlashCommandError("Usage: /mcp");
   }
   if (command === "/compact") {
     if (tokens.length === 1) {

@@ -15,7 +15,11 @@ import {
   type SessionId,
 } from "../ids/runtime-id";
 import { loadMcpConfig } from "../mcp/mcp-config";
-import { createMcpManager, type McpManager } from "../mcp/mcp-manager";
+import {
+  createMcpManager,
+  type McpInventorySnapshot,
+  type McpManager,
+} from "../mcp/mcp-manager";
 import type { ModelClient } from "../model/model-client";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
 import { SwapPlanner } from "../context/swap-planner";
@@ -112,12 +116,17 @@ export type RuntimeSession = {
   readonly resumed: boolean;
   readonly recovery: SessionRecoveryResult;
   skills(): RuntimeSkillsSnapshot;
+  mcp(): McpInventorySnapshot;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
   retireContext(): Promise<ContextRetirementResult>;
   canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
+
+const EMPTY_MCP_INVENTORY: McpInventorySnapshot = Object.freeze({
+  servers: Object.freeze([]),
+});
 
 export type RuntimeSkillsSnapshot = {
   readonly skills: readonly {
@@ -786,6 +795,10 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.skillCatalog.shadowed.map((entry) => entry.name),
       ),
     });
+  }
+
+  mcp(): McpInventorySnapshot {
+    return this.mcpManager?.inventory ?? EMPTY_MCP_INVENTORY;
   }
 
   private requireContextAutomation(): ContextAutomationDecision {

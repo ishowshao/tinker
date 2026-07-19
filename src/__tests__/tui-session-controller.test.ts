@@ -152,6 +152,7 @@ function fakeRuntime(
     resumed: false,
     recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
     skills: () => ({ skills: [], shadowedNames: [] }),
+    mcp: () => ({ servers: [] }),
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

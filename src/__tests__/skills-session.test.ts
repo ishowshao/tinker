@@ -230,6 +230,7 @@ describe("Agent Skills session lifecycle", () => {
             : undefined,
         createMcpManager: async () => ({
           executors: [mcpTool],
+          inventory: { servers: [{ name: "fixture", tools: ["echo"] }] },
           async dispose() {},
         }),
       };

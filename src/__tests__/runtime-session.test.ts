@@ -915,11 +915,12 @@ describe("RuntimeSession lifecycle", () => {
     expect(result.lastIteration.iterationId).toMatch(uuidV7);
     const runnerApiKeys: (keyof RuntimeSession)[] = [
       "sessionId",
+      "mcp",
       "executeTurn",
       "compactContext",
       "dispose",
     ];
-    expect(runnerApiKeys).toHaveLength(4);
+    expect(runnerApiKeys).toHaveLength(5);
   });
 });
 

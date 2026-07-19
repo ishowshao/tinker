@@ -21,8 +21,18 @@ export type McpClientFactory = (
 ) => Promise<McpClientConnection>;
 
 export type McpManager = {
-  executors: ToolExecutor[];
+  readonly executors: ToolExecutor[];
+  readonly inventory: McpInventorySnapshot;
   dispose(): Promise<void>;
+};
+
+export type McpInventorySnapshot = {
+  readonly servers: readonly McpServerInventory[];
+};
+
+export type McpServerInventory = {
+  readonly name: string;
+  readonly tools: readonly string[];
 };
 
 export type CreateMcpManagerOptions = {
@@ -55,6 +65,7 @@ export async function createMcpManager(
     parsePositiveIntegerEnv("TINKER_MCP_MAX_OBSERVATION_CHARS");
   const connections: McpClientConnection[] = [];
   const executors: ToolExecutor[] = [];
+  const servers: McpServerInventory[] = [];
 
   try {
     for (const [serverName, serverConfig] of options.config.servers) {
@@ -151,12 +162,17 @@ export async function createMcpManager(
         sessionId: options.runtimeSession.sessionId,
         data: { serverName, toolCount: seenToolNames.size },
       });
+      servers.push(
+        Object.freeze({
+          name: serverName,
+          tools: Object.freeze([...seenToolNames].sort(compareText)),
+        }),
+      );
     }
-    executors.sort((left, right) => {
-      const leftName = left.definition.name;
-      const rightName = right.definition.name;
-      return leftName < rightName ? -1 : leftName > rightName ? 1 : 0;
-    });
+    executors.sort((left, right) =>
+      compareText(left.definition.name, right.definition.name),
+    );
+    servers.sort((left, right) => compareText(left.name, right.name));
   } catch (error) {
     const errors = [error];
     await closeConnections(connections, errors);
@@ -171,11 +187,16 @@ export async function createMcpManager(
   let disposePromise: Promise<void> | undefined;
   return {
     executors,
+    inventory: Object.freeze({ servers: Object.freeze(servers) }),
     dispose(): Promise<void> {
       disposePromise ??= disposeConnections(connections);
       return disposePromise;
     },
   };
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 async function disposeConnections(connections: McpClientConnection[]): Promise<void> {

@@ -70,6 +70,11 @@ describe("parseSlashCommand", () => {
     expect(() => parseSlashCommand("/skills activate")).toThrow("Unknown command");
   });
 
+  test("parses the read-only MCP runtime inventory command", () => {
+    expect(parseSlashCommand("/mcp")).toEqual({ type: "mcp" });
+    expect(() => parseSlashCommand("/mcp verbose")).toThrow("Usage: /mcp");
+  });
+
   test("keeps /compact swap-only and parses explicit prefix retirement", () => {
     expect(parseSlashCommand("/compact")).toEqual({ type: "compact" });
     expect(parseSlashCommand("/compact retire")).toEqual({

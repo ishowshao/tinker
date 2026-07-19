@@ -8,6 +8,7 @@ import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
+import { McpPanel } from "../tui/components/mcp-panel";
 import { PromptHistory } from "../tui/prompt-history";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
@@ -27,6 +28,7 @@ import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { parseModelProfiles } from "../cli/model-profiles";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import type { ViewFile } from "../tui/view-file";
+import type { McpInventorySnapshot } from "../mcp/mcp-manager";
 import {
   createTestRuntime,
   TEST_CONTEXT_BUDGET,
@@ -60,6 +62,7 @@ function createSessionController(
   retire: () => Promise<ContextRetirementResult> = async () => {
     throw new Error("not used");
   },
+  mcp: McpInventorySnapshot = { servers: [] },
 ): TuiSessionController {
   const binding = {
     sessionId: "session-1" as SessionId,
@@ -67,6 +70,7 @@ function createSessionController(
     workspaceRoot: "/tmp/tinker",
     projectionStore,
     skills: () => ({ skills: [], shadowedNames: [] }),
+    mcp: () => mcp,
     executeTurn: run,
   };
   return {
@@ -247,6 +251,56 @@ describe("tui components", () => {
     await submitInput(stdin, "/nope");
     await Bun.sleep(25);
     expect(lastFrame()).not.toContain("Estimator");
+    cleanup();
+  });
+
+  test("shows current runtime MCP tools locally without running the agent", async () => {
+    let runCalls = 0;
+    const snapshot: McpInventorySnapshot = {
+      servers: [
+        {
+          name: "playwright",
+          tools: ["browser_click", "browser_navigate"],
+        },
+      ],
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+          undefined,
+          undefined,
+          snapshot,
+        )}
+      />,
+    );
+
+    await submitInput(stdin, "/mcp");
+    await Bun.sleep(25);
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("MCP Tools");
+    expect(frame).toContain("playwright (connected, 2 tools)");
+    expect(frame).toContain("browser_click, browser_navigate");
+    expect(runCalls).toBe(0);
+
+    await submitInput(stdin, "/mcp verbose");
+    await Bun.sleep(25);
+    expect(lastFrame()).not.toContain("browser_click");
+    expect(lastFrame()).toContain("Usage: /mcp");
+    expect(runCalls).toBe(0);
+    cleanup();
+  });
+
+  test("renders an empty MCP runtime inventory", () => {
+    const { lastFrame, cleanup } = render(<McpPanel snapshot={{ servers: [] }} />);
+
+    expect(lastFrame()).toContain("MCP Tools");
+    expect(lastFrame()).toContain("no MCP servers configured");
     cleanup();
   });
 

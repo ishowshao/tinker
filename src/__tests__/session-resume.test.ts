@@ -242,6 +242,7 @@ describe("RuntimeSession resume", () => {
           : undefined,
       createMcpManager: async () => ({
         executors: [mcpTool],
+        inventory: { servers: [{ name: "fixture", tools: ["echo"] }] },
         async dispose() {},
       }),
     };
@@ -267,6 +268,9 @@ describe("RuntimeSession resume", () => {
       expect(model.inputs[0]?.tools.map((tool) => tool.name)).toContain(
         "mcp__fixture__echo",
       );
+      expect(session.mcp()).toEqual({
+        servers: [{ name: "fixture", tools: ["echo"] }],
+      });
       await session.dispose({ type: "tui_exit" });
 
       mcpEnabled = false;
@@ -282,6 +286,7 @@ describe("RuntimeSession resume", () => {
       expect(model.inputs[0]?.tools.map((tool) => tool.name)).not.toContain(
         "mcp__fixture__echo",
       );
+      expect(session.mcp()).toEqual({ servers: [] });
       await session.dispose({ type: "tui_exit" });
 
       const refreshes = sink.events.flatMap((event) =>
