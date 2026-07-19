@@ -1,9 +1,15 @@
 import os from "node:os";
 import path from "node:path";
 import { Box, Text, useInput, usePaste } from "ink";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ContextUsageSnapshot } from "../../agent/context-meter";
 import { formatContextUsageLine } from "../context-format";
+import {
+  type FileMentionMatch,
+  findFileMention,
+  rankWorkspaceFiles,
+  replaceFileMention,
+} from "../file-mention";
 import {
   backspace,
   createLineEditorState,
@@ -20,6 +26,7 @@ import {
   splitAtCursor,
 } from "../line-editor";
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
+import { listWorkspaceFiles, type WorkspaceFileLister } from "../workspace-file-search";
 
 export type PromptInputProps = {
   modelName: string;
@@ -30,6 +37,7 @@ export type PromptInputProps = {
   placeholder?: string;
   history?: { entries: readonly string[] };
   commands?: readonly SlashCommand[];
+  fileLister?: WorkspaceFileLister;
   onSubmit: (value: string) => void;
 };
 
@@ -46,6 +54,11 @@ type PromptInputState = {
   suggestionsDismissed: boolean;
 };
 
+type FileCatalogState =
+  | { status: "idle" }
+  | { status: "ready"; files: readonly string[] }
+  | { status: "error"; message: string };
+
 function createPromptInputState(value = ""): PromptInputState {
   return {
     editor: createLineEditorState(value),
@@ -56,14 +69,55 @@ function createPromptInputState(value = ""): PromptInputState {
 
 export function PromptInput(props: PromptInputProps) {
   const [state, setState] = useState<PromptInputState>(createPromptInputState);
+  const [fileCatalog, setFileCatalog] = useState<FileCatalogState>({
+    status: "idle",
+  });
 
-  const suggestions = state.suggestionsDismissed
-    ? []
-    : matchSlashCommands(state.editor.value, props.commands);
+  const fileMention =
+    state.suggestionsDismissed || state.navigation?.browsing === true
+      ? undefined
+      : findFileMention(state.editor);
+  const filePopupActive = fileMention !== undefined && props.isDisabled !== true;
+  const fileLister = props.fileLister ?? listWorkspaceFiles;
+
+  useEffect(() => {
+    if (!filePopupActive) {
+      return;
+    }
+
+    const controller = new AbortController();
+    void fileLister(props.workspaceRoot, controller.signal).then(
+      (files) => {
+        if (!controller.signal.aborted) {
+          setFileCatalog({ status: "ready", files });
+        }
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) {
+          setFileCatalog({ status: "error", message: errorMessage(error) });
+        }
+      },
+    );
+
+    return () => controller.abort();
+  }, [fileLister, filePopupActive, props.workspaceRoot]);
+
+  const fileQuery = fileMention?.query;
+  const fileMatches = useMemo(
+    () =>
+      fileQuery === undefined || fileCatalog.status !== "ready"
+        ? []
+        : rankWorkspaceFiles(fileCatalog.files, fileQuery),
+    [fileCatalog, fileQuery],
+  );
+
+  const suggestions =
+    state.suggestionsDismissed || filePopupActive
+      ? []
+      : matchSlashCommands(state.editor.value, props.commands);
+  const suggestionCount = filePopupActive ? fileMatches.length : suggestions.length;
   const selectedIndex =
-    suggestions.length === 0
-      ? 0
-      : Math.min(state.suggestionIndex, suggestions.length - 1);
+    suggestionCount === 0 ? 0 : Math.min(state.suggestionIndex, suggestionCount - 1);
 
   const submit = (value: string) => {
     props.onSubmit(value);
@@ -79,6 +133,20 @@ export function PromptInput(props: PromptInputProps) {
       }
 
       return applyEditorChange(current, editor);
+    });
+  };
+
+  const insertFilePath = (filePath: string) => {
+    setState((current) => {
+      const mention = findFileMention(current.editor);
+      if (mention === undefined) {
+        return current;
+      }
+
+      return applyEditorChange(
+        current,
+        replaceFileMention(current.editor, mention, filePath),
+      );
     });
   };
 
@@ -116,11 +184,17 @@ export function PromptInput(props: PromptInputProps) {
 
   useInput(
     (input, key) => {
-      const selected = suggestions[selectedIndex];
+      const selectedFile = fileMatches[selectedIndex];
+      const selectedCommand = suggestions[selectedIndex];
 
       if (key.return) {
-        if (selected !== undefined) {
-          submit(`/${selected.name}`);
+        if (filePopupActive && selectedFile !== undefined) {
+          insertFilePath(selectedFile.path);
+          return;
+        }
+
+        if (selectedCommand !== undefined) {
+          submit(`/${selectedCommand.name}`);
           return;
         }
 
@@ -129,20 +203,40 @@ export function PromptInput(props: PromptInputProps) {
       }
 
       if (key.tab) {
-        if (selected !== undefined) {
-          setState(createPromptInputState(`/${selected.name} `));
+        if (filePopupActive) {
+          if (selectedFile === undefined) {
+            setState((current) => ({ ...current, suggestionsDismissed: true }));
+          } else {
+            insertFilePath(selectedFile.path);
+          }
+          return;
+        }
+
+        if (selectedCommand !== undefined) {
+          setState(createPromptInputState(`/${selectedCommand.name} `));
         }
         return;
       }
 
       if (key.escape) {
-        if (suggestions.length > 0) {
+        if (filePopupActive || suggestions.length > 0) {
           setState((current) => ({ ...current, suggestionsDismissed: true }));
         }
         return;
       }
 
       if (key.upArrow) {
+        if (filePopupActive) {
+          if (fileMatches.length > 0) {
+            setState((current) => ({
+              ...current,
+              suggestionIndex:
+                (selectedIndex + fileMatches.length - 1) % fileMatches.length,
+            }));
+          }
+          return;
+        }
+
         if (suggestions.length > 0) {
           setState((current) => ({
             ...current,
@@ -157,6 +251,16 @@ export function PromptInput(props: PromptInputProps) {
       }
 
       if (key.downArrow) {
+        if (filePopupActive) {
+          if (fileMatches.length > 0) {
+            setState((current) => ({
+              ...current,
+              suggestionIndex: (selectedIndex + 1) % fileMatches.length,
+            }));
+          }
+          return;
+        }
+
         if (suggestions.length > 0) {
           setState((current) => ({
             ...current,
@@ -215,7 +319,9 @@ export function PromptInput(props: PromptInputProps) {
     { isActive: props.isDisabled !== true },
   );
 
-  const showSuggestions = suggestions.length > 0 && props.isDisabled !== true;
+  const showFileSuggestions = filePopupActive;
+  const showSlashSuggestions = suggestions.length > 0 && props.isDisabled !== true;
+  const showSuggestions = showFileSuggestions || showSlashSuggestions;
 
   return (
     <Box flexDirection="column">
@@ -241,7 +347,9 @@ export function PromptInput(props: PromptInputProps) {
           )}
         </Box>
       )}
-      {showSuggestions ? (
+      {showFileSuggestions ? (
+        renderFileSuggestions(fileCatalog, fileMatches, selectedIndex)
+      ) : showSlashSuggestions ? (
         <Box flexDirection="column">
           {suggestions.map((command, index) => (
             <Text key={command.name}>
@@ -253,6 +361,52 @@ export function PromptInput(props: PromptInputProps) {
       ) : null}
     </Box>
   );
+}
+
+function renderFileSuggestions(
+  catalog: FileCatalogState,
+  matches: readonly FileMentionMatch[],
+  selectedIndex: number,
+) {
+  if (catalog.status === "idle") {
+    return <Text dimColor>Searching workspace files…</Text>;
+  }
+
+  if (catalog.status === "error") {
+    return <Text color="red">{catalog.message}</Text>;
+  }
+
+  if (matches.length === 0) {
+    return <Text dimColor>No matching files</Text>;
+  }
+
+  return (
+    <Box flexDirection="column">
+      {matches.map((match, index) => (
+        <Text key={match.path}>
+          {index === selectedIndex ? "❯ " : "  "}
+          {renderMatchedPath(match)}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+function renderMatchedPath(match: FileMentionMatch) {
+  const matchedIndices = new Set(match.indices);
+  return (
+    <Text>
+      {[...match.path].map((char, index) => (
+        <Text key={`${index}:${char}`} bold={matchedIndices.has(index)}>
+          {char}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function contextColor(

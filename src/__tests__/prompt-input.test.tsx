@@ -9,6 +9,7 @@ const ARROW_DOWN = "[B";
 const ARROW_LEFT = "[D";
 const ARROW_RIGHT = "[C";
 const BACKSPACE = "";
+const ESCAPE = "\u001b";
 const CTRL_A = "\u0001";
 const CTRL_E = "\u0005";
 const CTRL_U = "\u0015";
@@ -406,6 +407,102 @@ describe("prompt input", () => {
     await press(stdin, "/", ARROW_UP, "\t", "\r");
 
     expect(submitted).toEqual(["/beta "]);
+    cleanup();
+  });
+
+  test("opens shallow-first file suggestions for @ after whitespace", async () => {
+    let listCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        fileLister={async () => {
+          listCalls += 1;
+          return ["src/deep/file.ts", "src/index.ts", "README.md"];
+        }}
+        onSubmit={() => undefined}
+      />,
+    );
+
+    await press(stdin, "name@example.com");
+    expect(listCalls).toBe(0);
+    expect(stripAnsi(lastFrame())).toContain(MODEL_NAME);
+
+    await press(stdin, " @");
+    const frame = stripAnsi(lastFrame());
+    expect(listCalls).toBe(1);
+    expect(frame).not.toContain(MODEL_NAME);
+    expect(frame.indexOf("README.md")).toBeLessThan(frame.indexOf("src/index.ts"));
+    expect(frame.indexOf("src/index.ts")).toBeLessThan(
+      frame.indexOf("src/deep/file.ts"),
+    );
+    cleanup();
+  });
+
+  test("reuses one file enumeration while filtering and inserts an unquoted path", async () => {
+    let listCalls = 0;
+    const submitted: string[] = [];
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        fileLister={async () => {
+          listCalls += 1;
+          return ["docs/plan.md", "src/prompt input.tsx"];
+        }}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "fix @", "p", "i");
+    expect(listCalls).toBe(1);
+    expect(stripAnsi(lastFrame())).toContain("❯ src/prompt input.tsx");
+    expect(stripAnsi(lastFrame())).not.toContain("docs/plan.md");
+
+    await press(stdin, "\r", "now", "\r");
+    expect(submitted).toEqual(["fix src/prompt input.tsx now"]);
+    cleanup();
+  });
+
+  test("gives file suggestions priority over history navigation", async () => {
+    const submitted: string[] = [];
+    const { stdin, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        history={{ entries: ["old prompt"] }}
+        fileLister={async () => ["root.ts", "src/deep.ts"]}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "@", ARROW_UP, "\r", "\r");
+
+    expect(submitted).toEqual(["src/deep.ts "]);
+    cleanup();
+  });
+
+  test("dismisses file suggestions with escape and submits the raw input", async () => {
+    const submitted: string[] = [];
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        fileLister={async () => ["README.md"]}
+        onSubmit={(value) => submitted.push(value)}
+      />,
+    );
+
+    await press(stdin, "open @");
+    expect(stripAnsi(lastFrame())).toContain("README.md");
+
+    stdin.write(ESCAPE);
+    await Bun.sleep(30);
+    expect(stripAnsi(lastFrame())).not.toContain("README.md");
+    expect(stripAnsi(lastFrame())).toContain(MODEL_NAME);
+
+    await press(stdin, "\r");
+    expect(submitted).toEqual(["open @"]);
     cleanup();
   });
 
