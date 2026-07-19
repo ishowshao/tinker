@@ -58,6 +58,87 @@ describe("DefaultTuiSessionController", () => {
     expect(notifications).toBe(1);
   });
 
+  test("clones before opening the target and switches through the resume binding", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    let openedSessionId: SessionId | undefined;
+    let target: ReturnType<typeof fakeRuntime> | undefined;
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async (sessionId) => {
+        openedSessionId = sessionId;
+        target = fakeRuntime(sessionId);
+        return binding(target.runtime);
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+    );
+
+    const targetSessionId = await controller.fork();
+
+    expect(current.clones).toEqual([targetSessionId]);
+    expect(openedSessionId).toBe(targetSessionId);
+    expect(controller.getBinding().sessionId).toBe(targetSessionId);
+    expect(current.disposals).toEqual([{ type: "session_switch" }]);
+    expect(target?.disposals).toEqual([]);
+  });
+
+  test("keeps the source binding when a published clone cannot be activated", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async () => {
+        throw new Error("clone activation failed");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+    );
+
+    expect(controller.fork()).rejects.toThrow("clone activation failed");
+    expect(current.clones).toHaveLength(1);
+    expect(controller.getBinding().sessionId).toBe(current.runtime.sessionId);
+    expect(current.disposals).toEqual([]);
+  });
+
+  test("closes the clone and keeps the source binding when source disposal fails", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    current.runtime.dispose = async (reason) => {
+      current.disposals.push(reason);
+      throw new Error("source dispose failed");
+    };
+    let target: ReturnType<typeof fakeRuntime> | undefined;
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async (sessionId) => {
+        target = fakeRuntime(sessionId);
+        return binding(target.runtime);
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+    );
+
+    expect(controller.fork()).rejects.toThrow("source dispose failed");
+    expect(controller.getBinding().sessionId).toBe(current.runtime.sessionId);
+    expect(current.disposals).toEqual([{ type: "session_switch" }]);
+    expect(target?.disposals).toEqual([
+      { type: "runner_failed", error: "source dispose failed" },
+    ]);
+  });
+
   test("clears into a fresh session while preserving the current profile", async () => {
     const current = fakeRuntime("current-session" as SessionId);
     const target = fakeRuntime("fresh-session" as SessionId);
@@ -145,8 +226,10 @@ function fakeRuntime(
 ): {
   runtime: RuntimeSession;
   disposals: SessionDisposeReason[];
+  clones: SessionId[];
 } {
   const disposals: SessionDisposeReason[] = [];
+  const clones: SessionId[] = [];
   const runtime: RuntimeSession = {
     sessionId,
     resumed: false,
@@ -164,12 +247,15 @@ function fakeRuntime(
     retireContext: async () => {
       throw new Error("not used");
     },
+    cloneSession: async (targetSessionId) => {
+      clones.push(targetSessionId);
+    },
     canSwitchSession: () => canSwitchSession,
     dispose: async (reason) => {
       disposals.push(reason);
     },
   };
-  return { runtime, disposals };
+  return { runtime, disposals, clones };
 }
 
 function binding(runtime: RuntimeSession, profileName?: string) {

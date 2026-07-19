@@ -10,7 +10,7 @@ export class ObservationTextLog implements EventSink {
   constructor(private readonly filePath: string) {}
 
   async append(event: AgentEvent): Promise<void> {
-    const text = renderObservationLogBlock(event);
+    const text = renderObservationLogEvent(event);
     if (text === undefined) {
       return;
     }
@@ -19,7 +19,7 @@ export class ObservationTextLog implements EventSink {
   }
 }
 
-function renderObservationLogBlock(event: AgentEvent): string | undefined {
+export function renderObservationLogEvent(event: AgentEvent): string | undefined {
   switch (event.type) {
     case "session.started":
       return renderSessionStarted(event);

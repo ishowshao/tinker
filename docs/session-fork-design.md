@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-19
-- 状态：待实施
+- 状态：已实施并验证
 - 当前基线：SessionStore schema v8、`/resume`、`ResumeProjectionReader`、
   `DefaultTuiSessionController`
 - 相关设计：
@@ -624,6 +624,30 @@ git diff --check
   -> /resume clone
   -> 验证 clone-only 内容存在
 ```
+
+### 11.7 2026-07-19 实施验证记录
+
+门禁结果：
+
+- `bun run check`：通过，`627 pass / 0 fail`；
+- `bun run bench:recall`：通过；
+- `bun run bench:long-session`：通过；
+- `git diff --check`：通过。
+
+真实 PTY smoke：
+
+1. 创建 source session `019f78f8-1d04-73eb-8885-ef58cb0cf463`；
+2. 要求模型调用 Bash 执行 `printf 'fork-smoke-tool-output\n'`，工具以 exit 0
+   返回，assistant 回复 `TOOL_DONE`；
+3. 执行 `/compact`，结果为已低于 compact target，命令没有产生 provider request；
+4. 执行 `/fork`，得到 clone session
+   `019f78f9-5f62-73ad-bc4e-b72336c29018`；clone 首次打开时完整显示共同的 prompt、
+   Bash call/result 和 `TOOL_DONE`；
+5. 在 clone 中追加一轮并得到 `CLONE_ONLY`；
+6. `/resume` source，timeline 不含 `CLONE_ONLY`，追加一轮并得到 `SOURCE_ONLY`；
+7. `/resume` clone，timeline 含 `CLONE_ONLY` 且不含 `SOURCE_ONLY`；
+8. 退出后直接检查两个 SQLite store：两边各有 `2` 个 turn、`1` 个 tool result，
+   source 只持有 `SOURCE_ONLY`，clone 只持有 `CLONE_ONLY`。验证用 session 随后已清理。
 
 ## 十二、非目标
 

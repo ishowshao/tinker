@@ -836,6 +836,22 @@ export function createSessionSchema(database: Database): void {
   }
 }
 
+export function dropSessionCloneTriggers(database: Database): void {
+  for (const definition of schemaDefinitions) {
+    if (definition.type === "trigger") {
+      database.exec(`DROP TRIGGER ${definition.name}`);
+    }
+  }
+}
+
+export function reinstallSessionCloneTriggers(database: Database): void {
+  for (const definition of schemaDefinitions) {
+    if (definition.type === "trigger") {
+      database.exec(definition.sql);
+    }
+  }
+}
+
 export function verifySessionSchema(database: Database, sessionId?: SessionId): void {
   const applicationId = Number(singlePragmaValue(database, "PRAGMA application_id"));
   const userVersion = Number(singlePragmaValue(database, "PRAGMA user_version"));

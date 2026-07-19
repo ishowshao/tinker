@@ -70,6 +70,31 @@ export class ContextRevisionCompiler {
     return compiled;
   }
 
+  compileForIdentityRekey(input: {
+    canonical: ProtocolContextView;
+    revisionId: ContextRevisionId;
+    activeOverrides: readonly SwapOverride[];
+    keepFromOrdinal: number;
+    surface: StoredContextSurfaceV8;
+  }): CompiledRevisionContext {
+    this.protocolValidator.validate(input.canonical);
+    const compiled = compileEntries({
+      canonical: input.canonical,
+      revisionId: input.revisionId,
+      overrides: overrideMap(input.activeOverrides),
+      keepFromOrdinal: input.keepFromOrdinal,
+      systemPrompt: input.surface.systemPrompt,
+      surfaceSha256: input.surface.surfaceSha256,
+    });
+    this.compiledValidator.validateActive(
+      compiled,
+      input.canonical,
+      input.activeOverrides,
+      input.surface,
+    );
+    return compiled;
+  }
+
   compileProspective(input: {
     active: CompiledRevisionContext;
     canonical: ProtocolContextView;

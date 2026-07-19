@@ -25,6 +25,7 @@ import { swapOnlyPolicyV1 } from "../context/context-policy";
 import { SwapPlanner } from "../context/swap-planner";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
+import { promptPrefixFingerprint } from "../model/prompt-prefix-hash";
 import type {
   ModelRequestOptions,
   ModelRequestOutput,
@@ -148,6 +149,133 @@ describe("I2 deterministic context compaction", () => {
       const secondSnapshot = fixture.store.loadContextSnapshot();
       expect(secondSnapshot.activeOverrides).toHaveLength(2);
       expect(secondSnapshot.activeOverrides[0]).toEqual(firstOverride);
+      const sourceBuilt = fixture.ledger.buildCommittedModelRequest(tools);
+      const sourcePrepared = fixture.model.prepare(sourceBuilt.request);
+      const fingerprint = promptPrefixFingerprint(sourcePrepared);
+      fixture.store.writeMeasuredContextAnchor({
+        totalTokens: 30,
+        promptTokens: 20,
+        completionTokens: 10,
+        ...fingerprint,
+      });
+      const targetSessionId = runtimeIdFactory.createSessionId();
+      await fixture.store.cloneTo({ targetSessionId });
+      const cloned = await SessionStore.openExisting({
+        workspaceRoot: fixture.workspace,
+        sessionId: targetSessionId,
+      });
+      try {
+        const clonedLedger = new SqliteSessionLedger(cloned, runtimeIdFactory);
+        const clonedBuilt = clonedLedger.buildCommittedModelRequest(tools);
+        const clonedPrepared = fixture.model.prepare(clonedBuilt.request);
+        expect(clonedPrepared.payload).toEqual(sourcePrepared.payload);
+        expect(clonedPrepared.promptSegments).toEqual(sourcePrepared.promptSegments);
+        expect(clonedPrepared.requestConfigHash).toBe(sourcePrepared.requestConfigHash);
+        expect(cloned.loadContextSnapshot().revision).toMatchObject({
+          kind: "swap_only",
+          revisionNumber: 3,
+          activeOverrideCount: 2,
+        });
+        expect(cloned.loadContextSnapshot().activeOverrides).toEqual(
+          secondSnapshot.activeOverrides,
+        );
+        expect(
+          cloned.historyReader().search({
+            query: "historical-v1",
+            limit: 20,
+            offset: 0,
+          }),
+        ).toEqual(
+          fixture.store.historyReader().search({
+            query: "historical-v1",
+            limit: 20,
+            offset: 0,
+          }),
+        );
+        expect(
+          cloned.historyReader().get({
+            source: firstOverride.source,
+            byteOffset: 0,
+            byteLimit: firstOverride.originalBytes,
+          }),
+        ).toEqual(
+          fixture.store.historyReader().get({
+            source: firstOverride.source,
+            byteOffset: 0,
+            byteLimit: firstOverride.originalBytes,
+          }),
+        );
+        const clonedAnchor = cloned.readActiveMeasuredContextAnchor();
+        expect(clonedAnchor).toEqual(fixture.store.readActiveMeasuredContextAnchor());
+        if (clonedAnchor === undefined) {
+          throw new Error("Expected the cloned measured anchor.");
+        }
+        const restored = new ContextMeter(TEST_CONTEXT_BUDGET);
+        expect(restored.restoreExactMeasuredAnchor(clonedPrepared, clonedAnchor)).toBe(
+          true,
+        );
+        expect(restored.measure(clonedPrepared)).toMatchObject({
+          source: "measured_plus_estimated_delta",
+          usedInputTokens: 30,
+          rawDeltaTokens: 0,
+          guardedDeltaTokens: 0,
+        });
+
+        appendTextTurns(fixture, 1, () => "source-only-after-clone");
+        expect(
+          cloned.historyReader().search({
+            query: "source-only-after-clone",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(0);
+        expect(
+          fixture.store.historyReader().search({
+            query: "source-only-after-clone",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(1);
+
+        const cloneTurn: TurnIdentity = {
+          sessionId: targetSessionId,
+          turnId: runtimeIdFactory.createTurnId(),
+          turnNumber: cloned.nextTurnNumber(),
+        };
+        const cloneIteration = nextIteration(cloneTurn, 1);
+        const clonePending = clonedLedger.beginTurn({
+          turn: cloneTurn,
+          userPrompt: "clone-only-after-fork",
+        });
+        cloned.beginIteration(cloneIteration);
+        clonePending.agent.appendAssistant({
+          iteration: cloneIteration,
+          message: { role: "assistant", content: "clone-only-answer" },
+          provider: "test",
+          model: "test-model",
+        });
+        clonePending.finish({
+          status: "completed",
+          finalText: "clone-only-answer",
+          lastIteration: cloneIteration,
+        });
+        expect(
+          fixture.store.historyReader().search({
+            query: "clone-only-after-fork",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(0);
+        expect(
+          cloned.historyReader().search({
+            query: "clone-only-after-fork",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(1);
+      } finally {
+        await cloned.close("tui_exit");
+      }
       const inspection = new Database(fixture.store.databasePath, {
         readwrite: true,
       });
@@ -856,13 +984,14 @@ function appendReadTurn(
 function appendTextTurns(
   fixture: Awaited<ReturnType<typeof createFixture>>,
   count: number,
+  prompt: (turnNumber: number) => string = (turnNumber) => `tail-${turnNumber}`,
 ): void {
   for (let index = 0; index < count; index += 1) {
     const turn = nextTurn(fixture);
     const iteration = nextIteration(turn, 1);
     const pending = fixture.ledger.beginTurn({
       turn,
-      userPrompt: `tail-${turn.turnNumber}`,
+      userPrompt: prompt(turn.turnNumber),
     });
     fixture.store.beginIteration(iteration);
     pending.agent.appendAssistant({

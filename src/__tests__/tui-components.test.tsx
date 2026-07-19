@@ -79,6 +79,9 @@ function createSessionController(
     listSessions: async () => [],
     compact,
     retire,
+    fork: async () => {
+      throw new Error("not used");
+    },
     clear: async () => {
       throw new Error("not used");
     },
@@ -917,6 +920,51 @@ describe("tui components", () => {
     );
     expect(frame).not.toContain("old session prompt");
     expect(frame).not.toContain("old session answer");
+    cleanup();
+  });
+
+  test("clones the current session with /fork without running the agent", async () => {
+    const projectionStore = createProjectionStore();
+    const targetSessionId = runtimeIdFactory.createSessionId();
+    let runCount = 0;
+    let forkCount = 0;
+    const baseController = createSessionController(projectionStore, async () => {
+      runCount += 1;
+      return completedResult();
+    });
+    let activeBinding = baseController.getBinding();
+    const listeners = new Set<() => void>();
+    const controller: TuiSessionController = {
+      ...baseController,
+      getBinding: () => activeBinding,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      fork: async () => {
+        forkCount += 1;
+        activeBinding = { ...activeBinding, sessionId: targetSessionId };
+        for (const listener of listeners) {
+          listener();
+        }
+        return targetSessionId;
+      },
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={controller} />,
+    );
+
+    await submitInput(stdin, "/fork");
+    await Bun.sleep(25);
+
+    const frame = lastFrame() ?? "";
+    expect(forkCount).toBe(1);
+    expect(runCount).toBe(0);
+    expect(frame).toContain(targetSessionId);
+    expect(frame).toContain("Cloned current session as");
+    expect(frame.replace(/\s+/g, " ")).toContain(
+      "Previous session remains available via /resume.",
+    );
     cleanup();
   });
 

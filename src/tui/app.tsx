@@ -430,6 +430,22 @@ export function App(props: AppProps) {
             .finally(() => setIsSessionOperation(false));
           return;
         }
+        if (command.type === "fork") {
+          setIsSessionOperation(true);
+          void props.sessionController
+            .fork()
+            .then((sessionId) => {
+              setGitBranchRefresh((current) => current + 1);
+              setNotice(
+                `Cloned current session as ${sessionId}. Previous session remains available via /resume.`,
+              );
+            })
+            .catch((error: unknown) => {
+              setNotice(`Fork failed: ${errorMessage(error)}`);
+            })
+            .finally(() => setIsSessionOperation(false));
+          return;
+        }
         if (command.type === "quit") {
           props.onQuit?.();
           exit();

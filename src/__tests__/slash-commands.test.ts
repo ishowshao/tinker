@@ -91,6 +91,11 @@ describe("parseSlashCommand", () => {
     expect(() => parseSlashCommand("/clear now")).toThrow("Usage: /clear");
   });
 
+  test("parses /fork without arguments", () => {
+    expect(parseSlashCommand("/fork")).toEqual({ type: "fork" });
+    expect(() => parseSlashCommand("/fork extra")).toThrow("Usage: /fork");
+  });
+
   test("parses /copy without arguments", () => {
     expect(parseSlashCommand("/copy")).toEqual({ type: "copy" });
     expect(() => parseSlashCommand("/copy now")).toThrow("Usage: /copy");

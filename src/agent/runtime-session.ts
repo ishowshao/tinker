@@ -120,6 +120,7 @@ export type RuntimeSession = {
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
   retireContext(): Promise<ContextRetirementResult>;
+  cloneSession(targetSessionId: SessionId): Promise<void>;
   canSwitchSession(): boolean;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
@@ -1374,6 +1375,31 @@ class DefaultRuntimeSession implements RuntimeSession {
         .every((task) => task.status !== "running" && task.status !== "stopping") ??
         true)
     );
+  }
+
+  async cloneSession(targetSessionId: SessionId): Promise<void> {
+    if (!this.canSwitchSession()) {
+      throw new Error(
+        "Cannot clone the session while a turn, context operation, or background task is active.",
+      );
+    }
+    await this.waitForStableEventTail();
+    if (!this.canSwitchSession()) {
+      throw new Error(
+        "Cannot clone the session while a turn, context operation, or background task is active.",
+      );
+    }
+    await this.store.cloneTo({ targetSessionId });
+  }
+
+  private async waitForStableEventTail(): Promise<void> {
+    for (;;) {
+      const tail = this.eventTail;
+      await tail;
+      if (this.eventTail === tail) {
+        return;
+      }
+    }
   }
 
   private async performExecuteTurn(

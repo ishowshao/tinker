@@ -10,6 +10,7 @@ import type {
 } from "../agent/runtime-session";
 import type { RunAgentResult } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
+import { createUuidV7 } from "../ids/uuid-v7";
 import type { ModelProfile } from "../cli/model-profiles";
 import type { McpInventorySnapshot } from "../mcp/mcp-manager";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
@@ -32,6 +33,7 @@ export type TuiSessionController = {
   listSessions: () => Promise<readonly SessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
+  fork: () => Promise<SessionId>;
   clear: () => Promise<void>;
   resume: (sessionId: SessionId) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
@@ -82,6 +84,20 @@ export class DefaultTuiSessionController implements TuiSessionController {
 
   retire(): Promise<ContextRetirementResult> {
     return this.serialize(() => this.binding.runtimeSession.retireContext());
+  }
+
+  fork(): Promise<SessionId> {
+    return this.serialize(async () => {
+      const targetSessionId = createUuidV7() as SessionId;
+      await this.replaceSession(
+        "Cannot clone the session while a turn, context operation, or background task is active.",
+        async (current) => {
+          await current.runtimeSession.cloneSession(targetSessionId);
+          return this.openSession(targetSessionId);
+        },
+      );
+      return targetSessionId;
+    });
   }
 
   clear(): Promise<void> {

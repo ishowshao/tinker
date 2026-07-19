@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   open,
+  readFile,
   readdir,
   realpath,
   rename,
@@ -95,11 +96,15 @@ import {
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
+  dropSessionCloneTriggers,
   rebuildRecallIndex,
+  reinstallSessionCloneTriggers,
   verifyRecallIndex,
   verifySessionSchema,
   verifySqliteIntegrity,
 } from "./session-schema";
+import type { AgentEvent } from "../events/types";
+import { renderObservationLogEvent } from "../events/observation-text-log";
 import {
   SKILL_FILE_MAX_BYTES,
   SKILL_RESOURCE_MAX_DEPTH,
@@ -299,6 +304,24 @@ export type CommitSkillsUpdateFaultStage =
 
 export type CommitSkillsUpdateOptions = {
   faultInjector?: (stage: CommitSkillsUpdateFaultStage) => void;
+};
+
+export type CloneSessionFaultStage =
+  | "after_staging_mkdir"
+  | "after_snapshot"
+  | "after_trigger_drop"
+  | "after_identity_update"
+  | "after_revision_hash_rewrite"
+  | "after_trigger_reinstall"
+  | "after_recall_validation"
+  | "after_event_rewrite"
+  | "after_observation_render"
+  | "after_artifact_validation"
+  | "before_publish_rename";
+
+export type CloneSessionStoreInput = {
+  targetSessionId: SessionId;
+  faultInjector?: (stage: CloneSessionFaultStage) => void;
 };
 
 export function skillActivationManifestSha256(
@@ -2291,6 +2314,120 @@ export class SessionStore implements SessionLedgerCommitter {
         `Session record validation failed: ${errorMessage(error)}.`,
         { sessionId: this.sessionId, cause: error },
       );
+    }
+  }
+
+  async cloneTo(input: CloneSessionStoreInput): Promise<void> {
+    this.requireOpen();
+    if (input.targetSessionId === this.sessionId) {
+      throw new Error("Session clone target must differ from the source session.");
+    }
+
+    const sourceView = this.validateAll({ allowOpenTail: false });
+    const sourceMeta = this.readMeta();
+    const sessionsRoot = path.dirname(this.sessionDirectory);
+    await validateSessionsRoot(sessionsRoot, this.sessionId);
+    const targetDirectory = safeSessionDirectory(sessionsRoot, input.targetSessionId);
+    await assertPathMissing(targetDirectory, input.targetSessionId);
+
+    const stagingDirectory = path.join(sessionsRoot, `.cloning-${randomUUID()}`);
+    const stagingDatabasePath = path.join(stagingDirectory, "session.sqlite");
+    let stagingDatabase: Database | undefined;
+    let published = false;
+
+    try {
+      await mkdir(stagingDirectory, { mode: 0o700 });
+      await chmod(stagingDirectory, 0o700);
+      input.faultInjector?.("after_staging_mkdir");
+      this.database.query("VACUUM INTO ?").run(stagingDatabasePath);
+      await chmod(stagingDatabasePath, 0o600);
+      input.faultInjector?.("after_snapshot");
+
+      stagingDatabase = openWritableDatabase(stagingDatabasePath);
+      verifySessionSchema(stagingDatabase, this.sessionId);
+      dropSessionCloneTriggers(stagingDatabase);
+      input.faultInjector?.("after_trigger_drop");
+
+      const targetCanonical = rekeyProtocolView(sourceView, input.targetSessionId);
+      runTransaction(stagingDatabase, () => {
+        stagingDatabase!.exec("PRAGMA defer_foreign_keys = ON");
+        for (const table of SESSION_SCOPED_TABLES) {
+          stagingDatabase!
+            .query(`UPDATE ${table} SET session_id = ? WHERE session_id = ?`)
+            .run(input.targetSessionId, this.sessionId);
+        }
+        rekeyStoredToolCalls(stagingDatabase!, input.targetSessionId);
+        input.faultInjector?.("after_identity_update");
+
+        rewriteCloneRevisionHashes(stagingDatabase!, targetCanonical);
+        input.faultInjector?.("after_revision_hash_rewrite");
+
+        if (stagingDatabase!.query("PRAGMA foreign_key_check").all().length !== 0) {
+          throw new Error("Cloned session identity re-key broke foreign keys.");
+        }
+      });
+
+      reinstallSessionCloneTriggers(stagingDatabase);
+      input.faultInjector?.("after_trigger_reinstall");
+      verifySessionSchema(stagingDatabase, input.targetSessionId);
+      verifySqliteIntegrity(stagingDatabase, input.targetSessionId);
+      verifyRecallIndex(stagingDatabase, input.targetSessionId);
+      input.faultInjector?.("after_recall_validation");
+      const clonedStore = new SessionStore(stagingDatabase, this.lease, {
+        sessionId: input.targetSessionId,
+        workspaceRoot: this.workspaceRoot,
+        sessionDirectory: stagingDirectory,
+        databasePath: stagingDatabasePath,
+        clock: this.clock,
+      });
+      clonedStore.validateAll({ allowOpenTail: false });
+
+      await cloneDiagnosticFiles({
+        sourceDirectory: this.sessionDirectory,
+        stagingDirectory,
+        sourceSessionId: this.sessionId,
+        targetSessionId: input.targetSessionId,
+        nextEventSequence: sourceMeta.nextEventSequence,
+        faultInjector: input.faultInjector,
+      });
+
+      stagingDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      const standaloneJournal = stagingDatabase
+        .query("PRAGMA journal_mode = DELETE")
+        .get() as Record<string, unknown> | null;
+      if (String(standaloneJournal?.journal_mode).toLowerCase() !== "delete") {
+        throw new Error("Cloned session database did not leave WAL mode.");
+      }
+      stagingDatabase.close();
+      stagingDatabase = undefined;
+      await unlinkIfExists(`${stagingDatabasePath}-wal`);
+      await unlinkIfExists(`${stagingDatabasePath}-shm`);
+      await validateSecureDirectory(stagingDirectory, input.targetSessionId);
+      await validateSecureFile(stagingDatabasePath, input.targetSessionId);
+      await validateSecureOptionalFile(
+        path.join(stagingDirectory, "events.jsonl"),
+        input.targetSessionId,
+      );
+      await validateSecureOptionalFile(
+        path.join(stagingDirectory, "observations.md"),
+        input.targetSessionId,
+      );
+      input.faultInjector?.("after_artifact_validation");
+      await assertPathMissing(targetDirectory, input.targetSessionId);
+      input.faultInjector?.("before_publish_rename");
+      await rename(stagingDirectory, targetDirectory);
+      published = true;
+    } finally {
+      if (stagingDatabase !== undefined) {
+        try {
+          stagingDatabase.close();
+        } catch {
+          // Preserve the clone failure.
+        }
+      }
+      if (!published) {
+        await removeKnownInitializationFiles(stagingDirectory).catch(() => undefined);
+      }
     }
   }
 
@@ -4892,6 +5029,250 @@ function runTransaction<T>(database: Database, operation: () => T): T {
     }
     throw error;
   }
+}
+
+const SESSION_SCOPED_TABLES = [
+  "session_meta",
+  "turns",
+  "iterations",
+  "protocol_frames",
+  "messages",
+  "tool_results",
+  "context_surfaces",
+  "context_revisions",
+  "context_overrides",
+  "skill_activations",
+  "context_measurement_state",
+] as const;
+
+function rekeyStoredToolCalls(database: Database, targetSessionId: SessionId): void {
+  const rows = database
+    .query(
+      `SELECT message_id, tool_calls_json FROM messages
+       WHERE tool_calls_json IS NOT NULL ORDER BY ordinal`,
+    )
+    .all() as Array<{ message_id: string; tool_calls_json: string }>;
+  for (const row of rows) {
+    const calls = decodeStoredToolCalls(row.tool_calls_json).map((call) => ({
+      ...call,
+      sessionId: targetSessionId,
+    }));
+    database
+      .query("UPDATE messages SET tool_calls_json = ? WHERE message_id = ?")
+      .run(stableJsonStringify(calls), row.message_id);
+  }
+}
+
+function rekeyProtocolView(
+  source: ProtocolContextView,
+  targetSessionId: SessionId,
+): ProtocolContextView {
+  return {
+    sessionId: targetSessionId,
+    faulted: source.faulted,
+    frames: source.frames.map((frame) => ({
+      ...frame,
+      sessionId: targetSessionId,
+    })),
+    messages: source.messages.map((message) => ({
+      ...message,
+      sessionId: targetSessionId,
+      ...(message.role === "assistant" && message.toolCalls !== undefined
+        ? {
+            toolCalls: message.toolCalls.map((call) => ({
+              ...call,
+              sessionId: targetSessionId,
+            })),
+          }
+        : {}),
+    })),
+    toolResults: source.toolResults.map((result) => ({
+      ...result,
+      sessionId: targetSessionId,
+    })),
+  };
+}
+
+function rewriteCloneRevisionHashes(
+  database: Database,
+  canonical: ProtocolContextView,
+): void {
+  const surfaces = database
+    .query("SELECT * FROM context_surfaces")
+    .all()
+    .map(decodeContextSurface);
+  const surfacesById = new Map(surfaces.map((surface) => [surface.surfaceId, surface]));
+  const revisions = database
+    .query("SELECT * FROM context_revisions ORDER BY revision_number")
+    .all()
+    .map(decodeContextRevision);
+  const revisionNumberById = new Map(
+    revisions.map((revision) => [revision.revisionId, revision.revisionNumber]),
+  );
+  const overrides = database
+    .query(
+      `SELECT co.* FROM context_overrides co
+       JOIN context_revisions cr ON cr.revision_id = co.introduced_revision_id
+       ORDER BY cr.revision_number, co.ordinal`,
+    )
+    .all()
+    .map(decodeStoredSwapOverride);
+  const compiler = new ContextRevisionCompiler();
+  for (const revision of revisions) {
+    const surface = surfacesById.get(revision.surfaceId);
+    if (surface === undefined) {
+      throw new Error(`Cloned revision ${revision.revisionId} has no surface.`);
+    }
+    const activeOverrides = overrides.filter(
+      (override) =>
+        (revisionNumberById.get(override.introducedRevisionId) ??
+          Number.POSITIVE_INFINITY) <= revision.revisionNumber &&
+        override.ordinal >= revision.keepFromOrdinal,
+    );
+    const prefix = protocolPrefixView(canonical, revision.sourceThroughOrdinal);
+    const compiled = compiler.compileForIdentityRekey({
+      canonical: prefix,
+      revisionId: revision.revisionId,
+      activeOverrides,
+      keepFromOrdinal: revision.keepFromOrdinal,
+      surface,
+    });
+    database
+      .query(
+        `UPDATE context_revisions
+         SET canonical_sequence_sha256 = ?, rendered_message_sha256 = ?
+         WHERE revision_id = ?`,
+      )
+      .run(
+        canonicalSequenceHash(canonical, revision.sourceThroughOrdinal),
+        renderedMessageHash(compiled.entries, revision.sourceThroughOrdinal),
+        revision.revisionId,
+      );
+  }
+}
+
+async function cloneDiagnosticFiles(input: {
+  sourceDirectory: string;
+  stagingDirectory: string;
+  sourceSessionId: SessionId;
+  targetSessionId: SessionId;
+  nextEventSequence: number;
+  faultInjector?: (stage: CloneSessionFaultStage) => void;
+}): Promise<void> {
+  const sourcePath = path.join(input.sourceDirectory, "events.jsonl");
+  try {
+    await lstat(sourcePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  await validateSecureFile(sourcePath, input.sourceSessionId);
+
+  const bytes = await readFile(sourcePath);
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  const rawLines = text.split("\n");
+  if (rawLines.at(-1) === "") {
+    rawLines.pop();
+  }
+  const events: AgentEvent[] = [];
+  let previousSequence = 0;
+  for (const [index, line] of rawLines.entries()) {
+    if (line === "") {
+      throw new Error(`Session event log contains an empty line at ${index + 1}.`);
+    }
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch (error) {
+      throw new Error(`Session event log has invalid JSON at line ${index + 1}.`, {
+        cause: error,
+      });
+    }
+    if (!isEventEnvelope(value)) {
+      throw new Error(
+        `Session event log has an invalid envelope at line ${index + 1}.`,
+      );
+    }
+    if (value.sessionId !== input.sourceSessionId) {
+      throw new Error(`Session event log identity changed at line ${index + 1}.`);
+    }
+    if (value.eventSequence <= previousSequence) {
+      throw new Error(
+        `Session event sequence is not strictly increasing at line ${index + 1}.`,
+      );
+    }
+    if (value.eventSequence >= input.nextEventSequence) {
+      throw new Error(
+        `Session event sequence exceeds the canonical next counter at line ${index + 1}.`,
+      );
+    }
+    previousSequence = value.eventSequence;
+    events.push({ ...value, sessionId: input.targetSessionId });
+  }
+
+  const eventText = events.map((event) => JSON.stringify(event)).join("\n");
+  await writePrivateNewFile(
+    path.join(input.stagingDirectory, "events.jsonl"),
+    eventText === "" ? "" : `${eventText}\n`,
+  );
+  input.faultInjector?.("after_event_rewrite");
+  const observationText = events
+    .map((event) => renderObservationLogEvent(event))
+    .filter((block): block is string => block !== undefined)
+    .join("");
+  await writePrivateNewFile(
+    path.join(input.stagingDirectory, "observations.md"),
+    observationText,
+  );
+  input.faultInjector?.("after_observation_render");
+}
+
+function isEventEnvelope(value: unknown): value is AgentEvent {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.sessionId === "string" &&
+    Number.isSafeInteger(record.eventSequence) &&
+    Number(record.eventSequence) >= 1 &&
+    typeof record.timestamp === "string" &&
+    typeof record.type === "string" &&
+    record.data !== null &&
+    typeof record.data === "object"
+  );
+}
+
+async function writePrivateNewFile(filePath: string, content: string): Promise<void> {
+  const handle = await open(filePath, "wx", 0o600);
+  try {
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
+  await chmod(filePath, 0o600);
+}
+
+async function assertPathMissing(
+  filePath: string,
+  sessionId: SessionId,
+): Promise<void> {
+  try {
+    await lstat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  throw new SessionError(
+    "SESSION_ALREADY_EXISTS",
+    "clone_session",
+    `Session directory already exists: ${filePath}.`,
+    { sessionId },
+  );
 }
 
 async function canonicalWorkspaceRoot(workspaceRoot: string): Promise<string> {

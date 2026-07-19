@@ -12,6 +12,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     description: "Swap tool output or retire a cold history prefix",
   },
   { name: "clear", description: "Start a new session and clear conversation" },
+  { name: "fork", description: "Clone the current session" },
   { name: "view", description: "View a local UTF-8 text file" },
   { name: "copy", description: "Copy the last response as Markdown" },
   { name: "model", description: "Switch model profile (new session)" },
@@ -27,6 +28,7 @@ export type ParsedSlashCommand =
   | { type: "compact" }
   | { type: "compact_retire" }
   | { type: "clear" }
+  | { type: "fork" }
   | { type: "view"; filePath: string }
   | { type: "copy" }
   | { type: "quit" }
@@ -84,6 +86,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "clear" };
     }
     throw new SlashCommandError("Usage: /clear");
+  }
+  if (command === "/fork") {
+    if (tokens.length === 1) {
+      return { type: "fork" };
+    }
+    throw new SlashCommandError("Usage: /fork");
   }
   if (command === "/copy") {
     if (tokens.length === 1) {

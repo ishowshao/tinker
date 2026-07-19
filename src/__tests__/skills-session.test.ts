@@ -470,6 +470,31 @@ describe("Agent Skills session lifecycle", () => {
         { name: "review-code", state: "promoted" },
       ]);
 
+      const source = await SessionStore.openExisting({
+        workspaceRoot: fixture.workspace,
+        sessionId: fixture.sessionId,
+      });
+      const targetSessionId = runtimeIdFactory.createSessionId();
+      try {
+        await source.cloneTo({ targetSessionId });
+      } finally {
+        await source.abandon();
+      }
+      const cloned = await openSnapshot(fixture.workspace, targetSessionId);
+      expect(cloned.snapshot.revision).toMatchObject({
+        kind: "skills_update",
+        revisionNumber: promoted.snapshot.revision.revisionNumber,
+      });
+      expect(cloned.snapshot.surface.activeSkills).toEqual(
+        promoted.snapshot.surface.activeSkills,
+      );
+      expect(cloned.snapshot.activeOverrides).toEqual(
+        promoted.snapshot.activeOverrides,
+      );
+      expect(cloned.activations).toMatchObject([
+        { name: "review-code", state: "promoted" },
+      ]);
+
       await fixture.writeSkill(
         "Review code and tests",
         "Use the refreshed review checklist.",

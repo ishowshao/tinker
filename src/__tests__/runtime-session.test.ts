@@ -23,10 +23,10 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
-import type { SessionId } from "../ids/runtime-id";
+import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
 import type { SessionHistoryReader } from "../session/session-history-reader";
-import type { SessionStore } from "../session/session-store";
+import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { createDefaultTooling } from "../tools/registry";
 import {
@@ -75,6 +75,38 @@ class WaitingModel extends TestModelClient {
         return;
       }
       options.signal.addEventListener("abort", abort, { once: true });
+    });
+  }
+}
+
+class BackgroundTaskModel extends TestModelClient {
+  private requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      const identity = options.identity;
+      if (identity === undefined) {
+        throw new Error("Expected runtime identity for background Bash.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...identity.runtimeSession.createToolCall(identity.iteration, 1),
+            providerToolCallId: "provider-background",
+            name: "Bash",
+            args: { command: "sleep 30", run_in_background: true },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "background started",
     });
   }
 }
@@ -896,6 +928,77 @@ describe("RuntimeSession lifecycle", () => {
     expect(error).toBeInstanceOf(Error);
     expect(model.inputs).toHaveLength(0);
     expect(sink.events[0]?.type).toBe("session.started");
+  });
+
+  test("clones an idle runtime without requesting the model", async () => {
+    const model = new CapturingModel();
+    const input = createInput(model, collectingEventSink(), "runtime-clone");
+    const session = await createRuntimeSession(input, {
+      loadMcpConfig: async () => undefined,
+    });
+    const targetSessionId = runtimeIdFactory.createSessionId();
+    let target: SessionStore | undefined;
+    try {
+      await session.cloneSession(targetSessionId);
+      target = await SessionStore.openExisting({
+        workspaceRoot: input.workspaceRoot,
+        sessionId: targetSessionId,
+      });
+      expect(target.validateAll({ allowOpenTail: false }).sessionId).toBe(
+        targetSessionId,
+      );
+      expect(model.inputs).toHaveLength(0);
+    } finally {
+      await target?.abandon().catch(() => undefined);
+      await session.dispose({ type: "tui_exit" });
+    }
+  });
+
+  test("rejects cloning while a turn is active", async () => {
+    const model = new WaitingModel();
+    const input = createInput(model, collectingEventSink(), "clone-active-turn");
+    const session = await createRuntimeSession(input, {
+      loadMcpConfig: async () => undefined,
+    });
+    const controller = new AbortController();
+    const turn = session.executeTurn({
+      userPrompt: "wait",
+      signal: controller.signal,
+    });
+    await model.started;
+    try {
+      expect(session.cloneSession(runtimeIdFactory.createSessionId())).rejects.toThrow(
+        "Cannot clone the session while a turn, context operation, or background task is active.",
+      );
+    } finally {
+      controller.abort();
+      await turn;
+      await session.dispose({ type: "tui_exit" });
+    }
+  });
+
+  test("rejects cloning while a background task is running", async () => {
+    const input = createInput(
+      new BackgroundTaskModel(),
+      collectingEventSink(),
+      "clone-background-task",
+    );
+    const session = await createRuntimeSession(input, {
+      loadMcpConfig: async () => undefined,
+    });
+    try {
+      expect(
+        await session.executeTurn({
+          userPrompt: "start background work",
+          signal: new AbortController().signal,
+        }),
+      ).toMatchObject({ status: "completed" });
+      expect(session.cloneSession(runtimeIdFactory.createSessionId())).rejects.toThrow(
+        "Cannot clone the session while a turn, context operation, or background task is active.",
+      );
+    } finally {
+      await session.dispose({ type: "tui_exit" });
+    }
   });
 
   test("returns only the runner-facing API and uses UUIDv7 production IDs", async () => {

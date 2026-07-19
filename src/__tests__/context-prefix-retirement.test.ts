@@ -351,6 +351,60 @@ describe("I3 Recall-first prefix retirement", () => {
       expect(secondRetirement.keepFromOrdinal).toBeGreaterThan(firstKeep);
       expect(overrideCount(fixture.store.databasePath)).toBe(2);
       expect(fixture.store.loadContextSnapshot().activeOverrides).toHaveLength(0);
+      const sourceRequest =
+        fixture.ledger.buildCommittedModelRequest(recallTools).request;
+      const targetSessionId = runtimeIdFactory.createSessionId();
+      await fixture.store.cloneTo({ targetSessionId });
+      const cloned = await SessionStore.openExisting({
+        workspaceRoot: fixture.workspace,
+        sessionId: targetSessionId,
+      });
+      try {
+        expect(cloned.loadContextSnapshot().revision).toMatchObject({
+          kind: "prefix_retirement",
+          revisionNumber: secondRetirement.revisionNumber,
+          keepFromOrdinal: secondRetirement.keepFromOrdinal,
+          activeOverrideCount: 0,
+        });
+        expect(
+          new SqliteSessionLedger(cloned, runtimeIdFactory).buildCommittedModelRequest(
+            recallTools,
+          ).request,
+        ).toEqual(sourceRequest);
+        expect(
+          cloned.historyReader().search({
+            query: "old-observation",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(1);
+        expect(
+          cloned.historyReader().search({
+            query: "new-observation",
+            limit: 20,
+            offset: 0,
+          }).hits,
+        ).toHaveLength(1);
+        const database = new Database(cloned.databasePath, { readonly: true });
+        try {
+          expect(
+            database
+              .query("SELECT kind FROM context_revisions ORDER BY revision_number")
+              .all(),
+          ).toEqual([
+            { kind: "initial_full" },
+            { kind: "swap_only" },
+            { kind: "prefix_retirement" },
+            { kind: "surface_refresh" },
+            { kind: "swap_only" },
+            { kind: "prefix_retirement" },
+          ]);
+        } finally {
+          database.close();
+        }
+      } finally {
+        await cloned.close("tui_exit");
+      }
     } finally {
       await fixture.cleanup();
     }
