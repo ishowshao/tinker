@@ -13,10 +13,13 @@ Prompt 提交事务、事件投影和 provider 聚合限制。文末仍列为“
 完整 Prompt 文本。图片不按照占位符在句子中的位置穿插发送。
 
 当前可用于真实集成验证的多模态 provider 只有 Kimi K3。MVP 只实现 Kimi 的图片请求
-和远端 Token 计数适配器，但通用层仍通过 profile 显式声明能力和适配器类型，不根据
-`kimi-k3` 等模型名称猜测行为。Kimi 文档目前已经在 Chat API 和图片示例中列出
-`kimi-k3`；Token estimate 页面也给出了 K3 示例，但其生成的 request model enum 仍未
-列出 K3。本文只把后者视为需要真实 endpoint 验证的 schema/documentation 不一致。
+和远端 Token 计数适配器，但通用层仍通过 profile 的 `inputModalities` 显式启用图片能力，
+并显式声明 Token estimator 类型，不根据 `kimi-k3` 等模型名称猜测行为。图片 transport、
+格式、大小、数量、规划 charge 和重试策略属于 Tinker 的产品合同，固定为代码常量，不
+开放为 profile 配置。
+Kimi 文档目前已经在 Chat API 和图片示例中列出 `kimi-k3`；Token estimate 页面也给出了
+K3 示例，但其生成的 request model enum 仍未列出 K3。本文只把后者视为需要真实
+endpoint 验证的 schema/documentation 不一致。
 
 ## 背景
 
@@ -332,7 +335,8 @@ container，其他格式不交给 sharp；再对从同一 file handle 读出的 
 [metadata()](https://sharp.pixelplumbing.com/api-input/#metadata) 验证 format/media
 type/width/height，再按
 [constructor safety options](https://sharp.pixelplumbing.com/api-constructor/#sharp)，以
-`limitInputPixels = effectiveMaxPixels`、`unlimited = false`、`failOn = "warning"` 执行
+`limitInputPixels = IMAGE_INPUT_POLICY.maxPixels`、`unlimited = false`、
+`failOn = "warning"` 执行
 一次 `.raw().toBuffer()` 完整 decode probe，确保不只信任 header；`warning` 是 sharp 官方
 对不受信输入建议的最高敏感级别。probe 产物立即释放，asset store 仍保存原始字节，不做
 转码、旋转或 metadata strip。
@@ -348,9 +352,10 @@ flag 及 `ANIM`/`ANMF` chunks，并与 sharp metadata 交叉验证。禁止用�
 安装、macOS arm64 和 CI Linux 预编译包加载 smoke test 是阶段 B 门禁，不把 native
 dependency 失败留到用户第一次附图时才发现。
 
-默认产品限制固定如下；profile 只能进一步收紧，不能放宽本地安全上限：
+产品限制固定如下。实现统一从代码内的 `IMAGE_INPUT_POLICY` 读取；profile 不提供这些
+字段，也不能覆盖、收紧或放宽这些值：
 
-| 限制 | 默认值 | 适用时机 |
+| 限制 | 固定值 | 适用时机 |
 | --- | ---: | --- |
 | 单图原始字节 | `20 MiB` | 选择时 |
 | 单条 user message 图片数 | `8` | 选择和提交时 |
@@ -359,11 +364,11 @@ dependency 失败留到用户第一次附图时才发现。
 | 总像素 | `8,847,360`（`4096 × 2160`） | 选择时 |
 | 最终 JSON request body | `90,000,000` UTF-8 bytes | materialization 后 |
 
-`maxLongEdge` 与 `maxPixels` 必须同时满足，横图和竖图使用相同规则。解析器还必须检查
-宽高为正安全整数、格式完整且不是动画；不能为了读取尺寸而无界解压整张图片。Kimi
-文档建议图片不超过 4K，并给出请求体不超过 `100M` 的限制；Tinker 使用 `90,000,000`
-bytes 给 JSON、Base64 和 tool schema 留出余量，而不是把 provider 极限直接作为产品
-极限。
+`IMAGE_INPUT_POLICY.maxLongEdge` 与 `IMAGE_INPUT_POLICY.maxPixels` 必须同时满足，横图
+和竖图使用相同规则。解析器还必须检查宽高为正安全整数、格式完整且不是动画；不能为了
+读取尺寸而无界解压整张图片。Kimi 文档建议图片不超过 4K，并给出请求体不超过 `100M`
+的限制；Tinker 使用 `90,000,000` bytes 给 JSON、Base64 和 tool schema 留出余量，而不是
+把 provider 极限直接作为产品极限。
 
 选择阶段用 `4 * ceil(byteLength / 3)` 加固定 JSON 开销，对当前 active context 与新
 draft 做累计下界预检；下界已经超限时立即拒绝，避免用户附完多张图后才得知必然无法
@@ -523,24 +528,13 @@ dispose/cancel 只能通过 admission 的 AbortController 收敛。commit 成功
 
 ## 模型能力与 profile
 
-不能根据模型名称猜测是否支持图片。`ModelProfile` 增加明确能力与聚合限制：
+不能根据模型名称猜测是否支持图片。`ModelProfile` 只增加输入能力和 Token estimator
+选择；图片能力必须显式启用：
 
 ```json
 {
   "model": "kimi-k3",
   "inputModalities": ["text", "image"],
-  "imageInput": {
-    "transport": "openai-chat-image-url-data-v1",
-    "allowedMimeTypes": ["image/png", "image/jpeg", "image/webp"],
-    "maxBytesPerImage": 20971520,
-    "maxImagesPerMessage": 8,
-    "maxImagesPerRequest": 8,
-    "maxLongEdge": 4096,
-    "maxPixels": 8847360,
-    "maxRequestBodyBytes": 90000000,
-    "planningTokensPerImage": 2048,
-    "retryPolicy": "none"
-  },
   "tokenEstimator": {
     "kind": "moonshot-estimate-token-count-v1",
     "timeoutMs": 30000,
@@ -549,30 +543,60 @@ dispose/cancel 只能通过 admission 的 AbortController 收敛。commit 成功
 }
 ```
 
+图片输入的产品合同在实现中集中定义，不属于 profile schema：
+
+```ts
+const IMAGE_INPUT_POLICY = {
+  transport: "openai-chat-image-url-data-v1",
+  allowedMimeTypes: ["image/png", "image/jpeg", "image/webp"],
+  maxBytesPerImage: 20 * 1024 * 1024,
+  maxImagesPerMessage: 8,
+  maxImagesPerRequest: 8,
+  maxLongEdge: 4096,
+  maxPixels: 8_847_360,
+  maxRequestBodyBytes: 90_000_000,
+  planningTokensPerImage: 2048,
+  retryPolicy: "none",
+} as const;
+```
+
+该常量是产品固定值的唯一来源，不从环境变量、workspace 配置或 model profile 合并
+override。以后要改变限制或支持新的 transport，必须修改代码、补齐相应测试，并让变化
+进入 session compatibility identity 与 request configuration hash；不能靠 profile 在不同
+session 中形成未经测试的图片行为组合。
+
 约束如下：
 
+- `inputModalities` 是可选字段；缺省时在 profile 加载阶段规范化为 `["text"]`，之后的
+  runtime、compatibility identity 和 `requestConfigHash` 只消费规范化结果，不能继续传播
+  `undefined`。
+- 显式配置必须是非空数组，只允许 `text`、`image`，必须包含 `text` 且不能重复；空数组、
+  重复值、未知 modality 或缺少 `text` 都在 profile 加载阶段快速失败。加载结果统一按固定
+  顺序规范化为 `["text"]` 或 `["text", "image"]`。
 - `inputModalities` 未包含 `image` 时，`@` 选中图片立即失败。
-- 声明 `image` 时必须提供完整、合法的 `imageInput` 和 Token estimator；profile
-  加载阶段就拒绝缺失、未知 transport、非法 MIME 或非正安全整数。
-- effective MIME 集合取内置集合与 profile 集合的交集；所有 `max*` ceiling 取较小值；
-  `planningTokensPerImage` 取内置 floor 与 profile 配置的较大值。profile 不能借配置
-  放宽本地安全边界或降低规划 charge。
-- `planningTokensPerImage` 是同步规划 charge，不是 provider 计费承诺。在真实 endpoint
-  校正前，`2048` 只是显式保守起点，不能单独作为最终 admission 依据。
-- Kimi transport 只发送 `image_url.url`，不发送其 schema 未声明的 `detail`。
+- 声明 `image` 时必须提供完整、合法的 Token estimator；profile 加载阶段就拒绝缺失或
+  非法 estimator 配置。
+- profile schema 不定义 `imageInput`；出现该未知字段时直接拒绝，而不是忽略或兼容旧
+  配置。MIME、各类 `max*`、规划 charge、transport 和图片请求重试策略全部直接使用
+  `IMAGE_INPUT_POLICY`。
+- `IMAGE_INPUT_POLICY.planningTokensPerImage` 是同步规划 charge，不是 provider 计费承诺。
+  在真实 endpoint 校正前，`2048` 只是显式保守起点，不能单独作为最终 admission 依据。
+- 固定 transport 只发送 `image_url.url`，不发送 Kimi schema 未声明的 `detail`。
 - `tokenEstimator.kind` 显式选择计数策略，不能根据 `apiBase` 或模型名称推断。
 - estimator 使用独立的 `30,000 ms` admission timeout，并与用户 AbortSignal 组合；timeout
   在 commit 前失败并保留 draft，不能继承当前 chat request 的 30 分钟 timeout。
 - `tokenEstimator.timeoutMs` 必填且限制在 `1,000..60,000`；当前 profile 固定 30 秒。
-- 带图 chat 与 estimator 都显式 `maxRetries = 0`。OpenAI SDK 默认 retry 不能暗中重传
-  大型 Base64 body；estimate 失败保留 draft，accepted chat 失败则结束该 turn。未来只有
-  endpoint 提供并验证幂等键后，才能通过新 retry policy 开启重试。
+- 带图 chat 按固定 `retryPolicy = "none"` 设置 `maxRetries = 0`；estimator profile 也必须
+  显式配置 `maxRetries = 0`。OpenAI SDK 默认 retry 不能暗中重传大型 Base64 body；
+  estimate 失败保留 draft，accepted chat 失败则结束该 turn。未来只有 endpoint 提供并
+  验证幂等键后，才能通过代码中的新产品合同开启图片请求重试。
 - provider 实际拒绝图片时暴露经过脱敏的 provider 错误，不重试纯文本请求。
 
 版本所有权必须唯一：`messageProtocol.serializationVersion = "openai-chat-v2"` 负责
-content part 顺序、标签 framing 和 normalized segment 合同；`imageInput.transport`
-只负责 data URL 的编码与字段形状。两者和上述限制都进入 session compatibility identity
-及 request configuration hash，不能各自重复定义同一排序规则。
+content part 顺序、标签 framing 和 normalized segment 合同；
+`IMAGE_INPUT_POLICY.transport` 只负责 data URL 的编码与字段形状。protocol version 和
+固定 policy 的实际值都进入 session compatibility identity 及 request configuration hash，
+但不能各自重复定义同一排序规则。
 
 ### `/model` 和 `/resume`
 
@@ -582,10 +606,11 @@ slash-command 合同，含附件 draft 根本不路由 `/model`；用户需先�
 `/model` 创建目标 profile 的新 session。不要增加一个实际无法从当前输入模型触发的
 “带附件 draft 切换校验”分支。
 
-`/resume` 必须按 session 保存的 compatibility identity 恢复，不能用当前默认 profile
-覆盖 image transport 或 serialization version。未来若新增原地 model switch，再单独
-定义 active context 的媒体兼容规则；若新增独立于文本框的 model picker，也必须先把
-PromptDraft 提升到不会因 picker mount/unmount 而丢失的所有者，再定义切换行为。
+`/resume` 必须按 session 保存的 compatibility identity 恢复；当前代码中的固定 image
+policy 或 serialization version 与 session identity 不一致时快速失败，不能用 profile
+覆盖或绕过。未来若新增原地 model switch，再单独定义 active context 的媒体兼容规则；
+若新增独立于文本框的 model picker，也必须先把 PromptDraft 提升到不会因 picker
+mount/unmount 而丢失的所有者，再定义切换行为。
 
 ### Kimi K3 接入前置条件
 
@@ -742,8 +767,9 @@ Base64 不会进入 hash 链。
 
 `requestConfigHash` 至少覆盖：model、provider endpoint policy 的规范化 scheme/host/port/
 base path（移除 credentials、query 和 API key）、system/tool serialization、所有实际
-请求参数、`max_completion_tokens`、message protocol version、image transport、MIME 与
-聚合限制、planning charge、retry policy，以及 estimator endpoint/kind/coverage version。
+请求参数、`max_completion_tokens`、message protocol version、固定 image policy 中的
+transport、MIME、聚合限制、planning charge 和 retry policy，以及 estimator endpoint/
+kind/coverage version。
 任一会改变 payload、预算或 anchor 可复用性的字段都不能遗漏；estimator timeout/
 maxRetries 也进入 compatibility identity，避免 resume 后改变 admission 行为。
 
@@ -848,9 +874,9 @@ media descriptors。
 ### 两层 Token 合同
 
 `ContextMeter.measure()` 保持同步、确定且无 I/O：按 text tokens 加每张图片的
-`planningTokensPerImage` 计算本地规划值，用于 candidate 比较、shadow planning、
-compaction 和 retirement。该 charge 不把 Base64 字符数当视觉 Token，也不是最终
-provider 计数。
+`IMAGE_INPUT_POLICY.planningTokensPerImage` 计算本地规划值，用于 candidate 比较、
+shadow planning、compaction 和 retirement。该 charge 不把 Base64 字符数当视觉 Token，
+也不是最终 provider 计数。
 
 发送前计数使用异步适配器：
 
@@ -1070,7 +1096,7 @@ timeline 显示完整 text，用 range 高亮已绑定 label，并在相邻的�
 | 异步附件创建取消或结果过期 | 丢弃结果并恢复原 draft |
 | element、range 与 attachment 不一致 | 禁止提交，报告内部状态错误 |
 | session asset 缺失或 digest/metadata 不符 | 禁止打开或构造请求，报告安全 asset 摘要 |
-| image profile 缺少 estimator | profile 加载时拒绝配置 |
+| 声明 image 的 profile 缺少 estimator | profile 加载时拒绝配置 |
 | Kimi Token 计数失败或响应不合法 | 不提交 turn，不发送 chat，显示脱敏错误 |
 | estimate 期间 admission base 变化 | `ADMISSION_STALE`，丢弃 payload 并保留 draft |
 | provider 拒绝多模态 payload | 保留已接受 turn 并标记失败，不发纯文本重试 |
@@ -1107,7 +1133,9 @@ redaction 后才能展示或落日志。
 - `src/model/token-estimator.ts`、`src/model/input-token-estimator.ts`：media planning
   charge、provider estimate source 和 calibration 隔离；
 - `src/model/moonshot-input-token-estimator.ts`：Kimi estimate adapter；
-- `src/cli/model-profiles.ts`、session compatibility contract：能力、限制和版本校验；
+- `src/cli/model-profiles.ts`：输入能力的缺省/规范化、estimator 配置及未知 `imageInput`
+  字段校验；
+- image policy 模块、session compatibility contract：固定产品值及版本/hash 校验；
 - `src/events/types.ts`、事件存储、observation formatter、`resume-projection.ts`：统一
   `UserPromptProjection` 和 event version。
 
@@ -1172,6 +1200,10 @@ redaction 后才能展示或落日志。
 
 ### Model pipeline 与映射
 
+- 缺少 `inputModalities` 的 profile 规范化为 `["text"]`；显式声明 `image` 才启用
+  图片。空数组、重复/未知 modality 和缺少 `text` 都快速失败；合法输入统一为固定顺序。
+- profile 只声明 image capability 和 estimator；`imageInput` 未知字段快速失败，且无法
+  通过 profile 改写 `IMAGE_INPUT_POLICY`。
 - speculative `prepare()` 不触发文件 I/O、Base64 或 HTTP，结果稳定可哈希。
 - 无附件 user message 仍为字符串；单图、多图 mapping 顺序由 golden test 固定。
 - 每张图片恰好一个 open-tag、`image_url`、close-tag，完整 Prompt 始终最后。
@@ -1219,7 +1251,8 @@ redaction 后才能展示或落日志。
 
 - 先完成 K3 text/tool/reasoning 基线，移除 `max_tokens` 依赖。
 - 实测 K3 chat/estimate、两图 label 关联、tools coverage 和 body errors。
-- 冻结 `openai-chat-v2`、profile 字段、默认限制和 endpoint 测试记录。
+- 冻结 `openai-chat-v2`、profile 的 capability/estimator 字段、代码内
+  `IMAGE_INPUT_POLICY` 和 endpoint 测试记录。
 
 未通过两图语义关联测试，不进入正式 mapping 实现；未通过 K3 工具循环基线，不宣称
 K3 多模态可用。
@@ -1259,8 +1292,8 @@ K3 多模态可用。
 2. 普通 text tag framing 是否能让 K3 稳定建立两图编号关联；失败时 bump/fix
    `openai-chat-v2` 草案，不保留隐式兼容分支。
 3. 不同尺寸图片的 estimate 与 chat prompt usage 如何变化，据此校正
-   `planningTokensPerImage = 2048`；校正前远端 estimate 仍是无 anchor 请求的 admission
-   必需项。
+   `IMAGE_INPUT_POLICY.planningTokensPerImage = 2048`；校正前远端 estimate 仍是无
+   anchor 请求的 admission 必需项。
 4. Chat 和 estimate 接近官方 `100M` 边界时的实际错误形态，以及本地 `90,000,000`
    bytes 是否留有足够余量。
 5. K3 tool loop 对 reasoning 字段的精确重放要求，以及 streaming/non-streaming 字段是否
@@ -1272,7 +1305,8 @@ K3 多模态可用。
 
 - MVP 格式固定为 PNG、JPEG、静态 WebP；所有动画格式拒绝。
 - 采用 `20 MiB` 单图、每 message/request 最多 8 图、4K/`4096 × 2160` 像素与
-  `90,000,000` bytes 最终 body 上限。
+  `90,000,000` bytes 最终 body 上限；这些值与 transport、planning charge、retry policy
+  一并固定在 `IMAGE_INPUT_POLICY`，不作为 profile 配置。
 - `[Image #N]` 是带持久 range 的原子 UI element；asset ID 是原始字节 SHA-256，
   attachment ID 只做关系身份。
 - `prepare` 保持同步纯函数，只有 dispatch admission 可以异步 materialize 和远端计数。
