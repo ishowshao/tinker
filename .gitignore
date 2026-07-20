@@ -4,3 +4,4 @@ node_modules/
 .tinker/
 .data/
 .playwright-mcp/
+.DS_Store
