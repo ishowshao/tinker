@@ -1,4 +1,15 @@
 import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-id";
+import type { UserMessage } from "../image/image-types";
+
+export type {
+  CodePointRange,
+  ImageAssetId,
+  ImageAssetRef,
+  ImageAttachmentId,
+  ImageMimeType,
+  UserImageAttachment,
+  UserMessage,
+} from "../image/image-types";
 
 export type SessionIdentity = {
   sessionId: SessionId;
@@ -44,7 +55,7 @@ export type ToolMessage = {
 
 export type AgentMessage =
   | { role: "system"; content: string }
-  | { role: "user"; content: string }
+  | UserMessage
   | AssistantMessage
   | ToolMessage;
 

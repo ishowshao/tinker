@@ -1,4 +1,5 @@
 export type LineEditorState = {
+  /** Cursor offsets are Unicode code-point indices, never UTF-16 offsets. */
   value: string;
   cursor: number;
   preferredColumn?: number;

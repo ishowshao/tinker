@@ -39,7 +39,7 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         placeholder="ready"
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -55,7 +55,7 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -70,7 +70,7 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         gitBranch="feature/tui-info"
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -82,17 +82,13 @@ describe("prompt input", () => {
   test("keeps absolute workspace paths for Home itself and external directories", () => {
     const home = os.homedir();
     const homeRender = render(
-      <PromptInput
-        modelName={MODEL_NAME}
-        workspaceRoot={home}
-        onSubmit={() => undefined}
-      />,
+      <PromptInput modelName={MODEL_NAME} workspaceRoot={home} onSubmit={() => true} />,
     );
     const externalRender = render(
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot="/tmp/external-workspace"
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -112,7 +108,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -131,7 +130,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -151,7 +153,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -169,7 +174,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -186,7 +194,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -206,7 +217,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -238,7 +252,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -265,7 +282,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -282,7 +302,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -301,7 +324,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -322,7 +348,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -341,7 +370,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -359,7 +391,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -377,7 +412,7 @@ describe("prompt input", () => {
         workspaceRoot={WORKSPACE_ROOT}
         history={history}
         placeholder="ready"
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -400,13 +435,16 @@ describe("prompt input", () => {
         workspaceRoot={WORKSPACE_ROOT}
         history={{ entries: ["old prompt"] }}
         commands={commands}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
     await press(stdin, "/", ARROW_UP, "\t", "\r");
 
-    expect(submitted).toEqual(["/beta "]);
+    expect(submitted).toEqual(["/beta"]);
     cleanup();
   });
 
@@ -420,7 +458,7 @@ describe("prompt input", () => {
           listCalls += 1;
           return ["src/deep/file.ts", "src/index.ts", "README.md"];
         }}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -450,7 +488,10 @@ describe("prompt input", () => {
           listCalls += 1;
           return ["docs/plan.md", "src/prompt input.tsx"];
         }}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -472,13 +513,16 @@ describe("prompt input", () => {
         workspaceRoot={WORKSPACE_ROOT}
         history={{ entries: ["old prompt"] }}
         fileLister={async () => ["root.ts", "src/deep.ts"]}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
     await press(stdin, "@", ARROW_UP, "\r", "\r");
 
-    expect(submitted).toEqual(["src/deep.ts "]);
+    expect(submitted).toEqual(["src/deep.ts"]);
     cleanup();
   });
 
@@ -489,7 +533,10 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         fileLister={async () => ["README.md"]}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -512,7 +559,10 @@ describe("prompt input", () => {
       <PromptInput
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -527,7 +577,7 @@ describe("prompt input", () => {
         modelName={MODEL_NAME}
         workspaceRoot={WORKSPACE_ROOT}
         placeholder="type here"
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -544,7 +594,10 @@ describe("prompt input", () => {
         workspaceRoot={WORKSPACE_ROOT}
         isDisabled
         placeholder="waiting"
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 

@@ -1,4 +1,10 @@
-import type { ModelClient, PreparedModelRequest } from "../model/model-client";
+import {
+  materializeModelRequest,
+  type MaterializedModelRequest,
+  type ModelClient,
+  type PreparedModelRequest,
+} from "../model/model-client";
+import type { ImageAssetStore } from "../image/image-asset-store";
 import {
   CommittedPrefixAuditError,
   CommittedPrefixAuditor,
@@ -6,7 +12,7 @@ import {
 import type { ObservationBuilder } from "../observation/observation-builder";
 import type { ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ToolExecutionFatalError } from "../tools/types";
-import type { ContextMeter } from "./context-meter";
+import type { ContextMeter, ContextUsageSnapshot } from "./context-meter";
 import type { RuntimeSessionContext } from "./runtime-session";
 import type { AgentTurnLedger } from "./session-ledger";
 import { ContextProtocolError } from "../context/context-protocol-validator";
@@ -21,6 +27,7 @@ import {
   type SwapPlanner,
 } from "../context/swap-planner";
 import { SessionError } from "../session/session-errors";
+import { stableJsonStringify } from "../model/model-request-preflight";
 import {
   normalizeSyntheticDetail,
   type SyntheticToolCompletionInput,
@@ -59,6 +66,11 @@ export type RunAgentInput = {
   runtimeSession: RuntimeSessionContext;
   turn: TurnIdentity;
   signal: AbortSignal;
+  assetStore?: ImageAssetStore;
+  initialRequest?: {
+    prepared: MaterializedModelRequest;
+    usage: ContextUsageSnapshot;
+  };
 };
 
 export class FatalAgentTurnError extends Error {
@@ -97,14 +109,20 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     }
 
     let prepared: PreparedModelRequest;
+    let request: PreparedModelRequest;
     let built: BuiltContextRequest;
     let preflight;
     try {
       throwIfTurnCancelled(input.signal);
       built = input.ledger.buildModelRequest(input.tools.definitions());
-      prepared = input.model.prepare(built.request);
+      const admission = iterationNumber === 1 ? input.initialRequest : undefined;
+      const candidate = input.model.prepare(built.request);
+      if (admission !== undefined && !samePreparedPlan(candidate, admission.prepared)) {
+        throw new Error("Accepted request no longer matches the first dispatch plan.");
+      }
+      prepared = admission?.prepared ?? candidate;
       committedPrefixAuditor.audit(built.compiled.revisionId, prepared);
-      preflight = input.contextMeter.measure(prepared);
+      preflight = admission?.usage ?? input.contextMeter.measure(prepared);
     } catch (error) {
       if (input.signal.aborted) {
         return cancelledResult(
@@ -135,6 +153,52 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       return failedResult(error, iteration);
     }
 
+    try {
+      if (prepared.mediaOccurrenceCount > 0) {
+        if (input.initialRequest?.prepared === prepared) {
+          request = prepared;
+        } else {
+          if (input.assetStore === undefined) {
+            throw new Error("Image model request has no asset store.");
+          }
+          request = await materializeModelRequest(input.model, prepared, {
+            assetStore: input.assetStore,
+            signal: input.signal,
+          });
+          if (preflight.source === "measured_plus_estimated_delta") {
+            preflight = input.contextMeter.measure(request);
+          } else {
+            const estimator = input.model.inputTokenEstimator;
+            if (estimator === undefined) {
+              throw new Error("Image model request has no input token estimator.");
+            }
+            const estimate = await input.contextMeter.estimateProviderInput(
+              request as MaterializedModelRequest,
+              estimator,
+              { signal: input.signal },
+            );
+            preflight = input.contextMeter.applyProviderEstimate(request, estimate);
+          }
+          input.contextMeter.assertWithinBudget(preflight);
+          await input.runtimeSession.append({
+            type: "context.usage.updated",
+            ...iteration,
+            data: { phase: "preflight", snapshot: preflight },
+          });
+        }
+      } else {
+        request = prepared;
+      }
+    } catch (error) {
+      if (input.signal.aborted) {
+        return cancelledResult(
+          cancellation(input.signal, iteration, "model_request"),
+          iteration,
+        );
+      }
+      return failedResult(error, iteration);
+    }
+
     await input.runtimeSession.append({
       type: "model.request.started",
       ...iteration,
@@ -145,7 +209,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     try {
       throwIfTurnCancelled(input.signal);
       input.runtimeSession.prepareModelDispatch?.({ iteration, built });
-      modelOutput = await input.model.request(prepared, {
+      modelOutput = await input.model.request(request, {
         signal: input.signal,
         identity: {
           iteration,
@@ -168,8 +232,8 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       input.ledger.appendAssistant({
         iteration,
         message: modelOutput.message,
-        provider: prepared.provider,
-        model: prepared.model,
+        provider: request.provider,
+        model: request.model,
       });
     } catch (error) {
       if (error instanceof ContextProtocolError) {
@@ -183,7 +247,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ...iteration,
       data: { output: modelOutput },
     });
-    const measured = input.contextMeter.recordProviderUsage(prepared, modelOutput);
+    const measured = input.contextMeter.recordProviderUsage(request, modelOutput);
     await input.runtimeSession.append({
       type: "context.usage.updated",
       ...iteration,
@@ -432,6 +496,22 @@ function isCanonicalContextFailure(error: unknown): boolean {
     error instanceof CompiledContextError ||
     error instanceof CommittedPrefixAuditError ||
     error instanceof SessionError
+  );
+}
+
+function samePreparedPlan(
+  candidate: PreparedModelRequest,
+  accepted: PreparedModelRequest,
+): boolean {
+  return (
+    candidate.provider === accepted.provider &&
+    candidate.model === accepted.model &&
+    candidate.requestConfigHash === accepted.requestConfigHash &&
+    candidate.toolSchemaHash === accepted.toolSchemaHash &&
+    candidate.requestMaxOutputTokens === accepted.requestMaxOutputTokens &&
+    candidate.mediaOccurrenceCount === accepted.mediaOccurrenceCount &&
+    stableJsonStringify(candidate.promptSegments) ===
+      stableJsonStringify(accepted.promptSegments)
   );
 }
 

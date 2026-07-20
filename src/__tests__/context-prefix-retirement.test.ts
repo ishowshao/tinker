@@ -440,7 +440,10 @@ describe("I3 Recall-first prefix retirement", () => {
     try {
       for (let index = 0; index < 10; index += 1) {
         await session.executeTurn({
-          userPrompt: `runtime-turn-${index}-${"r".repeat(100)}`,
+          userMessage: {
+            role: "user",
+            content: `runtime-turn-${index}-${"r".repeat(100)}`,
+          },
           signal: new AbortController().signal,
         });
       }
@@ -462,7 +465,7 @@ describe("I3 Recall-first prefix retirement", () => {
       ]);
       expect(JSON.stringify(revisionEvents)).not.toContain("runtime-turn-0");
       await session.executeTurn({
-        userPrompt: "continue-after-retirement",
+        userMessage: { role: "user", content: "continue-after-retirement" },
         signal: new AbortController().signal,
       });
     } finally {
@@ -646,7 +649,7 @@ function appendTextTurns(
     };
     const pending = fixture.ledger.beginTurn({
       turn,
-      userPrompt: prompt(turn.turnNumber),
+      userMessage: { role: "user", content: prompt(turn.turnNumber) },
     });
     fixture.store.beginIteration(iteration);
     pending.agent.appendAssistant({
@@ -691,7 +694,7 @@ function appendReadTurn(
   };
   const pending = fixture.ledger.beginTurn({
     turn,
-    userPrompt: `read-${turn.turnNumber}`,
+    userMessage: { role: "user", content: `read-${turn.turnNumber}` },
   });
   fixture.store.beginIteration(firstIteration);
   pending.agent.appendAssistant({

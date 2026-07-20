@@ -9,7 +9,7 @@ describe("InMemorySessionLedger", () => {
     const fixture = createLedgerFixture("canonical");
     const pending = fixture.ledger.beginTurn({
       turn: fixture.turn,
-      userPrompt: "hello",
+      userMessage: { role: "user", content: "hello" },
     });
     const args = { file_path: "README.md", nested: { value: 1 } };
     const call = fixture.toolCall(fixture.iteration, 1, "provider-read", "Read", args);
@@ -78,7 +78,7 @@ describe("InMemorySessionLedger", () => {
     const fixture = createLedgerFixture("ordered-tools");
     const pending = fixture.ledger.beginTurn({
       turn: fixture.turn,
-      userPrompt: "run",
+      userMessage: { role: "user", content: "run" },
     });
     const first = fixture.toolCall(fixture.iteration, 1, "provider-a", "Read", {});
     const second = fixture.toolCall(fixture.iteration, 2, "provider-b", "Glob", {});
@@ -155,7 +155,10 @@ describe("InMemorySessionLedger", () => {
       name: "Read",
       args: {},
     };
-    const pending = ledger.beginTurn({ turn, userPrompt: "run" });
+    const pending = ledger.beginTurn({
+      turn,
+      userMessage: { role: "user", content: "run" },
+    });
     pending.agent.appendAssistant({
       iteration,
       message: { role: "assistant", toolCalls: [call] },
@@ -180,9 +183,9 @@ describe("InMemorySessionLedger", () => {
     expect(snapshot.messages).toHaveLength(3);
     expect(snapshot.toolResults).toHaveLength(0);
     expect(snapshot.frames.at(-1)?.state).toBe("open");
-    expect(() => ledger.buildCandidateModelRequest("next", [])).toThrow(
-      "ledger faulted",
-    );
+    expect(() =>
+      ledger.buildCandidateModelRequest({ role: "user", content: "next" }, []),
+    ).toThrow("ledger faulted");
   });
 
   test("builds deterministic interrupted completions without retrying calls", () => {

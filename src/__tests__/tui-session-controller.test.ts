@@ -236,6 +236,20 @@ function fakeRuntime(
     recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
     skills: () => ({ skills: [], shadowedNames: [] }),
     mcp: () => ({ servers: [] }),
+    supportsImageInput: () => false,
+    importImage: async () => {
+      throw new Error("not used");
+    },
+    verifyImageAssets: async () => undefined,
+    admitTurn: async ({ userMessage }) => ({
+      turnId: createTestRuntime().turn.turnId,
+      userMessage,
+      completion: Promise.resolve({
+        status: "completed",
+        finalText: "done",
+        lastIteration: createTestRuntime().iteration,
+      }),
+    }),
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

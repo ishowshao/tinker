@@ -224,7 +224,10 @@ describe("turn cancellation", () => {
         idFactory: deterministicIdFactory("cancel-openai-stream"),
         initialToolDefinitions: tooling.registry.definitions(),
       });
-      const pendingTurn = ledger.beginTurn({ turn, userPrompt: "wait" });
+      const pendingTurn = ledger.beginTurn({
+        turn,
+        userMessage: { role: "user", content: "wait" },
+      });
       const pending = runAgent({
         ledger: pendingTurn.agent,
         maxIterations: 2,
@@ -280,7 +283,10 @@ describe("turn cancellation", () => {
         idFactory: deterministicIdFactory("cancel-model"),
         initialToolDefinitions: tooling.registry.definitions(),
       });
-      const pendingTurn = ledger.beginTurn({ turn, userPrompt: "wait" });
+      const pendingTurn = ledger.beginTurn({
+        turn,
+        userMessage: { role: "user", content: "wait" },
+      });
       const pending = runAgent({
         ledger: pendingTurn.agent,
         maxIterations: 2,
@@ -389,7 +395,10 @@ describe("turn cancellation", () => {
       idFactory: deterministicIdFactory("cancel-tools"),
       initialToolDefinitions: registry.definitions(),
     });
-    const pendingTurn = ledger.beginTurn({ turn, userPrompt: "run tools" });
+    const pendingTurn = ledger.beginTurn({
+      turn,
+      userMessage: { role: "user", content: "run tools" },
+    });
     const result = await runAgent({
       ledger: pendingTurn.agent,
       maxIterations: 2,

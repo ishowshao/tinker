@@ -421,7 +421,7 @@ describe("runtime shadow isolation", () => {
     const turn = nextTurn(fixture.sessionId, 17);
     const pending = fixture.ledger.beginTurn({
       turn,
-      userPrompt: "active request",
+      userMessage: { role: "user", content: "active request" },
     });
     const expected = pending.agent.buildModelRequest([]).request;
     const model = new RuntimeShadowModel(false);
@@ -478,7 +478,7 @@ describe("runtime shadow isolation", () => {
     const turn = nextTurn(fixture.sessionId, 17);
     const pending = fixture.ledger.beginTurn({
       turn,
-      userPrompt: "active after diagnostic failure",
+      userMessage: { role: "user", content: "active after diagnostic failure" },
     });
     const expected = pending.agent.buildModelRequest([]).request;
     const model = new RuntimeShadowModel(true);
@@ -794,7 +794,7 @@ function appendToolTurn(
   };
   const pending = ledger.beginTurn({
     turn,
-    userPrompt: `turn ${turnNumber}`,
+    userMessage: { role: "user", content: `turn ${turnNumber}` },
   });
   pending.agent.appendAssistant({
     iteration,

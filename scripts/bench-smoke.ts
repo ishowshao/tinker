@@ -45,7 +45,7 @@ if (
   !longSession.retirement.providerRequestCountUnchanged ||
   !longSession.retirement.retiredPayloadVerified ||
   finalRetirement.keepFromOrdinal <= 1 ||
-  longSession.database.schemaVersion !== 8 ||
+  longSession.database.schemaVersion !== 9 ||
   longSession.database.revisionKind !== "prefix_retirement" ||
   longSession.database.revisionNumber !== finalRetirement.revisionNumber ||
   longSession.shadow.selectedCandidateCount < 1 ||

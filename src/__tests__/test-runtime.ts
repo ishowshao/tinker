@@ -43,6 +43,7 @@ import {
 } from "../session/session-store";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import type { ToolDefinition } from "../tools/types";
+import type { ImageAttachmentId } from "../image/image-types";
 import {
   RecallHistoryError,
   type SessionHistoryReader,
@@ -164,6 +165,7 @@ export function prepareTestModelRequest(
       toolSegments.map((segment) => segment.normalizedText).join("\n"),
     ),
     requestMaxOutputTokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
+    mediaOccurrenceCount: 0,
     assistantReplaySegments: (message) => [testPromptSegment(message)],
   };
   preparedInputs.set(prepared, {
@@ -334,6 +336,7 @@ export function deterministicIdFactory(prefix = "test"): RuntimeIdFactory {
   let frame = 0;
   let revision = 0;
   let surface = 0;
+  let imageAttachment = 0;
   return {
     createSessionId: () => `${prefix}-session-${++session}` as SessionId,
     createTurnId: () => `${prefix}-turn-${++turn}` as TurnId,
@@ -344,6 +347,8 @@ export function deterministicIdFactory(prefix = "test"): RuntimeIdFactory {
     createContextRevisionId: () =>
       `${prefix}-revision-${++revision}` as ContextRevisionId,
     createContextSurfaceId: () => `${prefix}-surface-${++surface}` as ContextSurfaceId,
+    createImageAttachmentId: () =>
+      `00000000-0000-7000-8000-${String(++imageAttachment).padStart(12, "0")}` as ImageAttachmentId,
   };
 }
 

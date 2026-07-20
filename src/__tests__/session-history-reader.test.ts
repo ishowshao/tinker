@@ -311,8 +311,11 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
   };
   const pending = ledger.beginTurn({
     turn,
-    userPrompt:
-      '中文路径 src/foo.ts failed with EACCES in C++ std::vector; see https://example.com/a?q=1 and literal "OR" * - % _.',
+    userMessage: {
+      role: "user",
+      content:
+        '中文路径 src/foo.ts failed with EACCES in C++ std::vector; see https://example.com/a?q=1 and literal "OR" * - % _.',
+    },
   });
   store.beginIteration(iteration);
   pending.agent.appendAssistant({
@@ -376,7 +379,10 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
     name: "Recall",
     args: { mode: "search", query: "x" },
   };
-  const recallPending = ledger.beginTurn({ turn: recallTurn, userPrompt: "recall it" });
+  const recallPending = ledger.beginTurn({
+    turn: recallTurn,
+    userMessage: { role: "user", content: "recall it" },
+  });
   store.beginIteration(recallIteration);
   recallPending.agent.appendAssistant({
     iteration: recallIteration,
@@ -453,7 +459,10 @@ function appendTextTurn(
     iterationId: runtimeIdFactory.createIterationId(),
     iterationNumber: 1,
   };
-  const pending = ledger.beginTurn({ turn, userPrompt });
+  const pending = ledger.beginTurn({
+    turn,
+    userMessage: { role: "user", content: userPrompt },
+  });
   store.beginIteration(iteration);
   pending.agent.appendAssistant({
     iteration,

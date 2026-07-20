@@ -40,6 +40,10 @@ export function estimatePromptSegments(
 
   for (const segment of segments) {
     exact[breakdownKey(segment.kind)] += estimateText(segment.normalizedText);
+    exact[breakdownKey(segment.kind)] += (segment.media ?? []).reduce(
+      (total, media) => total + media.planningTokens,
+      0,
+    );
   }
 
   const totalTokens = Math.ceil(

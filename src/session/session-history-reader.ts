@@ -4,7 +4,14 @@ import {
   parseMessageSource,
   type MessageSource,
 } from "../context/context-source";
-import { contentHash } from "../context/protocol-frame";
+import { contentHash, userMessageHash } from "../context/protocol-frame";
+import {
+  parseImageAssetId,
+  parseImageAttachmentId,
+  validateUserMessage,
+  type UserImageAttachment,
+  type UserMessage,
+} from "../image/image-types";
 import type { MessageId, SessionId } from "../ids/runtime-id";
 import { SessionError, sessionReadError } from "./session-errors";
 
@@ -110,6 +117,21 @@ type RecallRow = {
   observation_sha256?: unknown;
 };
 
+type RecallImageRow = {
+  message_id: unknown;
+  attachment_id: unknown;
+  position: unknown;
+  label: unknown;
+  range_start: unknown;
+  range_end: unknown;
+  original_name: unknown;
+  asset_id: unknown;
+  mime_type: unknown;
+  byte_length: unknown;
+  width: unknown;
+  height: unknown;
+};
+
 export function createSessionHistoryReader(input: {
   database: Database;
   sessionId: SessionId;
@@ -203,11 +225,18 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
 
     let decoded: Array<RecallSearchHit & { content: string }>;
     try {
+      const imageAttachments = this.loadImageAttachments(
+        rows.map((row) => nonEmptyString(row.message_id, "message_id") as MessageId),
+      );
       decoded = rows.map((row) => {
         const metadata = decodeRecallRow(row);
+        const attachments = imageAttachments.get(metadata.messageId) ?? [];
+        verifyRecallContent(metadata, attachments);
+        const content = renderRecallContent(metadata.content, attachments);
         return {
           ...metadata,
-          excerpt: buildExcerpt(metadata.content, input.query),
+          content,
+          excerpt: buildExcerpt(content, input.query),
         };
       });
     } catch (error) {
@@ -258,12 +287,15 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
     }
 
     let metadata: ReturnType<typeof decodeRecallRow>;
+    let attachments: readonly UserImageAttachment[];
     try {
       metadata = decodeRecallRow(row);
+      attachments =
+        this.loadImageAttachments([metadata.messageId]).get(metadata.messageId) ?? [];
     } catch (error) {
       throw sessionReadError("decode_recall_get", this.sessionId, error);
     }
-    const actualHash = contentHash(metadata.content);
+    const actualHash = recallContentHash(metadata, attachments);
     const observationHash = row.observation_sha256;
     if (
       actualHash !== metadata.contentSha256 ||
@@ -277,7 +309,8 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
       );
     }
 
-    const page = sliceUtf8Page(metadata.content, input.byteOffset, input.byteLimit);
+    const renderedContent = renderRecallContent(metadata.content, attachments);
+    const page = sliceUtf8Page(renderedContent, input.byteOffset, input.byteLimit);
     return Object.freeze({
       source: formatMessageSource(metadata.messageId),
       messageId: metadata.messageId,
@@ -324,6 +357,112 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
     }
     return requested ?? maximum;
   }
+
+  private loadImageAttachments(
+    messageIds: readonly MessageId[],
+  ): ReadonlyMap<MessageId, readonly UserImageAttachment[]> {
+    if (messageIds.length === 0) {
+      return new Map();
+    }
+    const unique = [...new Set(messageIds)];
+    let rows: RecallImageRow[];
+    try {
+      this.requireStoreOpen();
+      rows = this.database
+        .query(
+          `SELECT
+             mia.message_id, mia.attachment_id, mia.position, mia.label,
+             mia.range_start, mia.range_end, mia.original_name,
+             ia.asset_id, ia.mime_type, ia.byte_length, ia.width, ia.height
+           FROM message_image_attachments mia
+           JOIN image_assets ia ON ia.asset_id = mia.asset_id
+           WHERE mia.message_id IN (${unique.map(() => "?").join(", ")})
+           ORDER BY mia.message_id, mia.position`,
+        )
+        .all(...unique) as RecallImageRow[];
+    } catch (error) {
+      throw sessionReadError("read_recall_images", this.sessionId, error);
+    }
+
+    const grouped = new Map<MessageId, UserImageAttachment[]>();
+    for (const row of rows) {
+      const messageId = nonEmptyString(row.message_id, "message_id") as MessageId;
+      const attachments = grouped.get(messageId) ?? [];
+      const position = nonNegativeSafeInteger(row.position, "image position");
+      if (position !== attachments.length) {
+        throw new Error("Recall image positions are not contiguous.");
+      }
+      attachments.push(
+        Object.freeze({
+          attachmentId: parseImageAttachmentId(
+            nonEmptyString(row.attachment_id, "attachment_id"),
+          ),
+          assetId: parseImageAssetId(nonEmptyString(row.asset_id, "asset_id")),
+          label: nonEmptyString(row.label, "image label"),
+          range: Object.freeze({
+            start: nonNegativeSafeInteger(row.range_start, "image range start"),
+            end: safeInteger(row.range_end, "image range end"),
+          }),
+          mimeType: enumValue(
+            row.mime_type,
+            ["image/png", "image/jpeg", "image/webp"] as const,
+            "image MIME type",
+          ),
+          byteLength: safeInteger(row.byte_length, "image byte length"),
+          width: safeInteger(row.width, "image width"),
+          height: safeInteger(row.height, "image height"),
+          originalName: nonEmptyString(row.original_name, "original image name"),
+        }),
+      );
+      grouped.set(messageId, attachments);
+    }
+    return new Map(
+      [...grouped].map(([messageId, attachments]) => [
+        messageId,
+        Object.freeze(attachments),
+      ]),
+    );
+  }
+}
+
+export function renderRecallContent(
+  content: string,
+  attachments: readonly UserImageAttachment[],
+): string {
+  if (attachments.length === 0) return content;
+  const notes = attachments.map(
+    (attachment) =>
+      `[Historical image omitted: label=${attachment.label}, originalName=${JSON.stringify(attachment.originalName)}. Ask the user to reattach it.]`,
+  );
+  return `${content}\n\n${notes.join("\n")}`;
+}
+
+function verifyRecallContent(
+  metadata: ReturnType<typeof decodeRecallRow>,
+  attachments: readonly UserImageAttachment[],
+): void {
+  if (recallContentHash(metadata, attachments) !== metadata.contentSha256) {
+    throw new Error("Canonical Recall content failed its integrity check.");
+  }
+}
+
+function recallContentHash(
+  metadata: ReturnType<typeof decodeRecallRow>,
+  attachments: readonly UserImageAttachment[],
+): string {
+  if (metadata.role !== "user") {
+    if (attachments.length > 0) {
+      throw new Error("Non-user Recall message has image attachments.");
+    }
+    return contentHash(metadata.content);
+  }
+  const message: UserMessage = Object.freeze({
+    role: "user",
+    content: metadata.content,
+    ...(attachments.length === 0 ? {} : { attachments }),
+  });
+  validateUserMessage(message);
+  return userMessageHash(message);
 }
 
 function searchPredicates(
@@ -519,6 +658,14 @@ function safeInteger(value: unknown, name: string): number {
   const number = typeof value === "bigint" ? Number(value) : value;
   if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
     throw new Error(`${name} must be a positive safe integer.`);
+  }
+  return number;
+}
+
+function nonNegativeSafeInteger(value: unknown, name: string): number {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 0) {
+    throw new Error(`${name} must be a non-negative safe integer.`);
   }
   return number;
 }

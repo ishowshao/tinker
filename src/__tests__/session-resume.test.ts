@@ -72,13 +72,13 @@ describe("RuntimeSession resume", () => {
         { loadMcpConfig: async () => undefined },
       );
       await session.executeTurn({
-        userPrompt: "before file change",
+        userMessage: { role: "user", content: "before file change" },
         signal: new AbortController().signal,
       });
 
       await writeFile(instructionPath, "rule version two\n");
       await session.executeTurn({
-        userPrompt: "after file change",
+        userMessage: { role: "user", content: "after file change" },
         signal: new AbortController().signal,
       });
       expect(firstModel.inputs[1]?.messages[0]?.content).toContain("rule version one");
@@ -102,7 +102,7 @@ describe("RuntimeSession resume", () => {
         { loadMcpConfig: async () => undefined },
       );
       await session.executeTurn({
-        userPrompt: "after resume",
+        userMessage: { role: "user", content: "after resume" },
         signal: new AbortController().signal,
       });
       expect(resumedModel.inputs[0]?.messages[0]?.content).toContain(
@@ -153,7 +153,7 @@ describe("RuntimeSession resume", () => {
         { loadMcpConfig: async () => undefined },
       );
       await nextSession.executeTurn({
-        userPrompt: "new session",
+        userMessage: { role: "user", content: "new session" },
         signal: new AbortController().signal,
       });
       expect(nextModel.inputs[0]?.messages[0]?.content).toContain("rule version two");
@@ -262,7 +262,7 @@ describe("RuntimeSession resume", () => {
         dependencies,
       );
       await session.executeTurn({
-        userPrompt: "after MCP add",
+        userMessage: { role: "user", content: "after MCP add" },
         signal: new AbortController().signal,
       });
       expect(model.inputs[0]?.tools.map((tool) => tool.name)).toContain(
@@ -280,7 +280,7 @@ describe("RuntimeSession resume", () => {
         dependencies,
       );
       await session.executeTurn({
-        userPrompt: "after MCP remove",
+        userMessage: { role: "user", content: "after MCP remove" },
         signal: new AbortController().signal,
       });
       expect(model.inputs[0]?.tools.map((tool) => tool.name)).not.toContain(
@@ -399,11 +399,11 @@ describe("RuntimeSession resume", () => {
         { loadMcpConfig: async () => undefined },
       );
       await session.executeTurn({
-        userPrompt: "first",
+        userMessage: { role: "user", content: "first" },
         signal: new AbortController().signal,
       });
       await session.executeTurn({
-        userPrompt: "second",
+        userMessage: { role: "user", content: "second" },
         signal: new AbortController().signal,
       });
       const lastMeasured = [...sink.events]
@@ -442,7 +442,7 @@ describe("RuntimeSession resume", () => {
         calibrationSampleCount: 0,
       });
       await session.executeTurn({
-        userPrompt: "third",
+        userMessage: { role: "user", content: "third" },
         signal: new AbortController().signal,
       });
       await session.dispose({ type: "tui_exit" });
@@ -514,7 +514,7 @@ describe("RuntimeSession resume", () => {
         loadMcpConfig: async () => undefined,
       });
       await first.executeTurn({
-        userPrompt: "persisted",
+        userMessage: { role: "user", content: "persisted" },
         signal: new AbortController().signal,
       });
       await first.dispose({ type: "tui_exit" });
@@ -548,7 +548,7 @@ describe("RuntimeSession resume", () => {
         loadMcpConfig: async () => undefined,
       });
       await resumed.executeTurn({
-        userPrompt: "after mismatch",
+        userMessage: { role: "user", content: "after mismatch" },
         signal: new AbortController().signal,
       });
       expect(resumedModel.inputs[0]?.messages).toContainEqual({

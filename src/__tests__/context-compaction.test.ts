@@ -245,7 +245,7 @@ describe("I2 deterministic context compaction", () => {
         const cloneIteration = nextIteration(cloneTurn, 1);
         const clonePending = clonedLedger.beginTurn({
           turn: cloneTurn,
-          userPrompt: "clone-only-after-fork",
+          userMessage: { role: "user", content: "clone-only-after-fork" },
         });
         cloned.beginIteration(cloneIteration);
         clonePending.agent.appendAssistant({
@@ -705,12 +705,12 @@ describe("I2 deterministic context compaction", () => {
     );
     try {
       await session.executeTurn({
-        userPrompt: "read the large file",
+        userMessage: { role: "user", content: "read the large file" },
         signal: new AbortController().signal,
       });
       for (let index = 0; index < 8; index += 1) {
         await session.executeTurn({
-          userPrompt: `tail ${index}`,
+          userMessage: { role: "user", content: `tail ${index}` },
           signal: new AbortController().signal,
         });
       }
@@ -786,12 +786,12 @@ describe("I2 deterministic context compaction", () => {
     );
     try {
       await session.executeTurn({
-        userPrompt: "read the large file",
+        userMessage: { role: "user", content: "read the large file" },
         signal: new AbortController().signal,
       });
       for (let index = 0; index < 8; index += 1) {
         await session.executeTurn({
-          userPrompt: `tail ${index}`,
+          userMessage: { role: "user", content: `tail ${index}` },
           signal: new AbortController().signal,
         });
       }
@@ -807,7 +807,7 @@ describe("I2 deterministic context compaction", () => {
       expect(eventTypes).toContain("context.revision.finished");
       expect(() =>
         session.executeTurn({
-          userPrompt: "must not execute",
+          userMessage: { role: "user", content: "must not execute" },
           signal: new AbortController().signal,
         }),
       ).toThrow("faulted");
@@ -940,7 +940,10 @@ function appendReadTurn(
     name: "Read",
     args: { file_path: `history-${turn.turnNumber}.txt` },
   };
-  const pending = fixture.ledger.beginTurn({ turn, userPrompt: "read history" });
+  const pending = fixture.ledger.beginTurn({
+    turn,
+    userMessage: { role: "user", content: "read history" },
+  });
   fixture.store.beginIteration(firstIteration);
   pending.agent.appendAssistant({
     iteration: firstIteration,
@@ -991,7 +994,7 @@ function appendTextTurns(
     const iteration = nextIteration(turn, 1);
     const pending = fixture.ledger.beginTurn({
       turn,
-      userPrompt: prompt(turn.turnNumber),
+      userMessage: { role: "user", content: prompt(turn.turnNumber) },
     });
     fixture.store.beginIteration(iteration);
     pending.agent.appendAssistant({

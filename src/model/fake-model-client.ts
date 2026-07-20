@@ -14,6 +14,7 @@ import { sha256, stableJsonStringify } from "./model-request-preflight";
 import { estimatePromptSegments } from "./token-estimator";
 
 export class FakeModelClient implements ModelClient {
+  readonly inputModalities = Object.freeze(["text"] as const);
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
     adapter: "fake",
     serializationVersion: "fake-v1",
@@ -60,6 +61,7 @@ export class FakeModelClient implements ModelClient {
         toolSegments.map((segment) => segment.normalizedText).join("\n"),
       ),
       requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
+      mediaOccurrenceCount: 0,
       assistantReplaySegments: (message: AssistantMessage) => [
         toPromptSegment(message),
       ],

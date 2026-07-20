@@ -87,7 +87,7 @@ describe("session last response reader", () => {
       ).toBeUndefined();
 
       const result = await session.executeTurn({
-        userPrompt: "write a long response",
+        userMessage: { role: "user", content: "write a long response" },
         signal: new AbortController().signal,
       });
       expect(result.status).toBe("completed");
@@ -118,13 +118,13 @@ describe("session last response reader", () => {
         { loadMcpConfig: async () => undefined },
       );
       const completed = await session.executeTurn({
-        userPrompt: "complete",
+        userMessage: { role: "user", content: "complete" },
         signal: new AbortController().signal,
       });
       expect(completed.status).toBe("completed");
 
       const failed = await session.executeTurn({
-        userPrompt: "fail",
+        userMessage: { role: "user", content: "fail" },
         signal: new AbortController().signal,
       });
       expect(failed.status).toBe("failed");
@@ -134,7 +134,7 @@ describe("session last response reader", () => {
 
       const controller = new AbortController();
       const pending = session.executeTurn({
-        userPrompt: "cancel",
+        userMessage: { role: "user", content: "cancel" },
         signal: controller.signal,
       });
       await model.cancellationStarted;

@@ -8,6 +8,7 @@ import type {
 import type { ProtocolContextView } from "../context/protocol-frame";
 import type { StoredContextSurfaceV8 } from "../context/context-surface";
 import { stableJsonStringify } from "../model/model-request-preflight";
+import { validateUserMessage, type UserMessage } from "../image/image-types";
 
 export class ContextBuilder {
   build(input: {
@@ -17,7 +18,7 @@ export class ContextBuilder {
     compiled: CompiledRevisionContext;
     surface: StoredContextSurfaceV8;
     tools: readonly ToolDefinition[];
-    candidateUserPrompt?: string;
+    candidateUserMessage?: UserMessage;
   }): BuiltContextRequest {
     if (input.canonical.sessionId !== input.compiled.sessionId) {
       throw new Error(
@@ -36,11 +37,9 @@ export class ContextBuilder {
       );
     }
     const messages = input.compiled.entries.map((entry) => entry.message);
-    if (input.candidateUserPrompt !== undefined) {
-      if (input.candidateUserPrompt.trim() === "") {
-        throw new Error("Cannot build a candidate context with an empty prompt.");
-      }
-      messages.push({ role: "user", content: input.candidateUserPrompt });
+    if (input.candidateUserMessage !== undefined) {
+      validateUserMessage(input.candidateUserMessage);
+      messages.push(input.candidateUserMessage);
     }
     return Object.freeze({
       canonical: input.canonical,
@@ -52,7 +51,7 @@ export class ContextBuilder {
         messages,
         tools: [...input.surface.toolDefinitions],
       },
-      candidateUserPromptIncluded: input.candidateUserPrompt !== undefined,
+      candidateUserPromptIncluded: input.candidateUserMessage !== undefined,
     });
   }
 }

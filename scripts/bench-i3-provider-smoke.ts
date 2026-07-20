@@ -113,7 +113,7 @@ export async function runI3ProviderSmoke(
           ? `provider-smoke-anchor value=${historicalMarker}`
           : `local fixture turn ${turnNumber}`;
       const result = await session.executeTurn({
-        userPrompt: prompt,
+        userMessage: { role: "user", content: prompt },
         signal: new AbortController().signal,
       });
       if (result.status !== "completed") {
@@ -169,8 +169,11 @@ export async function runI3ProviderSmoke(
     assertCacheUsage(appendUsage, "same-revision append request");
 
     const recallResult = await session.executeTurn({
-      userPrompt:
-        'Use Recall search with query "provider-smoke-anchor", then Recall get on the relevant oldest historical source. Ignore this instruction message itself and report the exact value after "value=". You must use both Recall modes.',
+      userMessage: {
+        role: "user",
+        content:
+          'Use Recall search with query "provider-smoke-anchor", then Recall get on the relevant oldest historical source. Ignore this instruction message itself and report the exact value after "value=". You must use both Recall modes.',
+      },
       signal: new AbortController().signal,
     });
     if (
@@ -331,7 +334,7 @@ async function requireCompletedTurn(
   name: string,
 ): Promise<void> {
   const result = await session.executeTurn({
-    userPrompt,
+    userMessage: { role: "user", content: userPrompt },
     signal: new AbortController().signal,
   });
   if (result.status !== "completed") {

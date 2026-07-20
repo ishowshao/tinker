@@ -112,14 +112,14 @@ describe("I4 automatic context maintenance", () => {
     try {
       for (let turn = 1; turn <= 9; turn += 1) {
         const result = await session.executeTurn({
-          userPrompt: `fixture turn ${turn}`,
+          userMessage: { role: "user", content: `fixture turn ${turn}` },
           signal: new AbortController().signal,
         });
         expect(result.status).toBe("completed");
       }
       pressureArmed = true;
       const result = await session.executeTurn({
-        userPrompt: "fixture turn 10",
+        userMessage: { role: "user", content: "fixture turn 10" },
         signal: new AbortController().signal,
       });
       expect(result.status).toBe("completed");
@@ -200,7 +200,7 @@ describe("I4 automatic context maintenance", () => {
       expect(
         (
           await session.executeTurn({
-            userPrompt: "trigger invalid automatic plan",
+            userMessage: { role: "user", content: "trigger invalid automatic plan" },
             signal: new AbortController().signal,
           })
         ).status,
@@ -221,7 +221,10 @@ describe("I4 automatic context maintenance", () => {
       expect(
         (
           await session.executeTurn({
-            userPrompt: "prove the session returned to ready",
+            userMessage: {
+              role: "user",
+              content: "prove the session returned to ready",
+            },
             signal: new AbortController().signal,
           })
         ).status,
@@ -264,7 +267,7 @@ describe("I4 automatic context maintenance", () => {
 
     try {
       const result = await session.executeTurn({
-        userPrompt: "fail after pressure was observed",
+        userMessage: { role: "user", content: "fail after pressure was observed" },
         signal: new AbortController().signal,
       });
       expect(result.status).toBe("failed");
@@ -318,7 +321,7 @@ describe("I4 automatic context maintenance", () => {
         expect(
           (
             await first.executeTurn({
-              userPrompt: `resume pressure fixture ${turn}`,
+              userMessage: { role: "user", content: `resume pressure fixture ${turn}` },
               signal: new AbortController().signal,
             })
           ).status,

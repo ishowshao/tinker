@@ -36,7 +36,11 @@ function renderTimelineItem(item: TimelineItem) {
     return (
       <Fragment key={item.id}>
         <Text color="gray">- {item.label}</Text>
-        <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+        {item.userPrompt === undefined ? (
+          <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
+        ) : (
+          renderUserPrompt(item.userPrompt)
+        )}
         {renderItemBash(item)}
         {renderItemDiff(item)}
       </Fragment>
@@ -50,6 +54,31 @@ function renderTimelineItem(item: TimelineItem) {
       {renderItemDiff(item)}
     </Fragment>
   );
+}
+
+function renderUserPrompt(prompt: NonNullable<TimelineItem["userPrompt"]>) {
+  const chars = [...prompt.text];
+  const fragments: React.ReactNode[] = [];
+  let offset = 0;
+  for (const image of prompt.images) {
+    fragments.push(chars.slice(offset, image.range.start).join(""));
+    fragments.push(
+      <Text key={`${image.range.start}:${image.label}`} color="cyan" bold>
+        {chars.slice(image.range.start, image.range.end).join("")}
+        <Text dimColor> ({image.originalName})</Text>
+      </Text>,
+    );
+    offset = image.range.end;
+  }
+  fragments.push(chars.slice(offset).join(""));
+  if (prompt.omittedImageCount > 0) {
+    fragments.push(
+      <Text key="omitted-images" dimColor>
+        {` [${prompt.omittedImageCount} image(s) omitted]`}
+      </Text>,
+    );
+  }
+  return <Text color="white">{fragments}</Text>;
 }
 
 function renderItemDiff(item: TimelineItem) {

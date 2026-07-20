@@ -40,6 +40,7 @@ describe("runtime compatibility boundary", () => {
         "includeReasoningContent",
         "contextProfile",
         "messageProtocol",
+        "imageInput",
       ]);
       for (const excluded of [
         "version",
@@ -82,6 +83,24 @@ describe("runtime compatibility boundary", () => {
             },
           }),
         ],
+        [
+          "imageInput",
+          compatibilityContract({
+            imageInput: {
+              ...current.imageInput,
+              inputModalities: ["text", "image"],
+              tokenEstimator: {
+                kind: "moonshot-estimate-token-count-v1",
+                coverageVersion: "full-request-v1",
+                model: "kimi-k3",
+                endpoint:
+                  "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
+                timeoutMs: 30_000,
+                maxRetries: 0,
+              },
+            },
+          }),
+        ],
       ];
       for (const [field, mismatch] of mismatches) {
         expect(() => store.assertSessionCompatibility(mismatch)).toThrow(field);
@@ -105,7 +124,7 @@ describe("runtime compatibility boundary", () => {
     }
   });
 
-  test("excludes endpoint, key, timeout, transport, and provider label from request identity", () => {
+  test("binds payload and endpoint policy but excludes credentials and timeout from request identity", () => {
     const input = {
       messages: [{ role: "system" as const, content: "system" }],
       tools: [TOOL],
@@ -117,20 +136,25 @@ describe("runtime compatibility boundary", () => {
       providerName: "first-provider",
       fetch: stubFetch(),
     }).prepare(input);
-    const second = openAiClient({
+    const equivalent = openAiClient({
       apiKey: "second-key",
-      baseURL: "https://second.example/other?route=2#fragment",
+      baseURL: "https://first.example/v1?route=2#fragment",
       timeoutMs: 200,
       providerName: "second-provider",
       fetch: stubFetch(),
     }).prepare(input);
+    const otherEndpoint = openAiClient({
+      baseURL: "https://second.example/other",
+      fetch: stubFetch(),
+    }).prepare(input);
 
-    expect(second.requestConfigHash).toBe(first.requestConfigHash);
-    expect(second.toolSchemaHash).toBe(first.toolSchemaHash);
+    expect(equivalent.requestConfigHash).toBe(first.requestConfigHash);
+    expect(equivalent.toolSchemaHash).toBe(first.toolSchemaHash);
+    expect(otherEndpoint.requestConfigHash).not.toBe(first.requestConfigHash);
     expect(
       openAiClient({ stream: false, fetch: stubFetch() }).prepare(input)
         .requestConfigHash,
-    ).toBe(first.requestConfigHash);
+    ).not.toBe(first.requestConfigHash);
     expect(
       openAiClient({ model: "other-model" }).prepare(input).requestConfigHash,
     ).not.toBe(first.requestConfigHash);
@@ -145,6 +169,47 @@ describe("runtime compatibility boundary", () => {
         },
       }).prepare(input).requestConfigHash,
     ).not.toBe(first.requestConfigHash);
+
+    const estimator = {
+      kind: "moonshot-estimate-token-count-v1" as const,
+      model: "kimi-k3",
+      apiBase: "https://api.moonshot.test/v1",
+      apiKey: "first-estimator-key",
+      timeoutMs: 30_000,
+      maxRetries: 0 as const,
+    };
+    const imageFirst = openAiClient({
+      inputModalities: ["text", "image"],
+      tokenEstimator: estimator,
+    }).prepare(input);
+    const imageWithOtherCredential = openAiClient({
+      inputModalities: ["text", "image"],
+      tokenEstimator: { ...estimator, apiKey: "second-estimator-key" },
+    }).prepare(input);
+    expect(imageWithOtherCredential.requestConfigHash).toBe(
+      imageFirst.requestConfigHash,
+    );
+    expect(
+      openAiClient({
+        inputModalities: ["text", "image"],
+        tokenEstimator: {
+          ...estimator,
+          apiBase: "https://other.moonshot.test/v1",
+        },
+      }).prepare(input).requestConfigHash,
+    ).not.toBe(imageFirst.requestConfigHash);
+    expect(
+      openAiClient({
+        inputModalities: ["text", "image"],
+        tokenEstimator: { ...estimator, model: "other-estimator-model" },
+      }).prepare(input).requestConfigHash,
+    ).not.toBe(imageFirst.requestConfigHash);
+    expect(
+      openAiClient({
+        inputModalities: ["text", "image"],
+        tokenEstimator: { ...estimator, timeoutMs: 20_000 },
+      }).prepare(input).requestConfigHash,
+    ).not.toBe(imageFirst.requestConfigHash);
   });
 });
 
@@ -166,6 +231,8 @@ function compatibilityContract(
       adapter: "fake",
       serializationVersion: "test-model-v1",
     },
+    inputModalities: overrides.imageInput?.inputModalities,
+    tokenEstimator: overrides.imageInput?.tokenEstimator,
   });
 }
 

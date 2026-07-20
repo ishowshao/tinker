@@ -183,7 +183,7 @@ describe("runAgent", () => {
       });
       const pendingTurn = ledger.beginTurn({
         turn,
-        userPrompt: "Read README.md",
+        userMessage: { role: "user", content: "Read README.md" },
       });
       const result = await runAgent({
         ledger: pendingTurn.agent,
@@ -249,7 +249,7 @@ describe("runAgent", () => {
     };
     const firstTurn = ledger.beginTurn({
       turn: previousTurn,
-      userPrompt: "First prompt",
+      userMessage: { role: "user", content: "First prompt" },
     });
     firstTurn.agent.appendAssistant({
       iteration: previousIteration,
@@ -267,7 +267,7 @@ describe("runAgent", () => {
     ).request.messages;
     const secondTurn = ledger.beginTurn({
       turn,
-      userPrompt: "Second prompt",
+      userMessage: { role: "user", content: "Second prompt" },
     });
 
     const result = await runAgent({
@@ -342,7 +342,7 @@ describe("runAgent", () => {
     });
     const pending = ledger.beginTurn({
       turn: identity.turn,
-      userPrompt: "run both",
+      userMessage: { role: "user", content: "run both" },
     });
 
     const error = await runAgent({
@@ -390,7 +390,7 @@ describe("runAgent", () => {
     });
     const pending = ledger.beginTurn({
       turn: identity.turn,
-      userPrompt: "recall then mutate",
+      userMessage: { role: "user", content: "recall then mutate" },
     });
 
     const error = await runAgent({
@@ -438,7 +438,7 @@ describe("runAgent", () => {
     });
     const pending = ledger.beginTurn({
       turn: identity.turn,
-      userPrompt: "recall then continue",
+      userMessage: { role: "user", content: "recall then continue" },
     });
     const result = await runAgent({
       ledger: pending.agent,

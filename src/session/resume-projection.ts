@@ -25,6 +25,20 @@ import {
 import { SessionError } from "./session-errors";
 import { verifySessionSchema } from "./session-schema";
 import { decodeStoredToolCalls, decodeStoredToolRawResult } from "./session-store";
+import {
+  MAX_TIMELINE_PROMPT_CODE_POINTS,
+  projectUserMessage,
+  truncateUserPromptProjection,
+  type UserPromptProjection,
+} from "../agent/user-prompt-projection";
+import {
+  parseImageAssetId,
+  parseImageAttachmentId,
+  validateUserMessage,
+  type UserImageAttachment,
+  type UserMessage,
+} from "../image/image-types";
+import { userMessageHash } from "../context/protocol-frame";
 
 export class ResumeProjectionReader {
   static async read(input: {
@@ -153,11 +167,16 @@ function projectTurn(
   if (prompt === undefined) {
     throw new Error(`Turn ${turnId} user message disappeared.`);
   }
+  const userPrompt = truncateUserPromptProjection(
+    readUserPromptProjection(database, prompt),
+    MAX_TIMELINE_PROMPT_CODE_POINTS,
+  );
   const allItems: TimelineItem[] = [
     {
       id: `resume-${requireString(prompt.message_id, "message_id")}`,
       label: "prompt",
-      text: boundedText(requireString(prompt.content, "user content")),
+      text: userPrompt.text,
+      userPrompt,
       status: "text",
     },
   ];
@@ -242,6 +261,71 @@ function projectTurn(
     items: limited.items,
     omittedItemCount: limited.omitted,
   };
+}
+
+function readUserPromptProjection(
+  database: Database,
+  prompt: Record<string, unknown>,
+): UserPromptProjection {
+  const messageId = requireString(prompt.message_id, "message_id");
+  const text = requireString(prompt.content, "user content");
+  const chars = [...text];
+  const rows = database
+    .query(
+      `SELECT mia.attachment_id, mia.position, mia.label, mia.range_start,
+              mia.range_end, mia.original_name, ia.asset_id, ia.mime_type,
+              ia.byte_length, ia.width, ia.height
+       FROM message_image_attachments mia
+       JOIN image_assets ia ON ia.asset_id = mia.asset_id
+       WHERE mia.message_id = ? ORDER BY mia.position`,
+    )
+    .all(messageId) as Array<Record<string, unknown>>;
+  const attachments = rows.map((row, position): UserImageAttachment => {
+    if (safeNumber(row.position, "image position") !== position) {
+      throw new Error(`Image positions for message ${messageId} are not continuous.`);
+    }
+    const start = safeNumber(row.range_start, "image range_start");
+    const end = safeNumber(row.range_end, "image range_end");
+    const label = requireString(row.label, "image label");
+    if (
+      start < 0 ||
+      end <= start ||
+      end > chars.length ||
+      chars.slice(start, end).join("") !== label
+    ) {
+      throw new Error(`Image range for message ${messageId} is invalid.`);
+    }
+    return Object.freeze({
+      attachmentId: parseImageAttachmentId(
+        requireString(row.attachment_id, "image attachment_id"),
+      ),
+      assetId: parseImageAssetId(requireString(row.asset_id, "image asset_id")),
+      label,
+      range: Object.freeze({ start, end }),
+      mimeType: enumValue(
+        row.mime_type,
+        ["image/png", "image/jpeg", "image/webp"] as const,
+        "image mime_type",
+      ),
+      byteLength: positiveInteger(row.byte_length, "image byte_length"),
+      width: positiveInteger(row.width, "image width"),
+      height: positiveInteger(row.height, "image height"),
+      originalName: requireString(row.original_name, "image original_name"),
+    });
+  });
+  const message: UserMessage = Object.freeze({
+    role: "user",
+    content: text,
+    ...(attachments.length === 0 ? {} : { attachments: Object.freeze(attachments) }),
+  });
+  validateUserMessage(message);
+  if (
+    userMessageHash(message) !==
+    requireString(prompt.content_sha256, "user content_sha256")
+  ) {
+    throw new Error(`User message ${messageId} failed its integrity check.`);
+  }
+  return projectUserMessage(message);
 }
 
 function projectIteration(
@@ -561,10 +645,11 @@ function objectValue(value: unknown, name: string): Record<string, unknown> {
 }
 
 function positiveInteger(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
     throw new Error(`${name} must be a positive integer.`);
   }
-  return value as number;
+  return number;
 }
 
 function timestamp(value: unknown, name: string): string {

@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 8;
+export const SESSION_SCHEMA_VERSION = 9;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 8),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 9),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -195,6 +195,40 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           observation_format IS NULL AND synthetic_reason IS NOT NULL)
       ),
       CHECK ((synthetic_reason = 'failed_active') = (synthetic_detail IS NOT NULL))
+    ) STRICT`,
+  },
+  {
+    type: "table",
+    name: "image_assets",
+    sql: `CREATE TABLE image_assets (
+      asset_id TEXT PRIMARY KEY
+        CHECK (length(asset_id) = 64 AND asset_id NOT GLOB '*[^0-9a-f]*'),
+      mime_type TEXT NOT NULL
+        CHECK (mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+      byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+      width INTEGER NOT NULL CHECK (width > 0),
+      height INTEGER NOT NULL CHECK (height > 0),
+      created_at TEXT NOT NULL
+    ) STRICT`,
+  },
+  {
+    type: "table",
+    name: "message_image_attachments",
+    sql: `CREATE TABLE message_image_attachments (
+      message_id TEXT NOT NULL,
+      attachment_id TEXT NOT NULL CHECK (length(attachment_id) = 36),
+      asset_id TEXT NOT NULL,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      label TEXT NOT NULL CHECK (length(label) > 0),
+      range_start INTEGER NOT NULL CHECK (range_start >= 0),
+      range_end INTEGER NOT NULL CHECK (range_end > range_start),
+      original_name TEXT NOT NULL CHECK (length(original_name) > 0),
+      PRIMARY KEY (message_id, attachment_id),
+      UNIQUE (message_id, position),
+      UNIQUE (message_id, label),
+      UNIQUE (message_id, range_start, range_end),
+      FOREIGN KEY (message_id) REFERENCES messages(message_id),
+      FOREIGN KEY (asset_id) REFERENCES image_assets(asset_id)
     ) STRICT`,
   },
   {
@@ -391,6 +425,11 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
   {
     type: "index",
+    name: "idx_message_image_attachments_asset",
+    sql: "CREATE INDEX idx_message_image_attachments_asset ON message_image_attachments(asset_id)",
+  },
+  {
+    type: "index",
     name: "idx_turns_session_recent",
     sql: "CREATE INDEX idx_turns_session_recent ON turns(session_id, turn_number DESC)",
   },
@@ -431,6 +470,8 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
   ...immutableTriggers("messages"),
   ...immutableTriggers("tool_results"),
+  ...immutableTriggers("image_assets"),
+  ...immutableTriggers("message_image_attachments"),
   ...immutableTriggers("context_surfaces"),
   ...immutableTriggers("context_revisions"),
   ...immutableTriggers("context_overrides"),
@@ -795,7 +836,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V8_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V9_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -921,7 +962,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v8.",
+      "Session FTS configuration does not match schema v9.",
       { sessionId },
     );
   }

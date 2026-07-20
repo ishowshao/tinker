@@ -1,4 +1,9 @@
-import type { AgentMessage, IterationIdentity, ToolCall } from "../agent/types";
+import type {
+  AgentMessage,
+  IterationIdentity,
+  ToolCall,
+  UserMessage,
+} from "../agent/types";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ModelRequestOutput, ModelUsage } from "./model-client";
 import type { ToolDefinition } from "../tools/types";
@@ -6,8 +11,20 @@ import type {
   ChatCompletionAssistantMessageParam,
   ChatCompletionMessageFunctionToolCall,
   ChatCompletionMessageParam,
+  ChatCompletionContentPart,
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
+import {
+  parseImageAssetId,
+  validateUserMessage,
+  type ImageAssetId,
+} from "../image/image-types";
+
+const IMAGE_ASSET_URL_MARKER = Symbol("tinker.image-asset-url-marker");
+
+export type ImageAssetUrlMarker = {
+  readonly [IMAGE_ASSET_URL_MARKER]: ImageAssetId;
+};
 
 type DeepSeekAssistantMessageParam = ChatCompletionAssistantMessageParam & {
   reasoning_content?: string | null;
@@ -15,6 +32,7 @@ type DeepSeekAssistantMessageParam = ChatCompletionAssistantMessageParam & {
 
 export type OpenAIChatMessageMappingOptions = {
   includeReasoningContent?: boolean;
+  materializedImages?: ReadonlyMap<ImageAssetId, string>;
 };
 
 export function toOpenAIChatMessages(
@@ -47,8 +65,66 @@ export function toOpenAIChatMessages(
       };
     }
 
+    if (message.role === "user") {
+      return {
+        role: "user",
+        content: toOpenAIUserContent(message, options.materializedImages),
+      };
+    }
+
     return message;
   });
+}
+
+export function toOpenAIUserContent(
+  message: UserMessage,
+  materializedImages?: ReadonlyMap<ImageAssetId, string>,
+): string | ChatCompletionContentPart[] {
+  validateUserMessage(message);
+  const attachments = message.attachments;
+  if (attachments === undefined) {
+    return message.content;
+  }
+  return [
+    ...attachments.flatMap((attachment): ChatCompletionContentPart[] => [
+      { type: "text", text: `<image name=${attachment.label}>` },
+      {
+        type: "image_url",
+        image_url: {
+          url:
+            materializedImages === undefined
+              ? (imageAssetUrlMarker(attachment.assetId) as unknown as string)
+              : requireMaterializedImage(materializedImages, attachment.assetId),
+        },
+      },
+      { type: "text", text: "</image>" },
+    ]),
+    { type: "text", text: message.content },
+  ];
+}
+
+export function imageAssetUrlMarker(assetId: ImageAssetId): ImageAssetUrlMarker {
+  parseImageAssetId(assetId);
+  return Object.freeze({ [IMAGE_ASSET_URL_MARKER]: assetId });
+}
+
+export function parseImageAssetUrlMarker(value: unknown): ImageAssetId | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const assetId = (value as Partial<ImageAssetUrlMarker>)[IMAGE_ASSET_URL_MARKER];
+  return typeof assetId === "string" ? parseImageAssetId(assetId) : undefined;
+}
+
+function requireMaterializedImage(
+  materializedImages: ReadonlyMap<ImageAssetId, string>,
+  assetId: ImageAssetId,
+): string {
+  const dataUrl = materializedImages.get(assetId);
+  if (dataUrl === undefined) {
+    throw new Error(`Image asset ${assetId.slice(0, 12)}… was not materialized.`);
+  }
+  return dataUrl;
 }
 
 export function toOpenAIChatTools(

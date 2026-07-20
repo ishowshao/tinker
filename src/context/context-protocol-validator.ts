@@ -1,6 +1,7 @@
 import type { MessageId, ProtocolFrameId, ToolCallId } from "../ids/runtime-id";
 import {
   contentHash,
+  userMessageHash,
   rawResultHash,
   type CanonicalMessageRecord,
   type ProtocolContextView,
@@ -103,7 +104,16 @@ export class ContextProtocolValidator {
 
       if (
         options.fullIntegrity === true &&
-        message.contentSha256 !== contentHash(message.content)
+        message.contentSha256 !==
+          (message.role === "user"
+            ? userMessageHash({
+                role: "user",
+                content: message.content,
+                ...(message.attachments === undefined
+                  ? {}
+                  : { attachments: message.attachments }),
+              })
+            : contentHash(message.content))
       ) {
         fail(
           "content_hash_mismatch",

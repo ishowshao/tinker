@@ -22,7 +22,10 @@ import {
   type ContextRetirementResult,
 } from "../context/context-manager";
 import type { RunAgentResult } from "../agent/types";
-import type { TuiSessionController } from "../tui/tui-session-controller";
+import type {
+  TuiSessionBinding,
+  TuiSessionController,
+} from "../tui/tui-session-controller";
 import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { parseModelProfiles } from "../cli/model-profiles";
@@ -45,6 +48,10 @@ function completedResult() {
   };
 }
 
+function promptProjection(text: string) {
+  return { version: 1 as const, text, images: [], omittedImageCount: 0 };
+}
+
 function createProjectionStore(): TuiProjectionStore {
   return new TuiProjectionStore({
     sessionId: "session-1",
@@ -64,14 +71,19 @@ function createSessionController(
   },
   mcp: McpInventorySnapshot = { servers: [] },
 ): TuiSessionController {
-  const binding = {
+  const binding: TuiSessionBinding = {
     sessionId: "session-1" as SessionId,
     modelName: "model",
     workspaceRoot: "/tmp/tinker",
     projectionStore,
     skills: () => ({ skills: [], shadowedNames: [] }),
     mcp: () => mcp,
-    executeTurn: run,
+    admitTurn: async (userMessage, signal) => ({
+      turnId: testRuntime.turn.turnId,
+      userMessage,
+      completion: run(userMessage.content, signal),
+    }),
+    executeTurn: (userMessage, signal) => run(userMessage.content, signal),
   };
   return {
     getBinding: () => binding,
@@ -185,7 +197,7 @@ describe("tui components", () => {
           usedInputTokens: 700 * 1_024,
           inputBudgetTokens: 896 * 1_024,
         })}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
     expect(normal.lastFrame()).toContain(
@@ -203,7 +215,7 @@ describe("tui components", () => {
           inputBudgetTokens: 896 * 1_024,
           pressure: "blocked",
         })}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
     expect(blocked.lastFrame()).toContain("context 930K / 896K (104% used, blocked)");
@@ -631,7 +643,7 @@ describe("tui components", () => {
               ...testRuntime.turn,
               eventSequence: 1,
               timestamp: "2026-07-10T00:00:00.000Z",
-              data: { userPrompt: prompt },
+              data: { userPrompt: promptProjection(prompt) },
             });
             await projectionStore.append({
               type: "model.request.started",
@@ -882,7 +894,7 @@ describe("tui components", () => {
       ...testRuntime.turn,
       eventSequence: 1,
       timestamp: "2026-07-19T00:00:00.000Z",
-      data: { userPrompt: "old session prompt" },
+      data: { userPrompt: promptProjection("old session prompt") },
     });
     await currentStore.append({
       type: "turn.finished",
@@ -1244,7 +1256,7 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -1265,7 +1277,10 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -1280,7 +1295,7 @@ describe("prompt input slash commands", () => {
     stdin.write("\r");
     await Bun.sleep(25);
 
-    expect(submitted).toEqual(["/quit "]);
+    expect(submitted).toEqual(["/quit"]);
     cleanup();
   });
 
@@ -1291,7 +1306,10 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -1311,7 +1329,10 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -1336,7 +1357,10 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={(value) => submitted.push(value)}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
       />,
     );
 
@@ -1361,7 +1385,7 @@ describe("prompt input slash commands", () => {
         modelName={modelName}
         workspaceRoot={workspaceRoot}
         commands={commands}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -1383,7 +1407,7 @@ describe("prompt input slash commands", () => {
         workspaceRoot={workspaceRoot}
         commands={commands}
         history={{ entries: ["fix the bug"] }}
-        onSubmit={() => undefined}
+        onSubmit={() => true}
       />,
     );
 
@@ -1639,7 +1663,7 @@ describe("model switching", () => {
       ...testRuntime.turn,
       eventSequence: 2,
       timestamp: "2026-07-11T00:00:00.002Z",
-      data: { userPrompt: "hello" },
+      data: { userPrompt: promptProjection("hello") },
     });
     await projectionStore.append({
       type: "turn.finished",

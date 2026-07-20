@@ -231,7 +231,10 @@ describe("SessionStore and SqliteSessionLedger", () => {
         name: "Read",
         args: { file_path: "README.md" },
       };
-      const pending = ledger.beginTurn({ turn, userPrompt: "read" });
+      const pending = ledger.beginTurn({
+        turn,
+        userMessage: { role: "user", content: "read" },
+      });
       store.beginIteration(firstIteration);
       pending.agent.appendAssistant({
         iteration: firstIteration,
@@ -288,7 +291,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
       };
       const secondPending = ledger.beginTurn({
         turn: secondTurn,
-        userPrompt: "continue",
+        userMessage: { role: "user", content: "continue" },
       });
       store.beginIteration(secondIteration);
       secondPending.agent.appendAssistant({
@@ -388,7 +391,10 @@ describe("SessionStore and SqliteSessionLedger", () => {
           args: {},
         }),
       );
-      const pending = ledger.beginTurn({ turn, userPrompt: "run" });
+      const pending = ledger.beginTurn({
+        turn,
+        userMessage: { role: "user", content: "run" },
+      });
       store.beginIteration(iteration);
       pending.agent.appendAssistant({
         iteration,
@@ -457,7 +463,10 @@ describe("SessionStore and SqliteSessionLedger", () => {
         turnId: runtimeIdFactory.createTurnId(),
         turnNumber: 1,
       };
-      ledger.beginTurn({ turn, userPrompt: "persisted user fact" });
+      ledger.beginTurn({
+        turn,
+        userMessage: { role: "user", content: "persisted user fact" },
+      });
       await store.abandon();
 
       store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });

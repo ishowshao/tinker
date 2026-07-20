@@ -62,7 +62,10 @@ describe("ContextRevisionCompiler", () => {
     expect(activePrepared.requestConfigHash).toBe(legacyPrepared.requestConfigHash);
     expect(activePrepared.toolSchemaHash).toBe(legacyPrepared.toolSchemaHash);
 
-    const candidate = fixture.ledger.buildCandidateModelRequest("next", tools);
+    const candidate = fixture.ledger.buildCandidateModelRequest(
+      { role: "user", content: "next" },
+      tools,
+    );
     expect(candidate.compiled).toEqual(built.compiled);
     expect(candidate.candidateUserPromptIncluded).toBe(true);
     expect(candidate.request.messages).toEqual([
@@ -188,7 +191,7 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(8);
+      expect(store.readMeta().schemaVersion).toBe(9);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
@@ -336,7 +339,10 @@ function completedReadFixture(
     name: "Read",
     args: { file_path: "README.md" },
   };
-  const pending = ledger.beginTurn({ turn, userPrompt: "read" });
+  const pending = ledger.beginTurn({
+    turn,
+    userMessage: { role: "user", content: "read" },
+  });
   pending.agent.appendAssistant({
     iteration,
     message: { role: "assistant", toolCalls: [call] },

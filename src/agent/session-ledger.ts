@@ -31,6 +31,7 @@ import {
   immutableRecord,
   observationForCompletion,
   rawResultHash,
+  userMessageHash,
   type CanonicalMessageRecord,
   type ProtocolContextView,
   type ProtocolFrame,
@@ -46,14 +47,20 @@ import type {
   RunAgentResult,
   ToolCall,
   TurnIdentity,
+  UserMessage,
 } from "./types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
+import { validateUserMessage } from "../image/image-types";
 
 export type SessionLedger = {
-  beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn;
+  beginTurn(input: {
+    turn: TurnIdentity;
+    userMessage: UserMessage;
+    admissionBase?: AdmissionBaseToken;
+  }): PendingLedgerTurn;
   buildCommittedModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
   buildCandidateModelRequest(
-    userPrompt: string,
+    userMessage: UserMessage,
     tools: readonly ToolDefinition[],
   ): BuiltContextRequest;
   committedMessageCount(): number;
@@ -64,6 +71,26 @@ export type SessionLedger = {
   }): ProtocolContextView;
   fault(error: unknown): void;
 };
+
+export type AdmissionBaseToken = {
+  readonly canonicalMessageCount: number;
+  readonly canonicalHeadMessageId: MessageId;
+  readonly canonicalHeadContentSha256: string;
+  readonly activeRevisionId: ContextRevisionId;
+  readonly activeRevisionNumber: number;
+  readonly surfaceSha256: string;
+  readonly sessionCompatibilitySha256: string;
+  readonly nextTurnNumber: number;
+};
+
+export class AdmissionStaleError extends Error {
+  readonly code = "ADMISSION_STALE";
+
+  constructor() {
+    super("Turn admission became stale before commit; the Prompt was not accepted.");
+    this.name = "AdmissionStaleError";
+  }
+}
 
 export type PendingLedgerTurn = {
   readonly agent: AgentTurnLedger;
@@ -98,6 +125,7 @@ export type LedgerMutation =
       turn: TurnIdentity;
       frame: ProtocolFrame;
       message: CanonicalMessageRecord;
+      admissionBase?: AdmissionBaseToken;
       next: ProtocolContextView;
     }
   | {
@@ -234,11 +262,13 @@ export class InMemorySessionLedger implements SessionLedger {
     }
   }
 
-  beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn {
+  beginTurn(input: {
+    turn: TurnIdentity;
+    userMessage: UserMessage;
+    admissionBase?: AdmissionBaseToken;
+  }): PendingLedgerTurn {
     this.requireHealthy("begin a turn");
-    if (input.userPrompt.trim() === "") {
-      throw new Error("Cannot begin a ledger turn with an empty prompt.");
-    }
+    validateUserMessage(input.userMessage);
     if (input.turn.sessionId !== this.input.sessionId) {
       throw new Error(`Turn ${input.turn.turnId} belongs to another session.`);
     }
@@ -246,6 +276,9 @@ export class InMemorySessionLedger implements SessionLedger {
       throw new Error("Cannot begin a ledger turn while another turn is open.");
     }
     this.assertNoOpenFrame();
+    if (input.admissionBase !== undefined) {
+      this.assertAdmissionBase(input.admissionBase, input.turn.turnNumber);
+    }
 
     const createdAt = this.clock();
     const ordinal = this.view.messages.length + 1;
@@ -255,11 +288,18 @@ export class InMemorySessionLedger implements SessionLedger {
       sessionId: this.input.sessionId,
       frameId,
       ordinal,
-      contentSha256: contentHash(input.userPrompt),
+      contentSha256: userMessageHash(input.userMessage),
       createdAt,
       role: "user",
       turnId: input.turn.turnId,
-      content: input.userPrompt,
+      content: input.userMessage.content,
+      ...(input.userMessage.attachments === undefined
+        ? {}
+        : {
+            attachments: Object.freeze(
+              immutableCanonicalClone(input.userMessage.attachments),
+            ),
+          }),
       origin: "user",
     });
     const frame = immutableRecord<ProtocolFrame>({
@@ -275,7 +315,16 @@ export class InMemorySessionLedger implements SessionLedger {
     });
     const next = appendView(this.view, [frame], [message], []);
     this.validator.validate(next, { fullIntegrity: true });
-    this.commit({ kind: "begin_turn", turn: input.turn, frame, message, next });
+    this.commit({
+      kind: "begin_turn",
+      turn: input.turn,
+      frame,
+      message,
+      ...(input.admissionBase === undefined
+        ? {}
+        : { admissionBase: input.admissionBase }),
+      next,
+    });
 
     const pending = new InMemoryPendingLedgerTurn(this, input.turn);
     this.pending = pending;
@@ -291,14 +340,14 @@ export class InMemorySessionLedger implements SessionLedger {
   }
 
   buildCandidateModelRequest(
-    userPrompt: string,
+    userMessage: UserMessage,
     tools: readonly ToolDefinition[],
   ): BuiltContextRequest {
     this.requireHealthy("build candidate context");
     if (this.pending !== undefined) {
       throw new Error("Cannot build candidate context while a turn is open.");
     }
-    return this.buildRequest(tools, userPrompt);
+    return this.buildRequest(tools, userMessage);
   }
 
   committedMessageCount(): number {
@@ -554,7 +603,7 @@ export class InMemorySessionLedger implements SessionLedger {
 
   private buildRequest(
     tools: readonly ToolDefinition[],
-    candidateUserPrompt?: string,
+    candidateUserMessage?: UserMessage,
   ): BuiltContextRequest {
     try {
       const canonical = this.view;
@@ -568,7 +617,7 @@ export class InMemorySessionLedger implements SessionLedger {
         activeOverrides: this.activeOverrides,
         compiled,
         tools,
-        ...(candidateUserPrompt === undefined ? {} : { candidateUserPrompt }),
+        ...(candidateUserMessage === undefined ? {} : { candidateUserMessage }),
       });
     } catch (error) {
       if (error instanceof ContextProtocolError && error.code !== "open_frame") {
@@ -582,10 +631,29 @@ export class InMemorySessionLedger implements SessionLedger {
     try {
       this.input.committer?.commit(mutation);
     } catch (error) {
+      if (error instanceof AdmissionStaleError) {
+        throw error;
+      }
       this.view = immutableView({ ...this.view, faulted: true });
       throw new SessionLedgerWriteError(mutation.kind, { cause: error });
     }
     this.view = mutation.next;
+  }
+
+  private assertAdmissionBase(token: AdmissionBaseToken, turnNumber: number): void {
+    const head = this.view.messages.at(-1);
+    if (
+      head === undefined ||
+      token.canonicalMessageCount !== this.view.messages.length ||
+      token.canonicalHeadMessageId !== head.messageId ||
+      token.canonicalHeadContentSha256 !== head.contentSha256 ||
+      token.activeRevisionId !== this.revision.revisionId ||
+      token.activeRevisionNumber !== this.revision.revisionNumber ||
+      token.surfaceSha256 !== this.surface.surfaceSha256 ||
+      token.nextTurnNumber !== turnNumber
+    ) {
+      throw new AdmissionStaleError();
+    }
   }
 
   private requirePending(pending: InMemoryPendingLedgerTurn, action: string): void {

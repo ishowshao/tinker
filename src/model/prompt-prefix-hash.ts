@@ -1,5 +1,5 @@
 import type { PreparedModelRequest, PreparedPromptSegment } from "./model-client";
-import { sha256 } from "./model-request-preflight";
+import { sha256, stableJsonStringify } from "./model-request-preflight";
 
 export type PromptPrefixFingerprint = {
   readonly requestConfigHash: string;
@@ -18,9 +18,7 @@ export function promptPrefixHashes(
     if (previous === undefined) {
       throw new Error("Prompt prefix hash chain has no seed.");
     }
-    hashes.push(
-      sha256(`${previous}\u0000${segment.kind}\u0000${segment.normalizedText}`),
-    );
+    hashes.push(sha256(`${previous}\u0000${stableJsonStringify(segment)}`));
   }
   return Object.freeze(hashes);
 }

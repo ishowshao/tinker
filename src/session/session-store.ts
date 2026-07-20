@@ -29,6 +29,7 @@ import {
   type ModelContextProfile,
 } from "../model/model-context-profile";
 import type { ModelMessageProtocol } from "../model/model-client";
+import type { InputTokenEstimatorCompatibility } from "../model/input-token-estimator";
 import type { ToolDefinition, ToolRawResult } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import {
@@ -56,6 +57,7 @@ import {
   immutableRecord,
   interruptedCompletionInputs,
   observationForCompletion,
+  userMessageHash,
   type CanonicalMessageRecord,
   type ProtocolContextView,
   type ProtocolFrame,
@@ -76,11 +78,21 @@ import type {
   SwapOverride,
 } from "../context/context-revision";
 import type { IterationIdentity, ToolCall } from "../agent/types";
+import {
+  parseImageAssetId,
+  parseImageAttachmentId,
+  validateOriginalImageName,
+  validateUserMessage,
+  type ImageAssetRef,
+  type UserImageAttachment,
+} from "../image/image-types";
+import { ImageAssetStore } from "../image/image-asset-store";
 import type { MeasuredContextAnchor } from "../agent/context-meter";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import { SUPPORTED_RECALL_RETIREMENT_CONTRACT_VERSIONS } from "../context/recall-retirement-contract";
 import type { ClosedTurnBoundary } from "../context/prefix-retirement-planner";
 import {
+  AdmissionStaleError,
   InMemorySessionLedger,
   type LedgerMutation,
   type SessionLedgerCommitter,
@@ -92,7 +104,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V8_FINGERPRINT,
+  SESSION_SCHEMA_V9_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   configureWritableDatabase,
   createSessionSchema,
@@ -120,6 +132,17 @@ import {
   SKILL_POLICY_VERSION,
   renderSkillActivationReceipt,
 } from "../skills/skill-context";
+import {
+  IMAGE_INPUT_POLICY,
+  IMAGE_INPUT_POLICY_VERSION,
+} from "../image/image-input-policy";
+
+export type SessionImageInputCompatibility = {
+  readonly policyVersion: string;
+  readonly policySha256: string;
+  readonly inputModalities: readonly ("text" | "image")[];
+  readonly tokenEstimator?: InputTokenEstimatorCompatibility;
+};
 
 export type SessionCompatibilityContract = {
   modelName: string;
@@ -127,10 +150,11 @@ export type SessionCompatibilityContract = {
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   messageProtocol: ModelMessageProtocol;
+  imageInput: SessionImageInputCompatibility;
 };
 
-export type StoredSessionMetaV8 = {
-  schemaVersion: 8;
+export type StoredSessionMetaV9 = {
+  schemaVersion: 9;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -157,7 +181,7 @@ export type StoredSessionMetaV8 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV8["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV9["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -452,7 +476,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V8_FINGERPRINT,
+            SESSION_SCHEMA_V9_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -547,6 +571,7 @@ export class SessionStore implements SessionLedgerCommitter {
         store.validateCreatingState();
       } else {
         store.validateAll({ allowOpenTail: true });
+        await store.verifyImageAssetFiles();
       }
       try {
         verifyRecallIndex(database, input.sessionId);
@@ -608,6 +633,9 @@ export class SessionStore implements SessionLedgerCommitter {
         }
       });
     } catch (error) {
+      if (error instanceof AdmissionStaleError) {
+        throw error;
+      }
       throw sessionWriteError(mutation.kind, this.sessionId, error);
     }
   }
@@ -2056,6 +2084,7 @@ export class SessionStore implements SessionLedgerCommitter {
 
   loadProtocolView(): ProtocolContextView {
     this.requireOpen();
+    const imageAttachments = loadMessageImageAttachments(this.database);
     const frames = this.database
       .query("SELECT * FROM protocol_frames ORDER BY first_ordinal")
       .all()
@@ -2063,7 +2092,16 @@ export class SessionStore implements SessionLedgerCommitter {
     const messages = this.database
       .query("SELECT * FROM messages ORDER BY ordinal")
       .all()
-      .map(decodeMessage);
+      .map((row) => {
+        const record = recordFromSql(row, "message");
+        const messageId = stringFromSql(record.message_id, "message_id");
+        const message = decodeMessage(row, imageAttachments.get(messageId));
+        imageAttachments.delete(messageId);
+        return message;
+      });
+    if (imageAttachments.size > 0) {
+      throw new Error("Image attachment rows reference unknown messages.");
+    }
     const toolResults = this.database
       .query(
         `SELECT tr.* FROM tool_results tr
@@ -2081,13 +2119,43 @@ export class SessionStore implements SessionLedgerCommitter {
     });
   }
 
+  async verifyImageAssetFiles(): Promise<void> {
+    this.requireOpen();
+    const distinct = new Map<string, ImageAssetRef>();
+    for (const message of this.loadProtocolView().messages) {
+      if (message.role !== "user") {
+        continue;
+      }
+      for (const attachment of message.attachments ?? []) {
+        const previous = distinct.get(attachment.assetId);
+        const asset = imageAssetRefFromAttachment(attachment);
+        if (
+          previous !== undefined &&
+          stableJsonStringify(previous) !== stableJsonStringify(asset)
+        ) {
+          throw new Error(
+            `Conflicting metadata for image asset ${attachment.assetId}.`,
+          );
+        }
+        distinct.set(attachment.assetId, asset);
+      }
+    }
+    if (distinct.size === 0) {
+      return;
+    }
+    const store = await ImageAssetStore.open({ workspaceRoot: this.workspaceRoot });
+    for (const asset of distinct.values()) {
+      await store.verify(asset);
+    }
+  }
+
   loadContextSnapshot(): StoredContextSnapshotV8 {
     this.requireOpen();
     const meta = this.readMeta();
     try {
       if (
         meta.sessionId !== this.sessionId ||
-        meta.schemaFingerprint !== SESSION_SCHEMA_V8_FINGERPRINT
+        meta.schemaFingerprint !== SESSION_SCHEMA_V9_FINGERPRINT
       ) {
         throw new Error("Session metadata identity or schema fingerprint changed.");
       }
@@ -2133,7 +2201,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  readMeta(): StoredSessionMetaV8 {
+  readMeta(): StoredSessionMetaV9 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -2269,7 +2337,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V8_FINGERPRINT ||
+      meta.schemaFingerprint !== SESSION_SCHEMA_V9_FINGERPRINT ||
       meta.initializationState !== "ready" ||
       meta.activeRevisionId === null
     ) {
@@ -2381,6 +2449,7 @@ export class SessionStore implements SessionLedgerCommitter {
         clock: this.clock,
       });
       clonedStore.validateAll({ allowOpenTail: false });
+      await clonedStore.verifyImageAssetFiles();
 
       await cloneDiagnosticFiles({
         sourceDirectory: this.sessionDirectory,
@@ -2535,6 +2604,24 @@ export class SessionStore implements SessionLedgerCommitter {
     now: string,
   ): void {
     const meta = this.readMeta();
+    if (mutation.admissionBase !== undefined) {
+      const snapshot = this.loadContextSnapshot();
+      const head = snapshot.canonical.messages.at(-1);
+      const base = mutation.admissionBase;
+      if (
+        head === undefined ||
+        base.canonicalMessageCount !== snapshot.canonical.messages.length ||
+        base.canonicalHeadMessageId !== head.messageId ||
+        base.canonicalHeadContentSha256 !== head.contentSha256 ||
+        base.activeRevisionId !== snapshot.revision.revisionId ||
+        base.activeRevisionNumber !== snapshot.revision.revisionNumber ||
+        base.surfaceSha256 !== snapshot.surface.surfaceSha256 ||
+        base.sessionCompatibilitySha256 !== meta.sessionCompatibilitySha256 ||
+        base.nextTurnNumber !== meta.nextTurnNumber
+      ) {
+        throw new AdmissionStaleError();
+      }
+    }
     if (
       meta.initializationState !== "ready" ||
       meta.nextTurnNumber !== mutation.turn.turnNumber
@@ -2722,7 +2809,7 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   private loadValidatedContextSnapshot(
-    meta: StoredSessionMetaV8,
+    meta: StoredSessionMetaV9,
     canonical: ProtocolContextView,
   ): StoredContextSnapshotV8 {
     const activeRevisionId = requireActiveRevisionId(meta);
@@ -3170,7 +3257,7 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV8, view: ProtocolContextView): void {
+  private validateCounters(meta: StoredSessionMetaV9, view: ProtocolContextView): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -3386,6 +3473,8 @@ export function createSessionCompatibilityContract(input: {
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   messageProtocol: ModelMessageProtocol;
+  inputModalities?: readonly ("text" | "image")[];
+  tokenEstimator?: InputTokenEstimatorCompatibility;
 }): SessionCompatibilityContract {
   if (input.modelName.trim() === "") {
     throw new Error("Session compatibility model name must not be empty.");
@@ -3402,12 +3491,34 @@ export function createSessionCompatibilityContract(input: {
   ) {
     throw new Error("Session compatibility message protocol is invalid.");
   }
+  const inputModalities = normalizeInputModalities(input.inputModalities ?? ["text"]);
+  if (inputModalities.includes("image") && input.tokenEstimator === undefined) {
+    throw new Error(
+      "Session compatibility image input requires a token estimator identity.",
+    );
+  }
+  if (input.tokenEstimator !== undefined) {
+    validateTokenEstimatorCompatibility(input.tokenEstimator);
+  }
   return Object.freeze({
     modelName: input.modelName,
     ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
     includeReasoningContent: input.includeReasoningContent,
     contextProfile: Object.freeze(createModelContextProfile(input.contextProfile)),
     messageProtocol: immutableCanonicalClone(input.messageProtocol),
+    imageInput: Object.freeze({
+      policyVersion: IMAGE_INPUT_POLICY_VERSION,
+      policySha256: sha256(
+        stableJsonStringify({
+          version: IMAGE_INPUT_POLICY_VERSION,
+          ...IMAGE_INPUT_POLICY,
+        }),
+      ),
+      inputModalities,
+      ...(input.tokenEstimator === undefined
+        ? {}
+        : { tokenEstimator: immutableCanonicalClone(input.tokenEstimator) }),
+    }),
   });
 }
 
@@ -3422,7 +3533,61 @@ function normalizeSessionCompatibilityContract(
     includeReasoningContent: contract.includeReasoningContent,
     contextProfile: contract.contextProfile,
     messageProtocol: contract.messageProtocol,
+    inputModalities: contract.imageInput.inputModalities,
+    ...(contract.imageInput.tokenEstimator === undefined
+      ? {}
+      : { tokenEstimator: contract.imageInput.tokenEstimator }),
   });
+}
+
+function normalizeInputModalities(
+  modalities: readonly ("text" | "image")[],
+): readonly ("text" | "image")[] {
+  if (
+    modalities.length === 0 ||
+    modalities.some((value) => value !== "text" && value !== "image") ||
+    new Set(modalities).size !== modalities.length ||
+    !modalities.includes("text")
+  ) {
+    throw new Error("Session compatibility input modalities are invalid.");
+  }
+  return Object.freeze(
+    modalities.includes("image") ? (["text", "image"] as const) : (["text"] as const),
+  );
+}
+
+function validateTokenEstimatorCompatibility(
+  estimator: InputTokenEstimatorCompatibility,
+): void {
+  if (
+    estimator.kind !== "moonshot-estimate-token-count-v1" ||
+    estimator.coverageVersion !== "full-request-v1" ||
+    estimator.model.trim() === "" ||
+    !isNormalizedEstimatorEndpoint(estimator.endpoint) ||
+    !Number.isSafeInteger(estimator.timeoutMs) ||
+    estimator.timeoutMs < 1_000 ||
+    estimator.timeoutMs > 60_000 ||
+    estimator.maxRetries !== 0
+  ) {
+    throw new Error("Session compatibility token estimator identity is invalid.");
+  }
+}
+
+function isNormalizedEstimatorEndpoint(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      url.pathname.endsWith("/tokenizers/estimate-token-count") &&
+      url.toString() === value
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function sessionDatabasePath(
@@ -3493,6 +3658,83 @@ function insertMessage(database: Database, message: CanonicalMessageRecord): voi
       message.origin,
       message.createdAt,
     );
+  if (message.role === "user" && message.attachments !== undefined) {
+    insertMessageImageAttachments(database, message);
+  }
+}
+
+function insertMessageImageAttachments(
+  database: Database,
+  message: Extract<CanonicalMessageRecord, { role: "user" }>,
+): void {
+  const userMessage = {
+    role: "user" as const,
+    content: message.content,
+    attachments: message.attachments,
+  };
+  validateUserMessage(userMessage);
+  if (userMessageHash(userMessage) !== message.contentSha256) {
+    throw new Error("User image attachment hash does not match the message hash.");
+  }
+  for (let position = 0; position < message.attachments!.length; position += 1) {
+    const attachment = requireItem(message.attachments!, position, "image attachment");
+    const existing = database
+      .query(
+        `SELECT mime_type, byte_length, width, height, created_at
+         FROM image_assets WHERE asset_id = ?`,
+      )
+      .get(attachment.assetId) as {
+      mime_type: unknown;
+      byte_length: unknown;
+      width: unknown;
+      height: unknown;
+      created_at: unknown;
+    } | null;
+    if (existing === null) {
+      database
+        .query(
+          `INSERT INTO image_assets (
+             asset_id, mime_type, byte_length, width, height, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          attachment.assetId,
+          attachment.mimeType,
+          attachment.byteLength,
+          attachment.width,
+          attachment.height,
+          message.createdAt,
+        );
+    } else {
+      timestampFromSql(existing.created_at, "image asset created_at");
+      if (
+        existing.mime_type !== attachment.mimeType ||
+        numberFromSql(existing.byte_length, "image asset byte_length") !==
+          attachment.byteLength ||
+        numberFromSql(existing.width, "image asset width") !== attachment.width ||
+        numberFromSql(existing.height, "image asset height") !== attachment.height
+      ) {
+        throw new Error(`Image asset metadata conflicts for ${attachment.assetId}.`);
+      }
+    }
+    database
+      .query(
+        `INSERT INTO message_image_attachments (
+           message_id, attachment_id, asset_id, position, label,
+           range_start, range_end, original_name
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        message.messageId,
+        attachment.attachmentId,
+        attachment.assetId,
+        position,
+        attachment.label,
+        attachment.range.start,
+        attachment.range.end,
+        attachment.originalName,
+      );
+  }
 }
 
 function insertToolResult(database: Database, result: ToolResultRecord): void {
@@ -3591,7 +3833,67 @@ function decodeFrame(rowValue: unknown): ProtocolFrame {
   });
 }
 
-function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
+function loadMessageImageAttachments(
+  database: Database,
+): Map<string, readonly UserImageAttachment[]> {
+  const rows = database
+    .query(
+      `SELECT mia.*, ia.mime_type, ia.byte_length, ia.width, ia.height,
+              ia.created_at AS asset_created_at
+       FROM message_image_attachments mia
+       JOIN image_assets ia ON ia.asset_id = mia.asset_id
+       JOIN messages m ON m.message_id = mia.message_id
+       ORDER BY m.ordinal, mia.position`,
+    )
+    .all();
+  const mutable = new Map<string, UserImageAttachment[]>();
+  for (const rowValue of rows) {
+    const row = recordFromSql(rowValue, "message image attachment");
+    const messageId = stringFromSql(row.message_id, "attachment message_id");
+    const attachments = mutable.get(messageId) ?? [];
+    const position = numberFromSql(row.position, "attachment position");
+    if (position !== attachments.length) {
+      throw new Error(
+        `Image attachment positions for message ${messageId} are not continuous.`,
+      );
+    }
+    timestampFromSql(row.asset_created_at, "image asset created_at");
+    const attachment = immutableRecord<UserImageAttachment>({
+      attachmentId: parseImageAttachmentId(
+        stringFromSql(row.attachment_id, "attachment_id"),
+      ),
+      assetId: parseImageAssetId(stringFromSql(row.asset_id, "asset_id")),
+      mimeType: enumFromSql(
+        row.mime_type,
+        ["image/png", "image/jpeg", "image/webp"] as const,
+        "image mime_type",
+      ),
+      byteLength: numberFromSql(row.byte_length, "image byte_length"),
+      width: numberFromSql(row.width, "image width"),
+      height: numberFromSql(row.height, "image height"),
+      label: stringFromSql(row.label, "attachment label"),
+      range: immutableRecord({
+        start: numberFromSql(row.range_start, "attachment range_start"),
+        end: numberFromSql(row.range_end, "attachment range_end"),
+      }),
+      originalName: stringFromSql(row.original_name, "attachment original_name"),
+    });
+    validateOriginalImageName(attachment.originalName);
+    attachments.push(attachment);
+    mutable.set(messageId, attachments);
+  }
+  return new Map(
+    [...mutable].map(([messageId, attachments]) => [
+      messageId,
+      Object.freeze(attachments),
+    ]),
+  );
+}
+
+function decodeMessage(
+  rowValue: unknown,
+  attachments?: readonly UserImageAttachment[],
+): CanonicalMessageRecord {
   const row = recordFromSql(rowValue, "message");
   const base = {
     messageId: stringFromSql(row.message_id, "message_id") as MessageId,
@@ -3608,21 +3910,37 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
   );
   switch (role) {
     case "system":
+      if (attachments !== undefined) {
+        throw new Error("System messages cannot have image attachments.");
+      }
       return immutableRecord({
         ...base,
         role,
         content: stringFromSql(row.content, "content"),
         origin: "runtime",
       });
-    case "user":
-      return immutableRecord({
+    case "user": {
+      const message = {
         ...base,
         role,
         turnId: stringFromSql(row.turn_id, "turn_id") as TurnId,
         content: stringFromSql(row.content, "content"),
+        ...(attachments === undefined ? {} : { attachments }),
         origin: "user",
+      } as const;
+      validateUserMessage({
+        role: "user",
+        content: message.content,
+        ...(message.attachments === undefined
+          ? {}
+          : { attachments: message.attachments }),
       });
+      return immutableRecord(message);
+    }
     case "assistant": {
+      if (attachments !== undefined) {
+        throw new Error("Assistant messages cannot have image attachments.");
+      }
       const content = nullableTextFromSql(row.content, "content");
       const reasoningPresent = numberFromSql(
         row.reasoning_content_present,
@@ -3658,6 +3976,9 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
       });
     }
     case "tool":
+      if (attachments !== undefined) {
+        throw new Error("Tool messages cannot have image attachments.");
+      }
       return immutableRecord({
         ...base,
         role,
@@ -3673,6 +3994,16 @@ function decodeMessage(rowValue: unknown): CanonicalMessageRecord {
         origin: enumFromSql(row.origin, ["tool", "runtime"] as const, "tool origin"),
       });
   }
+}
+
+function imageAssetRefFromAttachment(attachment: UserImageAttachment): ImageAssetRef {
+  return Object.freeze({
+    assetId: attachment.assetId,
+    mimeType: attachment.mimeType,
+    byteLength: attachment.byteLength,
+    width: attachment.width,
+    height: attachment.height,
+  });
 }
 
 function decodeToolResult(rowValue: unknown): ToolResultRecord {
@@ -4767,7 +5098,7 @@ function assertCommitPrefixRetirementRevisionInput(
   }
 }
 
-function requireActiveRevisionId(meta: StoredSessionMetaV8): ContextRevisionId {
+function requireActiveRevisionId(meta: StoredSessionMetaV9): ContextRevisionId {
   if (meta.initializationState !== "ready" || meta.activeRevisionId === null) {
     throw new Error("Session has no active context revision.");
   }
@@ -4781,16 +5112,16 @@ function previousRevision(
   return revisions[revision.revisionNumber - 2];
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV8 {
+function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV9 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 8) {
+  if (schemaVersion !== 9) {
     throw new Error(
-      `Session metadata schema version must be 8; received ${schemaVersion}.`,
+      `Session metadata schema version must be 9; received ${schemaVersion}.`,
     );
   }
   const projectInstructionFile = nullableStringFromSql(
@@ -4919,6 +5250,7 @@ function compatibilityContractDifferences(
     "includeReasoningContent",
     "contextProfile",
     "messageProtocol",
+    "imageInput",
   ];
   return fields.filter((key) => {
     const storedValue = record[key];
@@ -4945,8 +5277,15 @@ function decodeSessionCompatibilityContract(
       "includeReasoningContent",
       "contextProfile",
       "messageProtocol",
+      "imageInput",
     ],
-    ["modelName", "includeReasoningContent", "contextProfile", "messageProtocol"],
+    [
+      "modelName",
+      "includeReasoningContent",
+      "contextProfile",
+      "messageProtocol",
+      "imageInput",
+    ],
     "session compatibility contract",
   );
   const contextProfile = recordFromSql(
@@ -4969,39 +5308,121 @@ function decodeSessionCompatibilityContract(
     ["adapter", "serializationVersion"],
     "session compatibility message protocol",
   );
+  const imageInput = recordFromSql(
+    record.imageInput,
+    "session compatibility image input",
+  );
+  assertObjectKeys(
+    imageInput,
+    ["policyVersion", "policySha256", "inputModalities", "tokenEstimator"],
+    ["policyVersion", "policySha256", "inputModalities"],
+    "session compatibility image input",
+  );
+  const inputModalities = imageInput.inputModalities;
+  if (!Array.isArray(inputModalities)) {
+    throw new Error("Session compatibility input modalities must be an array.");
+  }
+  const tokenEstimator =
+    imageInput.tokenEstimator === undefined
+      ? undefined
+      : decodeTokenEstimatorCompatibility(imageInput.tokenEstimator);
   if (typeof record.includeReasoningContent !== "boolean") {
     throw new Error("Session compatibility reasoning replay flag must be boolean.");
   }
-  return createSessionCompatibilityContract({
-    modelName: stringFromSql(record.modelName, "compatibility modelName"),
-    ...(record.profileName === undefined
-      ? {}
-      : {
-          profileName: stringFromSql(record.profileName, "compatibility profileName"),
-        }),
-    includeReasoningContent: record.includeReasoningContent,
-    contextProfile: {
-      contextWindowTokens: numberFromJson(
-        contextProfile.contextWindowTokens,
-        "compatibility contextWindowTokens",
-      ),
-      maxSupportedOutputTokens: numberFromJson(
-        contextProfile.maxSupportedOutputTokens,
-        "compatibility maxSupportedOutputTokens",
-      ),
-    },
-    messageProtocol: {
-      adapter: enumFromSql(
-        messageProtocol.adapter,
-        ["openai-chat", "fake"] as const,
-        "compatibility message adapter",
-      ),
-      serializationVersion: stringFromSql(
-        messageProtocol.serializationVersion,
-        "compatibility serializationVersion",
-      ),
-    },
+  const modelName = stringFromSql(record.modelName, "compatibility modelName");
+  const profileName =
+    record.profileName === undefined
+      ? undefined
+      : stringFromSql(record.profileName, "compatibility profileName");
+  const context = createModelContextProfile({
+    contextWindowTokens: numberFromJson(
+      contextProfile.contextWindowTokens,
+      "compatibility contextWindowTokens",
+    ),
+    maxSupportedOutputTokens: numberFromJson(
+      contextProfile.maxSupportedOutputTokens,
+      "compatibility maxSupportedOutputTokens",
+    ),
   });
+  const protocol: ModelMessageProtocol = Object.freeze({
+    adapter: enumFromSql(
+      messageProtocol.adapter,
+      ["openai-chat", "fake"] as const,
+      "compatibility message adapter",
+    ),
+    serializationVersion: stringFromSql(
+      messageProtocol.serializationVersion,
+      "compatibility serializationVersion",
+    ),
+  });
+  const modalities = normalizeInputModalities(
+    inputModalities.map((value) =>
+      enumFromSql(value, ["text", "image"] as const, "compatibility input modality"),
+    ),
+  );
+  if (modalities.includes("image") && tokenEstimator === undefined) {
+    throw new Error("Stored image input compatibility has no token estimator.");
+  }
+  const policyVersion = stringFromSql(
+    imageInput.policyVersion,
+    "compatibility image policyVersion",
+  );
+  const policySha256 = stringFromSql(
+    imageInput.policySha256,
+    "compatibility image policySha256",
+  );
+  if (!/^[0-9a-f]{64}$/.test(policySha256)) {
+    throw new Error("Session image policy hash is invalid.");
+  }
+  return Object.freeze({
+    modelName,
+    ...(record.profileName === undefined ? {} : { profileName: profileName! }),
+    includeReasoningContent: record.includeReasoningContent,
+    contextProfile: Object.freeze(context),
+    messageProtocol: protocol,
+    imageInput: Object.freeze({
+      policyVersion,
+      policySha256,
+      inputModalities: modalities,
+      ...(tokenEstimator === undefined ? {} : { tokenEstimator }),
+    }),
+  });
+}
+
+function decodeTokenEstimatorCompatibility(
+  value: unknown,
+): InputTokenEstimatorCompatibility {
+  const record = recordFromSql(value, "session compatibility token estimator");
+  assertObjectKeys(
+    record,
+    ["kind", "coverageVersion", "model", "endpoint", "timeoutMs", "maxRetries"],
+    ["kind", "coverageVersion", "model", "endpoint", "timeoutMs", "maxRetries"],
+    "session compatibility token estimator",
+  );
+  const estimator: InputTokenEstimatorCompatibility = {
+    kind: enumFromSql(
+      record.kind,
+      ["moonshot-estimate-token-count-v1"] as const,
+      "compatibility token estimator kind",
+    ),
+    coverageVersion: enumFromSql(
+      record.coverageVersion,
+      ["full-request-v1"] as const,
+      "compatibility token estimator coverage",
+    ),
+    model: stringFromSql(record.model, "compatibility token estimator model"),
+    endpoint: stringFromSql(record.endpoint, "compatibility token estimator endpoint"),
+    timeoutMs: numberFromJson(
+      record.timeoutMs,
+      "compatibility token estimator timeoutMs",
+    ),
+    maxRetries: zeroFromJson(
+      record.maxRetries,
+      "compatibility token estimator maxRetries",
+    ),
+  };
+  validateTokenEstimatorCompatibility(estimator);
+  return Object.freeze(estimator);
 }
 
 function openWritableDatabase(databasePath: string): Database {
@@ -5597,6 +6018,13 @@ function numberFromJson(value: unknown, name: string): number {
     throw new Error(`${name} must be a positive safe integer.`);
   }
   return value as number;
+}
+
+function zeroFromJson(value: unknown, name: string): 0 {
+  if (value !== 0) {
+    throw new Error(`${name} must be 0.`);
+  }
+  return 0;
 }
 
 function enumFromSql<const T extends readonly string[]>(

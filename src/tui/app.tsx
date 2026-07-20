@@ -7,6 +7,7 @@ import {
   type ContextRetirementResult,
 } from "../context/context-manager";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import { ModelRequestMediaAggregateError } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
 import { readLastAssistantResponse } from "../session/session-last-response-reader";
 import { visibleTimelineItems } from "./event-store";
@@ -17,7 +18,13 @@ import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
 import { FileViewer, FileViewerLoading } from "./components/file-viewer";
-import { PromptInput } from "./components/prompt-input";
+import {
+  PromptInput,
+  type PromptMaintenanceAction,
+  type PromptSubmission,
+  type PromptSubmissionOutcome,
+} from "./components/prompt-input";
+import { createPromptDraft } from "./prompt-draft";
 import { SkillsPanel } from "./components/skills-panel";
 import { McpPanel } from "./components/mcp-panel";
 import {
@@ -314,23 +321,51 @@ export function App(props: AppProps) {
       .finally(() => setIsCopying(false));
   };
 
-  const submitAgentPrompt = (prompt: string) => {
-    const trimmed = prompt.trim();
-    if (trimmed === "" || isRunning) {
-      return;
-    }
-
+  const submitAgentPrompt = async (
+    submission: PromptSubmission,
+    admissionSignal: AbortSignal,
+  ): Promise<PromptSubmissionOutcome> => {
+    if (isRunning) return false;
     setNotice(undefined);
-    setIsRunning(true);
     setIsCancelling(false);
     const controller = new AbortController();
+    const forwardAbort = () => controller.abort(admissionSignal.reason);
+    if (admissionSignal.aborted) {
+      forwardAbort();
+    } else {
+      admissionSignal.addEventListener("abort", forwardAbort, { once: true });
+    }
+
+    let accepted;
+    try {
+      if (binding.admitTurn === undefined) {
+        throw new Error("TUI session binding does not implement turn admission.");
+      }
+      accepted = await binding.admitTurn(submission.userMessage, controller.signal);
+    } catch (error) {
+      admissionSignal.removeEventListener("abort", forwardAbort);
+      if (
+        error instanceof ContextBudgetExceededError ||
+        error instanceof ModelRequestMediaAggregateError
+      ) {
+        return {
+          kind: "maintenance_offer",
+          reason:
+            error instanceof ContextBudgetExceededError ? "budget" : "media_aggregate",
+          message: error.message,
+        };
+      }
+      setNotice(`Turn was not accepted: ${errorMessage(error)}`);
+      return false;
+    }
+
     activeController.current = controller;
-    void props.history?.append(trimmed).catch(() => undefined);
-    let retainNotice = false;
-    void Promise.resolve()
-      .then(() => binding.executeTurn(trimmed, controller.signal))
+    setIsRunning(true);
+    void props.history?.append(submission.draft).catch((error: unknown) => {
+      setNotice(`Prompt history write failed: ${errorMessage(error)}`);
+    });
+    void accepted.completion
       .catch((error: unknown) => {
-        retainNotice = true;
         setNotice(
           error instanceof ContextBudgetExceededError
             ? error.message
@@ -342,30 +377,72 @@ export function App(props: AppProps) {
           activeController.current = undefined;
           setIsRunning(false);
           setIsCancelling(false);
-          if (!retainNotice) {
-            setNotice(undefined);
-          }
+          setNotice((current) =>
+            current === "Cancelling current turn..." ? undefined : current,
+          );
           setGitBranchRefresh((current) => current + 1);
         }
+        admissionSignal.removeEventListener("abort", forwardAbort);
       });
+    return true;
   };
 
-  const onSubmit = (prompt: string) => {
-    const trimmed = prompt.trim();
+  const onMaintenance = async (
+    action: PromptMaintenanceAction,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    signal.throwIfAborted();
+    setIsSessionOperation(true);
+    try {
+      if (action === "compact") {
+        const result = await props.sessionController.compact();
+        signal.throwIfAborted();
+        setNotice(formatContextCompactionNotice(result));
+        return;
+      }
+      if (action === "retire") {
+        const result = await props.sessionController.retire();
+        signal.throwIfAborted();
+        setNotice(formatContextRetirementNotice(result));
+        return;
+      }
+      await props.sessionController.clear();
+      signal.throwIfAborted();
+      const sessionId = props.sessionController.getBinding().sessionId;
+      setGitBranchRefresh((current) => current + 1);
+      setNotice(
+        `Started new session ${sessionId}. The image Prompt was preserved and was not submitted.`,
+      );
+    } finally {
+      setIsSessionOperation(false);
+    }
+  };
+
+  const onSubmit = (
+    submission: PromptSubmission,
+    signal: AbortSignal,
+  ): PromptSubmissionOutcome | Promise<PromptSubmissionOutcome> => {
+    const { userMessage } = submission;
+    const trimmed = userMessage.content.trim();
     setShowStatus(false);
     setShowSkills(false);
     setShowMcp(false);
     setViewError(undefined);
 
-    if (trimmed.startsWith("/")) {
+    if (userMessage.attachments === undefined && trimmed.startsWith("/")) {
       try {
         const projectCommand = resolveProjectSlashCommand(
           trimmed,
           props.projectSlashCommands ?? [],
         );
         if (projectCommand !== undefined) {
-          submitAgentPrompt(projectCommand.prompt);
-          return;
+          return submitAgentPrompt(
+            {
+              draft: createPromptDraft(projectCommand.prompt),
+              userMessage: { role: "user", content: projectCommand.prompt },
+            },
+            signal,
+          );
         }
 
         const command = parseSlashCommand(trimmed);
@@ -373,23 +450,23 @@ export function App(props: AppProps) {
 
         if (command.type === "view") {
           openFileView(command.filePath);
-          return;
+          return true;
         }
         if (command.type === "copy") {
           copyLastResponse();
-          return;
+          return true;
         }
         if (command.type === "status") {
           setShowStatus(true);
-          return;
+          return true;
         }
         if (command.type === "skills") {
           setShowSkills(true);
-          return;
+          return true;
         }
         if (command.type === "mcp") {
           setShowMcp(true);
-          return;
+          return true;
         }
         if (command.type === "compact") {
           setIsSessionOperation(true);
@@ -400,7 +477,7 @@ export function App(props: AppProps) {
               setNotice(formatContextCompactionFailureNotice(error));
             })
             .finally(() => setIsSessionOperation(false));
-          return;
+          return true;
         }
         if (command.type === "compact_retire") {
           setIsSessionOperation(true);
@@ -411,7 +488,7 @@ export function App(props: AppProps) {
               setNotice(formatContextRetirementFailureNotice(error));
             })
             .finally(() => setIsSessionOperation(false));
-          return;
+          return true;
         }
         if (command.type === "clear") {
           setIsSessionOperation(true);
@@ -428,7 +505,7 @@ export function App(props: AppProps) {
               setNotice(`Clear failed: ${errorMessage(error)}`);
             })
             .finally(() => setIsSessionOperation(false));
-          return;
+          return true;
         }
         if (command.type === "fork") {
           setIsSessionOperation(true);
@@ -444,36 +521,36 @@ export function App(props: AppProps) {
               setNotice(`Fork failed: ${errorMessage(error)}`);
             })
             .finally(() => setIsSessionOperation(false));
-          return;
+          return true;
         }
         if (command.type === "quit") {
           props.onQuit?.();
           exit();
-          return;
+          return true;
         }
         if (command.type === "model" || command.type === "model_switch") {
           if (!canSwitchModel) {
             setNotice(
               "Cannot switch models after the session has turns or while running.",
             );
-            return;
+            return false;
           }
           if (command.type === "model_switch") {
             const targetProfile = props.profiles?.profiles.get(command.profileName);
             if (targetProfile === undefined) {
               setNotice(`Unknown model profile: ${command.profileName}`);
-              return;
+              return false;
             }
             void doSwitchModel(targetProfile);
           } else {
             setModelPickerState({ isSwitching: false });
             setShowModelPicker(true);
           }
-          return;
+          return true;
         }
         if (command.type === "resume_list") {
           openResumePicker();
-          return;
+          return true;
         }
         setIsSessionOperation(true);
         const operation =
@@ -491,10 +568,11 @@ export function App(props: AppProps) {
           .finally(() => setIsSessionOperation(false));
       } catch (error) {
         setNotice(errorMessage(error));
+        return false;
       }
-      return;
+      return true;
     }
-    submitAgentPrompt(trimmed);
+    return submitAgentPrompt(submission, signal);
   };
 
   return (
@@ -569,7 +647,10 @@ export function App(props: AppProps) {
                 isDisabled={isRunning || isSessionOperation || isCopying}
                 history={props.history}
                 commands={availableCommands}
+                importImage={binding.importImage}
+                verifyImageAssets={binding.verifyImageAssets}
                 onSubmit={onSubmit}
+                onMaintenance={onMaintenance}
                 placeholder='Enter a coding request, or "/" for commands'
               />
             )}

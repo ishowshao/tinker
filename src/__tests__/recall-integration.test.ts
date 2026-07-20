@@ -34,7 +34,10 @@ describe("Recall historical/current integration", () => {
         { loadMcpConfig: async () => undefined },
       );
       const first = await session.executeTurn({
-        userPrompt: "exercise historical and current file state",
+        userMessage: {
+          role: "user",
+          content: "exercise historical and current file state",
+        },
         signal: new AbortController().signal,
       });
       expect(first.status).toBe("completed");
@@ -51,7 +54,10 @@ describe("Recall historical/current integration", () => {
       );
       expect(session.recovery.recallIndexRebuilt).toBe(false);
       const resumed = await session.executeTurn({
-        userPrompt: "resume and retrieve the exact historical source",
+        userMessage: {
+          role: "user",
+          content: "resume and retrieve the exact historical source",
+        },
         signal: new AbortController().signal,
       });
       expect(resumed.status).toBe("completed");

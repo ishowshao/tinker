@@ -348,7 +348,14 @@ function turnStarted(
     ...turn,
     eventSequence,
     timestamp: timestamp(eventSequence),
-    data: { userPrompt },
+    data: {
+      userPrompt: {
+        version: 1,
+        text: userPrompt,
+        images: [],
+        omittedImageCount: 0,
+      },
+    },
   };
 }
 

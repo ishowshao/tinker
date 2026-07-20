@@ -17,6 +17,11 @@ import {
   type TuiProjectionPolicy,
   validateTuiProjectionPolicy,
 } from "./tui-projection-policy";
+import {
+  MAX_TIMELINE_PROMPT_CODE_POINTS,
+  truncateUserPromptProjection,
+  type UserPromptProjection,
+} from "../agent/user-prompt-projection";
 
 export type TimelineItem = {
   id: string;
@@ -27,6 +32,7 @@ export type TimelineItem = {
   diff?: DiffHunk[];
   diffTruncated?: boolean;
   bash?: BashDisplayDetail;
+  userPrompt?: UserPromptProjection;
 };
 
 export type TuiTurnProjection = {
@@ -117,6 +123,10 @@ export function reduceTuiProjection(
         "turn.started turnNumber",
       );
       parseEventTimestamp(event.timestamp);
+      const userPrompt = truncateUserPromptProjection(
+        event.data.userPrompt,
+        MAX_TIMELINE_PROMPT_CODE_POINTS,
+      );
       return {
         ...state,
         status: "running",
@@ -132,7 +142,8 @@ export function reduceTuiProjection(
             {
               id: `turn-${turnId}-prompt-${event.eventSequence}`,
               label: "prompt",
-              text: event.data.userPrompt,
+              text: userPrompt.text,
+              userPrompt,
               status: "text",
             },
           ],

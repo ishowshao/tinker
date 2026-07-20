@@ -268,7 +268,7 @@ async function runTrial(input: {
           ? input.entry.earlyPrompt
           : `Synthetic long-session filler turn ${turnNumber}. Read fixture-payload.txt and confirm completion.`;
       const result = await session.executeTurn({
-        userPrompt,
+        userMessage: { role: "user", content: userPrompt },
         signal: new AbortController().signal,
       });
       if (result.status !== "completed") {
@@ -302,7 +302,7 @@ async function runTrial(input: {
     });
     recorder.beginTerminalTurn();
     const result = await session.executeTurn({
-      userPrompt: input.entry.terminalPrompt,
+      userMessage: { role: "user", content: input.entry.terminalPrompt },
       signal: new AbortController().signal,
     });
     if (result.status !== "completed") {

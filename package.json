@@ -4,6 +4,7 @@
   "scripts": {
     "bench:long-session": "bun scripts/bench-long-session-memory.ts",
     "bench:i3-provider-smoke": "bun scripts/bench-i3-provider-smoke.ts",
+    "bench:k3-image-live": "bun scripts/k3-image-live-smoke.ts",
     "bench:i4-active-recall": "bun scripts/bench-i4-active-recall.ts",
     "qualify:i4-active-recall": "bun scripts/qualify-i4-active-recall.ts",
     "bench:recall": "bun scripts/bench-recall.ts",
@@ -30,6 +31,7 @@
     "linkedom": "^0.18.13",
     "openai": "^6.45.0",
     "react": "^19.2.7",
+    "sharp": "^0.35.3",
     "shiki": "^4.3.1",
     "turndown": "^7.2.4",
     "uuid": "^14.0.1",

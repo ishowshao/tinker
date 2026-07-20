@@ -4,11 +4,14 @@ import type {
 } from "../context/context-manager";
 import type {
   ExecuteTurnInput,
+  AcceptedTurn,
   RuntimeSession,
   RuntimeSkillsSnapshot,
   SessionDisposeReason,
 } from "../agent/runtime-session";
-import type { RunAgentResult } from "../agent/types";
+import type { RunAgentResult, UserMessage } from "../agent/types";
+import type { ImageAssetRef } from "../image/image-types";
+import type { ImportedImageAsset } from "../image/image-asset-store";
 import type { SessionId } from "../ids/runtime-id";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { ModelProfile } from "../cli/model-profiles";
@@ -24,7 +27,18 @@ export type TuiSessionBinding = {
   projectionStore: TuiProjectionStore;
   skills(): RuntimeSkillsSnapshot;
   mcp(): McpInventorySnapshot;
-  executeTurn(userPrompt: string, signal: AbortSignal): Promise<RunAgentResult>;
+  supportsImageInput?: () => boolean;
+  importImage?: (
+    sourcePath: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ) => Promise<ImportedImageAsset>;
+  verifyImageAssets?: (
+    assets: readonly ImageAssetRef[],
+    signal: AbortSignal,
+  ) => Promise<void>;
+  admitTurn?: (userMessage: UserMessage, signal: AbortSignal) => Promise<AcceptedTurn>;
+  executeTurn(userMessage: UserMessage, signal: AbortSignal): Promise<RunAgentResult>;
 };
 
 export type TuiSessionController = {
@@ -194,9 +208,20 @@ export function managedTuiBinding(input: {
     runtimeSession: input.runtimeSession,
     skills: () => input.runtimeSession.skills(),
     mcp: () => input.runtimeSession.mcp(),
-    executeTurn: (userPrompt, signal) =>
+    supportsImageInput: () => input.runtimeSession.supportsImageInput(),
+    importImage: (sourcePath, signal, prospectiveMessageImageCount) =>
+      input.runtimeSession.importImage(
+        sourcePath,
+        signal,
+        prospectiveMessageImageCount,
+      ),
+    verifyImageAssets: (assets, signal) =>
+      input.runtimeSession.verifyImageAssets(assets, signal),
+    admitTurn: (userMessage, signal) =>
+      input.runtimeSession.admitTurn({ userMessage, signal }),
+    executeTurn: (userMessage, signal) =>
       input.runtimeSession.executeTurn({
-        userPrompt,
+        userMessage,
         signal,
       } satisfies ExecuteTurnInput),
   };

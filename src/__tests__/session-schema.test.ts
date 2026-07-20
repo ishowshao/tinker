@@ -8,7 +8,7 @@ import type { IterationIdentity, TurnIdentity } from "../agent/types";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
-  SESSION_SCHEMA_V8_FINGERPRINT,
+  SESSION_SCHEMA_V9_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   verifySessionSchema,
 } from "../session/session-schema";
@@ -34,7 +34,7 @@ describe("session schema identity", () => {
             schema_fingerprint: string;
           }
         ).schema_fingerprint,
-      ).toBe(SESSION_SCHEMA_V8_FINGERPRINT);
+      ).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
       expect(
         database
           .query(
@@ -114,7 +114,7 @@ describe("session schema identity", () => {
   });
 
   test("rejects older schemas without migration", () => {
-    for (const version of [1, 2, 4, 5, 6]) {
+    for (const version of [1, 2, 3, 4, 5, 6, 7, 8]) {
       const sessionId = runtimeIdFactory.createSessionId();
       const database = new Database(":memory:");
       try {
@@ -197,9 +197,12 @@ describe("session schema identity", () => {
         turnId: runtimeIdFactory.createTurnId(),
         turnNumber: 1,
       };
-      expect(() => ledger.beginTurn({ turn, userPrompt: "must roll back" })).toThrow(
-        "begin_turn commit failed",
-      );
+      expect(() =>
+        ledger.beginTurn({
+          turn,
+          userMessage: { role: "user", content: "must roll back" },
+        }),
+      ).toThrow("begin_turn commit failed");
 
       const inspection = new Database(store.databasePath, { readonly: true });
       expect(inspection.query("SELECT COUNT(*) AS count FROM turns").get()).toEqual({
@@ -253,7 +256,10 @@ function appendTextTurn(store: SessionStore): void {
     iterationId: runtimeIdFactory.createIterationId(),
     iterationNumber: 1,
   };
-  const pending = ledger.beginTurn({ turn, userPrompt: "rebuild-keyword" });
+  const pending = ledger.beginTurn({
+    turn,
+    userMessage: { role: "user", content: "rebuild-keyword" },
+  });
   store.beginIteration(iteration);
   pending.agent.appendAssistant({
     iteration,

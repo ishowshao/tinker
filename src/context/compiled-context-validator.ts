@@ -235,9 +235,18 @@ function assertSameMessage(actual: AgentMessage, record: CanonicalMessageRecord)
   }
   switch (record.role) {
     case "system":
-    case "user":
       if (actual.role !== record.role || actual.content !== record.content) {
         fail(`Canonical entry changed message content at ordinal ${record.ordinal}.`);
+      }
+      return;
+    case "user":
+      if (
+        actual.role !== "user" ||
+        actual.content !== record.content ||
+        stableJsonStringify(actual.attachments ?? null) !==
+          stableJsonStringify(record.attachments ?? null)
+      ) {
+        fail(`Canonical entry changed user data at ordinal ${record.ordinal}.`);
       }
       return;
     case "assistant":

@@ -1,32 +1,59 @@
 import os from "node:os";
 import path from "node:path";
 import { Box, Text, useInput, usePaste } from "ink";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { ContextUsageSnapshot } from "../../agent/context-meter";
+import type { UserMessage } from "../../agent/types";
+import { ModelRequestMediaAggregateError } from "../../model/model-client";
+import { ImageNotRecognizedError } from "../../image/image-probe";
+import type { ImportedImageAsset } from "../../image/image-asset-store";
+import type { ImageAssetRef } from "../../image/image-types";
+import { runtimeIdFactory, type RuntimeIdFactory } from "../../ids/runtime-id";
 import { formatContextUsageLine } from "../context-format";
 import {
   type FileMentionMatch,
   findFileMention,
   rankWorkspaceFiles,
-  replaceFileMention,
 } from "../file-mention";
 import {
-  backspace,
-  createLineEditorState,
-  deleteForward,
-  deleteToLineStart,
-  insert,
-  type LineEditorState,
-  moveDown,
-  moveLeft,
-  moveRight,
-  moveToLineEnd,
-  moveToLineStart,
-  moveUp,
-  splitAtCursor,
-} from "../line-editor";
+  restorePromptHistoryEntry,
+  type LoadedPromptHistoryRecord,
+} from "../prompt-history";
+import {
+  backspaceDraft,
+  createPromptDraft,
+  deleteForwardDraft,
+  deleteToLineStartDraft,
+  draftSubmissionSnapshot,
+  insertDraftImage,
+  insertDraftText,
+  moveDraftDown,
+  moveDraftLeft,
+  moveDraftRight,
+  moveDraftToLineEnd,
+  moveDraftToLineStart,
+  moveDraftUp,
+  promptDraftChanged,
+  replaceDraftText,
+  type PromptDraft,
+} from "../prompt-draft";
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
 import { listWorkspaceFiles, type WorkspaceFileLister } from "../workspace-file-search";
+
+export type PromptSubmission = {
+  readonly draft: PromptDraft;
+  readonly userMessage: UserMessage;
+};
+
+export type PromptMaintenanceAction = "compact" | "retire" | "new_session";
+
+export type PromptSubmissionOutcome =
+  | boolean
+  | {
+      readonly kind: "maintenance_offer";
+      readonly reason: "budget" | "media_aggregate";
+      readonly message: string;
+    };
 
 export type PromptInputProps = {
   modelName: string;
@@ -35,23 +62,57 @@ export type PromptInputProps = {
   contextUsage?: ContextUsageSnapshot;
   isDisabled?: boolean;
   placeholder?: string;
-  history?: { entries: readonly string[] };
+  history?: {
+    records?: readonly LoadedPromptHistoryRecord[];
+    entries?: readonly string[];
+  };
   commands?: readonly SlashCommand[];
   fileLister?: WorkspaceFileLister;
-  onSubmit: (value: string) => void;
+  idFactory?: Pick<RuntimeIdFactory, "createImageAttachmentId">;
+  importImage?: (
+    sourcePath: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ) => Promise<ImportedImageAsset>;
+  verifyImageAssets?: (
+    assets: readonly ImageAssetRef[],
+    signal: AbortSignal,
+  ) => Promise<void>;
+  onSubmit: (
+    submission: PromptSubmission,
+    signal: AbortSignal,
+  ) => PromptSubmissionOutcome | Promise<PromptSubmissionOutcome>;
+  onMaintenance?: (
+    action: PromptMaintenanceAction,
+    signal: AbortSignal,
+  ) => void | Promise<void>;
 };
 
 type HistoryNavigation = {
   index: number;
-  originalDraft: LineEditorState;
+  originalDraft: PromptDraft;
   browsing: boolean;
 };
 
+type PromptInputPhase =
+  | { kind: "idle" }
+  | { kind: "attaching"; operationId: string }
+  | { kind: "restoring_history"; operationId: string; targetIndex: number }
+  | { kind: "admitting"; submissionId: string }
+  | {
+      kind: "maintenance_offer";
+      reason: "budget" | "media_aggregate";
+      operationId?: string;
+      action?: PromptMaintenanceAction;
+    };
+
 type PromptInputState = {
-  editor: LineEditorState;
+  draft: PromptDraft;
   navigation?: HistoryNavigation;
   suggestionIndex: number;
   suggestionsDismissed: boolean;
+  phase: PromptInputPhase;
+  error?: string;
 };
 
 type FileCatalogState =
@@ -61,9 +122,10 @@ type FileCatalogState =
 
 function createPromptInputState(value = ""): PromptInputState {
   return {
-    editor: createLineEditorState(value),
+    draft: createPromptDraft(value),
     suggestionIndex: 0,
     suggestionsDismissed: false,
+    phase: { kind: "idle" },
   };
 }
 
@@ -72,19 +134,28 @@ export function PromptInput(props: PromptInputProps) {
   const [fileCatalog, setFileCatalog] = useState<FileCatalogState>({
     status: "idle",
   });
+  const operation = useRef<AbortController | undefined>(undefined);
+  const idFactory = props.idFactory ?? runtimeIdFactory;
+  const locked = props.isDisabled === true || state.phase.kind !== "idle";
+
+  useEffect(
+    () => () => {
+      operation.current?.abort();
+    },
+    [],
+  );
 
   const fileMention =
     state.suggestionsDismissed || state.navigation?.browsing === true
       ? undefined
-      : findFileMention(state.editor);
-  const filePopupActive = fileMention !== undefined && props.isDisabled !== true;
+      : findFileMention(state.draft.editor);
+  const filePopupActive = fileMention !== undefined && !locked;
   const fileLister = props.fileLister ?? listWorkspaceFiles;
 
   useEffect(() => {
     if (!filePopupActive) {
       return;
     }
-
     const controller = new AbortController();
     void fileLister(props.workspaceRoot, controller.signal).then(
       (files) => {
@@ -98,7 +169,6 @@ export function PromptInput(props: PromptInputProps) {
         }
       },
     );
-
     return () => controller.abort();
   }, [fileLister, filePopupActive, props.workspaceRoot]);
 
@@ -110,203 +180,530 @@ export function PromptInput(props: PromptInputProps) {
         : rankWorkspaceFiles(fileCatalog.files, fileQuery),
     [fileCatalog, fileQuery],
   );
-
   const suggestions =
-    state.suggestionsDismissed || filePopupActive
+    state.suggestionsDismissed || filePopupActive || state.draft.attachments.length > 0
       ? []
-      : matchSlashCommands(state.editor.value, props.commands);
+      : matchSlashCommands(state.draft.editor.value, props.commands);
   const suggestionCount = filePopupActive ? fileMatches.length : suggestions.length;
   const selectedIndex =
     suggestionCount === 0 ? 0 : Math.min(state.suggestionIndex, suggestionCount - 1);
 
-  const submit = (value: string) => {
-    props.onSubmit(value);
-    setState(createPromptInputState());
-  };
-
-  const updateEditor = (update: (editor: LineEditorState) => LineEditorState) => {
+  const updateDraft = (update: (draft: PromptDraft) => PromptDraft) => {
     setState((current) => {
-      const editor = update(current.editor);
-
-      if (!editorChanged(current.editor, editor)) {
+      if (current.phase.kind !== "idle") {
         return current;
       }
-
-      return applyEditorChange(current, editor);
+      const draft = update(current.draft);
+      return promptDraftChanged(current.draft, draft)
+        ? applyDraftChange(current, draft)
+        : current;
     });
   };
 
   const insertFilePath = (filePath: string) => {
     setState((current) => {
-      const mention = findFileMention(current.editor);
-      if (mention === undefined) {
+      const mention = findFileMention(current.draft.editor);
+      if (mention === undefined || current.phase.kind !== "idle") {
         return current;
       }
-
-      return applyEditorChange(
+      return applyDraftChange(
         current,
-        replaceFileMention(current.editor, mention, filePath),
+        replaceDraftText(
+          current.draft,
+          { start: mention.start, end: mention.end },
+          fileMentionReplacement(current.draft.editor.value, mention.end, filePath),
+        ),
       );
     });
   };
 
-  const navigateUp = () => {
-    setState((current) => {
-      const entries = props.history?.entries ?? [];
-
-      if (current.navigation?.browsing === true) {
-        return navigateHistoryUp(current, entries);
-      }
-
-      const editor = moveUp(current.editor);
-      if (editorChanged(current.editor, editor)) {
-        return applyEditorChange(current, editor);
-      }
-
-      return navigateHistoryUp(current, entries);
-    });
+  const selectFile = (filePath: string) => {
+    const mention = findFileMention(state.draft.editor);
+    if (mention === undefined || locked) {
+      return;
+    }
+    if (props.importImage === undefined) {
+      insertFilePath(filePath);
+      return;
+    }
+    const controller = new AbortController();
+    const operationId = crypto.randomUUID();
+    operation.current?.abort();
+    operation.current = controller;
+    const captured = state.draft;
+    setState((current) => ({
+      ...current,
+      phase: { kind: "attaching", operationId },
+      error: undefined,
+    }));
+    void props
+      .importImage(filePath, controller.signal, captured.attachments.length + 1)
+      .then((imported) => {
+        setState((current) => {
+          if (
+            current.phase.kind !== "attaching" ||
+            current.phase.operationId !== operationId
+          ) {
+            return current;
+          }
+          if (controller.signal.aborted) {
+            return { ...current, phase: { kind: "idle" } };
+          }
+          try {
+            const draft = insertDraftImage(captured, {
+              replace: { start: mention.start, end: mention.end },
+              attachmentId: idFactory.createImageAttachmentId(),
+              imported,
+            });
+            return {
+              ...applyDraftChange(current, draft),
+              phase: { kind: "idle" },
+              error: undefined,
+            };
+          } catch (error) {
+            return {
+              ...current,
+              phase: { kind: "idle" },
+              error: errorMessage(error),
+            };
+          }
+        });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          setState((current) =>
+            current.phase.kind === "attaching" &&
+            current.phase.operationId === operationId
+              ? { ...current, phase: { kind: "idle" } }
+              : current,
+          );
+          return;
+        }
+        if (error instanceof ImageNotRecognizedError) {
+          setState((current) => {
+            if (
+              current.phase.kind !== "attaching" ||
+              current.phase.operationId !== operationId
+            ) {
+              return current;
+            }
+            return {
+              ...applyDraftChange(
+                current,
+                replaceDraftText(
+                  captured,
+                  { start: mention.start, end: mention.end },
+                  fileMentionReplacement(captured.editor.value, mention.end, filePath),
+                ),
+              ),
+              phase: { kind: "idle" },
+            };
+          });
+          return;
+        }
+        if (error instanceof ModelRequestMediaAggregateError) {
+          setState((current) =>
+            current.phase.kind === "attaching" &&
+            current.phase.operationId === operationId
+              ? {
+                  ...current,
+                  phase: {
+                    kind: "maintenance_offer",
+                    reason: "media_aggregate",
+                  },
+                  error: error.message,
+                }
+              : current,
+          );
+          return;
+        }
+        setState((current) =>
+          current.phase.kind === "attaching" &&
+          current.phase.operationId === operationId
+            ? {
+                ...current,
+                phase: { kind: "idle" },
+                error: `Image attachment failed: ${errorMessage(error)}`,
+              }
+            : current,
+        );
+      })
+      .finally(() => {
+        if (operation.current === controller) {
+          operation.current = undefined;
+        }
+      });
   };
 
-  const navigateDown = () => {
-    setState((current) => {
-      const entries = props.history?.entries ?? [];
+  const submitDraft = (draft: PromptDraft) => {
+    if (locked) {
+      return;
+    }
+    let submission: PromptSubmission;
+    try {
+      const snapshot = draftSubmissionSnapshot(draft);
+      submission = { draft: snapshot.draft, userMessage: snapshot.userMessage };
+    } catch (error) {
+      setState((current) => ({ ...current, error: errorMessage(error) }));
+      return;
+    }
+    const controller = new AbortController();
+    const submissionId = crypto.randomUUID();
+    operation.current?.abort();
+    operation.current = controller;
+    setState((current) => ({
+      ...current,
+      phase: { kind: "admitting", submissionId },
+      error: undefined,
+    }));
+    void Promise.resolve(props.onSubmit(submission, controller.signal))
+      .then((outcome) => {
+        setState((current) => {
+          if (
+            current.phase.kind !== "admitting" ||
+            current.phase.submissionId !== submissionId
+          ) {
+            return current;
+          }
+          if (outcome === true) return createPromptInputState();
+          if (typeof outcome === "object" && outcome.kind === "maintenance_offer") {
+            return {
+              ...current,
+              phase: {
+                kind: "maintenance_offer",
+                reason: outcome.reason,
+              },
+              error: outcome.message,
+            };
+          }
+          return { ...current, phase: { kind: "idle" } };
+        });
+      })
+      .catch((error: unknown) => {
+        setState((current) =>
+          current.phase.kind === "admitting" &&
+          current.phase.submissionId === submissionId
+            ? {
+                ...current,
+                phase: { kind: "idle" },
+                error: errorMessage(error),
+              }
+            : current,
+        );
+      })
+      .finally(() => {
+        if (operation.current === controller) {
+          operation.current = undefined;
+        }
+      });
+  };
 
-      if (current.navigation?.browsing === true) {
-        return navigateHistoryDown(current, entries);
-      }
-
-      const editor = moveDown(current.editor);
-      return editorChanged(current.editor, editor)
-        ? applyEditorChange(current, editor)
-        : navigateHistoryDown(current, entries);
+  const navigateHistory = (direction: "up" | "down") => {
+    const records = historyRecords(props.history);
+    if (records.length === 0 || locked) {
+      return;
+    }
+    const currentNavigation = state.navigation;
+    if (direction === "down" && currentNavigation === undefined) {
+      return;
+    }
+    if (
+      direction === "down" &&
+      currentNavigation !== undefined &&
+      currentNavigation.index >= records.length - 1
+    ) {
+      setState({
+        ...state,
+        draft: currentNavigation.originalDraft,
+        navigation: undefined,
+        suggestionIndex: 0,
+        suggestionsDismissed: false,
+        error: undefined,
+      });
+      return;
+    }
+    const targetIndex =
+      currentNavigation === undefined
+        ? records.length - 1
+        : direction === "up"
+          ? Math.max(0, currentNavigation.index - 1)
+          : Math.min(records.length - 1, currentNavigation.index + 1);
+    const record = records[targetIndex];
+    if (record === undefined) {
+      return;
+    }
+    const navigation: HistoryNavigation = {
+      index: targetIndex,
+      originalDraft: currentNavigation?.originalDraft ?? state.draft,
+      browsing: true,
+    };
+    if (record.kind === "invalid") {
+      setState({
+        ...state,
+        navigation,
+        suggestionsDismissed: true,
+        error: `Prompt history line ${record.lineNumber} is invalid (${record.errorCode}).`,
+      });
+      return;
+    }
+    if (record.entry.version === 1) {
+      setState({
+        ...state,
+        draft: restorePromptHistoryEntry(record.entry, idFactory),
+        navigation,
+        suggestionsDismissed: true,
+        suggestionIndex: 0,
+        error: undefined,
+      });
+      return;
+    }
+    if (props.verifyImageAssets === undefined) {
+      setState({
+        ...state,
+        navigation,
+        error: "Current model profile cannot restore image Prompt history.",
+      });
+      return;
+    }
+    const controller = new AbortController();
+    const operationId = crypto.randomUUID();
+    operation.current?.abort();
+    operation.current = controller;
+    setState({
+      ...state,
+      phase: { kind: "restoring_history", operationId, targetIndex },
+      error: undefined,
     });
+    void props
+      .verifyImageAssets(
+        record.entry.attachments.map((attachment) => attachment.asset),
+        controller.signal,
+      )
+      .then(() => {
+        setState((current) => {
+          if (
+            current.phase.kind !== "restoring_history" ||
+            current.phase.operationId !== operationId
+          ) {
+            return current;
+          }
+          if (controller.signal.aborted) {
+            return { ...current, phase: { kind: "idle" } };
+          }
+          return {
+            ...current,
+            draft: restorePromptHistoryEntry(record.entry, idFactory),
+            navigation,
+            phase: { kind: "idle" },
+            suggestionsDismissed: true,
+            suggestionIndex: 0,
+          };
+        });
+      })
+      .catch((error: unknown) => {
+        setState((current) =>
+          current.phase.kind === "restoring_history" &&
+          current.phase.operationId === operationId
+            ? controller.signal.aborted
+              ? { ...current, phase: { kind: "idle" } }
+              : {
+                  ...current,
+                  navigation,
+                  phase: { kind: "idle" },
+                  error: `Prompt history restore failed: ${errorMessage(error)}`,
+                }
+            : current,
+        );
+      })
+      .finally(() => {
+        if (operation.current === controller) {
+          operation.current = undefined;
+        }
+      });
   };
 
   useInput(
     (input, key) => {
-      const selectedFile = fileMatches[selectedIndex];
-      const selectedCommand = suggestions[selectedIndex];
-
-      if (key.return) {
-        if (filePopupActive && selectedFile !== undefined) {
-          insertFilePath(selectedFile.path);
+      if (state.phase.kind === "maintenance_offer") {
+        if (state.phase.operationId !== undefined) {
           return;
         }
-
-        if (selectedCommand !== undefined) {
-          submit(`/${selectedCommand.name}`);
+        if (key.escape) {
+          setState((current) => ({
+            ...current,
+            phase: { kind: "idle" },
+            error: undefined,
+          }));
           return;
         }
-
-        submit(state.editor.value);
+        const action = maintenanceAction(input);
+        if (action === undefined) return;
+        if (props.onMaintenance === undefined) {
+          setState((current) => ({
+            ...current,
+            error: "Prompt maintenance actions are unavailable.",
+          }));
+          return;
+        }
+        const controller = new AbortController();
+        const operationId = crypto.randomUUID();
+        operation.current?.abort();
+        operation.current = controller;
+        setState((current) =>
+          current.phase.kind === "maintenance_offer"
+            ? {
+                ...current,
+                phase: {
+                  ...current.phase,
+                  operationId,
+                  action,
+                },
+                error: undefined,
+              }
+            : current,
+        );
+        void Promise.resolve(props.onMaintenance(action, controller.signal))
+          .then(() => {
+            setState((current) =>
+              current.phase.kind === "maintenance_offer" &&
+              current.phase.operationId === operationId
+                ? { ...current, phase: { kind: "idle" } }
+                : current,
+            );
+          })
+          .catch((error: unknown) => {
+            setState((current) =>
+              current.phase.kind === "maintenance_offer" &&
+              current.phase.operationId === operationId
+                ? {
+                    ...current,
+                    phase: {
+                      kind: "maintenance_offer",
+                      reason: current.phase.reason,
+                    },
+                    error: `Maintenance failed: ${errorMessage(error)}`,
+                  }
+                : current,
+            );
+          })
+          .finally(() => {
+            if (operation.current === controller) {
+              operation.current = undefined;
+            }
+          });
         return;
       }
-
+      if (state.phase.kind !== "idle") {
+        if (key.escape) {
+          operation.current?.abort();
+        }
+        return;
+      }
+      const selectedFile = fileMatches[selectedIndex];
+      const selectedCommand = suggestions[selectedIndex];
+      if (key.return) {
+        if (filePopupActive && selectedFile !== undefined) {
+          selectFile(selectedFile.path);
+        } else if (selectedCommand !== undefined) {
+          submitDraft(createPromptDraft(`/${selectedCommand.name}`));
+        } else {
+          submitDraft(state.draft);
+        }
+        return;
+      }
       if (key.tab) {
         if (filePopupActive) {
           if (selectedFile === undefined) {
             setState((current) => ({ ...current, suggestionsDismissed: true }));
           } else {
-            insertFilePath(selectedFile.path);
+            selectFile(selectedFile.path);
           }
-          return;
-        }
-
-        if (selectedCommand !== undefined) {
+        } else if (selectedCommand !== undefined) {
           setState(createPromptInputState(`/${selectedCommand.name} `));
         }
         return;
       }
-
       if (key.escape) {
         if (filePopupActive || suggestions.length > 0) {
           setState((current) => ({ ...current, suggestionsDismissed: true }));
         }
         return;
       }
-
-      if (key.upArrow) {
-        if (filePopupActive) {
-          if (fileMatches.length > 0) {
-            setState((current) => ({
-              ...current,
-              suggestionIndex:
-                (selectedIndex + fileMatches.length - 1) % fileMatches.length,
-            }));
-          }
-          return;
-        }
-
-        if (suggestions.length > 0) {
+      if (key.upArrow && filePopupActive) {
+        if (fileMatches.length > 0) {
           setState((current) => ({
             ...current,
             suggestionIndex:
-              (selectedIndex + suggestions.length - 1) % suggestions.length,
+              (selectedIndex + fileMatches.length - 1) % fileMatches.length,
           }));
-          return;
         }
-
-        navigateUp();
         return;
       }
-
-      if (key.downArrow) {
-        if (filePopupActive) {
-          if (fileMatches.length > 0) {
-            setState((current) => ({
-              ...current,
-              suggestionIndex: (selectedIndex + 1) % fileMatches.length,
-            }));
-          }
-          return;
-        }
-
-        if (suggestions.length > 0) {
+      if (key.downArrow && filePopupActive) {
+        if (fileMatches.length > 0) {
           setState((current) => ({
             ...current,
-            suggestionIndex: (selectedIndex + 1) % suggestions.length,
+            suggestionIndex: (selectedIndex + 1) % fileMatches.length,
           }));
+        }
+        return;
+      }
+      if (key.upArrow && suggestions.length > 0) {
+        setState((current) => ({
+          ...current,
+          suggestionIndex:
+            (selectedIndex + suggestions.length - 1) % suggestions.length,
+        }));
+        return;
+      }
+      if (key.downArrow && suggestions.length > 0) {
+        setState((current) => ({
+          ...current,
+          suggestionIndex: (selectedIndex + 1) % suggestions.length,
+        }));
+        return;
+      }
+      if (key.upArrow) {
+        if (state.navigation !== undefined) {
+          navigateHistory("up");
           return;
         }
-
-        navigateDown();
-        return;
-      }
-
-      if (key.leftArrow) {
-        updateEditor(moveLeft);
-        return;
-      }
-
-      if (key.rightArrow) {
-        updateEditor(moveRight);
-        return;
-      }
-
-      if (key.backspace || key.delete) {
-        updateEditor(backspace);
-        return;
-      }
-
-      if (key.ctrl) {
-        if (input === "a") {
-          updateEditor(moveToLineStart);
-        } else if (input === "e") {
-          updateEditor(moveToLineEnd);
-        } else if (input === "d") {
-          updateEditor(deleteForward);
-        } else if (input === "u") {
-          updateEditor(deleteToLineStart);
+        const moved = moveDraftUp(state.draft);
+        if (promptDraftChanged(state.draft, moved)) {
+          updateDraft(() => moved);
+        } else {
+          navigateHistory("up");
         }
         return;
       }
-
-      if (key.meta || key.pageUp || key.pageDown) {
+      if (key.downArrow) {
+        if (state.navigation?.browsing === true) {
+          navigateHistory("down");
+          return;
+        }
+        const moved = moveDraftDown(state.draft);
+        if (promptDraftChanged(state.draft, moved)) {
+          updateDraft(() => moved);
+        } else {
+          navigateHistory("down");
+        }
         return;
       }
-
-      if (input !== "") {
-        updateEditor((editor) => insert(editor, normalizeLineBreaks(input)));
+      if (key.leftArrow) {
+        updateDraft(moveDraftLeft);
+      } else if (key.rightArrow) {
+        updateDraft(moveDraftRight);
+      } else if (key.backspace) {
+        updateDraft(backspaceDraft);
+      } else if (key.delete) {
+        updateDraft(deleteForwardDraft);
+      } else if (key.ctrl) {
+        if (input === "a") updateDraft(moveDraftToLineStart);
+        else if (input === "e") updateDraft(moveDraftToLineEnd);
+        else if (input === "d") updateDraft(deleteForwardDraft);
+        else if (input === "u") updateDraft(deleteToLineStartDraft);
+      } else if (!key.meta && !key.pageUp && !key.pageDown && input !== "") {
+        updateDraft((draft) => insertDraftText(draft, normalizeLineBreaks(input)));
       }
     },
     { isActive: props.isDisabled !== true },
@@ -314,25 +711,25 @@ export function PromptInput(props: PromptInputProps) {
 
   usePaste(
     (text) => {
-      updateEditor((editor) => insert(editor, normalizeLineBreaks(text)));
+      updateDraft((draft) => insertDraftText(draft, normalizeLineBreaks(text)));
     },
-    { isActive: props.isDisabled !== true },
+    { isActive: !locked },
   );
 
   const showFileSuggestions = filePopupActive;
-  const showSlashSuggestions = suggestions.length > 0 && props.isDisabled !== true;
+  const showSlashSuggestions = suggestions.length > 0 && !locked;
   const showSuggestions = showFileSuggestions || showSlashSuggestions;
-
   return (
     <Box flexDirection="column">
       <Box width="100%" borderStyle="single" borderLeft={false} borderRight={false}>
-        {renderEditor(state.editor, props)}
+        {renderDraft(state.draft, props, locked)}
       </Box>
       {showSuggestions ? null : (
         <Box>
           <Text dimColor>
             {props.modelName} · {formatWorkspacePath(props.workspaceRoot)}
             {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
+            {state.phase.kind === "idle" ? null : ` · ${phaseLabel(state.phase)}`}
           </Text>
           {props.contextUsage === undefined ? null : (
             <>
@@ -359,8 +756,107 @@ export function PromptInput(props: PromptInputProps) {
           ))}
         </Box>
       ) : null}
+      {state.error === undefined ? null : <Text color="red">{state.error}</Text>}
+      {state.phase.kind === "maintenance_offer" ? (
+        <Text color="yellow">
+          {state.phase.operationId === undefined
+            ? "Context maintenance: c compact · r compact retire · n new session · Esc edit"
+            : `Running ${maintenanceLabel(state.phase.action)}…`}
+        </Text>
+      ) : null}
     </Box>
   );
+}
+
+function applyDraftChange(
+  state: PromptInputState,
+  draft: PromptDraft,
+): PromptInputState {
+  const valueChanged = state.draft.editor.value !== draft.editor.value;
+  return {
+    ...state,
+    draft,
+    navigation: valueChanged
+      ? undefined
+      : state.navigation === undefined
+        ? undefined
+        : { ...state.navigation, browsing: false },
+    suggestionIndex: valueChanged ? 0 : state.suggestionIndex,
+    suggestionsDismissed: valueChanged ? false : state.suggestionsDismissed,
+    error: undefined,
+  };
+}
+
+function historyRecords(
+  history: PromptInputProps["history"],
+): readonly LoadedPromptHistoryRecord[] {
+  if (history?.records !== undefined) {
+    return history.records;
+  }
+  return (history?.entries ?? []).map((text, index) => ({
+    kind: "valid",
+    lineNumber: index + 1,
+    entry: { version: 1, text },
+  }));
+}
+
+function renderDraft(draft: PromptDraft, props: PromptInputProps, disabled: boolean) {
+  if (draft.editor.value === "") {
+    const placeholder = props.placeholder ?? "";
+    if (disabled) return <Text dimColor>{placeholder}</Text>;
+    if (placeholder === "") return <Text inverse> </Text>;
+    return (
+      <Text>
+        <Text inverse>{placeholder.slice(0, 1)}</Text>
+        <Text dimColor>{placeholder.slice(1)}</Text>
+      </Text>
+    );
+  }
+  const chars = [...draft.editor.value];
+  const elements = new Map(
+    draft.elements.map((element) => [element.range.start, element]),
+  );
+  const nodes: React.ReactNode[] = [];
+  for (let index = 0; index <= chars.length; ) {
+    const element = elements.get(index);
+    if (element !== undefined) {
+      nodes.push(
+        <Text
+          key={`image-${element.attachmentId}`}
+          color="cyan"
+          bold
+          inverse={!disabled && draft.editor.cursor === element.range.start}
+        >
+          {element.label}
+        </Text>,
+      );
+      index = element.range.end;
+      continue;
+    }
+    if (index === chars.length) {
+      if (!disabled && draft.editor.cursor === index) {
+        nodes.push(
+          <Text key="cursor-end" inverse>
+            {" "}
+          </Text>,
+        );
+      }
+      break;
+    }
+    const char = chars[index];
+    if (!disabled && draft.editor.cursor === index) {
+      nodes.push(
+        <Fragment key={`cursor-${index}`}>
+          <Text inverse>{char === "\n" ? " " : char}</Text>
+          {char === "\n" ? "\n" : null}
+        </Fragment>,
+      );
+    } else {
+      nodes.push(<Fragment key={`char-${index}`}>{char}</Fragment>);
+    }
+    index += 1;
+  }
+  return <Text>{nodes}</Text>;
 }
 
 function renderFileSuggestions(
@@ -368,18 +864,10 @@ function renderFileSuggestions(
   matches: readonly FileMentionMatch[],
   selectedIndex: number,
 ) {
-  if (catalog.status === "idle") {
+  if (catalog.status === "idle")
     return <Text dimColor>Searching workspace files…</Text>;
-  }
-
-  if (catalog.status === "error") {
-    return <Text color="red">{catalog.message}</Text>;
-  }
-
-  if (matches.length === 0) {
-    return <Text dimColor>No matching files</Text>;
-  }
-
+  if (catalog.status === "error") return <Text color="red">{catalog.message}</Text>;
+  if (matches.length === 0) return <Text dimColor>No matching files</Text>;
   return (
     <Box flexDirection="column">
       {matches.map((match, index) => (
@@ -405,182 +893,73 @@ function renderMatchedPath(match: FileMentionMatch) {
   );
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function phaseLabel(phase: PromptInputPhase): string {
+  switch (phase.kind) {
+    case "idle":
+      return "ready";
+    case "attaching":
+      return "attaching image…";
+    case "restoring_history":
+      return "restoring history…";
+    case "admitting":
+      return "admitting turn…";
+    case "maintenance_offer":
+      return phase.operationId === undefined
+        ? "maintenance choice"
+        : `running ${maintenanceLabel(phase.action)}…`;
+  }
 }
 
-function contextColor(
-  pressure: ContextUsageSnapshot["pressure"],
-): "yellow" | "red" | undefined {
-  if (pressure === "blocked") {
-    return "red";
-  }
-  return pressure === "triggered" ? "yellow" : undefined;
+function maintenanceAction(input: string): PromptMaintenanceAction | undefined {
+  if (input === "c") return "compact";
+  if (input === "r") return "retire";
+  if (input === "n") return "new_session";
+  return undefined;
 }
 
-function formatWorkspacePath(workspaceRoot: string): string {
-  const home = os.homedir();
-  const relative = path.relative(home, workspaceRoot);
-
-  if (relative === "") {
-    return home;
-  }
-
-  const isInsideHome =
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative);
-
-  return isInsideHome ? `~${path.sep}${relative}` : workspaceRoot;
-}
-
-function renderEditor(editor: LineEditorState, props: PromptInputProps) {
-  if (editor.value === "") {
-    const placeholder = props.placeholder ?? "";
-
-    if (props.isDisabled === true) {
-      return <Text dimColor>{placeholder}</Text>;
-    }
-
-    if (placeholder === "") {
-      return <Text inverse> </Text>;
-    }
-
-    return (
-      <Text>
-        <Text inverse>{placeholder.slice(0, 1)}</Text>
-        <Text dimColor>{placeholder.slice(1)}</Text>
-      </Text>
-    );
-  }
-
-  if (props.isDisabled === true) {
-    return <Text>{editor.value}</Text>;
-  }
-
-  const { before, at, after } = splitAtCursor(editor);
-  if (at === "\n") {
-    return (
-      <Text>
-        {before}
-        <Text inverse> </Text>
-        {"\n"}
-        {after}
-      </Text>
-    );
-  }
-
-  return (
-    <Text>
-      {before}
-      <Text inverse>{at}</Text>
-      {after}
-    </Text>
-  );
+function maintenanceLabel(action: PromptMaintenanceAction | undefined): string {
+  if (action === "compact") return "compact";
+  if (action === "retire") return "compact retire";
+  if (action === "new_session") return "new session";
+  return "maintenance";
 }
 
 function normalizeLineBreaks(value: string): string {
   return value.replace(/\r\n?/g, "\n");
 }
 
-function editorChanged(before: LineEditorState, after: LineEditorState): boolean {
-  return before.value !== after.value || before.cursor !== after.cursor;
+function fileMentionReplacement(
+  value: string,
+  mentionEnd: number,
+  filePath: string,
+): string {
+  const suffixStart = [...value][mentionEnd];
+  return suffixStart !== undefined && suffixStart !== "\n" && /\s/u.test(suffixStart)
+    ? filePath
+    : `${filePath} `;
 }
 
-function applyEditorChange(
-  state: PromptInputState,
-  editor: LineEditorState,
-): PromptInputState {
-  const valueChanged = state.editor.value !== editor.value;
-  let navigation = state.navigation;
-
-  if (valueChanged) {
-    navigation = undefined;
-  } else if (navigation !== undefined) {
-    navigation = { ...navigation, browsing: false };
-  }
-
-  return {
-    ...state,
-    editor,
-    navigation,
-    suggestionIndex: valueChanged ? 0 : state.suggestionIndex,
-    suggestionsDismissed: valueChanged ? false : state.suggestionsDismissed,
-  };
+function contextColor(
+  pressure: ContextUsageSnapshot["pressure"],
+): "yellow" | "red" | undefined {
+  return pressure === "blocked"
+    ? "red"
+    : pressure === "triggered"
+      ? "yellow"
+      : undefined;
 }
 
-function navigateHistoryUp(
-  state: PromptInputState,
-  entries: readonly string[],
-): PromptInputState {
-  if (entries.length === 0) {
-    return state;
-  }
-
-  if (state.navigation === undefined) {
-    const index = entries.length - 1;
-    return showHistoryEntry(state, entries, {
-      index,
-      originalDraft: state.editor,
-      browsing: true,
-    });
-  }
-
-  if (state.navigation.index === 0) {
-    return {
-      ...state,
-      navigation: { ...state.navigation, browsing: true },
-    };
-  }
-
-  const navigation = {
-    ...state.navigation,
-    index: state.navigation.index - 1,
-    browsing: true,
-  };
-  return showHistoryEntry(state, entries, navigation);
+function formatWorkspacePath(workspaceRoot: string): string {
+  const home = os.homedir();
+  const relative = path.relative(home, workspaceRoot);
+  if (relative === "") return home;
+  const isInsideHome =
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative);
+  return isInsideHome ? `~${path.sep}${relative}` : workspaceRoot;
 }
 
-function navigateHistoryDown(
-  state: PromptInputState,
-  entries: readonly string[],
-): PromptInputState {
-  const navigation = state.navigation;
-  if (navigation === undefined) {
-    return state;
-  }
-
-  if (navigation.index >= entries.length - 1) {
-    return {
-      editor: navigation.originalDraft,
-      suggestionIndex: 0,
-      suggestionsDismissed: false,
-    };
-  }
-
-  const nextNavigation = {
-    ...navigation,
-    index: navigation.index + 1,
-    browsing: true,
-  };
-  return showHistoryEntry(state, entries, nextNavigation);
-}
-
-function showHistoryEntry(
-  state: PromptInputState,
-  entries: readonly string[],
-  navigation: HistoryNavigation,
-): PromptInputState {
-  const entry = entries[navigation.index];
-  if (entry === undefined) {
-    throw new Error(`History entry ${navigation.index} does not exist`);
-  }
-
-  return {
-    ...state,
-    editor: createLineEditorState(entry),
-    navigation,
-    suggestionIndex: 0,
-    suggestionsDismissed: true,
-  };
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -72,7 +72,7 @@ export async function runOneShot(
     });
 
     const result = await session.executeTurn({
-      userPrompt,
+      userMessage: { role: "user", content: userPrompt },
       signal: new AbortController().signal,
     });
     if (result.status === "completed") {

@@ -1,4 +1,5 @@
 import { createUuidV7 } from "./uuid-v7";
+import type { ImageAttachmentId } from "../image/image-types";
 
 export type RuntimeId<Name extends string> = string & {
   readonly __runtimeId: Name;
@@ -22,6 +23,7 @@ export type RuntimeIdFactory = {
   createProtocolFrameId(): ProtocolFrameId;
   createContextRevisionId(): ContextRevisionId;
   createContextSurfaceId(): ContextSurfaceId;
+  createImageAttachmentId(): ImageAttachmentId;
 };
 
 export const runtimeIdFactory: RuntimeIdFactory = {
@@ -33,6 +35,7 @@ export const runtimeIdFactory: RuntimeIdFactory = {
   createProtocolFrameId: () => createUuidV7() as ProtocolFrameId,
   createContextRevisionId: () => createUuidV7() as ContextRevisionId,
   createContextSurfaceId: () => createUuidV7() as ContextSurfaceId,
+  createImageAttachmentId: () => createUuidV7() as ImageAttachmentId,
 };
 
 const canonicalUuidV7Pattern =

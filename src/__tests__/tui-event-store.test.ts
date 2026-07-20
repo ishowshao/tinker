@@ -73,7 +73,9 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...base,
       ...testRuntime.turn,
       type: "turn.started",
-      data: { userPrompt: stringValue(promptInput.userPrompt) ?? "prompt" },
+      data: {
+        userPrompt: promptProjection(stringValue(promptInput.userPrompt) ?? "prompt"),
+      },
     };
   }
   if (input.type === "model.request.started") {
@@ -191,6 +193,10 @@ function testEvent(input: TestEventInput): AgentEvent {
     } as AgentEvent;
   }
   throw new Error(`Unsupported test event: ${input.type}`);
+}
+
+function promptProjection(text: string) {
+  return { version: 1 as const, text, images: [], omittedImageCount: 0 };
 }
 
 function testToolCall(value: unknown): ToolCall {

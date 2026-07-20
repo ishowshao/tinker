@@ -81,7 +81,7 @@ describe("session catalog and resume projection", () => {
         loadMcpConfig: async () => undefined,
       });
       await session.executeTurn({
-        userPrompt: "catalog prompt",
+        userMessage: { role: "user", content: "catalog prompt" },
         signal: new AbortController().signal,
       });
       await session.dispose({ type: "tui_exit" });
@@ -154,7 +154,7 @@ describe("session catalog and resume projection", () => {
         { loadMcpConfig: async () => undefined },
       );
       await session.executeTurn({
-        userPrompt: "run the fixture",
+        userMessage: { role: "user", content: "run the fixture" },
         signal: new AbortController().signal,
       });
       const liveItems = visibleTimelineItems(liveProjection.getSnapshot());

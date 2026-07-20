@@ -17,7 +17,7 @@ import type {
   PendingLedgerTurn,
   SessionLedger,
 } from "../src/agent/session-ledger";
-import type { AssistantMessage, ToolCall } from "../src/agent/types";
+import type { AssistantMessage, ToolCall, UserMessage } from "../src/agent/types";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { runtimeIdFactory, type SessionId } from "../src/ids/runtime-id";
@@ -40,7 +40,7 @@ import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V8_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V9_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -220,7 +220,7 @@ export async function runLongSessionBenchmark(
     for (let turnNumber = 1; turnNumber <= workloadTurnCount; turnNumber += 1) {
       const startedAt = performance.now();
       const result = await session.executeTurn({
-        userPrompt: workloadPrompt(turnNumber),
+        userMessage: { role: "user", content: workloadPrompt(turnNumber) },
         signal: new AbortController().signal,
       });
       turnDurations.push(performance.now() - startedAt);
@@ -313,7 +313,7 @@ export async function runLongSessionBenchmark(
     const cancellationController = new AbortController();
     const cancellationStartedAt = performance.now();
     const cancellation = session.executeTurn({
-      userPrompt: "benchmark cancellation turn",
+      userMessage: { role: "user", content: "benchmark cancellation turn" },
       signal: cancellationController.signal,
     });
     await model.waitForCancellationRequest();
@@ -348,7 +348,7 @@ export async function runLongSessionBenchmark(
 
     const recallStartedAt = performance.now();
     const recallResult = await session.executeTurn({
-      userPrompt: "benchmark Recall search and get turn",
+      userMessage: { role: "user", content: "benchmark Recall search and get turn" },
       signal: new AbortController().signal,
     });
     turnDurations.push(performance.now() - recallStartedAt);
@@ -365,7 +365,7 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 8 ||
+      database.schemaVersion !== 9 ||
       !database.schemaFingerprintMatches ||
       database.contextRevisionCount !==
         compactionResults.length + retirementResults.length + 1 ||
@@ -684,13 +684,13 @@ class TimedSessionLedger implements SessionLedger {
   }
 
   buildCandidateModelRequest(
-    userPrompt: string,
+    userMessage: UserMessage,
     tools: readonly ToolDefinition[],
   ): BuiltContextRequest {
     const startedAt = performance.now();
     return this.metrics.record(
       startedAt,
-      this.inner.buildCandidateModelRequest(userPrompt, tools),
+      this.inner.buildCandidateModelRequest(userMessage, tools),
     );
   }
 
@@ -1174,7 +1174,7 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V8_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V9_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),

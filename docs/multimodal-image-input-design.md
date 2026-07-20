@@ -1,4 +1,4 @@
-# 多模态图片输入技术方案（候选实现合同）
+# 多模态图片输入技术方案（实现合同）
 
 ## 文档状态
 
@@ -7,6 +7,10 @@
 不可变资产引用、inline range 持久化、同步规划与异步物化拆分、Token admission、
 Prompt 提交事务、事件投影和 provider 聚合限制。文末仍列为“需真实验证”的 endpoint
 行为在验证完成前不得凭假设实现。
+
+2026-07-19 已使用 Kimi Code chat key 与 Kimi 开放平台 estimator key 完成真实双凭据
+RuntimeSession gate。单图、两图编号关联、含图工具迭代重放、measured anchor、streaming
+工具循环和 non-streaming 均通过；endpoint、usage 与剩余边界记录在文末。
 
 本文采用与 Codex CLI 相同的核心思路：Prompt Input 中显示可编辑的
 `[Image #N]` 占位符；提交给模型时先发送带名称的图片块，最后发送包含这些占位符的
@@ -537,6 +541,9 @@ dispose/cancel 只能通过 admission 的 AbortController 收敛。commit 成功
   "inputModalities": ["text", "image"],
   "tokenEstimator": {
     "kind": "moonshot-estimate-token-count-v1",
+    "model": "kimi-k3",
+    "apiBase": "https://api.moonshot.cn/v1",
+    "apiKey": "<open-platform-key>",
     "timeoutMs": 30000,
     "maxRetries": 0
   }
@@ -582,7 +589,11 @@ session 中形成未经测试的图片行为组合。
 - `IMAGE_INPUT_POLICY.planningTokensPerImage` 是同步规划 charge，不是 provider 计费承诺。
   在真实 endpoint 校正前，`2048` 只是显式保守起点，不能单独作为最终 admission 依据。
 - 固定 transport 只发送 `image_url.url`，不发送 Kimi schema 未声明的 `detail`。
-- `tokenEstimator.kind` 显式选择计数策略，不能根据 `apiBase` 或模型名称推断。
+- `tokenEstimator.kind` 显式选择计数策略，不能根据 chat `apiBase` 或模型名称推断。
+- estimator 的 `model`、`apiBase` 和 `apiKey` 必须独立配置。Kimi Code chat 使用 `k3`
+  与 Kimi Code key，开放平台 estimator 使用 `kimi-k3` 与 Moonshot key；两个 key 不能
+  互换。estimator endpoint/model 进入 compatibility 与 request config hash，API key 不
+  进入任何持久化 identity 或日志。
 - estimator 使用独立的 `30,000 ms` admission timeout，并与用户 AbortSignal 组合；timeout
   在 commit 前失败并保留 draft，不能继承当前 chat request 的 30 分钟 timeout。
 - `tokenEstimator.timeoutMs` 必填且限制在 `1,000..60,000`；当前 profile 固定 30 秒。
@@ -896,10 +907,12 @@ type InputTokenEstimate = {
 };
 ```
 
-Kimi estimator 从 chat materialized payload 严格提取相同的 `model` 和 `messages`，调用
-`POST /v1/tokenizers/estimate-token-count`，并校验 HTTP、响应 `error`、
-`data.total_tokens` 和安全整数边界。它不能另外构造近似消息，也不能在日志中记录请求
-body。真实 endpoint 未确认 tools coverage 前，固定返回 `coverage: "messages"`。
+Kimi estimator 从 chat materialized payload 严格提取相同的 `messages` 和 `tools`，使用
+profile 中独立的 estimator model 调用 `POST /v1/tokenizers/estimate-token-count`，并校验
+HTTP、响应 `error`、`data.total_tokens` 和安全整数边界。它不能另外构造近似消息，也
+不能在日志中记录请求 body。2026-07-19 真实 endpoint 已确认接受并计算 tools，因此
+固定返回 `coverage: "full_request"`，compatibility coverage version 为
+`full-request-v1`。
 
 ### Admission 算法
 
@@ -916,11 +929,11 @@ body。真实 endpoint 未确认 tools coverage 前，固定返回 `coverage: "m
    只有最终 segments 中所有 media 都位于 `[0, anchor.segmentCount)`，anchor 后没有新增
    图片，才允许用 `anchor total + guarded local delta` 并跳过远端 estimator。
 5. 没有可用 anchor、anchor 失效或 anchor 后出现图片时，对已 materialize 的同一组
-   messages 调用 estimator。`coverage: "messages"` 时加 guarded local tool schema
-   tokens。
+   messages 与 tools 调用 estimator。当前 `coverage: "full_request"`，不重复增加本地
+   tool schema tokens。
 6. 最终 guarded input 为以下分支之一：
    `max(localPlannedFull, anchorTotal + guardedLocalDelta)`，或
-   `max(localPlannedFull, providerMessages + guardedLocalTools)`。胜出的候选决定 snapshot
+   `max(localPlannedFull, providerFullRequest)`。胜出的候选决定 snapshot
    source：分别使用现有 `estimated_full`、`measured_plus_estimated_delta`，或新增的
    `provider_estimated`。
 7. 用 `contextWindowTokens - requestMaxOutputTokens` 得到 input budget 并断言 guarded input
@@ -1224,7 +1237,7 @@ redaction 后才能展示或落日志。
 - 本地规划为每张图片加入固定 charge，breakdown 归入对应 user segment。
 - measured anchor 覆盖全部图片且 delta 无新图时不调用 estimator。
 - 无 anchor、anchor 失效或 delta 有新图时恰好调用一次 estimator。
-- messages-only estimate 加 guarded tool tokens，并与 local full estimate 取最大值。
+- full-request estimate 覆盖 messages 与 tools，并与 local full estimate 取最大值。
 - provider estimate 使用独立 source，不建立 anchor，不写 calibration。
 - estimator user abort/30s timeout 都在 commit 前结束 admission、保留 draft 并清 media cache。
 - retryable HTTP/network fault 下 image chat 与 estimator 都只发一次请求，SDK 不自动重传
@@ -1283,21 +1296,67 @@ K3 多模态可用。
 
 门禁：`bun run check`、PTY/TUI 用例和 live/resume projection parity 全部通过。
 
-## 实现前仍需真实验证
+## 2026-07-19 真实 K3 provider spike
+
+本轮使用的 chat profile 为 model `k3`、base URL
+`https://api.kimi.com/coding/v1`，凭据来自 Kimi Code。未记录或输出凭据内容。
+
+已确认：
+
+- 当前 `openai-chat-v2` 图片 mapping 可被 Kimi Code chat 接受。单张红底白色 `A` 图片
+  返回 `SINGLE=red/A`，provider usage 为 `255` prompt tokens，请求体 `6105` bytes；
+- 红底白色 `A` 与蓝底白色 `B` 两图按 `[Image #1]` / `[Image #2]` 返回
+  `[Image #1]=red/A; [Image #2]=blue/B`，provider usage 为 `402` prompt tokens，请求体
+  `11662` bytes。本次真实语义关联通过，不只是 HTTP 成功；
+- streaming 工具循环完成两次模型请求、一次 `Glob` 调用，tool result 后返回
+  `TOOL-OK`；两次 assistant 响应都有 reasoning 内容，现有 replay 路径可完成循环；
+- non-streaming 请求返回 `NONSTREAM-OK`，provider usage 为 `112` prompt tokens；
+- 上述 chat 请求均接受当前的 `max_completion_tokens` 字段。
+
+第一轮确认的配置边界：
+
+- `POST https://api.kimi.com/coding/v1/tokenizers/estimate-token-count` 使用 Kimi Code key
+  返回 HTTP `404`；[Kimi Code 公开文档](https://www.kimi.com/code/docs/)只声明
+  chat/messages 等 coding endpoint，没有 Token estimate endpoint；
+- `POST https://api.moonshot.cn/v1/tokenizers/estimate-token-count` 使用同一个 Kimi Code
+  key 返回 HTTP `401`。[Kimi 开放平台 Token estimate 文档](https://platform.kimi.com/docs/api/estimate)
+  使用独立的 Moonshot endpoint 与凭据；两套 key 不能互换；
+- 单凭据配置下 Runtime admission 因 estimator `404` 在 turn commit 和 chat dispatch 前
+  快速失败，未发生纯文本 fallback；
+- 可复现实测入口为
+  `TINKER_MODELS=.tinker/models.json TINKER_LIVE_K3_IMAGE=1 bun run bench:k3-image-live -- k3`。
+  当 estimator 不可用时，该脚本仍完成直接 chat provider spike、输出脱敏结果，最后以
+  非零状态明确报告完整 runtime gate 未通过。
+
+随后完成的双凭据 RuntimeSession gate 已确认：
+
+- profile 中 chat 与 estimator 分别拥有 model、endpoint 和 key；chat 使用 `k3`，
+  estimator 使用 `kimi-k3`。estimator key 不进入 request hash、session compatibility、
+  事件或输出；
+- 单图 estimate 为 `2108`，对应 chat prompt usage 为 `2109`；两图 estimate 为 `2255`，
+  对应 chat prompt usage 为 `2256`。两组仅差一个 token，确认 estimator model 与 Kimi
+  Code chat 的输入计数语义一致；
+- 默认工具集使 full runtime usage 高于第一轮无工具直接 chat。独立 probe 中 messages-only
+  为 `89`，带 tools 为 `171`，确认 endpoint 接受并计算 tools；estimator coverage 因此
+  冻结为 `full_request` / `full-request-v1`；
+- 单图、双图的保守本地 planning 分别为 `5985`、`8582`，高于 provider estimate，因此
+  admission snapshot source 为 `estimated_full`。远端 estimator 仍在 commit 前实际调用，
+  不能因本地值胜出而跳过；
+- 含图工具 turn 只调用一次 estimator，完成两次 chat request；两次 chat 都重放一张真实
+  图片，第二轮 source 为 `measured_plus_estimated_delta`，最终返回 `IMAGE-TOOL=red/A`；
+- 完整 live smoke 共完成 `7` 次 chat 与 `3` 次 estimator 请求，并以状态 `0` 结束。
+
+## 仍需真实验证
 
 以下只依赖外部 endpoint，不能靠本地设计拍板：
 
-1. K3 estimate endpoint 是否接受 `kimi-k3`，以及是否接受并计算 tools；验证前保持
-   `coverage: "messages"`。
-2. 普通 text tag framing 是否能让 K3 稳定建立两图编号关联；失败时 bump/fix
-   `openai-chat-v2` 草案，不保留隐式兼容分支。
-3. 不同尺寸图片的 estimate 与 chat prompt usage 如何变化，据此校正
+1. 不同尺寸图片的 estimate 与 chat prompt usage 如何变化，据此校正
    `IMAGE_INPUT_POLICY.planningTokensPerImage = 2048`；校正前远端 estimate 仍是无
    anchor 请求的 admission 必需项。
-4. Chat 和 estimate 接近官方 `100M` 边界时的实际错误形态，以及本地 `90,000,000`
+2. Chat 和 estimate 接近官方 `100M` 边界时的实际错误形态，以及本地 `90,000,000`
    bytes 是否留有足够余量。
-5. K3 tool loop 对 reasoning 字段的精确重放要求，以及 streaming/non-streaming 字段是否
-   完全一致。
+3. 更长含图工具历史下的 reasoning replay、provider cache usage 与 rate-limit 错误形态；
+   本轮两轮含图工具循环已通过。
 
 ## 当前推荐
 

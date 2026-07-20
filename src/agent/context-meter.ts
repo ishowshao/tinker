@@ -2,8 +2,13 @@ import type { ModelContextBudget } from "../model/model-context-profile";
 import type {
   ModelRequestOutput,
   ModelUsage,
+  MaterializedModelRequest,
   PreparedModelRequest,
 } from "../model/model-client";
+import type {
+  InputTokenEstimate,
+  InputTokenEstimator,
+} from "../model/input-token-estimator";
 import {
   assertContextBudget,
   contextPressure,
@@ -63,6 +68,7 @@ export class ContextMeter {
   private anchor?: MeasuredContextAnchor;
   private lastProviderUsage?: ModelUsage;
   private calibrationIdentity?: string;
+  private readonly providerEstimateCache = new Map<string, InputTokenEstimate>();
 
   constructor(
     private readonly budget: ModelContextBudget,
@@ -166,10 +172,12 @@ export class ContextMeter {
       throw new Error("Cannot record provider usage before measuring the request.");
     }
 
-    this.calibration.record(
-      output.usage.promptTokens,
-      measurement.rawFullEstimate.totalTokens,
-    );
+    if (prepared.mediaOccurrenceCount === 0) {
+      this.calibration.record(
+        output.usage.promptTokens,
+        measurement.rawFullEstimate.totalTokens,
+      );
+    }
     this.lastProviderUsage = { ...output.usage };
     const replaySegments = prepared.assistantReplaySegments(output.message);
     const anchoredSegments = [...prepared.promptSegments, ...replaySegments];
@@ -209,6 +217,62 @@ export class ContextMeter {
     };
   }
 
+  applyProviderEstimate(
+    prepared: PreparedModelRequest,
+    estimate: {
+      inputTokens: number;
+      coverage: "messages" | "full_request";
+    },
+  ): ContextUsageSnapshot {
+    if (!Number.isSafeInteger(estimate.inputTokens) || estimate.inputTokens < 0) {
+      throw new Error("Provider input estimate must be a non-negative safe integer.");
+    }
+    const local = this.measure(prepared);
+    const measurement = this.measurements.get(prepared)!;
+    const guardedTools =
+      estimate.coverage === "messages"
+        ? Math.ceil(
+            measurement.rawFullEstimate.toolSchemaTokens * local.correctionFactor,
+          )
+        : 0;
+    const providerGuarded = estimate.inputTokens + guardedTools;
+    if (providerGuarded <= local.usedInputTokens) {
+      return local;
+    }
+    const snapshot: ContextUsageSnapshot = {
+      ...local,
+      usedInputTokens: providerGuarded,
+      source: "provider_estimated",
+      pressure: contextPressure(providerGuarded, this.budget),
+    };
+    this.measurements.set(prepared, {
+      rawFullEstimate: measurement.rawFullEstimate,
+      snapshot,
+    });
+    return snapshot;
+  }
+
+  async estimateProviderInput(
+    prepared: MaterializedModelRequest,
+    estimator: InputTokenEstimator,
+    options: { signal: AbortSignal },
+  ): Promise<InputTokenEstimate> {
+    options.signal.throwIfAborted();
+    const key = providerEstimateCacheKey(
+      prepared,
+      estimator.compatibility.coverageVersion,
+    );
+    const cached = this.providerEstimateCache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const estimate = await estimator.estimate(prepared, options);
+    options.signal.throwIfAborted();
+    const frozen = Object.freeze({ ...estimate });
+    this.providerEstimateCache.set(key, frozen);
+    return frozen;
+  }
+
   assertWithinBudget(snapshot: ContextUsageSnapshot): void {
     assertContextBudget({
       usedInputTokens: snapshot.usedInputTokens,
@@ -231,6 +295,7 @@ export class ContextMeter {
       this.lastProviderUsage = undefined;
       this.measurements = new WeakMap();
       this.calibration.clear();
+      this.providerEstimateCache.clear();
       this.calibrationIdentity = nextIdentity;
       throw new Error(
         "Context revision changed the request configuration or tool schema.",
@@ -239,6 +304,7 @@ export class ContextMeter {
     this.anchor = undefined;
     this.lastProviderUsage = undefined;
     this.measurements = new WeakMap();
+    this.providerEstimateCache.clear();
     this.calibrationIdentity = nextIdentity;
   }
 
@@ -249,6 +315,7 @@ export class ContextMeter {
     this.measurements = new WeakMap();
     this.calibration.clear();
     this.calibrationIdentity = undefined;
+    this.providerEstimateCache.clear();
   }
 
   private usableAnchor(
@@ -263,7 +330,10 @@ export class ContextMeter {
       anchor.requestConfigHash !== prepared.requestConfigHash ||
       anchor.toolSchemaHash !== prepared.toolSchemaHash ||
       anchor.segmentCount > prepared.promptSegments.length ||
-      prefixHashes[anchor.segmentCount] !== anchor.prefixHash
+      prefixHashes[anchor.segmentCount] !== anchor.prefixHash ||
+      prepared.promptSegments
+        .slice(anchor.segmentCount)
+        .some((segment) => (segment.media?.length ?? 0) > 0)
     ) {
       this.anchor = undefined;
       return undefined;
@@ -287,6 +357,20 @@ export class ContextMeter {
     }
     this.calibrationIdentity = next;
   }
+}
+
+function providerEstimateCacheKey(
+  prepared: PreparedModelRequest,
+  coverageVersion: string,
+): string {
+  return [
+    prepared.requestConfigHash,
+    prepared.toolSchemaHash,
+    lastPromptPrefixHash(
+      promptPrefixHashes(prepared.requestConfigHash, prepared.promptSegments),
+    ),
+    coverageVersion,
+  ].join(":");
 }
 
 function assertMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {

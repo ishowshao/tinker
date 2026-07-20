@@ -14,6 +14,19 @@ export type ModelProfile = {
   readonly maxSupportedOutputTokens: number;
   readonly includeReasoningContent: boolean;
   readonly stream: boolean;
+  readonly inputModalities: readonly ModelInputModality[];
+  readonly tokenEstimator?: ModelTokenEstimatorProfile;
+};
+
+export type ModelInputModality = "text" | "image";
+
+export type ModelTokenEstimatorProfile = {
+  readonly kind: "moonshot-estimate-token-count-v1";
+  readonly model: string;
+  readonly apiBase: string;
+  readonly apiKey: string;
+  readonly timeoutMs: number;
+  readonly maxRetries: 0;
 };
 
 export type ModelProfiles = {
@@ -223,6 +236,22 @@ function parseProfile(
     throw new Error(`${where} must be an object.`);
   }
 
+  assertKnownKeys(
+    value,
+    [
+      "model",
+      "apiBase",
+      "apiKey",
+      "contextWindowTokens",
+      "maxSupportedOutputTokens",
+      "includeReasoningContent",
+      "stream",
+      "inputModalities",
+      "tokenEstimator",
+    ],
+    where,
+  );
+
   const model = requireString(value.model, `${where}: "model"`);
   const apiBase = requireString(value.apiBase, `${where}: "apiBase"`);
   const apiKey = requireString(value.apiKey, `${where}: "apiKey"`);
@@ -249,6 +278,20 @@ function parseProfile(
       ? true
       : parseBoolean(value.stream, `${where}: "stream"`);
 
+  const inputModalities = parseInputModalities(
+    value.inputModalities,
+    `${where}: "inputModalities"`,
+  );
+  const tokenEstimator =
+    value.tokenEstimator === undefined
+      ? undefined
+      : parseTokenEstimator(value.tokenEstimator, `${where}: "tokenEstimator"`);
+  if (inputModalities.includes("image") && tokenEstimator === undefined) {
+    throw new Error(
+      `${where}: image input requires a complete "tokenEstimator" configuration.`,
+    );
+  }
+
   createModelContextProfile({
     contextWindowTokens,
     maxSupportedOutputTokens,
@@ -263,7 +306,81 @@ function parseProfile(
     maxSupportedOutputTokens,
     includeReasoningContent,
     stream,
+    inputModalities,
+    ...(tokenEstimator === undefined ? {} : { tokenEstimator }),
   });
+}
+
+function parseInputModalities(
+  value: unknown,
+  name: string,
+): readonly ModelInputModality[] {
+  if (value === undefined) {
+    return Object.freeze(["text"]);
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${name} must be a non-empty array.`);
+  }
+  const modalities = value.map((rawEntry): ModelInputModality => {
+    const entry: unknown = rawEntry;
+    if (entry !== "text" && entry !== "image") {
+      throw new Error(`${name} contains an unsupported modality.`);
+    }
+    return entry;
+  });
+  if (new Set(modalities).size !== modalities.length) {
+    throw new Error(`${name} must not contain duplicates.`);
+  }
+  if (!modalities.includes("text")) {
+    throw new Error(`${name} must include "text".`);
+  }
+  return Object.freeze(
+    modalities.includes("image") ? (["text", "image"] as const) : (["text"] as const),
+  );
+}
+
+function parseTokenEstimator(value: unknown, name: string): ModelTokenEstimatorProfile {
+  if (!isRecord(value)) {
+    throw new Error(`${name} must be an object.`);
+  }
+  assertKnownKeys(
+    value,
+    ["kind", "model", "apiBase", "apiKey", "timeoutMs", "maxRetries"],
+    name,
+  );
+  if (value.kind !== "moonshot-estimate-token-count-v1") {
+    throw new Error(`${name}.kind must be "moonshot-estimate-token-count-v1".`);
+  }
+  const model = requireString(value.model, `${name}.model`);
+  const apiBase = requireString(value.apiBase, `${name}.apiBase`);
+  const apiKey = requireString(value.apiKey, `${name}.apiKey`);
+  const timeoutMs = requirePositiveInteger(value.timeoutMs, `${name}.timeoutMs`);
+  if (timeoutMs < 1_000 || timeoutMs > 60_000) {
+    throw new Error(`${name}.timeoutMs must be between 1000 and 60000.`);
+  }
+  if (value.maxRetries !== 0) {
+    throw new Error(`${name}.maxRetries must be 0.`);
+  }
+  return Object.freeze({
+    kind: value.kind,
+    model,
+    apiBase,
+    apiKey,
+    timeoutMs,
+    maxRetries: 0,
+  });
+}
+
+function assertKnownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  name: string,
+): void {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(value).find((key) => !allowedSet.has(key));
+  if (unknown !== undefined) {
+    throw new Error(`${name} contains unknown field ${JSON.stringify(unknown)}.`);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

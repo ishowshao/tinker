@@ -122,7 +122,7 @@ describe("ContextProtocolValidator", () => {
     const fixture = ledgerFixture("open-tail");
     const pending = fixture.ledger.beginTurn({
       turn: fixture.turn,
-      userPrompt: "run",
+      userMessage: { role: "user", content: "run" },
     });
     const call = fixture.call(1, "provider-call", "Read");
     pending.agent.appendAssistant({
@@ -144,7 +144,7 @@ function completeToolView(): ProtocolContextView {
   const fixture = ledgerFixture("validator");
   const pending = fixture.ledger.beginTurn({
     turn: fixture.turn,
-    userPrompt: "run",
+    userMessage: { role: "user", content: "run" },
   });
   const first = fixture.call(1, "provider-first", "Read");
   const second = fixture.call(2, "provider-second", "Glob");

@@ -15,7 +15,9 @@ import { renderRecallRetirementContract } from "../context/recall-retirement-con
 import {
   profileToContextProfile,
   type ModelProfile,
+  type ModelInputModality,
   type ModelProfiles,
+  type ModelTokenEstimatorProfile,
   unknownProfileError,
 } from "./model-profiles";
 
@@ -76,6 +78,8 @@ export type RunnerConfig = {
   contextBudget: ModelContextBudget;
   profileName?: string;
   profiles?: ModelProfiles;
+  inputModalities: readonly ModelInputModality[];
+  tokenEstimator?: ModelTokenEstimatorProfile;
 };
 
 export type RunnerConfigOverrides = Partial<Omit<RunnerConfig, "contextBudget">>;
@@ -130,6 +134,10 @@ function runnerConfigFromProfile(
     contextBudget,
     profileName: profile.name,
     profiles,
+    inputModalities: profile.inputModalities,
+    ...(profile.tokenEstimator === undefined
+      ? {}
+      : { tokenEstimator: profile.tokenEstimator }),
   };
 }
 
@@ -164,6 +172,10 @@ function runnerConfigFromEnv(overrides: RunnerConfigOverrides): RunnerConfig {
       parseBoolean(process.env.TINKER_STREAM, DEFAULT_STREAM, "TINKER_STREAM"),
     contextProfile,
     contextBudget,
+    inputModalities: overrides.inputModalities ?? Object.freeze(["text"]),
+    ...(overrides.tokenEstimator === undefined
+      ? {}
+      : { tokenEstimator: overrides.tokenEstimator }),
   };
 }
 
@@ -176,7 +188,8 @@ export function createModelClientFromEnv(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  >,
+  > &
+    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
 ): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
@@ -196,6 +209,10 @@ export function createModelClientFromEnv(
     model: config.modelName,
     stream: config.stream,
     contextBudget: config.contextBudget,
+    inputModalities: config.inputModalities ?? Object.freeze(["text"]),
+    ...(config.tokenEstimator === undefined
+      ? {}
+      : { tokenEstimator: config.tokenEstimator }),
   });
 }
 
@@ -208,7 +225,8 @@ export function createRunnerModelClient(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  >,
+  > &
+    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
   injected?: ModelClient,
 ): ModelClient {
   return injected ?? createModelClientFromEnv(config);
@@ -223,7 +241,8 @@ export function createWebFetchRefinerFromEnv(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  >,
+  > &
+    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
 ): Refiner {
   return createModelRefiner({
     createModelClient: () => createModelClientFromEnv(config),

@@ -314,11 +314,11 @@ describe("RuntimeSession lifecycle", () => {
     const session = await createTestSession(model, sink, "ordered");
 
     const first = await session.executeTurn({
-      userPrompt: "first",
+      userMessage: { role: "user", content: "first" },
       signal: new AbortController().signal,
     });
     const second = await session.executeTurn({
-      userPrompt: "second",
+      userMessage: { role: "user", content: "second" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -374,14 +374,14 @@ describe("RuntimeSession lifecycle", () => {
     });
 
     const failed = await session.executeTurn({
-      userPrompt: "use tools",
+      userMessage: { role: "user", content: "use tools" },
       signal: new AbortController().signal,
     });
     const failedMessages = materializeAgentMessages(
       requireLedger(ledger).snapshot().messages,
     );
     const recovered = await session.executeTurn({
-      userPrompt: "continue",
+      userMessage: { role: "user", content: "continue" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -444,7 +444,7 @@ describe("RuntimeSession lifecycle", () => {
 
     const error = await session
       .executeTurn({
-        userPrompt: "use tools",
+        userMessage: { role: "user", content: "use tools" },
         signal: new AbortController().signal,
       })
       .catch((caught: unknown) => caught);
@@ -453,7 +453,7 @@ describe("RuntimeSession lifecycle", () => {
     expect(toolExecutions).toBe(1);
     expect(() =>
       session.executeTurn({
-        userPrompt: "after fault",
+        userMessage: { role: "user", content: "after fault" },
         signal: new AbortController().signal,
       }),
     ).toThrow("faulted");
@@ -505,7 +505,7 @@ describe("RuntimeSession lifecycle", () => {
 
     const error = await session
       .executeTurn({
-        userPrompt: "recall then write",
+        userMessage: { role: "user", content: "recall then write" },
         signal: new AbortController().signal,
       })
       .catch((caught: unknown) => caught);
@@ -513,7 +513,7 @@ describe("RuntimeSession lifecycle", () => {
     expect(executedTools).toEqual(["Recall"]);
     expect(() =>
       session.executeTurn({
-        userPrompt: "after fault",
+        userMessage: { role: "user", content: "after fault" },
         signal: new AbortController().signal,
       }),
     ).toThrow("faulted");
@@ -551,11 +551,11 @@ describe("RuntimeSession lifecycle", () => {
     const session = await createTestSession(model, sink, "model-failure");
 
     const failed = await session.executeTurn({
-      userPrompt: "first failed prompt",
+      userMessage: { role: "user", content: "first failed prompt" },
       signal: new AbortController().signal,
     });
     const recovered = await session.executeTurn({
-      userPrompt: "continue",
+      userMessage: { role: "user", content: "continue" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -576,14 +576,14 @@ describe("RuntimeSession lifecycle", () => {
     const controller = new AbortController();
 
     const pending = session.executeTurn({
-      userPrompt: "cancel this",
+      userMessage: { role: "user", content: "cancel this" },
       signal: controller.signal,
     });
     await model.firstStarted;
     controller.abort();
     const cancelled = await pending;
     const recovered = await session.executeTurn({
-      userPrompt: "continue",
+      userMessage: { role: "user", content: "continue" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -619,7 +619,7 @@ describe("RuntimeSession lifecycle", () => {
     );
 
     const invalid = await session.executeTurn({
-      userPrompt: "bad turn",
+      userMessage: { role: "user", content: "bad turn" },
       signal: new AbortController().signal,
     });
     expect(invalid).toMatchObject({ status: "failed" });
@@ -634,7 +634,7 @@ describe("RuntimeSession lifecycle", () => {
     );
 
     const recovered = await session.executeTurn({
-      userPrompt: "clean turn",
+      userMessage: { role: "user", content: "clean turn" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -679,7 +679,7 @@ describe("RuntimeSession lifecycle", () => {
 
     const error = await session
       .executeTurn({
-        userPrompt: "do not commit",
+        userMessage: { role: "user", content: "do not commit" },
         signal: new AbortController().signal,
       })
       .catch((caught: unknown) => caught);
@@ -696,7 +696,7 @@ describe("RuntimeSession lifecycle", () => {
     ]);
     expect(() =>
       session.executeTurn({
-        userPrompt: "after fault",
+        userMessage: { role: "user", content: "after fault" },
         signal: new AbortController().signal,
       }),
     ).toThrow("faulted");
@@ -713,19 +713,19 @@ describe("RuntimeSession lifecycle", () => {
 
     expect(() =>
       session.executeTurn({
-        userPrompt: "   ",
+        userMessage: { role: "user", content: "   " },
         signal: new AbortController().signal,
       }),
-    ).toThrow("empty prompt");
+    ).toThrow("must not be empty");
 
     const pending = session.executeTurn({
-      userPrompt: "wait",
+      userMessage: { role: "user", content: "wait" },
       signal: new AbortController().signal,
     });
     await model.started;
     expect(() =>
       session.executeTurn({
-        userPrompt: "second",
+        userMessage: { role: "user", content: "second" },
         signal: new AbortController().signal,
       }),
     ).toThrow("executing");
@@ -746,7 +746,7 @@ describe("RuntimeSession lifecycle", () => {
     });
     expect(() =>
       session.executeTurn({
-        userPrompt: "after dispose",
+        userMessage: { role: "user", content: "after dispose" },
         signal: new AbortController().signal,
       }),
     ).toThrow("disposed");
@@ -760,7 +760,7 @@ describe("RuntimeSession lifecycle", () => {
     let caught: unknown;
     try {
       await session.executeTurn({
-        userPrompt: "x".repeat(1_000_000),
+        userMessage: { role: "user", content: "x".repeat(1_000_000) },
         signal: new AbortController().signal,
       });
     } catch (error) {
@@ -816,7 +816,7 @@ describe("RuntimeSession lifecycle", () => {
     );
 
     const result = await session.executeTurn({
-      userPrompt: "read the huge fixture",
+      userMessage: { role: "user", content: "read the huge fixture" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -889,7 +889,7 @@ describe("RuntimeSession lifecycle", () => {
     });
 
     const result = await session.executeTurn({
-      userPrompt: "continue",
+      userMessage: { role: "user", content: "continue" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });
@@ -962,7 +962,7 @@ describe("RuntimeSession lifecycle", () => {
     });
     const controller = new AbortController();
     const turn = session.executeTurn({
-      userPrompt: "wait",
+      userMessage: { role: "user", content: "wait" },
       signal: controller.signal,
     });
     await model.started;
@@ -989,7 +989,7 @@ describe("RuntimeSession lifecycle", () => {
     try {
       expect(
         await session.executeTurn({
-          userPrompt: "start background work",
+          userMessage: { role: "user", content: "start background work" },
           signal: new AbortController().signal,
         }),
       ).toMatchObject({ status: "completed" });
@@ -1009,7 +1009,7 @@ describe("RuntimeSession lifecycle", () => {
     const uuidV7 =
       /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
     const result = await session.executeTurn({
-      userPrompt: "hello",
+      userMessage: { role: "user", content: "hello" },
       signal: new AbortController().signal,
     });
     await session.dispose({ type: "oneshot_complete" });

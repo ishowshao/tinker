@@ -20,7 +20,20 @@ import {
   type McpInventorySnapshot,
   type McpManager,
 } from "../mcp/mcp-manager";
-import type { ModelClient } from "../model/model-client";
+import {
+  materializeModelRequest,
+  ModelRequestMediaAggregateError,
+  type MaterializedModelRequest,
+  type ModelClient,
+} from "../model/model-client";
+import { ImageAssetStore, type ImportedImageAsset } from "../image/image-asset-store";
+import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
+import {
+  validateUserMessage,
+  type ImageAssetRef,
+  type UserMessage,
+} from "../image/image-types";
+import { projectUserMessage } from "./user-prompt-projection";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
 import { SwapPlanner } from "../context/swap-planner";
 import {
@@ -69,7 +82,12 @@ import {
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { SessionError } from "../session/session-errors";
 import { FatalAgentTurnError, runAgent, type RunAgentInput } from "./loop";
-import { SessionLedgerWriteError, type SessionLedger } from "./session-ledger";
+import {
+  AdmissionStaleError,
+  SessionLedgerWriteError,
+  type AdmissionBaseToken,
+  type SessionLedger,
+} from "./session-ledger";
 import { TurnCancelledError } from "./turn-cancellation";
 import type { ToolCompletionInput } from "../context/protocol-frame";
 import type { BuiltContextRequest } from "../context/context-revision";
@@ -100,8 +118,14 @@ import {
 } from "../skills/skill-context";
 
 export type ExecuteTurnInput = {
-  userPrompt: string;
+  userMessage: UserMessage;
   signal: AbortSignal;
+};
+
+export type AcceptedTurn = {
+  readonly turnId: TurnIdentity["turnId"];
+  readonly userMessage: UserMessage;
+  readonly completion: Promise<RunAgentResult>;
 };
 
 export type SessionDisposeReason =
@@ -117,6 +141,17 @@ export type RuntimeSession = {
   readonly recovery: SessionRecoveryResult;
   skills(): RuntimeSkillsSnapshot;
   mcp(): McpInventorySnapshot;
+  supportsImageInput(): boolean;
+  importImage(
+    sourcePath: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ): Promise<ImportedImageAsset>;
+  verifyImageAssets(
+    assets: readonly ImageAssetRef[],
+    signal: AbortSignal,
+  ): Promise<void>;
+  admitTurn(input: ExecuteTurnInput): Promise<AcceptedTurn>;
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
   retireContext(): Promise<ContextRetirementResult>;
@@ -243,6 +278,7 @@ export class RuntimeEventAppendError extends Error {
 
 type RuntimeSessionState =
   | "initializing"
+  | "admitting"
   | "ready"
   | "executing"
   | "compacting"
@@ -254,6 +290,12 @@ type RuntimeSessionState =
 type ActiveTurn = {
   controller: AbortController;
   completion: Promise<RunAgentResult>;
+};
+
+type ActiveAdmission = {
+  controller: AbortController;
+  settled: Promise<void>;
+  settle: () => void;
 };
 
 const defaultDependencies: RuntimeSessionFactoryDependencies = {
@@ -305,6 +347,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private tooling?: DefaultTooling;
   private mcpManager?: McpManager;
   private ledger?: SessionLedger;
+  private activeAdmission?: ActiveAdmission;
   private activeTurn?: ActiveTurn;
   private activeContextRevision?: Promise<
     ContextCompactionResult | ContextRetirementResult
@@ -328,6 +371,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     private readonly eventSink: EventSink,
     private readonly observationBuilder: ObservationBuilder,
     private readonly store: SessionStore,
+    private readonly assetStore: ImageAssetStore,
   ) {
     this.sessionId = input.selection.sessionId;
     this.resumed = input.selection.mode === "resume";
@@ -365,6 +409,19 @@ class DefaultRuntimeSession implements RuntimeSession {
   ): Promise<RuntimeSession> {
     validateCreateInput(input);
     const store = await dependencies.openStore(input, dependencies.idFactory);
+    let assetStore: ImageAssetStore;
+    try {
+      assetStore = await ImageAssetStore.open({ workspaceRoot: store.workspaceRoot });
+    } catch (error) {
+      if (isNewSessionInput(input)) {
+        await store
+          .deleteFromDisk()
+          .catch(() => store.abandon().catch(() => undefined));
+      } else {
+        await store.abandon().catch(() => undefined);
+      }
+      throw error;
+    }
     let session: DefaultRuntimeSession;
     try {
       session = new DefaultRuntimeSession(
@@ -373,6 +430,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         dependencies.createEventSink(input),
         dependencies.createObservationBuilder(),
         store,
+        assetStore,
       );
     } catch (error) {
       if (isNewSessionInput(input)) {
@@ -393,6 +451,12 @@ class DefaultRuntimeSession implements RuntimeSession {
         includeReasoningContent: input.includeReasoningContent,
         contextProfile: input.contextProfile,
         messageProtocol: input.modelClient.messageProtocol,
+        inputModalities: input.modelClient.inputModalities ?? ["text"],
+        ...(input.modelClient.inputTokenEstimator === undefined
+          ? {}
+          : {
+              tokenEstimator: input.modelClient.inputTokenEstimator.compatibility,
+            }),
       });
       if (input.selection.mode === "resume") {
         store.assertSessionCompatibility(compatibility);
@@ -802,6 +866,55 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.mcpManager?.inventory ?? EMPTY_MCP_INVENTORY;
   }
 
+  supportsImageInput(): boolean {
+    return this.input.modelClient.inputModalities?.includes("image") === true;
+  }
+
+  importImage(
+    sourcePath: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ): Promise<ImportedImageAsset> {
+    if (this.state !== "ready") {
+      throw new Error(`Cannot import an image while RuntimeSession is ${this.state}.`);
+    }
+    if (!this.supportsImageInput()) {
+      throw new Error("Current model profile does not support image input.");
+    }
+    if (
+      !Number.isSafeInteger(prospectiveMessageImageCount) ||
+      prospectiveMessageImageCount < 1 ||
+      prospectiveMessageImageCount > IMAGE_INPUT_POLICY.maxImagesPerMessage
+    ) {
+      throw new Error("Prospective Prompt image count is invalid.");
+    }
+    const activeImageCount = this.input.modelClient.prepare(
+      this.requireLedger().buildCommittedModelRequest(
+        this.requireTooling().registry.definitions(),
+      ).request,
+    ).mediaOccurrenceCount;
+    const aggregateImageCount = activeImageCount + prospectiveMessageImageCount;
+    if (aggregateImageCount > IMAGE_INPUT_POLICY.maxImagesPerRequest) {
+      throw new ModelRequestMediaAggregateError(
+        `Model request would have ${aggregateImageCount} images; maximum is ${IMAGE_INPUT_POLICY.maxImagesPerRequest}.`,
+      );
+    }
+    return this.assetStore.importWorkspaceFile(sourcePath, { signal });
+  }
+
+  async verifyImageAssets(
+    assets: readonly ImageAssetRef[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!this.supportsImageInput()) {
+      throw new Error("Current model profile does not support image input.");
+    }
+    for (const asset of assets) {
+      signal.throwIfAborted();
+      await this.assetStore.readVerified(asset, { signal });
+    }
+  }
+
   private requireContextAutomation(): ContextAutomationDecision {
     if (this.contextAutomationDecision === undefined) {
       throw new Error("RuntimeSession context automation is not initialized.");
@@ -1117,58 +1230,135 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
   }
 
-  executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult> {
+  async executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult> {
+    return (await this.admitTurn(input)).completion;
+  }
+
+  async admitTurn(input: ExecuteTurnInput): Promise<AcceptedTurn> {
     if (this.state !== "ready") {
       throw new Error(`Cannot execute a turn while RuntimeSession is ${this.state}.`);
     }
-    if (input.userPrompt.trim() === "") {
-      throw new Error("Cannot execute a turn with an empty prompt.");
-    }
+    validateUserMessage(input.userMessage);
     if (this.activeTurn !== undefined) {
       throw new Error("Cannot execute concurrent turns in one RuntimeSession.");
     }
 
-    let admissionPrepared;
+    this.state = "admitting";
+    const controller = new AbortController();
+    const removeExternalAbortListener = forwardExternalAbort(input.signal, controller);
+    const admission = createActiveAdmission(controller);
+    this.activeAdmission = admission;
+    let pendingLedgerTurn: ReturnType<SessionLedger["beginTurn"]>;
+    let admissionPrepared: MaterializedModelRequest;
+    let admissionSnapshot;
     try {
-      admissionPrepared = this.input.modelClient.prepare(
-        this.requireLedger().buildCandidateModelRequest(
-          input.userPrompt,
-          this.requireTooling().registry.definitions(),
-        ).request,
+      controller.signal.throwIfAborted();
+      const built = this.requireLedger().buildCandidateModelRequest(
+        input.userMessage,
+        this.requireTooling().registry.definitions(),
       );
+      const admissionBase = this.createAdmissionBaseToken(built);
+      const prepared = this.input.modelClient.prepare(built.request);
+      const localSnapshot = this.contextMeter.measure(prepared);
+      this.contextMeter.assertWithinBudget(localSnapshot);
+      admissionPrepared = await materializeModelRequest(
+        this.input.modelClient,
+        prepared,
+        { assetStore: this.assetStore, signal: controller.signal },
+      );
+      admissionSnapshot = this.contextMeter.measure(admissionPrepared);
+      if (
+        prepared.mediaOccurrenceCount > 0 &&
+        admissionSnapshot.source !== "measured_plus_estimated_delta"
+      ) {
+        const estimator = this.input.modelClient.inputTokenEstimator;
+        if (estimator === undefined) {
+          throw new Error("Image model request has no input token estimator.");
+        }
+        const estimate = await this.contextMeter.estimateProviderInput(
+          admissionPrepared,
+          estimator,
+          { signal: controller.signal },
+        );
+        admissionSnapshot = this.contextMeter.applyProviderEstimate(
+          admissionPrepared,
+          estimate,
+        );
+      }
+      this.contextMeter.assertWithinBudget(admissionSnapshot);
+      controller.signal.throwIfAborted();
+      const turn = this.stageTurn(input.userMessage);
+      pendingLedgerTurn = this.requireLedger().beginTurn({
+        turn,
+        userMessage: input.userMessage,
+        admissionBase,
+      });
+
+      this.settleAdmission(admission);
+      this.state = "executing";
+      const completion = this.startAcceptedTurn({
+        userMessage: input.userMessage,
+        turn,
+        pendingLedgerTurn,
+        controller,
+        removeExternalAbortListener,
+        initialRequest: {
+          prepared: admissionPrepared,
+          usage: admissionSnapshot,
+        },
+      });
+      this.activeTurn = { controller, completion };
+      return Object.freeze({
+        turnId: turn.turnId,
+        userMessage: input.userMessage,
+        completion,
+      });
     } catch (error) {
+      this.settleAdmission(admission);
+      removeExternalAbortListener();
+      if (error instanceof AdmissionStaleError) {
+        this.nextTurnNumber = this.store.nextTurnNumber();
+      }
+      if (this.state === "admitting") {
+        this.state = "ready";
+      }
       if (isCanonicalRuntimeFault(error)) {
         this.fault(error);
       }
       throw error;
     }
-    const admissionSnapshot = this.contextMeter.measure(admissionPrepared);
-    this.contextMeter.assertWithinBudget(admissionSnapshot);
+  }
 
-    const controller = new AbortController();
-    const removeExternalAbortListener = forwardExternalAbort(input.signal, controller);
-    const turn = this.stageTurn(input.userPrompt);
-    let pendingLedgerTurn;
-    try {
-      pendingLedgerTurn = this.requireLedger().beginTurn({
-        turn,
-        userPrompt: input.userPrompt,
-      });
-      this.registerTurn(turn);
-    } catch (error) {
-      this.fault(error);
-      throw error;
+  private settleAdmission(admission: ActiveAdmission): void {
+    if (this.activeAdmission !== admission) {
+      throw new Error("Runtime admission ownership was lost.");
     }
-    this.state = "executing";
-    const completion = this.performExecuteTurn(
-      input.userPrompt,
-      turn,
-      pendingLedgerTurn,
-      controller.signal,
-      removeExternalAbortListener,
-    );
-    this.activeTurn = { controller, completion };
-    return completion;
+    this.activeAdmission = undefined;
+    admission.settle();
+  }
+
+  private createAdmissionBaseToken(built: BuiltContextRequest): AdmissionBaseToken {
+    const meta = this.store.readMeta();
+    const head = built.canonical.messages.at(-1);
+    if (
+      head === undefined ||
+      meta.sessionCompatibilitySha256 === null ||
+      built.revision.revisionId !== meta.activeRevisionId ||
+      built.surface.surfaceSha256 !== built.revision.surfaceSha256 ||
+      meta.nextTurnNumber !== this.nextTurnNumber
+    ) {
+      throw new Error("Cannot capture a consistent turn admission base.");
+    }
+    return Object.freeze({
+      canonicalMessageCount: built.canonical.messages.length,
+      canonicalHeadMessageId: head.messageId,
+      canonicalHeadContentSha256: head.contentSha256,
+      activeRevisionId: built.revision.revisionId,
+      activeRevisionNumber: built.revision.revisionNumber,
+      surfaceSha256: built.surface.surfaceSha256,
+      sessionCompatibilitySha256: meta.sessionCompatibilitySha256,
+      nextTurnNumber: meta.nextTurnNumber,
+    });
   }
 
   compactContext(): Promise<ContextCompactionResult> {
@@ -1402,12 +1592,40 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
   }
 
+  private async startAcceptedTurn(input: {
+    userMessage: UserMessage;
+    turn: TurnIdentity;
+    pendingLedgerTurn: ReturnType<SessionLedger["beginTurn"]>;
+    controller: AbortController;
+    removeExternalAbortListener: () => void;
+    initialRequest: NonNullable<RunAgentInput["initialRequest"]>;
+  }): Promise<RunAgentResult> {
+    try {
+      this.registerTurn(input.turn);
+    } catch (error) {
+      input.removeExternalAbortListener();
+      input.pendingLedgerTurn.fault(error);
+      this.activeTurn = undefined;
+      this.fault(error);
+      throw error;
+    }
+    return this.performExecuteTurn(
+      input.userMessage,
+      input.turn,
+      input.pendingLedgerTurn,
+      input.controller.signal,
+      input.removeExternalAbortListener,
+      input.initialRequest,
+    );
+  }
+
   private async performExecuteTurn(
-    userPrompt: string,
+    userMessage: UserMessage,
     turn: TurnIdentity,
     pendingLedgerTurn: ReturnType<SessionLedger["beginTurn"]>,
     signal: AbortSignal,
     removeExternalAbortListener: () => void,
+    initialRequest: NonNullable<RunAgentInput["initialRequest"]>,
   ): Promise<RunAgentResult> {
     let settled = false;
 
@@ -1415,7 +1633,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       await this.append({
         type: "turn.started",
         ...turn,
-        data: { userPrompt },
+        data: { userPrompt: projectUserMessage(userMessage) },
       });
 
       let result: RunAgentResult;
@@ -1448,6 +1666,8 @@ class DefaultRuntimeSession implements RuntimeSession {
           runtimeSession: this.context,
           turn,
           signal,
+          assetStore: this.assetStore,
+          initialRequest,
         });
       } catch (error) {
         if (error instanceof RuntimeEventAppendError) {
@@ -1694,6 +1914,11 @@ class DefaultRuntimeSession implements RuntimeSession {
 
     this.state = "disposing";
     const errors: unknown[] = this.faultCause === undefined ? [] : [this.faultCause];
+    const activeAdmission = this.activeAdmission;
+    if (activeAdmission !== undefined) {
+      activeAdmission.controller.abort(new TurnCancelledError("session_dispose"));
+      await activeAdmission.settled;
+    }
     const activeContextRevision = this.activeContextRevision;
     if (activeContextRevision !== undefined) {
       try {
@@ -1786,10 +2011,8 @@ class DefaultRuntimeSession implements RuntimeSession {
     throw new Error("Initialization error collection unexpectedly returned.");
   }
 
-  private stageTurn(userPrompt: string): TurnIdentity {
-    if (userPrompt.trim() === "") {
-      throw new Error("Cannot create an AgentTurn for an empty prompt.");
-    }
+  private stageTurn(userMessage: UserMessage): TurnIdentity {
+    validateUserMessage(userMessage);
 
     const identity: TurnIdentity = {
       sessionId: this.sessionId,
@@ -2115,6 +2338,24 @@ function isNewSessionInput(
   input: CreateRuntimeSessionInput,
 ): input is CreateNewRuntimeSessionInput {
   return input.selection.mode === "new";
+}
+
+function createActiveAdmission(controller: AbortController): ActiveAdmission {
+  let resolve!: () => void;
+  const settled = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  let didSettle = false;
+  return {
+    controller,
+    settled,
+    settle: () => {
+      if (!didSettle) {
+        didSettle = true;
+        resolve();
+      }
+    },
+  };
 }
 
 function forwardExternalAbort(

@@ -93,10 +93,13 @@ describe("OpenAIChatModelClient streaming", () => {
     });
   });
 
-  test("keeps the prepared payload free of stream flags", () => {
+  test("freezes stream flags into the prepared payload before body sizing", () => {
     const streaming = client({ fetch: stubFetch() });
     const prepared = streaming.prepare(INPUT);
-    expect(prepared.payload).not.toContainKeys(["stream", "stream_options"]);
+    expect(prepared.payload).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true },
+    });
   });
 
   test("stream=false sends a non-streaming request", async () => {
@@ -133,12 +136,12 @@ describe("OpenAIChatModelClient streaming", () => {
     expect(output.message.content).toBe("ok");
   });
 
-  test("stream flag is transport-only and does not change the request config hash", () => {
+  test("stream mode changes the request config identity", () => {
     const fetchImpl = stubFetch();
     const streaming = client({ fetch: fetchImpl });
     const nonStreaming = client({ stream: false, fetch: fetchImpl });
 
-    expect(streaming.prepare(INPUT).requestConfigHash).toBe(
+    expect(streaming.prepare(INPUT).requestConfigHash).not.toBe(
       nonStreaming.prepare(INPUT).requestConfigHash,
     );
   });

@@ -72,7 +72,7 @@ function renderTurnStarted(
   return [
     `## Turn ${event.turnNumber ?? ""} - Prompt`,
     "",
-    event.data.userPrompt,
+    event.data.userPrompt.text,
     "",
     "---",
     "",

@@ -4,11 +4,12 @@ import type { ProtocolContextView } from "../context/protocol-frame";
 import type { BuiltContextRequest } from "../context/context-revision";
 import {
   InMemorySessionLedger,
+  type AdmissionBaseToken,
   type AgentTurnLedger,
   type PendingLedgerTurn,
   type SessionLedger,
 } from "../agent/session-ledger";
-import type { RunAgentResult, TurnIdentity } from "../agent/types";
+import type { RunAgentResult, TurnIdentity, UserMessage } from "../agent/types";
 import type { SessionStore } from "./session-store";
 
 export class SqliteSessionLedger implements SessionLedger {
@@ -20,7 +21,11 @@ export class SqliteSessionLedger implements SessionLedger {
     private readonly idFactory: RuntimeIdFactory,
   ) {}
 
-  beginTurn(input: { turn: TurnIdentity; userPrompt: string }): PendingLedgerTurn {
+  beginTurn(input: {
+    turn: TurnIdentity;
+    userMessage: UserMessage;
+    admissionBase?: AdmissionBaseToken;
+  }): PendingLedgerTurn {
     this.requireAvailable("begin a turn");
     if (this.active !== undefined) {
       throw new Error("Cannot begin a SQLite ledger turn while another turn is open.");
@@ -47,14 +52,14 @@ export class SqliteSessionLedger implements SessionLedger {
   }
 
   buildCandidateModelRequest(
-    userPrompt: string,
+    userMessage: UserMessage,
     tools: readonly ToolDefinition[],
   ): BuiltContextRequest {
     this.requireAvailable("build candidate context");
     if (this.active !== undefined) {
       throw new Error("Cannot build candidate context while a turn is open.");
     }
-    return this.createCore().buildCandidateModelRequest(userPrompt, tools);
+    return this.createCore().buildCandidateModelRequest(userMessage, tools);
   }
 
   committedMessageCount(): number {

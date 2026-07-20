@@ -382,7 +382,7 @@ describe("Agent Skills session lifecycle", () => {
         let failure: unknown;
         try {
           await session.executeTurn({
-            userPrompt: "review this change",
+            userMessage: { role: "user", content: "review this change" },
             signal: new AbortController().signal,
           });
         } catch (error) {
@@ -426,7 +426,7 @@ describe("Agent Skills session lifecycle", () => {
         },
       ]);
       const result = await session.executeTurn({
-        userPrompt: "review this change",
+        userMessage: { role: "user", content: "review this change" },
         signal: new AbortController().signal,
       });
       expect(result).toMatchObject({
@@ -585,7 +585,7 @@ describe("Agent Skills session lifecycle", () => {
       );
 
       await session.executeTurn({
-        userPrompt: "review and test this change",
+        userMessage: { role: "user", content: "review and test this change" },
         signal: new AbortController().signal,
       });
       expect(session.skills().skills).toMatchObject([
@@ -651,12 +651,12 @@ describe("Agent Skills session lifecycle", () => {
         },
       );
       await session.executeTurn({
-        userPrompt: "activate review guidance",
+        userMessage: { role: "user", content: "activate review guidance" },
         signal: new AbortController().signal,
       });
       for (let index = 0; index < 10; index += 1) {
         await session.executeTurn({
-          userPrompt: `tail-${index}-${"x".repeat(100)}`,
+          userMessage: { role: "user", content: `tail-${index}-${"x".repeat(100)}` },
           signal: new AbortController().signal,
         });
       }
@@ -665,7 +665,7 @@ describe("Agent Skills session lifecycle", () => {
       expect(retirement.status).toBe("retired");
       expect(session.skills().skills[0]?.active).toBe(true);
       await session.executeTurn({
-        userPrompt: "continue after retirement",
+        userMessage: { role: "user", content: "continue after retirement" },
         signal: new AbortController().signal,
       });
       expect(model.inputs.at(-1)?.messages[0]?.content).toContain(
@@ -720,7 +720,7 @@ describe("Agent Skills session lifecycle", () => {
       );
 
       const result = await session.executeTurn({
-        userPrompt: "review this change",
+        userMessage: { role: "user", content: "review this change" },
         signal: controller.signal,
       });
       expect(result.status).toBe("cancelled");
@@ -780,7 +780,7 @@ describe("Agent Skills session lifecycle", () => {
         },
       );
       await initial.executeTurn({
-        userPrompt: "review this change",
+        userMessage: { role: "user", content: "review this change" },
         signal: new AbortController().signal,
       });
       expect(initial.skills().skills[0]).toMatchObject({
@@ -848,7 +848,7 @@ describe("Agent Skills session lifecycle", () => {
 
       expect(
         session.executeTurn({
-          userPrompt: "review this change",
+          userMessage: { role: "user", content: "review this change" },
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow("Failed to append runtime event turn.finished");
@@ -924,7 +924,7 @@ describe("Agent Skills session lifecycle", () => {
 
       const error = await session
         .executeTurn({
-          userPrompt: "review this change",
+          userMessage: { role: "user", content: "review this change" },
           signal: new AbortController().signal,
         })
         .catch((caught: unknown) => caught);
@@ -993,7 +993,7 @@ describe("Agent Skills session lifecycle", () => {
 
       expect(
         session.executeTurn({
-          userPrompt: "review this change",
+          userMessage: { role: "user", content: "review this change" },
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow("Failed to append runtime event turn.finished");

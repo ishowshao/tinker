@@ -54,7 +54,7 @@ describe("prepared model requests", () => {
       "user",
     ]);
     expect(prepared.payload).toMatchObject({
-      max_tokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
+      max_completion_tokens: TEST_CONTEXT_BUDGET.requestMaxOutputTokens,
       model: "test-model",
       tool_choice: "auto",
     });

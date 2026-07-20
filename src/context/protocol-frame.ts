@@ -8,6 +8,12 @@ import type {
   ToolCall,
   TurnIdentity,
 } from "../agent/types";
+import {
+  canonicalUserMessageHash,
+  validateUserMessage,
+  type UserImageAttachment,
+  type UserMessage,
+} from "../image/image-types";
 
 export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v3" as const;
 export const SUPPORTED_TOOL_OBSERVATION_FORMATS = [
@@ -36,6 +42,7 @@ export type CanonicalMessageRecord =
       readonly role: "user";
       readonly turnId: TurnIdentity["turnId"];
       readonly content: string;
+      readonly attachments?: readonly UserImageAttachment[];
       readonly origin: "user";
     })
   | (CanonicalMessageBase & {
@@ -134,6 +141,10 @@ export function contentHash(content: string | null): string {
   return sha256(stableJsonStringify({ content }));
 }
 
+export function userMessageHash(message: UserMessage): string {
+  return canonicalUserMessageHash(message);
+}
+
 export function rawResultHash(raw: ToolRawResult): string {
   return sha256(stableJsonStringify(raw));
 }
@@ -156,8 +167,18 @@ export function materializeAgentMessages(
   return records.map((record): AgentMessage => {
     switch (record.role) {
       case "system":
-      case "user":
         return { role: record.role, content: record.content };
+      case "user": {
+        const message: UserMessage = {
+          role: "user",
+          content: record.content,
+          ...(record.attachments === undefined
+            ? {}
+            : { attachments: canonicalClone(record.attachments) }),
+        };
+        validateUserMessage(message);
+        return message;
+      }
       case "assistant": {
         const message: AssistantMessage = {
           role: "assistant",

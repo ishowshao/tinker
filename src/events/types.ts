@@ -5,6 +5,7 @@ import type {
   TurnCancellation,
   TurnIdentity,
 } from "../agent/types";
+import type { UserPromptProjection } from "../agent/user-prompt-projection";
 import type {
   IterationId,
   ProtocolFrameId,
@@ -284,7 +285,7 @@ export type AgentEventDataMap = {
   "session.resumed": SessionResumedData;
   "session.interrupted_frame_recovered": InterruptedFrameRecoveredData;
   "session.finished": SessionFinishedData;
-  "turn.started": { userPrompt: string };
+  "turn.started": { userPrompt: UserPromptProjection };
   "turn.finished": TurnFinishedData;
   "turn.failed": { error: string };
   "turn.cancelled": { cancellation: TurnCancellation };
