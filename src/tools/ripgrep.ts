@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
+import { rgPath } from "@vscode/ripgrep";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 
 export const RIPGREP_MISSING_ERROR =
-  "ripgrep is required. Install rg and ensure it is available on PATH.";
+  "Tinker's bundled ripgrep executable is unavailable. Reinstall tinker-agent.";
 
 const defaultTimeoutMs = 20_000;
 const defaultMaxBufferBytes = 20_000_000;
@@ -22,7 +23,7 @@ export type RipgrepOptions = {
 };
 
 export function findRipgrepCommand(): string {
-  return process.env.TINKER_RIPGREP_PATH ?? "rg";
+  return process.env.TINKER_RIPGREP_PATH ?? rgPath;
 }
 
 export async function ripGrep(

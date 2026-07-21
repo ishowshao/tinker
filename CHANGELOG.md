@@ -11,6 +11,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 - Ship Bun 1.3.14 as an npm dependency and launch it through the installed `tinker`
   command, so users no longer need a system-wide Bun installation.
+- Ship a verified platform-specific ripgrep binary for Grep and workspace file
+  discovery instead of requiring a system-wide `rg` installation.
 - License the project under Apache License 2.0 and preserve the original Infinite
   Context architecture attribution in `NOTICE`.
 - Add CI, release-package verification, community health files, and an npm trusted

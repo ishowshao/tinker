@@ -89,6 +89,13 @@ const installedBunPackageJson = JSON.parse(
   readFileSync(join(installedRoot, "node_modules", "bun", "package.json"), "utf8"),
 ) as { version: string };
 assert.equal(installedBunPackageJson.version, "1.3.14");
+const installedRipgrepPackageJson = JSON.parse(
+  readFileSync(
+    join(installedRoot, "node_modules", "@vscode", "ripgrep", "package.json"),
+    "utf8",
+  ),
+) as { version: string };
+assert.equal(installedRipgrepPackageJson.version, "1.18.0");
 assert(
   readFileSync(
     join(installedRoot, "node_modules", "markdansi", "dist", "render.js"),
@@ -117,7 +124,7 @@ assert.equal(smoke.status, 1, smoke.stderr);
 assert.match(smoke.stderr, /TINKER_MODEL is required/);
 
 process.stdout.write(
-  `Verified ${packed.id}: npm tarball, bundled Bun, tinker launcher, license, and dependency patch.\n`,
+  `Verified ${packed.id}: npm tarball, bundled Bun and ripgrep, tinker launcher, license, and dependency patch.\n`,
 );
 
 function run(command: string, args: string[]) {

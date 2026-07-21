@@ -1678,7 +1678,7 @@ describe("Grep tool", () => {
 
         expect(raw.ok).toBe(false);
         expect("error" in raw ? raw.error : "").toBe(
-          "ripgrep is required. Install rg and ensure it is available on PATH.",
+          "Tinker's bundled ripgrep executable is unavailable. Reinstall tinker-agent.",
         );
       } finally {
         if (previous === undefined) {
