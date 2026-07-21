@@ -115,7 +115,9 @@ async function submitInput(stdin: { write: (data: string) => void }, value: stri
   stdin.write("\r");
 }
 
-async function waitForFrame(
+async function writeInputUntilFrame(
+  stdin: { write: (data: string) => void },
+  input: string,
   lastFrame: () => string | undefined,
   predicate: (frame: string) => boolean,
   description: string,
@@ -125,7 +127,11 @@ async function waitForFrame(
     if (predicate(lastFrame() ?? "")) {
       return;
     }
-    await Bun.sleep(10);
+
+    // A rendered overlay can precede its useInput subscription on a loaded runner.
+    // Retry the input instead of depending on one event that may arrive too early.
+    stdin.write(input);
+    await Bun.sleep(25);
   }
 
   throw new Error(`Timed out waiting for ${description}. Last frame:\n${lastFrame()}`);
@@ -1176,8 +1182,9 @@ describe("tui components", () => {
     expect(lastFrame()).not.toContain('Enter a coding request, or "/" for commands');
     expect(runCount).toBe(0);
 
-    stdin.write("\u001b");
-    await waitForFrame(
+    await writeInputUntilFrame(
+      stdin,
+      "\u001b",
       lastFrame,
       (frame) => !frame.includes("View: docs/design notes.ts"),
       "the file viewer to close",
@@ -1243,8 +1250,9 @@ describe("tui components", () => {
     );
     expect(lastFrame()).toContain("帮我提交推送");
 
-    stdin.write("\u001b");
-    await waitForFrame(
+    await writeInputUntilFrame(
+      stdin,
+      "\u001b",
       lastFrame,
       (frame) => !frame.includes("Resume session"),
       "the resume picker to close",
