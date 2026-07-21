@@ -1,12 +1,57 @@
 {
-  "name": "tinker",
+  "name": "tinker-agent",
+  "version": "1.2.0",
+  "description": "A personal coding agent with an interactive TUI and one-shot CLI.",
+  "license": "Apache-2.0",
   "type": "module",
+  "bin": {
+    "tinker": "bin/tinker.js"
+  },
+  "files": [
+    "bin",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md",
+    "src/agent",
+    "src/cli",
+    "src/context",
+    "src/events",
+    "src/ids",
+    "src/image",
+    "src/instructions",
+    "src/mcp",
+    "src/model",
+    "src/observation",
+    "src/session",
+    "src/skills",
+    "src/tools",
+    "src/tui",
+    "patches"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ishowshao/tinker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ishowshao/tinker/issues"
+  },
+  "homepage": "https://github.com/ishowshao/tinker#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bundledDependencies": [
+    "markdansi"
+  ],
   "scripts": {
     "bench:long-session": "bun scripts/bench-long-session-memory.ts",
     "bench:i3-provider-smoke": "bun scripts/bench-i3-provider-smoke.ts",
     "bench:k3-image-live": "bun scripts/k3-image-live-smoke.ts",
     "bench:i4-active-recall": "bun scripts/bench-i4-active-recall.ts",
     "qualify:i4-active-recall": "bun scripts/qualify-i4-active-recall.ts",
+    "release:verify": "bun scripts/verify-release-package.ts",
     "bench:recall": "bun scripts/bench-recall.ts",
     "bench:smoke": "bun scripts/bench-smoke.ts",
     "chrome:build": "bun packages/tinker-chrome/scripts/build.ts",
@@ -17,8 +62,8 @@
     "check": "bun run typecheck && bun run format:check && bun run lint && bun test && bun run bench:smoke",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "lint": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --max-warnings=0",
-    "lint:fix": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --fix",
+    "lint": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --max-warnings=0",
+    "lint:fix": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --fix",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
@@ -28,11 +73,13 @@
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
+    "bun": "1.3.14",
     "clipboardy": "^5.3.1",
     "diff": "^9.0.0",
     "glob": "^13.0.6",
     "ink": "^7.1.0",
     "linkedom": "^0.18.13",
+    "markdansi": "0.3.2",
     "openai": "^6.45.0",
     "react": "^19.2.7",
     "sharp": "^0.35.3",

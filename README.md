@@ -25,22 +25,26 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
 - **Turn cancellation**: Users can cancel an ongoing turn safely, with protocol-safe synthetic tool messages.
 - **Context metering**: Budget-aware context management with protocol validation before sending requests to the model.
 - **Deterministic context compaction**: Idle sessions can swap eligible historical tool output into Recall-addressable placeholders without calling the model.
+- **Infinite Context architecture**: Immutable canonical history, deterministic
+  context revisions, Recall-addressable cold state, and qualified prefix retirement
+  keep long-running sessions recoverable without pretending the model has infinite
+  tokens. See the [technical design](docs/infinite-context-technical-design-a.md).
 - **Choice of models**: Supports any OpenAI-compatible API (defaults to DeepSeek). Configurable via environment variables.
 
 ## Quick Start
 
 ```bash
-# Clone and install
-git clone <repo>
-cd tinker
-bun install
+npm install --global tinker-agent
 
 # Start the interactive TUI
-bun run tinker
+tinker
 
 # Run a one-shot prompt
-bun run tinker run "explain the project structure"
+tinker run "explain the project structure"
 ```
+
+The npm package includes its own Bun runtime. To run Tinker from a source checkout,
+install Bun 1.3 or later, then use `bun install` followed by `bun run tinker`.
 
 ### Slash Commands
 
@@ -223,9 +227,28 @@ tinker/
 
 ## Requirements
 
-- [Bun](https://bun.sh) (developed with Bun 1.x)
+- Node.js 20 or later and npm for the global package installation
+- [Bun](https://bun.sh) 1.3 or later for development from source
 - A compatible LLM API (defaults to DeepSeek; any OpenAI-compatible API works)
+
+## Security
+
+Tinker is an agent with permission to read and modify files and run shell commands in
+the selected workspace. Review its configuration and model-provider data policies
+before using it with sensitive source code. Please report vulnerabilities privately
+through [GitHub Security Advisories](https://github.com/ishowshao/tinker/security/advisories/new).
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development
+workflow and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
+
+## Attribution
+
+The original Tinker Infinite Context architecture and its initial implementation were
+designed and developed by **ishowshao**. See [NOTICE](NOTICE) for the attribution that
+accompanies distributions and derivative works.
 
 ## License
 
-MIT
+Licensed under the [Apache License 2.0](LICENSE).

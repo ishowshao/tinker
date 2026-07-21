@@ -33,4 +33,14 @@ export default tseslint.config(
       "@typescript-eslint/require-await": "off",
     },
   },
+  {
+    ...tseslint.configs.disableTypeChecked,
+    files: ["bin/**/*.js"],
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: globals.node,
+    },
+  },
 );
