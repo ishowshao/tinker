@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Tinker Chrome",
+  "description": "A local bridge that lets Tinker open and summarize Chrome pages.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "105",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqGlL8D8gqoSvijoMlAxM7qGSO4g5VzVK6/+ulZBkaOe5hgCAmRkSktS4bUGTWEc6xv6HOT33qCzrhjEQTkUcS5XnPfY94M2kFwVFV5uEwQEElPuOLRuFlWbBnklp19y9l4v7KtBSWNR8p5Erpo0JVsuhyp1PaOauwstcf/oIDR6+YAx9bVe6Llo9k+sCFu54f5wd+QKNDX9bBCIrV4muRQjMqgNW5hF6EOq/XEhUyA8GpCkpqf9uP4luxWhWrv24uRZ/kvAGgWIToMWyYsF5v1yj6Ko/vsbj3yrltK+MlbD8B2R8OvK5h0M1zQi2w241kwTCBWWrh/DwVfwxltsufwIDAQAB",
+  "permissions": ["nativeMessaging", "scripting", "storage", "tabs"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  }
+}

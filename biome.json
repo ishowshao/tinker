@@ -4,6 +4,8 @@
     "includes": [
       "src/**",
       "scripts/**",
+      "packages/**",
+      "!!packages/tinker-chrome/dist",
       "package.json",
       "tsconfig.json",
       "eslint.config.js",

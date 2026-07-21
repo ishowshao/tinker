@@ -10,12 +10,13 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts"],
+    files: ["src/**/*.{ts,tsx}", "scripts/**/*.ts", "packages/**/*.ts"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
       globals: {
         ...globals.bunBuiltin,
+        ...globals.browser,
         ...globals.node,
       },
       parserOptions: {

@@ -1,7 +1,9 @@
 .env
 .env.deepseek
+.mcp.json
 node_modules/
 .tinker/
 .data/
 .playwright-mcp/
+packages/tinker-chrome/dist/
 .DS_Store
