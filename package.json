@@ -68,8 +68,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@assistant-ui/react-ink": "^0.0.31",
-    "@assistant-ui/react-ink-markdown": "^0.0.30",
+    "@assistant-ui/react-ink": "^0.0.32",
+    "@assistant-ui/react-ink-markdown": "^0.0.31",
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
