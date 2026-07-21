@@ -35,6 +35,10 @@ class MemoryWriter {
 class BackgroundTaskModel extends TestModelClient {
   private calls = 0;
 
+  constructor(private readonly pidFilePath: string) {
+    super();
+  }
+
   async request(
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
@@ -55,7 +59,7 @@ class BackgroundTaskModel extends TestModelClient {
             providerToolCallId: "call_background",
             name: "Bash",
             args: {
-              command: "echo $$; sleep 30",
+              command: `echo $$ > ${JSON.stringify(this.pidFilePath)}; sleep 30`,
               run_in_background: true,
             },
           },
@@ -63,7 +67,7 @@ class BackgroundTaskModel extends TestModelClient {
       });
     }
 
-    await Bun.sleep(50);
+    await waitForNonEmptyFile(this.pidFilePath);
     return testModelOutput(prepared, {
       role: "assistant",
       content: "Background task started.",
@@ -288,6 +292,7 @@ describe("runOneShot", () => {
 
   test("stops background tasks before returning", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-"));
+    const pidFilePath = path.join(workspace, "background.pid");
     const stdout = new MemoryWriter();
     const stderr = new MemoryWriter();
 
@@ -297,7 +302,7 @@ describe("runOneShot", () => {
         workspaceRoot: workspace,
         modelName: "fake",
         contextProfile: TEST_CONTEXT_PROFILE,
-        modelClient: new BackgroundTaskModel(),
+        modelClient: new BackgroundTaskModel(pidFilePath),
         stdout,
         stderr,
       });
@@ -325,20 +330,40 @@ describe("runOneShot", () => {
         "killed",
       );
 
-      const rawEvent = events.find((event) => event.type === "tool.raw_result");
-      const rawEventData = rawEvent?.data as Record<string, unknown> | undefined;
-      const raw = rawEventData?.raw as Record<string, unknown> | undefined;
-      const outputFilePath = raw?.outputFilePath;
-      expect(outputFilePath).toBeString();
-      const pid = Number(
-        (await readFile(outputFilePath as string, "utf8")).trim().split("\n")[0],
-      );
+      const pidText = await readFile(pidFilePath, "utf8");
+      expect(pidText).toMatch(/^[1-9]\d*\n?$/);
+      const pid = Number(pidText.trim());
       await waitForProcessExit(pid);
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 });
+
+async function waitForNonEmptyFile(filePath: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    try {
+      if ((await readFile(filePath, "utf8")).trim() !== "") {
+        return;
+      }
+    } catch (error) {
+      if (
+        !(
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOENT"
+        )
+      ) {
+        throw error;
+      }
+    }
+    await Bun.sleep(10);
+  }
+
+  throw new Error(`Timed out waiting for a PID in ${filePath}.`);
+}
 
 async function waitForProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + 2_000;
