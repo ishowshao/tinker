@@ -115,6 +115,22 @@ async function submitInput(stdin: { write: (data: string) => void }, value: stri
   stdin.write("\r");
 }
 
+async function waitForFrame(
+  lastFrame: () => string | undefined,
+  predicate: (frame: string) => boolean,
+  description: string,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate(lastFrame() ?? "")) {
+      return;
+    }
+    await Bun.sleep(10);
+  }
+
+  throw new Error(`Timed out waiting for ${description}. Last frame:\n${lastFrame()}`);
+}
+
 function contextSnapshot(
   overrides: Partial<ContextUsageSnapshot> = {},
 ): ContextUsageSnapshot {
@@ -1161,7 +1177,11 @@ describe("tui components", () => {
     expect(runCount).toBe(0);
 
     stdin.write("\u001b");
-    await Bun.sleep(25);
+    await waitForFrame(
+      lastFrame,
+      (frame) => !frame.includes("View: docs/design notes.ts"),
+      "the file viewer to close",
+    );
     expect(lastFrame()).not.toContain("View: docs/design notes.ts");
     expect(lastFrame()).toContain("model · /tmp/tinker");
 
@@ -1224,7 +1244,11 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("帮我提交推送");
 
     stdin.write("\u001b");
-    await Bun.sleep(25);
+    await waitForFrame(
+      lastFrame,
+      (frame) => !frame.includes("Resume session"),
+      "the resume picker to close",
+    );
     expect(lastFrame()).not.toContain("Resume session");
     expect(resumed).toEqual([]);
 
