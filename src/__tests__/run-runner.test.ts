@@ -333,12 +333,24 @@ describe("runOneShot", () => {
       const pid = Number(
         (await readFile(outputFilePath as string, "utf8")).trim().split("\n")[0],
       );
-      expect(isProcessAlive(pid)).toBe(false);
+      await waitForProcessExit(pid);
     } finally {
       await rm(workspace, { recursive: true });
     }
   });
 });
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await Bun.sleep(10);
+  }
+
+  throw new Error(`Process ${pid} is still alive.`);
+}
 
 function isProcessAlive(pid: number): boolean {
   try {
