@@ -42,5 +42,7 @@ boundaries so invalid state does not enter canonical history.
 
 ## Quality Gate
 
-Run `bun run check` before considering a change complete. It must pass type
-checking, formatting, linting, tests, and the benchmark smoke check.
+When a change includes source code, tests, executable scripts, dependencies, or
+build/runtime configuration, run `bun run check` before considering it complete.
+It must pass type checking, formatting, linting, tests, and the benchmark smoke
+check.

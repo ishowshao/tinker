@@ -20,7 +20,7 @@
    `doctor`；未知命令或参数不会误启动 TUI。
 2. README 准确描述当前命令、配置、模型 profile、图片输入和全部内置 slash commands。
 3. 公共环境变量与 model profile 字段拥有代码内的单一声明源；parser、doctor、README
-   校验和测试不再分别维护字段名与默认值。
+   生成与校验和测试不再分别维护字段名与默认值。
 4. 当前依赖 advisory 被修复，或按本文的例外合同记录；CI 和发布链持续执行安全审计。
 5. Dependabot 使用 Bun 生态更新 `package.json` 与文本 `bun.lock`，任何不同步的 PR 在
    frozen install 阶段立即失败。
@@ -170,7 +170,7 @@ type PublicConfigField = {
 - runner parser 和 tool config parser 使用该声明，不再各自直接读取、各自容错；
 - model profile 的 known keys、默认值和 primitive 类型也来自同模块的 profile contract；
 - cross-field 规则保留为明确函数，例如 output 不得大于 context、image 必须携带 estimator；
-- README 中的环境变量表和 profile 字段表由声明确定性生成或校验；
+- README 中的环境变量表和 profile 字段表由声明确定性渲染，不再手工维护同一组字段事实；
 - 无效的已声明字段统一在 session 创建前 fast-fail，不再静默回退。
 
 不要为了“共享 schema”引入第二套只供文档使用的 JSON Schema。运行时声明就是主契约；如
@@ -273,15 +273,62 @@ workspace 根的 `.mcp.json`，project slash commands 继续是 `.tinker.json`�
 
 ### 6.4 README 同步机制
 
-新增 `scripts/check-public-contract-docs.ts` 和 `bun run docs:check`：
+阶段一固定采用 **README 内受控 marker 段落**，不把公共配置主表迁移成只由 README
+链接的独立文档。README 是 GitHub、npm 页面和安装包内都能直接看到的用户入口，而当前
+发布清单不包含整个 `docs/` 目录；核心配置合同不能依赖另一个可能不在安装包中的文件。
+未来若配置参考明显膨胀，可以由同一 renderer 额外生成独立文档，但 README 仍保留最小
+可用配置摘要，且不得手工复制另一份字段表。
 
-- 检查 README 的 CLI 命令表、公共环境变量表、profile 字段表与代码声明一致；
-- 检查 README 的内置 slash command 名称和顺序与 `SLASH_COMMANDS` 一致；
-- 不通过脆弱的全文关键字搜索推断一致性；为受控表格使用明确 marker 或结构化 renderer；
-- `bun run check` 必须包含 `bun run docs:check`，本地和 CI 使用同一门禁。
+每类机械内容使用一对唯一 HTML comment marker，例如：
 
-固定 prose 仍由人维护。生成/校验只覆盖适合机械同步的字段，不自动重写 README 的产品
-说明。
+```md
+<!-- BEGIN GENERATED: PUBLIC ENVIRONMENT VARIABLES -->
+<!-- END GENERATED: PUBLIC ENVIRONMENT VARIABLES -->
+```
+
+阶段一至少建立以下受控段落：
+
+- `PUBLIC CLI COMMANDS`；
+- `PUBLIC ENVIRONMENT VARIABLES`；
+- `MODEL PROFILE FIELDS`；
+- `BUILT-IN SLASH COMMANDS`。
+
+HTML comment marker 在正常 Markdown 渲染中不可见。每对 marker 在 README 中必须精确出现
+一次，顺序固定；marker 缺失、重复、交叉或反向时立即失败。脚本只替换 marker 之间的内容，
+不得重排或重写 marker 外的人工 prose。
+
+新增单一 renderer `scripts/render-public-contract-docs.ts`，并提供两个职责分离的命令：
+
+```text
+bun run docs:generate  # 显式更新 README 受控段落
+bun run docs:check     # 只读生成期望文本并与已提交 README 比较
+```
+
+两条命令必须调用同一个纯 renderer：
+
+- `docs:generate` 是唯一写入入口；写入必须是确定性、原子且幂等的，连续执行两次第二次不得
+  产生 diff；
+- `docs:check` 不修改任何文件，只在内存中渲染并逐段精确比较；不一致时返回非零，指出具体
+  段落，并提示运行 `bun run docs:generate`，同时给出有界 diff；
+- `bun run check` 只调用 `bun run docs:check`，不得在质量门禁中静默修复 README；本地和 CI
+  使用同一门禁；
+- renderer 不读取 `.env`、当前进程的 secret 或机器相关路径，不输出时间戳；它只消费无副作用
+  的公共声明元数据和安全 placeholder；
+- 不通过 `rg process.env`、AST 扫描或全文关键字搜索推断字段合同，也不引入第二套只供文档
+  使用的 schema。
+
+各段落的事实来源固定如下：
+
+- 公共环境变量、profile 和 token estimator 字段来自
+  `src/cli/public-config-contract.ts`；runtime parser 必须消费同一声明；
+- 公共 CLI 命令来自 CLI command tree 使用的无副作用声明，不从手写 help 文本反向解析；
+- 内置 slash command 的名称、顺序和描述来自 `SLASH_COMMANDS`。若 README 要生成参数形式或
+  变体，`usage` 也必须成为 runtime 与 renderer 共享的命令元数据，不能在脚本中另写一份；
+- text/image profile 示例由 renderer 从合同构造，或由 `docs:check` 抽取后交给 production
+  `parseModelProfiles()` 验证；示例不得成为未经解析器验证的第三份 schema。
+
+固定 prose 仍由人维护。生成只覆盖适合机械同步的字段、默认值、顺序、usage 和示例，不自动
+重写 README 的产品说明、provider 能力边界、图片交互解释或安全提示。
 
 ## 7. README 收口内容
 
@@ -290,17 +337,21 @@ README 至少完成以下修改：
 1. **Quick Start**：npm 安装后使用 `tinker`；源码开发才使用 `bun run tinker`。源码 Bun
    必须不低于 `package.json` 的 `dependencies.bun` 基线，而不是要求与其精确相等。补充
    `tinker --help`、`tinker doctor`。
-2. **Commands**：区分发布给用户的 CLI 与仓库开发 scripts，不再把二者混成同一命令面。
-3. **Configuration**：使用第 6 节的真实字段、模式、默认值和路径解析规则；明确 secret
-   会发送给对应外部服务但 doctor 不打印。
-4. **Profiles**：分别提供最小 text profile 和 image profile 示例；同时展示 TUI 的顶层
-   `--profile` 与 one-shot 的 `run --profile`；示例 secret 使用明显 placeholder，不提供真实
-   key。
+2. **Commands**：区分发布给用户的 CLI 与仓库开发 scripts，不再把二者混成同一命令面；
+   公共 CLI 摘要位于 `PUBLIC CLI COMMANDS` 生成段落。
+3. **Configuration**：`PUBLIC ENVIRONMENT VARIABLES` 生成段落使用第 6 节的真实字段、模式、
+   默认值和路径解析规则；marker 外人工 prose 明确 secret 会发送给对应外部服务但 doctor
+   不打印。
+4. **Profiles**：`MODEL PROFILE FIELDS` 生成段落包含字段表，以及由合同生成或经 production
+   parser 验证的最小 text profile 和 image profile 示例；marker 外人工 prose 同时展示 TUI
+   的顶层 `--profile` 与 one-shot 的 `run --profile`；示例 secret 使用明显 placeholder，不
+   提供真实 key。
 5. **Image Input**：说明只在声明 image 的 profile 中启用；通过 TUI `@` 选择 workspace
    内且未被搜索规则排除的文件；格式、动画、数量/尺寸限制可链接
    `multimodal-image-input-design.md`，README 保留用户必须知道的最小约束。
-6. **Slash Commands**：以实现顺序列全 `/status`、`/skills`、`/mcp`、`/compact`、
-   `/clear`、`/fork`、`/view`、`/copy`、`/model`、`/resume`、`/session`、`/quit`。
+6. **Slash Commands**：`BUILT-IN SLASH COMMANDS` 生成段落以实现顺序列全 `/status`、
+   `/skills`、`/mcp`、`/compact`、`/clear`、`/fork`、`/view`、`/copy`、`/model`、
+   `/resume`、`/session`、`/quit`；参数形式来自共享 usage 元数据。
 7. **Provider 表述**：阶段一只写“使用 OpenAI-compatible Chat Completions transport；实际
    provider 支持范围以资格矩阵为准”。在阶段二矩阵落地前，不声称 any provider 或默认
    DeepSeek。
@@ -310,6 +361,7 @@ README 至少完成以下修改：
    check。
 
 README 不复制设计文档中的内部协议细节，也不把尚未实现的 roadmap 能力写成现有功能。
+marker 外 prose 的准确性仍需人工 review；生成机制只承诺受控段落内的机械事实不会漂移。
 
 ## 8. 依赖安全与维护合同
 
@@ -449,10 +501,14 @@ runner config。
 ### P1.3 README 契约同步
 
 - 修正 README 五类已知漂移；
-- 增加结构化 docs checker；
-- 将 `docs:check` 纳入总门禁。
+- 增加 README 唯一 marker、纯 renderer、显式 `docs:generate` 和只读 `docs:check`；
+- 从代码声明生成 CLI、公共环境变量、profile 和内置 slash command 受控段落；
+- 将 `docs:check` 纳入总门禁，门禁不得写回文件；
+- 覆盖 marker 缺失/重复/乱序、生成结果陈旧、输出确定性、连续生成幂等和 check 只读性。
 
-完成信号：任意删除/改名公共字段或 slash command 而不更新 README 时，测试必然失败。
+完成信号：任意删除、改名或改变公共字段默认值、CLI/slash command 而未重新生成 README
+时，`docs:check` 必然失败；执行 `docs:generate` 后受控段落产生可 review 的唯一 diff，再执行
+一次不产生变化。
 
 ### P1.4 依赖与 Dependabot
 
@@ -509,7 +565,9 @@ matrix。
   未知/重复/缺字段；
 - text 与 image profile，完整/不完整 estimator，未知 modality；
 - 所有公共 tooling env 的默认、合法和非法值；
-- README 自动校验对字段名、默认值、secret 标记和 slash command 漂移敏感。
+- README 生成结果对字段名、默认值、secret 标记、CLI 和 slash command 漂移敏感；
+- marker 缺失、重复、交叉或反向均失败；
+- `docs:generate` 连续执行幂等，`docs:check` 成功或失败均不修改 README 或其他文件。
 
 ### 11.4 包与平台 matrix
 
@@ -537,12 +595,12 @@ matrix。
 | [`CLI 方案涉及的 src/cli 文件`](product-hardening-phase-one-cli-design.md#11-模块拆分) | Commander、Prompt source、package metadata、doctor 与入口 dispatch |
 | `src/cli/tui-runner.tsx`、`run-runner.ts` | 接收已解析配置，不改变 runtime ownership |
 | `src/tools/*`、`src/mcp/*` | 接收 composition root 传入的公共 tool config |
-| `scripts/check-public-contract-docs.ts` | 机械检查 README 公共表面 |
+| `scripts/render-public-contract-docs.ts` | 纯渲染、marker 更新与只读 README 合同比较 |
 | `scripts/verify-release-package.ts` | 真实 tarball 的扩展 smoke |
 | [`CLI 方案涉及的测试`](product-hardening-phase-one-cli-design.md#12-测试方案) | parser、Prompt source、doctor、入口与 tarball smoke |
 | `src/__tests__/config.test.ts` | env/tooling 统一 parser |
 | `src/__tests__/model-profiles.test.ts` | profile/schema 合同 |
-| `README.md` | 当前用户合同 |
+| `README.md` | 当前用户合同；固定 prose 加受控生成段落 |
 | `.github/dependabot.yml` | Bun 生态更新 |
 | `.github/workflows/ci.yml` | 双平台 package smoke |
 | `package.json`、`bun.lock` | scripts、审计修复和锁定结果 |
@@ -557,8 +615,9 @@ matrix。
 
 - [ ] 独立 CLI 技术方案的完成定义全部满足。
 - [ ] 公共 env/profile 字段有单一声明源，tooling 不再散落解释公共 env。
-- [ ] README 命令、配置、profile、图片和 slash commands 与实现一致。
-- [ ] docs contract check 已进入 `bun run check`。
+- [ ] README 命令、配置、profile、图片和 slash commands 与实现一致；机械事实位于唯一 marker
+  受控段落。
+- [ ] `docs:generate` 确定、原子、幂等；`docs:check` 只读且已进入 `bun run check`。
 - [ ] 当前 audit 已修复或存在合规、未过期的精确例外；无 critical/high。
 - [ ] Dependabot 使用 Bun ecosystem，并以真实 PR 证明同步文本 `bun.lock`。
 - [ ] macOS、Linux 都从真实 npm tarball 的干净 prefix 通过 package smoke。
