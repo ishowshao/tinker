@@ -746,7 +746,8 @@ describe("tui components", () => {
 
     await waitForFrame(
       lastFrame,
-      (frame) => frame.includes("cancelled"),
+      (frame) =>
+        frame.includes("cancelled") && !frame.includes("Cancelling current turn..."),
       "the cancelled turn event",
     );
     expect(lastFrame()).not.toContain("Cancelling current turn...");
