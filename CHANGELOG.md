@@ -5,6 +5,14 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-22
+
+### Added
+
+- Recover automatically when an OpenAI-compatible provider completes a response
+  with reasoning only and no final answer or tool call: Tinker retries that exact
+  request once without adding the invalid response to session history.
+
 ## [1.2.1] - 2026-07-22
 
 ### Fixed
@@ -40,7 +48,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/ishowshao/tinker/releases/tag/v1.3.0
 [1.2.1]: https://github.com/ishowshao/tinker/releases/tag/v1.2.1
 [1.2.0]: https://github.com/ishowshao/tinker/releases/tag/v1.2.0
 [1.1.0]: https://www.npmjs.com/package/tinker-agent/v/1.1.0
