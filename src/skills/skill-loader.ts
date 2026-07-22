@@ -86,15 +86,6 @@ type ScopeRoot = {
   canonicalRoot: string;
 };
 
-const SKILL_FIELDS = Object.freeze([
-  "name",
-  "description",
-  "license",
-  "compatibility",
-  "metadata",
-  "allowed-tools",
-] as const);
-
 const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export async function loadSkillCatalog(input: {
@@ -519,17 +510,6 @@ function parseSkillDocument(
   if (!isPlainRecord(value)) {
     throw frontmatterError(scope, directoryName, "root must be a plain mapping");
   }
-  const unknown = Object.keys(value).filter(
-    (key) => !(SKILL_FIELDS as readonly string[]).includes(key),
-  );
-  if (unknown.length > 0) {
-    throw fieldError(
-      scope,
-      directoryName,
-      `contains unknown field ${JSON.stringify(unknown.sort(compareText)[0])}`,
-    );
-  }
-
   const name = requireStringField(value, "name", scope, directoryName);
   const description = requireStringField(value, "description", scope, directoryName);
   if (

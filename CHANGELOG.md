@@ -5,6 +5,15 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-07-22
+
+### Fixed
+
+- Ignore unrecognized top-level Agent Skill frontmatter fields while continuing to
+  validate Tinker's supported fields, so harmless extensions such as `version` no
+  longer prevent the CLI from starting. Unknown fields remain available in the
+  original `SKILL.md` content when the skill is activated.
+
 ## [1.2.0] - 2026-07-21
 
 ### Added
@@ -31,6 +40,7 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/ishowshao/tinker/releases/tag/v1.2.1
 [1.2.0]: https://github.com/ishowshao/tinker/releases/tag/v1.2.0
 [1.1.0]: https://www.npmjs.com/package/tinker-agent/v/1.1.0

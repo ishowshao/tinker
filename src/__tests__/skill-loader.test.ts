@@ -82,17 +82,21 @@ describe("Agent Skill loader", () => {
     });
   });
 
-  test("does not hide an invalid user skill behind a valid project collision", async () => {
+  test("ignores unknown top-level fields while preserving the original content", async () => {
     await withRoots(async ({ workspace, home }) => {
-      await writeSkill(workspace, "strict-skill", "Project", "project body");
-      await writeSkill(home, "strict-skill", "User", "user body", {
-        extraFrontmatter: "unknown-field: rejected\n",
+      await writeSkill(home, "extended-skill", "Extended", "user body", {
+        extraFrontmatter: "version: 1.0.0\nunknown-field: retained\n",
       });
 
-      await expectSkillLoadError(
-        loadSkillCatalog({ workspaceRoot: workspace, homeRoot: home }),
-        "SKILL_FIELD_INVALID",
-      );
+      const catalog = await loadSkillCatalog({
+        workspaceRoot: workspace,
+        homeRoot: home,
+      });
+      const skill = catalog.skills.get("extended-skill");
+
+      expect(skill?.frontmatter).toEqual({});
+      expect(skill?.content).toContain("version: 1.0.0");
+      expect(skill?.content).toContain("unknown-field: retained");
     });
   });
 

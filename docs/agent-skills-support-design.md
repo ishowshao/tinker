@@ -191,7 +191,7 @@ notice 只输出摘要，不额外复制正文。
 - 不实现文件 watcher、每 turn 重扫或 `/refresh`；
 - 不实现 subagent skill delegation；
 - 不把 `allowed-tools` 当成权限授予；
-- 不做宽松 YAML 修复、旧 Claude-specific frontmatter 兼容或未知顶层字段透传；
+- 不做宽松 YAML 修复或旧 Claude-specific frontmatter 兼容；
 - 不迁移 schema v7 session。
 
 ## 五、核心不变量
@@ -337,7 +337,7 @@ parser。解析选项应：
 - `description`、`compatibility` 使用 Unicode code points 计数；
 - `license`、`compatibility`、`allowed-tools` 存在时必须是 string；
 - `metadata` 存在时必须是 plain mapping，且所有 key/value 都是 string；
-- 未知顶层字段直接报错；扩展信息必须进入标准 `metadata`；
+- 未知顶层字段不进入 Tinker 的结构化 frontmatter，但保留在原始 `SKILL.md` 内容中；
 - Markdown body trim 后必须非空；这是 Tinker 的附加有效性约束；
 - frontmatter 与 body 都保留原始文本，激活时返回完整 `SKILL.md`。
 
@@ -1181,7 +1181,7 @@ SKILLS_UPDATE_VALIDATION_FAILED
 - 所有规范 name 边界与非法 uppercase、首尾 hyphen、`--`；
 - description、compatibility 长度边界按 Unicode code point；
 - optional fields 和 metadata string mapping；
-- unknown field、duplicate YAML key、alias、custom tag、非 mapping；
+- unknown field 忽略且保留原文、duplicate YAML key、alias、custom tag、非 mapping；
 - 缺少/open/close delimiter、空 body、NUL、invalid UTF-8、超限；
 - 普通文件、目录、FIFO、broken symlink、越界 symlink、权限和 read race；
 - skill count、catalog bytes 上限；
