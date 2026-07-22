@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { FatalAgentTurnError } from "../agent/loop";
@@ -23,6 +23,7 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
+import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
 import type { SessionHistoryReader } from "../session/session-history-reader";
@@ -569,6 +570,235 @@ describe("RuntimeSession lifecycle", () => {
     ]);
   });
 
+  test("persists a redacted reasoning-only attempt and only the retry assistant", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-reasoning-retry-runtime-"),
+    );
+    const eventLogPath = path.join(workspace, "events.jsonl");
+    const observationLogPath = path.join(workspace, "observations.md");
+    const requestBodies: string[] = [];
+    let dispatchCount = 0;
+    const secretReasoning = "secret provider reasoning";
+    const fetchImpl = (async (_url: unknown, init?: RequestInit) => {
+      dispatchCount += 1;
+      if (typeof init?.body !== "string") {
+        throw new Error("Expected a serialized OpenAI request body.");
+      }
+      requestBodies.push(init.body);
+      if (dispatchCount === 1) {
+        return sseResponse([
+          streamChunk({ role: "assistant", reasoning_content: secretReasoning }),
+          streamFinish("stop"),
+          streamUsage({
+            prompt_tokens: 7,
+            completion_tokens: 3,
+            total_tokens: 10,
+            prompt_cache_hit_tokens: 0,
+            prompt_cache_miss_tokens: 7,
+            completion_tokens_details: { reasoning_tokens: 3 },
+          }),
+        ]);
+      }
+      return sseResponse([
+        streamChunk({ role: "assistant", content: "retry answer" }),
+        streamFinish("stop"),
+        streamUsage({
+          prompt_tokens: 7,
+          completion_tokens: 2,
+          total_tokens: 9,
+          prompt_cache_hit_tokens: 7,
+          prompt_cache_miss_tokens: 0,
+        }),
+      ]);
+    }) as typeof fetch;
+    const model = new OpenAIChatModelClient({
+      apiKey: "test-key",
+      model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
+      fetch: fetchImpl,
+    });
+    const sink = collectingEventSink();
+    const input = createInput(model, sink, "reasoning-retry-runtime");
+    input.workspaceRoot = workspace;
+    input.persistence = { eventLogPath, observationLogPath };
+    const sessionId = input.selection.sessionId;
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("reasoning-retry-runtime"),
+      loadMcpConfig: async () => undefined,
+    });
+
+    try {
+      const result = await session.executeTurn({
+        userMessage: { role: "user", content: "hello" },
+        signal: new AbortController().signal,
+      });
+      expect(result).toMatchObject({
+        status: "completed",
+        finalText: "retry answer",
+      });
+      await session.dispose({ type: "oneshot_complete" });
+
+      expect(dispatchCount).toBe(2);
+      expect(requestBodies[1]).toBe(requestBodies[0]);
+      const serializedEvents = await readFile(eventLogPath, "utf8");
+      const events = serializedEvents
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(
+        events
+          .filter((event) => String(event.type).startsWith("model.request."))
+          .map((event) => event.type),
+      ).toEqual([
+        "model.request.started",
+        "model.request.failed",
+        "model.request.started",
+        "model.request.finished",
+      ]);
+      const failed = events.find((event) => event.type === "model.request.failed") as
+        | { data?: Record<string, unknown> }
+        | undefined;
+      expect(failed?.data).toMatchObject({
+        attemptNumber: 1,
+        maxAttempts: 2,
+        code: "reasoning_only_assistant",
+        retryDisposition: "scheduled",
+        diagnostics: {
+          finishReason: "stop",
+          contentChars: 0,
+          reasoningChars: secretReasoning.length,
+          toolCallCount: 0,
+          usage: {
+            promptTokens: 7,
+            completionTokens: 3,
+            totalTokens: 10,
+            promptCacheHitTokens: 0,
+            promptCacheMissTokens: 7,
+            reasoningTokens: 3,
+          },
+        },
+      });
+      expect(serializedEvents).not.toContain(secretReasoning);
+
+      const observations = await readFile(observationLogPath, "utf8");
+      expect(observations).toContain("retry answer");
+      expect(observations).not.toContain("reasoning-only");
+      expect(observations).not.toContain(secretReasoning);
+
+      const database = new Database(
+        path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+        { readonly: true },
+      );
+      expect(
+        database
+          .query(
+            "SELECT role, content, reasoning_content FROM messages ORDER BY ordinal",
+          )
+          .all(),
+      ).toEqual([
+        { role: "system", content: "system", reasoning_content: null },
+        { role: "user", content: "hello", reasoning_content: null },
+        {
+          role: "assistant",
+          content: "retry answer",
+          reasoning_content: null,
+        },
+      ]);
+      database.close();
+    } finally {
+      await session.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("fails one turn after two provider-mapped reasoning-only responses", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-reasoning-exhausted-runtime-"),
+    );
+    let dispatchCount = 0;
+    const fetchImpl: typeof fetch = Object.assign(
+      async () => {
+        dispatchCount += 1;
+        return sseResponse([
+          streamChunk({
+            role: "assistant",
+            reasoning_content: "private reasoning",
+          }),
+          streamFinish("stop"),
+          streamUsage({
+            prompt_tokens: 7,
+            completion_tokens: 3,
+            total_tokens: 10,
+            completion_tokens_details: { reasoning_tokens: 3 },
+          }),
+        ]);
+      },
+      { preconnect() {} },
+    );
+    const model = new OpenAIChatModelClient({
+      apiKey: "test-key",
+      model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
+      fetch: fetchImpl,
+    });
+    const sink = collectingEventSink();
+    const input = createInput(model, sink, "reasoning-exhausted-runtime");
+    input.workspaceRoot = workspace;
+    const sessionId = input.selection.sessionId;
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("reasoning-exhausted-runtime"),
+      loadMcpConfig: async () => undefined,
+    });
+
+    try {
+      const result = await session.executeTurn({
+        userMessage: { role: "user", content: "hello" },
+        signal: new AbortController().signal,
+      });
+      expect(result).toMatchObject({
+        status: "failed",
+        error:
+          "Provider returned reasoning without final text or tool calls in both attempts (provider=openai-compatible, model=test-model).",
+      });
+      expect(dispatchCount).toBe(2);
+      expect(
+        sink.events
+          .filter((event) => event.type.startsWith("model.request."))
+          .map((event) => event.type),
+      ).toEqual([
+        "model.request.started",
+        "model.request.failed",
+        "model.request.started",
+        "model.request.failed",
+      ]);
+      expect(
+        sink.events
+          .filter((event) => event.type === "model.request.failed")
+          .map((event) => event.data.retryDisposition),
+      ).toEqual(["scheduled", "exhausted"]);
+      expect(sink.events.at(-1)).toMatchObject({
+        type: "turn.failed",
+        data: { error: result.status === "failed" ? result.error : "" },
+      });
+
+      await session.dispose({ type: "oneshot_complete" });
+      const database = new Database(
+        path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+        { readonly: true },
+      );
+      expect(
+        database.query("SELECT role, content FROM messages ORDER BY ordinal").all(),
+      ).toEqual([
+        { role: "system", content: "system" },
+        { role: "user", content: "hello" },
+      ]);
+      database.close();
+    } finally {
+      await session.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("commits user-only deltas after cancellation", async () => {
     const sink = collectingEventSink();
     const model = new CancelsThenCompletesModel();
@@ -1074,5 +1304,50 @@ function createInput(
     modelClient: model,
     presentationSinks: [sink],
     persistence: false,
+  };
+}
+
+function sseResponse(events: readonly unknown[]): Response {
+  return new Response(
+    [
+      ...events.map((event) => `data: ${JSON.stringify(event)}`),
+      "data: [DONE]",
+      "",
+    ].join("\n\n"),
+    {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    },
+  );
+}
+
+function streamChunk(delta: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: "chatcmpl_test",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "test-model",
+    choices: [{ index: 0, delta, finish_reason: null }],
+  };
+}
+
+function streamFinish(finishReason: string): Record<string, unknown> {
+  return {
+    id: "chatcmpl_test",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "test-model",
+    choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
+  };
+}
+
+function streamUsage(usage: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: "chatcmpl_test",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "test-model",
+    choices: [],
+    usage,
   };
 }

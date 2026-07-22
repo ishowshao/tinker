@@ -688,7 +688,7 @@ describe("tui components", () => {
               ...testRuntime.iteration,
               eventSequence: 2,
               timestamp: "2026-07-10T00:00:00.100Z",
-              data: {},
+              data: { attemptNumber: 1, maxAttempts: 2 },
             });
 
             return await new Promise((resolve) => {

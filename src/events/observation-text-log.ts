@@ -45,6 +45,8 @@ export function renderObservationLogEvent(event: AgentEvent): string | undefined
       return renderTurnCancelled(event);
     case "turn.failed":
       return renderTurnFailed(event.data.error);
+    case "model.request.failed":
+      return undefined;
     default:
       return undefined;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelRequestInput } from "../model/model-client";
+import { ProviderResponseError, type ModelRequestInput } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { TEST_CONTEXT_BUDGET } from "./test-runtime";
 
@@ -156,7 +156,46 @@ describe("OpenAIChatModelClient streaming", () => {
     const error = await streaming
       .request(prepared, { signal: new AbortController().signal })
       .catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("invalid_provider_stream");
+    expect((error as ProviderResponseError).diagnostics).toEqual({
+      provider: "openai-compatible",
+      model: "test-model",
+      path: "chunks",
+    });
     expect((error as Error).message).toContain("chunks must not be empty");
+  });
+
+  test("classifies and redacts provider request errors", async () => {
+    const fetchImpl: typeof fetch = Object.assign(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Bearer super-secret data:image/png;base64,QUJD",
+            },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        ),
+      { preconnect() {} },
+    );
+    const streaming = client({ fetch: fetchImpl });
+    const prepared = streaming.prepare(INPUT);
+
+    const error = await streaming
+      .request(prepared, { signal: new AbortController().signal })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("provider_request_error");
+    expect((error as ProviderResponseError).diagnostics).toEqual({
+      provider: "openai-compatible",
+      model: "test-model",
+    });
+    expect((error as Error).message).toBe(
+      "400 Bearer [redacted] [redacted image data]",
+    );
+    expect((error as Error).message).not.toContain("super-secret");
+    expect((error as Error).message).not.toContain("QUJD");
   });
 });

@@ -122,3 +122,32 @@ export type ModelUsage = {
   promptCacheMissTokens?: number;
   reasoningTokens?: number;
 };
+
+export type ProviderResponseErrorCode =
+  | "reasoning_only_assistant"
+  | "invalid_provider_response"
+  | "invalid_provider_stream"
+  | "provider_request_error";
+
+export type ProviderResponseDiagnostics = {
+  provider: string;
+  model: string;
+  path?: string;
+  finishReason?: string;
+  contentChars?: number;
+  reasoningChars?: number;
+  toolCallCount?: number;
+  usage?: ModelUsage;
+};
+
+export class ProviderResponseError extends Error {
+  constructor(
+    readonly code: ProviderResponseErrorCode,
+    message: string,
+    readonly diagnostics: ProviderResponseDiagnostics,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "ProviderResponseError";
+  }
+}

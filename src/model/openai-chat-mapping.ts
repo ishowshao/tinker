@@ -5,7 +5,12 @@ import type {
   UserMessage,
 } from "../agent/types";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
-import type { ModelRequestOutput, ModelUsage } from "./model-client";
+import {
+  ProviderResponseError,
+  type ModelRequestOutput,
+  type ModelUsage,
+  type ProviderResponseDiagnostics,
+} from "./model-client";
 import type { ToolDefinition } from "../tools/types";
 import type {
   ChatCompletionAssistantMessageParam,
@@ -178,20 +183,44 @@ export function fromOpenAIChatCompletion(
     "choices[0].message.content",
     options,
   );
-  if ((content === null || content.trim() === "") && rawToolCalls.length === 0) {
-    throw providerResponseError(
-      options,
-      "choices[0].message",
-      "has neither non-empty text nor tool calls",
-    );
-  }
-
   const finishReason = optionalString(
     choice.finish_reason,
     "choices[0].finish_reason",
     options,
   );
   const usage = parseUsage(completion.usage, options);
+  const reasoningContent = normalizeContent(
+    message.reasoning_content,
+    "choices[0].message.reasoning_content",
+    options,
+  );
+  const diagnostics = responseDiagnostics(options, {
+    path: "choices[0].message",
+    finishReason,
+    contentChars: content?.length ?? 0,
+    reasoningChars: reasoningContent?.length ?? 0,
+    toolCallCount: rawToolCalls.length,
+    usage,
+  });
+  if ((content === null || content.trim() === "") && rawToolCalls.length === 0) {
+    if (
+      finishReason === "stop" &&
+      reasoningContent !== null &&
+      reasoningContent.trim() !== ""
+    ) {
+      throw new ProviderResponseError(
+        "reasoning_only_assistant",
+        `Invalid provider response (provider=${options.provider}, model=${options.model}): choices[0].message contains reasoning but neither non-empty final text nor tool calls.`,
+        diagnostics,
+      );
+    }
+    throw providerResponseError(
+      options,
+      "choices[0].message",
+      "has neither non-empty text nor tool calls",
+      diagnostics,
+    );
+  }
 
   if (rawToolCalls.length > 0 && options.identity === undefined) {
     throw providerResponseError(
@@ -208,11 +237,7 @@ export function fromOpenAIChatCompletion(
     message: {
       role: "assistant",
       content,
-      reasoningContent: normalizeContent(
-        message.reasoning_content,
-        "choices[0].message.reasoning_content",
-        options,
-      ),
+      reasoningContent,
       toolCalls: toolCalls.length === 0 ? undefined : toolCalls,
     },
     finishReason,
@@ -513,8 +538,22 @@ function providerResponseError(
   options: { provider: string; model: string },
   path: string,
   detail: string,
-): Error {
-  return new Error(
+  diagnostics: ProviderResponseDiagnostics = responseDiagnostics(options, { path }),
+): ProviderResponseError {
+  return new ProviderResponseError(
+    "invalid_provider_response",
     `Invalid provider response (provider=${options.provider}, model=${options.model}): ${path} ${detail}.`,
+    { ...diagnostics, path },
   );
+}
+
+function responseDiagnostics(
+  options: { provider: string; model: string },
+  diagnostics: Omit<ProviderResponseDiagnostics, "provider" | "model">,
+): ProviderResponseDiagnostics {
+  return {
+    provider: options.provider,
+    model: options.model,
+    ...diagnostics,
+  };
 }

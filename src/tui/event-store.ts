@@ -153,13 +153,21 @@ export function reduceTuiProjection(
     }
     case "model.request.started":
       return updateActiveTurn(state, event, policy, (turn) =>
-        appendTurnItem(turn, {
-          id: `model-${event.iterationId}`,
-          ref: modelRequestRef(event.iterationId),
-          text: `model iteration ${event.iterationNumber}`,
-          status: "running",
-        }),
+        event.data.attemptNumber === 1
+          ? appendTurnItem(turn, {
+              id: `model-${event.iterationId}`,
+              ref: modelRequestRef(event.iterationId),
+              text: `model iteration ${event.iterationNumber}`,
+              status: "running",
+            })
+          : updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
+              ...item,
+              text: `model iteration ${event.iterationNumber} · retrying`,
+              status: "running",
+            })),
       );
+    case "model.request.failed":
+      return state;
     case "model.request.finished":
       return updateActiveTurn(state, event, policy, (turn) =>
         updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
@@ -333,7 +341,7 @@ export function reduceTuiProjection(
     }
     case "turn.failed": {
       const active = requireActiveTurn(state, event);
-      const failed = appendTurnItem(active, {
+      const failed = appendTurnItem(markRunningItemsFailed(active), {
         id: `turn-${active.turnId}-failed-${event.eventSequence}`,
         label: "error",
         text: event.data.error,
@@ -465,6 +473,15 @@ function appendTurnItem(
   item: TimelineItem,
 ): TuiTurnProjection {
   return { ...turn, items: [...turn.items, item] };
+}
+
+function markRunningItemsFailed(turn: TuiTurnProjection): TuiTurnProjection {
+  return {
+    ...turn,
+    items: turn.items.map((item) =>
+      item.status === "running" ? { ...item, status: "failed" } : item,
+    ),
+  };
 }
 
 function updateTurnItem(

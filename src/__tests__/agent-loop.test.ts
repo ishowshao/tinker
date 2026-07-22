@@ -5,6 +5,7 @@ import path from "node:path";
 import { FatalAgentTurnError, runAgent } from "../agent/loop";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
+import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
@@ -14,6 +15,7 @@ import type {
   ModelRequestOutput,
   PreparedModelRequest,
 } from "../model/model-client";
+import { ProviderResponseError } from "../model/model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { SessionError } from "../session/session-errors";
 import {
@@ -156,6 +158,72 @@ class ArrayEventSink implements EventSink {
 
   async append(event: AgentEvent): Promise<void> {
     this.events.push(event);
+  }
+}
+
+class RetryScriptModel extends TestModelClient {
+  readonly preparedRequests: PreparedModelRequest[] = [];
+  readonly identities: ModelRequestOptions["identity"][] = [];
+
+  constructor(
+    private readonly steps: readonly ("reasoning_only" | "success" | Error)[],
+  ) {
+    super();
+  }
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.preparedRequests.push(prepared);
+    this.identities.push(options.identity);
+    const step = this.steps[this.preparedRequests.length - 1];
+    if (step === undefined) {
+      throw new Error("Unexpected provider dispatch.");
+    }
+    if (step instanceof Error) {
+      throw step;
+    }
+    if (step === "reasoning_only") {
+      throw reasoningOnlyError(prepared);
+    }
+    return testModelOutput(
+      prepared,
+      { role: "assistant", content: "retry succeeded" },
+      "stop",
+    );
+  }
+}
+
+class RetryThenWaitingModel extends TestModelClient {
+  calls = 0;
+  readonly secondStarted: Promise<void>;
+  private markSecondStarted!: () => void;
+
+  constructor() {
+    super();
+    this.secondStarted = new Promise((resolve) => {
+      this.markSecondStarted = resolve;
+    });
+  }
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      throw reasoningOnlyError(prepared);
+    }
+    this.markSecondStarted();
+    return await new Promise<ModelRequestOutput>((_resolve, reject) => {
+      const onAbort = () => reject(new Error("Second model attempt was aborted."));
+      if (options.signal.aborted) {
+        onAbort();
+        return;
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 }
 
@@ -311,6 +379,345 @@ describe("runAgent", () => {
       { role: "assistant", content: "Second prompt answered." },
     ]);
     expect(result).not.toHaveProperty("messages");
+  });
+
+  test("retries one reasoning-only response with the same prepared request", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    let prepareDispatchCalls = 0;
+    const runtimeSession: RuntimeSessionContext = {
+      ...identity.runtimeSession,
+      prepareModelDispatch() {
+        prepareDispatchCalls += 1;
+      },
+    };
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("reasoning-retry"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel(["reasoning_only", "success"]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({ status: "completed", finalText: "retry succeeded" });
+    expect(model.preparedRequests).toHaveLength(2);
+    expect(model.preparedRequests[1]).toBe(model.preparedRequests[0]);
+    expect(model.identities[1]?.iteration).toBe(model.identities[0]?.iteration);
+    expect(model.identities[1]?.runtimeSession).toBe(
+      model.identities[0]?.runtimeSession,
+    );
+    expect(prepareDispatchCalls).toBe(1);
+
+    const requestEvents = events.events.filter((event) =>
+      event.type.startsWith("model.request."),
+    );
+    expect(requestEvents.map((event) => event.type)).toEqual([
+      "model.request.started",
+      "model.request.failed",
+      "model.request.started",
+      "model.request.finished",
+    ]);
+    expect(requestEvents.map((event) => event.data)).toMatchObject([
+      { attemptNumber: 1, maxAttempts: 2 },
+      {
+        attemptNumber: 1,
+        maxAttempts: 2,
+        code: "reasoning_only_assistant",
+        retryDisposition: "scheduled",
+        provider: "test",
+        model: "test-model",
+        diagnostics: {
+          finishReason: "stop",
+          contentChars: 0,
+          reasoningChars: 16,
+          toolCallCount: 0,
+          usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10 },
+        },
+      },
+      { attemptNumber: 2, maxAttempts: 2 },
+      { attemptNumber: 2, maxAttempts: 2 },
+    ]);
+    expect(JSON.stringify(requestEvents)).not.toContain("hidden reasoning");
+    expect(
+      events.events
+        .filter((event) => event.type === "context.usage.updated")
+        .map((event) => event.data.phase),
+    ).toEqual(["preflight", "measured"]);
+
+    pending.finish(result);
+    expect(
+      ledger.buildCommittedModelRequest(registry.definitions()).request.messages,
+    ).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "retry succeeded" },
+    ]);
+  });
+
+  test("exhausts two reasoning-only attempts without committing an assistant", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("reasoning-exhausted"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel(["reasoning_only", "reasoning_only"]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+
+    expect(model.preparedRequests).toHaveLength(2);
+    expect(result).toEqual({
+      status: "failed",
+      error:
+        "Provider returned reasoning without final text or tool calls in both attempts (provider=test, model=test-model).",
+      lastIteration: identity.iteration,
+    });
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.failed")
+        .map((event) => event.data.retryDisposition),
+    ).toEqual(["scheduled", "exhausted"]);
+    expect(pending.projectedMessageCount()).toBe(2);
+    expect(
+      pending.agent.buildModelRequest(registry.definitions()).request.messages,
+    ).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "hello" },
+    ]);
+  });
+
+  test("does not retry an ordinary provider failure after reasoning-only", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("reasoning-then-error"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([
+      "reasoning_only",
+      new Error("provider transport failed"),
+    ]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+
+    expect(model.preparedRequests).toHaveLength(2);
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "provider transport failed",
+    });
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.failed")
+        .map((event) => [event.data.code, event.data.retryDisposition]),
+    ).toEqual([
+      ["reasoning_only_assistant", "scheduled"],
+      ["provider_request_error", "not_retryable"],
+    ]);
+  });
+
+  test("does not retry an ordinary provider response error on attempt one", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("ordinary-provider-error"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([
+      new ProviderResponseError(
+        "invalid_provider_response",
+        "Invalid provider response.",
+        {
+          provider: "test",
+          model: "test-model",
+          path: "choices[0].message",
+        },
+      ),
+      "success",
+    ]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "Invalid provider response.",
+    });
+    expect(model.preparedRequests).toHaveLength(1);
+    expect(
+      events.events.find((event) => event.type === "model.request.failed"),
+    ).toMatchObject({
+      data: {
+        attemptNumber: 1,
+        code: "invalid_provider_response",
+        retryDisposition: "not_retryable",
+      },
+    });
+  });
+
+  test("honors cancellation scheduled between reasoning-only attempts", async () => {
+    const controller = new AbortController();
+    const events = new ArrayEventSink();
+    const cancellingSink: EventSink = {
+      async append(event) {
+        await events.append(event);
+        if (
+          event.type === "model.request.failed" &&
+          event.data.retryDisposition === "scheduled"
+        ) {
+          controller.abort(new TurnCancelledError("user"));
+        }
+      },
+    };
+    const identity = createTestRuntime(cancellingSink);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("reasoning-cancel"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel(["reasoning_only", "success"]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: controller.signal,
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(model.preparedRequests).toHaveLength(1);
+    expect(
+      events.events.filter((event) => event.type === "model.request.started"),
+    ).toHaveLength(1);
+  });
+
+  test("cancels an in-flight second attempt without recording another failure", async () => {
+    const controller = new AbortController();
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("reasoning-second-cancel"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pendingTurn = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryThenWaitingModel();
+
+    const pending = runAgent({
+      ledger: pendingTurn.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: controller.signal,
+    });
+    await model.secondStarted;
+    controller.abort(new TurnCancelledError("user"));
+    const result = await pending;
+
+    expect(result.status).toBe("cancelled");
+    expect(model.calls).toBe(2);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.failed")
+        .map((event) => event.data.retryDisposition),
+    ).toEqual(["scheduled"]);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.started")
+        .map((event) => event.data.attemptNumber),
+    ).toEqual([1, 2]);
   });
 
   test("does not start the next tool when the completion write barrier fails", async () => {
@@ -481,6 +888,23 @@ function testTool(name: string, execute: () => void): ToolExecutor {
       };
     },
   };
+}
+
+function reasoningOnlyError(prepared: PreparedModelRequest): ProviderResponseError {
+  return new ProviderResponseError(
+    "reasoning_only_assistant",
+    `Invalid provider response (provider=${prepared.provider}, model=${prepared.model}): choices[0].message contains reasoning but neither non-empty final text nor tool calls.`,
+    {
+      provider: prepared.provider,
+      model: prepared.model,
+      path: "choices[0].message",
+      finishReason: "stop",
+      contentChars: 0,
+      reasoningChars: "hidden reasoning".length,
+      toolCallCount: 0,
+      usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10 },
+    },
+  );
 }
 
 function requireRuntime(options: ModelRequestOptions): RuntimeSessionContext {

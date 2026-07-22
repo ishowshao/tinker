@@ -2,8 +2,10 @@
 
 ## 状态
 
-本文定义 provider 返回 reasoning-only assistant 响应时的诊断事件和运行时处理契约。
-当前仅完成设计，尚未修改实现。
+已于 2026-07-22 按本文契约完成实现。确定性注入测试覆盖 reasoning-only 后成功、连续
+reasoning-only、第二次普通失败和 cancellation；进程内 provider 集成测试同时验证 JSONL
+脱敏、Observation 隔离与 canonical history 不污染。真实 `deepseek-v4-flash` Docker
+cache-miss smoke 正常完成；该样本未概率性复现 reasoning-only。
 
 ## 背景
 

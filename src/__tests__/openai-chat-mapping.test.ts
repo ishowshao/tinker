@@ -3,6 +3,7 @@ import {
   fromOpenAIChatCompletion,
   toOpenAIChatMessages,
 } from "../model/openai-chat-mapping";
+import { ProviderResponseError } from "../model/model-client";
 import { createTestRuntime } from "./test-runtime";
 
 describe("openai chat mapping", () => {
@@ -221,6 +222,145 @@ describe("openai chat mapping", () => {
     });
   });
 
+  test("classifies a complete reasoning-only assistant response", () => {
+    const reasoning = "private chain of thought";
+    const error = captureError(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "  ",
+                reasoning_content: reasoning,
+                tool_calls: [],
+              },
+            },
+          ],
+          usage: {
+            prompt_tokens: 9,
+            completion_tokens: 3,
+            total_tokens: 12,
+            prompt_cache_hit_tokens: 0,
+            prompt_cache_miss_tokens: 9,
+            completion_tokens_details: { reasoning_tokens: 3 },
+          },
+        },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    );
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("reasoning_only_assistant");
+    expect((error as ProviderResponseError).diagnostics).toEqual({
+      provider: "test-provider",
+      model: "test-model",
+      path: "choices[0].message",
+      finishReason: "stop",
+      contentChars: 2,
+      reasoningChars: reasoning.length,
+      toolCallCount: 0,
+      usage: {
+        promptTokens: 9,
+        completionTokens: 3,
+        totalTokens: 12,
+        promptCacheHitTokens: 0,
+        promptCacheMissTokens: 9,
+        reasoningTokens: 3,
+      },
+    });
+    expect(error.message).not.toContain(reasoning);
+    expect(JSON.stringify((error as ProviderResponseError).diagnostics)).not.toContain(
+      reasoning,
+    );
+  });
+
+  test("does not classify empty or non-stop assistant responses as reasoning-only", () => {
+    const empty = captureError(() =>
+      fromOpenAIChatCompletion(
+        completionWithMessage({
+          finishReason: "stop",
+          content: "",
+          reasoningContent: "   ",
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    );
+    expect(empty).toBeInstanceOf(ProviderResponseError);
+    expect((empty as ProviderResponseError).code).toBe("invalid_provider_response");
+
+    const length = captureError(() =>
+      fromOpenAIChatCompletion(
+        completionWithMessage({
+          finishReason: "length",
+          content: null,
+          reasoningContent: "unfinished reasoning",
+        }),
+        { provider: "test-provider", model: "test-model" },
+      ),
+    );
+    expect(length).toBeInstanceOf(ProviderResponseError);
+    expect((length as ProviderResponseError).code).toBe("invalid_provider_response");
+    expect((length as ProviderResponseError).diagnostics.finishReason).toBe("length");
+  });
+
+  test("validates usage before classifying an empty assistant response", () => {
+    const error = captureError(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "",
+                reasoning_content: "reasoning",
+              },
+            },
+          ],
+        },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    );
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("invalid_provider_response");
+    expect((error as ProviderResponseError).diagnostics.path).toBe("usage");
+    expect(error.message).toContain("usage is required");
+  });
+
+  test("validates reasoning content type before empty-message classification", () => {
+    const error = captureError(() =>
+      fromOpenAIChatCompletion(
+        {
+          choices: [
+            {
+              finish_reason: "stop",
+              message: {
+                role: "assistant",
+                content: "",
+                reasoning_content: { private: true },
+              },
+            },
+          ],
+          usage: {
+            prompt_tokens: 9,
+            completion_tokens: 3,
+            total_tokens: 12,
+          },
+        },
+        { provider: "test-provider", model: "test-model" },
+      ),
+    );
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("invalid_provider_response");
+    expect((error as ProviderResponseError).diagnostics.path).toBe(
+      "choices[0].message.reasoning_content",
+    );
+  });
+
   test("normalizes cache and reasoning usage variants", () => {
     const deepSeek = fromOpenAIChatCompletion(
       completionWithUsage({
@@ -428,4 +568,40 @@ function completionWithUsage(usage: unknown): Record<string, unknown> {
     ],
     ...(usage === undefined ? {} : { usage }),
   };
+}
+
+function completionWithMessage(input: {
+  finishReason: string;
+  content: string | null;
+  reasoningContent: string;
+}): Record<string, unknown> {
+  return {
+    choices: [
+      {
+        finish_reason: input.finishReason,
+        message: {
+          role: "assistant",
+          content: input.content,
+          reasoning_content: input.reasoningContent,
+        },
+      },
+    ],
+    usage: {
+      prompt_tokens: 9,
+      completion_tokens: 3,
+      total_tokens: 12,
+    },
+  };
+}
+
+function captureError(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected operation to throw.");
 }

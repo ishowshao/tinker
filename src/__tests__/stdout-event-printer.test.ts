@@ -3,6 +3,58 @@ import { StdoutEventPrinter } from "../events/stdout-event-printer";
 import { createTestRuntime } from "./test-runtime";
 
 describe("stdout event printer", () => {
+  test("prints one model request line across a silent retry", async () => {
+    const output: string[] = [];
+    const errors: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => output.push(chunk) },
+      { write: (chunk: string) => errors.push(chunk) },
+    );
+    const runtime = createTestRuntime(printer);
+
+    await runtime.runtimeSession.append({
+      type: "model.request.started",
+      ...runtime.iteration,
+      data: { attemptNumber: 1, maxAttempts: 2 },
+    });
+    await runtime.runtimeSession.append({
+      type: "model.request.failed",
+      ...runtime.iteration,
+      data: {
+        attemptNumber: 1,
+        maxAttempts: 2,
+        code: "reasoning_only_assistant",
+        retryDisposition: "scheduled",
+        provider: "test-provider",
+        model: "test-model",
+        error: "reasoning-only",
+      },
+    });
+    await runtime.runtimeSession.append({
+      type: "model.request.started",
+      ...runtime.iteration,
+      data: { attemptNumber: 2, maxAttempts: 2 },
+    });
+    await runtime.runtimeSession.append({
+      type: "model.request.finished",
+      ...runtime.iteration,
+      data: {
+        attemptNumber: 2,
+        maxAttempts: 2,
+        output: {
+          message: { role: "assistant", content: "done" },
+          usage: { promptTokens: 2, completionTokens: 1, totalTokens: 3 },
+        },
+      },
+    });
+
+    expect(output).toEqual([
+      "model.request.started iteration=1\n",
+      "model.request.finished iteration=1\n",
+    ]);
+    expect(errors).toEqual([]);
+  });
+
   test("prints run cancellation separately from failures", async () => {
     const output: string[] = [];
     const errors: string[] = [];

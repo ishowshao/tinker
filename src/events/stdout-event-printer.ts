@@ -43,7 +43,13 @@ export class StdoutEventPrinter implements EventSink {
         );
         break;
       case "model.request.started":
-        this.stdout.write(`model.request.started iteration=${event.iterationNumber}\n`);
+        if (event.data.attemptNumber === 1) {
+          this.stdout.write(
+            `model.request.started iteration=${event.iterationNumber}\n`,
+          );
+        }
+        break;
+      case "model.request.failed":
         break;
       case "model.request.finished":
         this.stdout.write(

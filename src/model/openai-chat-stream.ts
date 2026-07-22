@@ -1,3 +1,5 @@
+import { ProviderResponseError } from "./model-client";
+
 type ProviderContext = { provider: string; model: string };
 
 type ToolCallAccumulator = {
@@ -265,8 +267,10 @@ function providerStreamError(
   options: ProviderContext,
   path: string,
   detail: string,
-): Error {
-  return new Error(
+): ProviderResponseError {
+  return new ProviderResponseError(
+    "invalid_provider_stream",
     `Invalid provider stream (provider=${options.provider}, model=${options.model}): ${path} ${detail}.`,
+    { provider: options.provider, model: options.model, path },
   );
 }

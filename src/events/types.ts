@@ -13,7 +13,11 @@ import type {
   ToolCallId,
   TurnId,
 } from "../ids/runtime-id";
-import type { ModelRequestOutput } from "../model/model-client";
+import type {
+  ModelRequestOutput,
+  ProviderResponseDiagnostics,
+  ProviderResponseErrorCode,
+} from "../model/model-client";
 import type {
   ModelContextBudget,
   ModelContextProfile,
@@ -280,6 +284,22 @@ export type TurnFinishedData = {
   messageCount: number;
 };
 
+export type ModelRequestAttemptData = {
+  attemptNumber: 1 | 2;
+  maxAttempts: 2;
+};
+
+export type ModelRequestFailureCode = ProviderResponseErrorCode;
+
+export type ModelRequestFailedData = ModelRequestAttemptData & {
+  code: ModelRequestFailureCode;
+  retryDisposition: "scheduled" | "not_retryable" | "exhausted";
+  provider: string;
+  model: string;
+  error: string;
+  diagnostics?: ProviderResponseDiagnostics;
+};
+
 export type AgentEventDataMap = {
   "session.started": SessionStartedData;
   "session.resumed": SessionResumedData;
@@ -290,8 +310,11 @@ export type AgentEventDataMap = {
   "turn.failed": { error: string };
   "turn.cancelled": { cancellation: TurnCancellation };
   "agent.iteration.started": { iterationNumber: number };
-  "model.request.started": Record<string, never>;
-  "model.request.finished": { output: ModelRequestOutput };
+  "model.request.started": ModelRequestAttemptData;
+  "model.request.failed": ModelRequestFailedData;
+  "model.request.finished": ModelRequestAttemptData & {
+    output: ModelRequestOutput;
+  };
   "context.usage.updated": ContextUsageUpdatedData;
   "context.revision.started": ContextRevisionStartedData;
   "context.revision.finished": ContextRevisionFinishedData;
@@ -385,6 +408,7 @@ export type AgentEventInput =
   | IterationEventInput<
       | "agent.iteration.started"
       | "model.request.started"
+      | "model.request.failed"
       | "model.request.finished"
       | "context.usage.updated"
       | "context.shadow.planned"

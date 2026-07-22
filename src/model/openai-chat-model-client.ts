@@ -11,7 +11,7 @@ import {
 import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
 import type { ModelContextBudget } from "./model-context-profile";
 import type { InputTokenEstimator } from "./input-token-estimator";
-import { ModelRequestMediaAggregateError } from "./model-client";
+import { ModelRequestMediaAggregateError, ProviderResponseError } from "./model-client";
 import type {
   MaterializedModelRequest,
   ModelClient,
@@ -234,17 +234,12 @@ export class OpenAIChatModelClient implements ModelClient {
       throw new Error("Image request must be materialized before provider dispatch.");
     }
 
-    let response;
-    try {
-      response = this.stream
-        ? await this.requestStreaming(prepared, options.signal)
-        : await this.client.chat.completions.create(
-            prepared.payload as ChatCompletionCreateParamsNonStreaming,
-            { signal: options.signal },
-          );
-    } catch (error) {
-      throw sanitizedProviderError(error);
-    }
+    const response = this.stream
+      ? accumulateOpenAIChatCompletionChunks(
+          await this.collectStreamingChunks(prepared, options.signal),
+          { provider: this.provider, model: this.options.model },
+        )
+      : await this.requestNonStreaming(prepared, options.signal);
 
     return fromOpenAIChatCompletion(response, {
       identity: options.identity,
@@ -253,22 +248,37 @@ export class OpenAIChatModelClient implements ModelClient {
     });
   }
 
-  private async requestStreaming(
+  private async collectStreamingChunks(
     prepared: PreparedModelRequest,
     signal: AbortSignal,
-  ): Promise<Record<string, unknown>> {
-    const stream = await this.client.chat.completions.create(
-      prepared.payload as ChatCompletionCreateParamsStreaming,
-      { signal },
-    );
-    const chunks: unknown[] = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk);
+  ): Promise<unknown[]> {
+    try {
+      const stream = await this.client.chat.completions.create(
+        prepared.payload as ChatCompletionCreateParamsStreaming,
+        { signal },
+      );
+      const chunks: unknown[] = [];
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    } catch (error) {
+      throw sanitizedProviderError(error, this.provider, this.options.model);
     }
-    return accumulateOpenAIChatCompletionChunks(chunks, {
-      provider: this.provider,
-      model: this.options.model,
-    });
+  }
+
+  private async requestNonStreaming(
+    prepared: PreparedModelRequest,
+    signal: AbortSignal,
+  ) {
+    try {
+      return await this.client.chat.completions.create(
+        prepared.payload as ChatCompletionCreateParamsNonStreaming,
+        { signal },
+      );
+    } catch (error) {
+      throw sanitizedProviderError(error, this.provider, this.options.model);
+    }
   }
 
   private assistantReplaySegments(message: AssistantMessage): PreparedPromptSegment[] {
@@ -508,7 +518,11 @@ function deepFreeze<T>(value: T): T {
   return Object.freeze(value);
 }
 
-function sanitizedProviderError(error: unknown): Error {
+function sanitizedProviderError(
+  error: unknown,
+  provider: string,
+  model: string,
+): ProviderResponseError {
   const message = error instanceof Error ? error.message : String(error);
   const sanitized = message
     .replace(
@@ -516,5 +530,10 @@ function sanitizedProviderError(error: unknown): Error {
       "[redacted image data]",
     )
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/giu, "Bearer [redacted]");
-  return new Error(sanitized, { cause: error });
+  return new ProviderResponseError(
+    "provider_request_error",
+    sanitized,
+    { provider, model },
+    { cause: error },
+  );
 }

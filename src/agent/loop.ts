@@ -2,7 +2,9 @@ import {
   materializeModelRequest,
   type MaterializedModelRequest,
   type ModelClient,
+  type ModelRequestOutput,
   type PreparedModelRequest,
+  ProviderResponseError,
 } from "../model/model-client";
 import type { ImageAssetStore } from "../image/image-asset-store";
 import {
@@ -82,6 +84,8 @@ export class FatalAgentTurnError extends Error {
     this.name = "FatalAgentTurnError";
   }
 }
+
+const MODEL_REQUEST_MAX_ATTEMPTS = 2 as const;
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastIteration: IterationIdentity | undefined;
@@ -202,21 +206,15 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     await input.runtimeSession.append({
       type: "model.request.started",
       ...iteration,
-      data: {},
+      data: {
+        attemptNumber: 1,
+        maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+      },
     });
 
-    let modelOutput;
     try {
       throwIfTurnCancelled(input.signal);
       input.runtimeSession.prepareModelDispatch?.({ iteration, built });
-      modelOutput = await input.model.request(request, {
-        signal: input.signal,
-        identity: {
-          iteration,
-          runtimeSession: input.runtimeSession,
-        },
-      });
-      throwIfTurnCancelled(input.signal);
     } catch (error) {
       if (input.signal.aborted) {
         return cancelledResult(
@@ -226,6 +224,82 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
 
       return failedResult(error, iteration);
+    }
+
+    const requestOptions = {
+      signal: input.signal,
+      identity: {
+        iteration,
+        runtimeSession: input.runtimeSession,
+      },
+    };
+    let modelOutput: ModelRequestOutput | undefined;
+    let successfulAttempt: 1 | 2 | undefined;
+    for (const attemptNumber of [1, 2] as const) {
+      if (input.signal.aborted) {
+        return cancelledResult(
+          cancellation(input.signal, iteration, "model_request"),
+          iteration,
+        );
+      }
+      if (attemptNumber === 2) {
+        await input.runtimeSession.append({
+          type: "model.request.started",
+          ...iteration,
+          data: {
+            attemptNumber,
+            maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+          },
+        });
+      }
+
+      try {
+        throwIfTurnCancelled(input.signal);
+        modelOutput = await input.model.request(request, requestOptions);
+        throwIfTurnCancelled(input.signal);
+        successfulAttempt = attemptNumber;
+        break;
+      } catch (error) {
+        if (input.signal.aborted) {
+          return cancelledResult(
+            cancellation(input.signal, iteration, "model_request"),
+            iteration,
+          );
+        }
+
+        const reasoningOnly = isReasoningOnlyProviderError(error);
+        const retryDisposition = reasoningOnly
+          ? attemptNumber === 1
+            ? "scheduled"
+            : "exhausted"
+          : "not_retryable";
+        await input.runtimeSession.append({
+          type: "model.request.failed",
+          ...iteration,
+          data: modelRequestFailureData({
+            error,
+            request,
+            attemptNumber,
+            retryDisposition,
+          }),
+        });
+
+        if (retryDisposition === "scheduled") {
+          continue;
+        }
+        if (retryDisposition === "exhausted") {
+          return failedResult(
+            new Error(
+              `Provider returned reasoning without final text or tool calls in both attempts (provider=${request.provider}, model=${request.model}).`,
+            ),
+            iteration,
+          );
+        }
+        return failedResult(error, iteration);
+      }
+    }
+    if (modelOutput === undefined || successfulAttempt === undefined) {
+      throw new Error("Model request attempt state completed without an output.");
     }
 
     try {
@@ -245,7 +319,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
     await input.runtimeSession.append({
       type: "model.request.finished",
       ...iteration,
-      data: { output: modelOutput },
+      data: {
+        attemptNumber: successfulAttempt,
+        maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+        output: modelOutput,
+      },
     });
     const measured = input.contextMeter.recordProviderUsage(request, modelOutput);
     await input.runtimeSession.append({
@@ -614,6 +692,32 @@ function failedResult(
     status: "failed",
     error: errorMessage(error),
     lastIteration,
+  };
+}
+
+function isReasoningOnlyProviderError(error: unknown): error is ProviderResponseError {
+  return (
+    error instanceof ProviderResponseError && error.code === "reasoning_only_assistant"
+  );
+}
+
+function modelRequestFailureData(input: {
+  error: unknown;
+  request: PreparedModelRequest;
+  attemptNumber: 1 | 2;
+  retryDisposition: "scheduled" | "not_retryable" | "exhausted";
+}) {
+  const providerError =
+    input.error instanceof ProviderResponseError ? input.error : undefined;
+  return {
+    attemptNumber: input.attemptNumber,
+    maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+    code: providerError?.code ?? ("provider_request_error" as const),
+    retryDisposition: input.retryDisposition,
+    provider: input.request.provider,
+    model: input.request.model,
+    error: errorMessage(input.error),
+    ...(providerError === undefined ? {} : { diagnostics: providerError.diagnostics }),
   };
 }
 

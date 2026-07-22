@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromOpenAIChatCompletion } from "../model/openai-chat-mapping";
 import { accumulateOpenAIChatCompletionChunks } from "../model/openai-chat-stream";
+import { ProviderResponseError } from "../model/model-client";
 
 const PROVIDER = { provider: "test-provider", model: "test-model" };
 
@@ -179,6 +180,41 @@ describe("accumulateOpenAIChatCompletionChunks", () => {
     );
   });
 
+  test("does not classify reasoning without a terminal stop as retryable", () => {
+    const completion = accumulateOpenAIChatCompletionChunks(
+      [chunk({ role: "assistant", reasoning_content: "thinking" }), USAGE_ONLY_CHUNK],
+      PROVIDER,
+    );
+    const choice = (completion.choices as Record<string, unknown>[])[0];
+    expect(choice?.finish_reason).toBeNull();
+
+    const error = captureError(() => fromOpenAIChatCompletion(completion, PROVIDER));
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("invalid_provider_response");
+    expect((error as ProviderResponseError).diagnostics).toMatchObject({
+      reasoningChars: 8,
+      toolCallCount: 0,
+    });
+  });
+
+  test("does not classify a resource finish as reasoning-only", () => {
+    const completion = accumulateOpenAIChatCompletionChunks(
+      [
+        chunk({ role: "assistant", reasoning_content: "thinking" }),
+        chunk({}, { finish_reason: "insufficient_system_resource" }),
+        USAGE_ONLY_CHUNK,
+      ],
+      PROVIDER,
+    );
+    const error = captureError(() => fromOpenAIChatCompletion(completion, PROVIDER));
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("invalid_provider_response");
+    expect((error as ProviderResponseError).diagnostics.finishReason).toBe(
+      "insufficient_system_resource",
+    );
+  });
+
   test("fast-fails an empty stream", () => {
     expect(() => accumulateOpenAIChatCompletionChunks([], PROVIDER)).toThrow(
       "chunks must not be empty",
@@ -304,3 +340,15 @@ describe("accumulateOpenAIChatCompletionChunks", () => {
     ).toThrow('delta.role must be "assistant"');
   });
 });
+
+function captureError(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected operation to throw.");
+}

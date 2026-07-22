@@ -60,7 +60,7 @@ describe("TuiProjectionStore", () => {
       ...iteration,
       eventSequence: 2,
       timestamp: timestamp(2),
-      data: {},
+      data: { attemptNumber: 1, maxAttempts: 2 },
     });
     await store.append({
       type: "model.request.finished",
@@ -68,6 +68,8 @@ describe("TuiProjectionStore", () => {
       eventSequence: 3,
       timestamp: timestamp(3),
       data: {
+        attemptNumber: 1,
+        maxAttempts: 2,
         output: {
           message: { role: "assistant", toolCalls: [call] },
           usage: testUsage(),
@@ -368,7 +370,7 @@ function modelStarted(
     ...iteration,
     eventSequence,
     timestamp: timestamp(eventSequence),
-    data: {},
+    data: { attemptNumber: 1, maxAttempts: 2 },
   };
 }
 
@@ -382,6 +384,8 @@ function modelFinished(
     eventSequence,
     timestamp: timestamp(eventSequence),
     data: {
+      attemptNumber: 1,
+      maxAttempts: 2,
       output: {
         message: { role: "assistant", content: "response" },
         usage: testUsage(),

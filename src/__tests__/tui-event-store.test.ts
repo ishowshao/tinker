@@ -83,7 +83,10 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...base,
       ...testRuntime.iteration,
       type: "model.request.started",
-      data: {},
+      data: {
+        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
+        maxAttempts: 2,
+      },
     };
   }
   if (input.type === "model.request.finished") {
@@ -91,8 +94,31 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...base,
       ...testRuntime.iteration,
       type: "model.request.finished",
-      data: { output: input.output },
+      data: {
+        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
+        maxAttempts: 2,
+        output: input.output,
+      },
     } as unknown as AgentEvent;
+  }
+  if (input.type === "model.request.failed") {
+    return {
+      ...base,
+      ...testRuntime.iteration,
+      type: "model.request.failed",
+      data: {
+        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
+        maxAttempts: 2,
+        code: "reasoning_only_assistant",
+        retryDisposition:
+          stringValue(input.retryDisposition) === "exhausted"
+            ? "exhausted"
+            : "scheduled",
+        provider: "test-provider",
+        model: "test-model",
+        error: "reasoning-only",
+      },
+    };
   }
   if (input.type === "assistant.progress") {
     return {
@@ -586,6 +612,102 @@ describe("tui event store", () => {
     expect(visibleTimelineItems(state)).toHaveLength(4);
     expect(visibleTimelineItems(state)[3]?.text).toBe("Glob **/*.test.ts -> 5 matches");
     expect(visibleTimelineItems(state)[3]?.status).toBe("ok");
+  });
+
+  test("updates one model item while a reasoning-only retry is running", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      iterationNumber: 1,
+      attemptNumber: 1,
+    });
+    const initialModelItem = visibleTimelineItems(state)[1];
+    expect(initialModelItem?.text).toBe("model iteration 1");
+
+    state = applyAgentEvent(state, {
+      type: "model.request.failed",
+      iterationNumber: 1,
+      attemptNumber: 1,
+      retryDisposition: "scheduled",
+    });
+    expect(visibleTimelineItems(state)[1]).toBe(initialModelItem);
+
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      iterationNumber: 1,
+      attemptNumber: 2,
+    });
+    expect(visibleTimelineItems(state)).toHaveLength(2);
+    expect(visibleTimelineItems(state)[1]).toMatchObject({
+      id: initialModelItem?.id,
+      ref: initialModelItem?.ref,
+      text: "model iteration 1 · retrying",
+      status: "running",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "model.request.finished",
+      iterationNumber: 1,
+      attemptNumber: 2,
+      output: {
+        message: { role: "assistant", content: "done" },
+      },
+    });
+    expect(visibleTimelineItems(state)).toHaveLength(2);
+    expect(visibleTimelineItems(state)[1]).toMatchObject({
+      id: initialModelItem?.id,
+      ref: initialModelItem?.ref,
+      text: "model iteration 1 -> assistant response",
+      status: "ok",
+    });
+  });
+
+  test("settles the retrying model item when both attempts fail", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      attemptNumber: 1,
+    });
+    state = applyAgentEvent(state, {
+      type: "model.request.failed",
+      attemptNumber: 1,
+      retryDisposition: "scheduled",
+    });
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      attemptNumber: 2,
+    });
+    state = applyAgentEvent(state, {
+      type: "model.request.failed",
+      attemptNumber: 2,
+      retryDisposition: "exhausted",
+    });
+    state = applyAgentEvent(state, {
+      type: "turn.failed",
+      error: "reasoning retry exhausted",
+    });
+
+    const items = visibleTimelineItems(state);
+    const modelItems = items.filter((item) => item.ref?.startsWith("model-request-"));
+    expect(modelItems).toHaveLength(1);
+    expect(modelItems[0]).toMatchObject({
+      text: "model iteration 1 · retrying",
+      status: "failed",
+    });
+    expect(items.at(-1)).toMatchObject({
+      label: "error",
+      text: "reasoning retry exhausted",
+      status: "failed",
+    });
   });
 
   test("summarizes Grep tool calls per output mode", () => {
