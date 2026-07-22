@@ -1265,8 +1265,13 @@ describe("tui components", () => {
       <App sessionController={controller} />,
     );
 
+    await Bun.sleep(100);
     await submitInput(stdin, "/resume");
-    await Bun.sleep(25);
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("↑/↓ or j/k to move · Enter to resume"),
+      "the resume picker to open",
+    );
     expect(lastFrame()).toContain("Resume session");
     expect(lastFrame()).toContain(
       "↑/↓ or j/k to move · Enter to resume · Esc to cancel",
@@ -1283,15 +1288,30 @@ describe("tui components", () => {
     expect(lastFrame()).not.toContain("Resume session");
     expect(resumed).toEqual([]);
 
+    await Bun.sleep(100);
     await submitInput(stdin, "/resume");
-    await Bun.sleep(25);
-    stdin.write("\r");
-    await Bun.sleep(25);
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("↑/↓ or j/k to move · Enter to resume"),
+      "the resume picker to reopen",
+    );
+    await writeInputUntilFrame(
+      stdin,
+      "\r",
+      lastFrame,
+      (frame) => frame.includes(`Resumed session ${targetId}.`),
+      "the selected session to resume",
+    );
     expect(resumed).toEqual([targetId]);
     expect(lastFrame()).toContain(`Resumed session ${targetId}.`);
 
+    await Bun.sleep(100);
     await submitInput(stdin, `/resume ${directTargetId}`);
-    await Bun.sleep(25);
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes(`Resumed session ${directTargetId}.`),
+      "the direct session to resume",
+    );
     expect(resumed).toEqual([targetId, directTargetId]);
     cleanup();
   });
