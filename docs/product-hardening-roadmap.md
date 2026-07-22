@@ -12,6 +12,8 @@ structured checkpoint、跨 session 记忆、多 agent 或云同步。
 
 ## 阶段一：公共契约与发布收口
 
+独立实施方案：[`product-hardening-phase-one-design.md`](product-hardening-phase-one-design.md)。
+
 ### 目标
 
 让 npm 安装后的入口、配置说明和实际运行契约保持一致，并修复当前依赖维护与安全审计
