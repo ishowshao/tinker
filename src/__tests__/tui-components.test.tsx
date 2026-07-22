@@ -137,6 +137,22 @@ async function writeInputUntilFrame(
   throw new Error(`Timed out waiting for ${description}. Last frame:\n${lastFrame()}`);
 }
 
+async function waitForFrame(
+  lastFrame: () => string | undefined,
+  predicate: (frame: string) => boolean,
+  description: string,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate(lastFrame() ?? "")) {
+      return;
+    }
+    await Bun.sleep(25);
+  }
+
+  throw new Error(`Timed out waiting for ${description}. Last frame:\n${lastFrame()}`);
+}
+
 function contextSnapshot(
   overrides: Partial<ContextUsageSnapshot> = {},
 ): ContextUsageSnapshot {
@@ -708,7 +724,7 @@ describe("tui components", () => {
                           lastIteration: testRuntime.iteration,
                         }),
                       );
-                  }, 40);
+                  }, 250);
                 },
                 { once: true },
               );
@@ -719,22 +735,29 @@ describe("tui components", () => {
     );
 
     await submitInput(stdin, "wait");
-    await Bun.sleep(20);
-    stdin.write("\u001b");
-    await Bun.sleep(25);
-    stdin.write("\u001b");
-    await Bun.sleep(25);
-
-    expect(lastFrame()).toContain("cancelling");
+    await writeInputUntilFrame(
+      stdin,
+      "\u001b",
+      lastFrame,
+      (frame) => frame.includes("cancelling"),
+      "local cancellation feedback",
+    );
     expect(abortCount).toBe(1);
 
-    await Bun.sleep(60);
-    expect(lastFrame()).toContain("cancelled");
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("cancelled"),
+      "the cancelled turn event",
+    );
     expect(lastFrame()).not.toContain("Cancelling current turn...");
 
+    await Bun.sleep(100);
     await submitInput(stdin, "/nope");
-    await Bun.sleep(25);
-    expect(lastFrame()).toContain("Unknown command: /nope");
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("Unknown command: /nope"),
+      "the next prompt to be handled",
+    );
     cleanup();
   });
 
