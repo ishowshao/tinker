@@ -3,10 +3,10 @@
 ## 文档状态
 
 - 状态：待实施。
-- 日期：2026-07-22。
+- 日期：2026-07-23。
 - 基线：Tinker `1.3.0`，commit `7822852dad23`。
 - 上位方案：[`product-hardening-phase-one-design.md`](product-hardening-phase-one-design.md)。
-- 范围：npm 包暴露的 `tinker` 顶层 CLI、one-shot Prompt 输入和只读 `doctor`。
+- 范围：npm 包暴露的 `tinker` 顶层 CLI 和 one-shot Prompt 输入。
 
 本文是产品加固阶段一的 CLI 实施合同。公共配置字段、依赖安全、README 总体收口和发布
 流程仍由上位方案负责；本文冻结命令语法、Prompt 输入、输出、退出码、所有权和测试边界。
@@ -21,7 +21,7 @@ const [, , command, ...args] = process.argv;
 
 它只特殊处理 `run` 和 `--profile`/`-p`，其余输入全部落入 `runTui()`。因此：
 
-- 没有 `--help`、`--version` 或 `doctor`；
+- 没有 `--help` 或 `--version`；
 - 未知命令和未知 option 会误启动 TUI；
 - 缺参数、多参数和子命令帮助没有统一合同；
 - CLI parser、输出和 runner dispatch 耦合在入口文件中；
@@ -55,9 +55,8 @@ tinker run explain $HOME *.ts
 - 短 Prompt 可以通过一个明确引用的位置参数提交。
 - 任意多行文本、代码、shell 字符和敏感内容可以通过 stdin 或文件稳定提交。
 - 三种 Prompt 来源统一成同一个未经改写的字符串，再进入现有 `runOneShot()`。
-- `doctor` 在没有完整运行环境时也能给出只读、离线、脱敏的本地诊断。
-- parser、Prompt 读取、doctor 和 runner dispatch 保持分层、可独立测试。
-- npm tarball 中的 help、version、doctor 和 Prompt 输入在 macOS、Linux 都可验证。
+- parser、Prompt 读取和 runner dispatch 保持分层、可独立测试。
+- npm tarball 中的 help、version 和 Prompt 输入在 macOS、Linux 都可验证。
 
 ## 3. 非目标
 
@@ -68,7 +67,6 @@ tinker run explain $HOME *.ts
 - 不支持 JSON envelope、Base64 Prompt 或自定义转义语言。
 - 不尝试恢复 shell 已经展开或删除的原始字符。
 - 不接受多个位置参数后猜测它们应如何拼接。
-- 不实现 `doctor --fix`，不进行 provider connectivity check。
 - 不为当前 variadic `run` 行为增加兼容分支。
 
 ## 4. 核心决定
@@ -91,8 +89,6 @@ tinker run explain $HOME *.ts
 12. `tui`/`run` 路径每次进程最多执行一次 public config resolution；长期 TUI 可以从该冻结
     快照纯派生多个 session config，runner 不得重新读取 env/profile/tooling。显式持久化 default
     profile 是独立写操作，不得反向替换当前 runtime 快照。
-13. `doctor` 同时验证 bundled ripgrep 和配置后实际生效的 ripgrep，并覆盖 CLI/session
-    bootstrap 中可无副作用验证的只读本地输入。
 
 ## 5. Commander 选型
 
@@ -148,8 +144,8 @@ lockfile，不从本文旧快照盲目安装。
 - `.version(packageVersion, "-V, --version")`，传入不带程序名前缀的纯 package version；
 - `.helpOption("-h, --help")`；
 - `.helpCommand(true)`，支持 `tinker help` 与 `tinker help <command>`；
-- 顶层 `.showHelpAfterError('Run "tinker --help" for usage.')`，并为 `run`、`doctor` 配置各自
-  对应的 help hint；
+- 顶层 `.showHelpAfterError('Run "tinker --help" for usage.')`，并为 `run` 配置对应的
+  help hint；
 - `.showSuggestionAfterError(false)`，避免 option/command 清单变化造成额外、漂移的诊断行；
 - 顶层和每个子命令的 effective setting 必须是 `.allowExcessArguments(false)`；即使 Commander
   v14 当前默认拒绝 excess arguments，也要显式冻结并逐 command 测试本文的单位置参数合同；
@@ -220,23 +216,19 @@ tinker run [--profile <profile-name>] <prompt>
 tinker run [--profile <profile-name>] --stdin
 tinker run [--profile <profile-name>] --file <path>
 
-tinker doctor
-
 tinker --help
 tinker -h
 tinker help
 tinker help run
-tinker help doctor
 
 tinker --version
 tinker -V
 ```
 
-子命令同时支持自己的帮助：
+`run` 子命令同时支持自己的帮助：
 
 ```text
 tinker run --help
-tinker doctor --help
 ```
 
 ### 6.2 Profile option 所有权
@@ -272,15 +264,14 @@ tinker run --file prompt.md -p kimi
 default profile 或 env mode；在 env mode 下显式选择 profile 必须在 config boundary 明确
 失败，不能静默忽略。
 
-顶层 profile 仍不允许与 `run` 或 `doctor` 组合：
+顶层 profile 不允许与 `run` 组合：
 
 ```bash
 tinker --profile kimi run "hello"
-tinker --profile kimi doctor
 ```
 
-两者都返回 `2`。这不是因为 Commander 无法解析，而是为了让每个 option 的 owner 由位置
-确定：子命令前属于顶层 TUI，`run` 后属于 one-shot；`doctor` 不接受 profile option。
+该输入返回 `2`。这不是因为 Commander 无法解析，而是为了让每个 option 的 owner 由位置
+确定：子命令前属于顶层 TUI，`run` 后属于 one-shot。
 
 唯一例外是成功的 terminal help/version parse：
 
@@ -320,8 +311,8 @@ help 中必须列出三种 Prompt 来源，并明确复杂或敏感 Prompt 优�
 `--file`。help 不复制完整 shell quoting 教程，README 负责提供示例。
 
 usage error 的 help hint 固定为当前 command：顶层使用
-`Run "tinker --help" for usage.`，`run` 使用 `Run "tinker run --help" for usage.`，`doctor`
-使用 `Run "tinker doctor --help" for usage.`。Commander parse error 与 Tinker 自己产生的
+`Run "tinker --help" for usage.`，`run` 使用 `Run "tinker run --help" for usage.`。
+Commander parse error 与 Tinker 自己产生的
 post-parse invariant/source-conflict error 必须经过同一个 renderer，不能出现两套格式。
 
 ## 7. Prompt 来源合同
@@ -522,7 +513,6 @@ bin/tinker.js (dependency-light Node launcher)
        -> help/version/usage terminal result
        -> CliCommand
   -> validate cross-command invariants
-  -> command=doctor: dynamically load runDoctor and its read-only probes
   -> command=tui/run: dynamically load config boundary only
        -> resolve one immutable public-config snapshot
        -> derive selected RunnerConfig without further config I/O
@@ -539,7 +529,7 @@ bin/tinker.js (dependency-light Node launcher)
   Commander 或应用模块；
 - `index.ts`、`main.ts`、`command-line.ts` 和 `package-metadata.ts` 的静态 import graph 不得触达
   TUI、agent runtime、tool registry、MCP manager、provider client 或 `@vscode/ripgrep`；
-- help/version/usage terminal result 返回后不得再执行 config、doctor 或 runner dynamic import；
+- help/version/usage terminal result 返回后不得再执行 config 或 runner dynamic import；
 - `main()` 的默认 production dependency 也必须是选中 command 后才求值的 lazy loader，不能
   因“可注入”而在模块顶层静态 import 所有 runner；
 - `run` 先完成语法解析，再加载 model 配置，最后读取 Prompt；三者都在 session 创建前完成；
@@ -551,7 +541,6 @@ bin/tinker.js (dependency-light Node launcher)
   加载 provider/tool implementation；
 - public config 在 `tui`/`run` 的 CLI composition root 最多读取一次，runner 不再重复读取
   env/profile/tooling；
-- doctor 使用 production config parser，但不调用 runner；
 - TUI 及其 Ink/React 依赖只在命令明确为 `tui` 后加载和初始化。
 
 该顺序依赖上位方案 P1.1 先完成配置所有权上移。当前
@@ -584,16 +573,13 @@ export function deriveRunnerConfig(
 
 - `resolvePublicConfig()` 是唯一读取 env、`TINKER_MODELS`、workspace/tooling 配置并执行公共
   primitive/cross-field 校验的入口；返回值是当前进程使用的不可变快照；
-- 它内部的 model/profile、workspace 与 tooling production sub-resolver 可以为 doctor 导出，
-  但 `tui`/`run` 只能调用完整 facade；doctor 对每个 sub-resolver 最多调用一次以保留独立诊断；
 - 快照包含 env mode 的规范化配置，或完整、已验证的 profile catalog，以及所有 tooling
   config；不得包含随机生成的 `sessionId`；
 - `deriveRunnerConfig()` 是无 I/O 的纯函数；它选择 default/显式 profile、拒绝 env mode 下的
   profile 选择、派生 context budget，并绑定调用者提供的 session identity；
 - one-shot 只派生一次；TUI 可在 initial、resume、`/model`、`/clear`、`/fork` 等生命周期中从
   同一快照多次派生，但不得重新读取 `process.env` 或 profile 文件；
-- 新 session 的 UUID 只在确实准备创建该 session 时生成。doctor 只验证快照，不生成 session
-  identity；
+- 新 session 的 UUID 只在确实准备创建该 session 时生成；
 - TUI 显式持久化新的 default profile 是现有产品写操作，不算第二次 runtime resolution；写入
   路径可为原子更新重新读取并用 production parser 验证文件，但结果不得替换当前进程已冻结的
   profile 定义快照，也不得使外部修改悄悄进入当前 session 生命周期。
@@ -612,8 +598,7 @@ export type CliCommand =
       readonly type: "run";
       readonly profileName?: string;
       readonly promptSource: PromptSource;
-    }
-  | { readonly type: "doctor" };
+    };
 ```
 
 help/version 由 Commander 作为成功 terminal parse 处理，不伪装成 runtime command。
@@ -655,7 +640,7 @@ if (import.meta.main) {
 
 dynamic import failure 使用固定 reinstall 提示；第二层 catch 只是 `main()` 违反 total-boundary
 合同后的最后兜底，不输出 stack。正常命令错误必须由 `main()` 分类。`main()` 返回 exit code，
-不调用 `process.exit()`；`runTui()`、`runOneShot()`、doctor 和 Commander override 也不得调用
+不调用 `process.exit()`；`runTui()`、`runOneShot()` 和 Commander override 也不得调用
 它。TUI `/quit` 必须完成 Ink、session、MCP 和 background task 清理后正常返回，让 executable
 guard 统一设置 `process.exitCode`。强制退出会跳过 stdout/stderr 的自然排空，因此不能作为
 “确保 CLI 结束”的手段。
@@ -665,12 +650,12 @@ guard 统一设置 `process.exitCode`。强制退出会跳过 stdout/stderr 的�
 `process.exitCode`。只有 child 被 signal 终止时使用 `process.kill(process.pid, signal)` 保持 shell
 可观察到的 signal 语义；不得用 `process.exit()` 模拟 signal 或普通 exit code。
 
-`main()` 的生产依赖使用默认实现，测试则可注入 package metadata、config resolution、doctor
-和 runner dispatch probe，以证明 terminal parse 没有加载或调用后续边界。测试直接 import
+`main()` 的生产依赖使用默认实现，测试则可注入 package metadata、config resolution 和
+runner dispatch probe，以证明 terminal parse 没有加载或调用后续边界。测试直接 import
 `main.ts` 或 `index.ts` 都不能启动命令、写输出或改变 `process.exitCode`，也不需要 monkey-patch
 `process.exit`、`process.env` 或 cwd。
 
-`main()` 开始时复制 args 与 env，并固定 cwd；之后 parser、config、doctor 和 runner 只接收该
+`main()` 开始时复制 args 与 env，并固定 cwd；之后 parser、config 和 runner 只接收该
 调用快照，不在 await 间隙重新观察全局 `process.argv`、`process.env` 或 cwd。
 
 `main()` 是公共错误边界：Commander 成功终止、usage error、配置/Prompt 错误、runner 返回值
@@ -679,8 +664,7 @@ guard 统一设置 `process.exitCode`。强制退出会跳过 stdout/stderr 的�
 产品输出不得由 `main()` 重复输出。
 
 安装根 package metadata 缺失、不可读或无法解析使用独立的 typed bootstrap error，`main()`
-将其映射为固定 reinstall 提示和 `1`，不泄漏底层路径或 parser message。name/bin/dependency 的
-语义不匹配仍由 doctor 的 package check 报告，不阻止一个结构完整的 CLI 显示 help/version。
+将其映射为固定 reinstall 提示和 `1`，不泄漏底层路径或 parser message。
 
 Commander 的 `CommanderError` 必须按 `code` 分类，而不是通过英文 message 做字符串匹配。
 help/version 是成功终止；未知 option、缺 argument、excess argument 和冲突 source 是
@@ -697,8 +681,6 @@ usage error。
 | Prompt source 不可用、非 regular、超限、空、NUL 或编码无效 | 空 | 有界、无正文的输入错误 | `2` |
 | Prompt stdin/file 的系统资源或意外 I/O fault | 空 | 有界本地错误 | `1` |
 | public config 缺失/非法、未知 profile 或 workspace 非法 | 空 | 脱敏配置错误 | `1` |
-| doctor 全部通过 | 检查项、限制说明和最终 `RESULT PASS` | 空 | `0` |
-| doctor 检查失败 | 已完成检查项、限制说明和最终 `RESULT FAIL` | 脱敏失败摘要 | `1` |
 | TUI/one-shot runtime failure | 保持 runner 产品输出 | 运行错误 | `1` |
 
 Commander 默认的 usage error exit code 可能不是 Tinker 合同值；入口必须统一映射为 `2`。
@@ -709,7 +691,7 @@ failure 并返回 `1`。相反，空 profile argv value、重复 option、source
 仍返回 `2`。
 
 统一常量 `MAX_CLI_DIAGNOSTIC_DETAIL_BYTES = 512`。错误 renderer 必须清除 ANSI、转义换行和
-其他控制字符，并让每条 error/doctor summary 的动态 detail 连同确定性的 truncation marker
+其他控制字符，并让每条 error detail 连同确定性的 truncation marker
 不超过该 UTF-8 字节上限；截断不得切开 code point。不得把底层 error object、stack、完整 env
 value 或 Prompt 正文直接插入公共 stderr。
 
@@ -719,109 +701,7 @@ output callback 可以先写入命令级 buffer，再由 `main()` 统一 flush�
 `main()` 都不通过 `process.exit()` 抢先结束；进程级测试必须证明 pipe 中的完整输出和最终
 exit code 同时可观察。
 
-## 10. `tinker doctor`
-
-### 10.1 目的与边界
-
-doctor 回答“当前安装、公共配置，以及 CLI/session bootstrap 会消费的只读本地合同是否能
-通过 production parser”，不模拟完整 session 初始化，也不回答“远端 provider 是否可用”。
-它必须只读、离线、确定：
-
-- 不调用 model 或 token estimator；
-- 不启动 MCP server；
-- 不创建 session、asset、history 或 workspace 文件；
-- 不修复配置和权限；
-- 不输出 API key、profile secret 或 `.mcp.json` 的 env 内容。
-
-因此 PASS 仍不承诺 workspace 可写、session store 可创建、MCP server 可启动或 provider 可
-连接；这些边界需要实际 runtime 才能验证。相反，AGENTS/CLAUDE、Agent Skills、`.tinker.json`
-等在调用 `createRuntimeSession()` 前就会被 production runner 读取的内容，以及 `.mcp.json`
-这类可在不启动 MCP 的前提下独立验证的 session-bootstrap 配置，都必须纳入 doctor。doctor
-不能在 production parser 已能确定失败时给出假阳性。
-
-Node launcher、Commander 和可读取的安装根 package metadata 是 doctor 自身能够启动的最小
-bootstrap 前提。若 Bun package/executable 或 package metadata 已损坏到入口无法启动，
-`bin/tinker.js`/bootstrap 直接输出有界 reinstall error 并返回 `1`；doctor 不声称能在自身无法
-执行时生成表格。package check 负责发现入口已经能读取、但 name/version/bin/dependency identity
-不符合发布合同的情况。
-
-### 10.2 固定检查顺序
-
-1. **package**：安装根 package name 是 `tinker-agent`，version 非空，bin 只暴露
-   `tinker`。
-2. **bun**：当前入口运行在 Bun 下，且 runtime version 按 SemVer precedence 大于等于实际
-   安装包 `dependencies.bun` 声明的版本。该依赖必须是可解析的精确稳定版本，作为最低兼容
-   基线，不能在 doctor 源码中复制版本常量。发布入口会启动包内 Bun，通常精确命中；源码
-   开发使用兼容的较新 Bun 也必须 `PASS`，低于基线、pre-release 或无法识别版本才 `FAIL`。
-3. **bundled ripgrep**：忽略 `TINKER_RIPGREP_PATH`，从安装根解析包内
-   `@vscode/ripgrep` executable，运行 `--version` 且 exit `0`。该项证明发布包装完整。
-4. **workspace**：按 production 规则解析 workspace，realpath 存在且是可读目录；不写
-   `.tinker`。
-5. **public config**：调用 `resolvePublicConfig()` 所使用的 production model/profile 与 tooling
-   resolver，分别验证 profile/env mode、context budget 和所有 tooling config，再汇总成一个
-   check；一个子域失败不阻止其他独立子域继续。secret 只报告 configured/missing，不生成
-   session identity。
-6. **effective ripgrep**：若未设置 `TINKER_RIPGREP_PATH`，复用 bundled probe 的结果且不重复
-   spawn；若设置 override，则对 production tooling resolver 为 public snapshot 产出的 effective
-   executable 独立运行 `--version`。bundled 与 effective 任一失败都使 doctor 最终失败。
-7. **project instructions**：复用 `loadProjectInstructions()` 验证优先级、regular file、
-   workspace 边界、大小、NUL、UTF-8 和非空合同，但不构造 session。
-8. **agent skills**：复用 `loadSkillCatalog()` 验证 project 与 user 两个固定 scope 的完整发现
-   快照，包括 symlink/trust boundary、frontmatter、数量与字节上限；不激活 skill，也不执行
-   resource 或 script。
-9. **project config**：存在时用 production parser 验证 `.mcp.json` 与 `.tinker.json`，但
-   不连接或执行；两者独立运行，一个失败不能阻止另一个完成，最终汇总为一个 bounded check。
-10. **result**：无 `FAIL` 才返回 `0`。
-
-两个 ripgrep probe 共用固定执行合同：不经过 shell，只传 `--version`，timeout 为 `5_000 ms`，
-stdout/stderr 各最多读取 `64 KiB`，超时、超限、spawn error 或非零 exit 都是 `FAIL`。child env
-只从调用快照 allowlist `PATH`、`LANG`、`LC_ALL`、`TMPDIR` 并强制 `NO_COLOR=1`，不得把 model/
-tool secret 传给被探测 executable；summary 只使用安全渲染后的首个非空 version 行。这里的
-“离线”指 Tinker 不创建网络 client 或主动发请求；显式 `TINKER_RIPGREP_PATH` 指向的是用户选择
-执行的本地程序，其自身行为属于与正常 Grep 执行相同的信任边界。
-
-各项输出 `PASS`、`FAIL` 或因前置依赖失败产生的 `SKIP`。独立检查尽量继续，一次显示多个
-本地问题。依赖规则固定为：
-
-- package 失败时，bun baseline 和 bundled ripgrep 为 `SKIP`；workspace/public config 等独立
-  检查继续；
-- workspace 失败时，project instructions、agent skills 和 project config 为 `SKIP`；
-- `TINKER_RIPGREP_PATH` 所属的 production tooling resolver 失败时，effective ripgrep 为
-  `SKIP`；model/profile 子域失败不阻止 effective ripgrep，doctor 也不得另写一套 env parser；
-- bundled ripgrep 失败且没有 override 时，effective ripgrep 为 `SKIP`；有 override 时仍独立
-  检查 effective executable；
-- 缺少可选的 AGENTS/CLAUDE、skills root、`.mcp.json` 或 `.tinker.json` 是对应检查的正常
-  `PASS`，不是 `SKIP`。
-
-每个检查的 stdout 行固定为 `<STATUS> <check-id>: <bounded-summary>`；check id 固定使用
-`package`、`bun`、`bundled-ripgrep`、`workspace`、`public-config`、`effective-ripgrep`、
-`project-instructions`、`agent-skills`、`project-config`。九个检查行之后，无论 PASS/FAIL 都
-依次输出三条限制说明，最后一行才是 `RESULT PASS` 或 `RESULT FAIL`：
-
-```text
-Provider connectivity was not checked.
-MCP server startup was not checked.
-Session storage writability was not checked.
-RESULT <PASS|FAIL>
-```
-
-失败时 stderr 只增加一行 `Doctor found <N> failed checks.`，其中 `N` 只统计 `FAIL`，不统计
-`SKIP`；不得重复底层错误。所有 summary 使用第 9 节的有界、去控制字符 renderer。
-
-### 10.3 实现所有权
-
-`src/cli/doctor.ts` 依赖 production config、project-instruction、skill 和 project-config
-loader，以及可注入 package/runtime/subprocess probes。它不得静态 import runner 或 tool
-registry；bundled ripgrep 通过 package metadata 安全解析，effective ripgrep 来自构成 public
-snapshot 的 production tooling 子结果，因此不依赖 model/profile 子结果成功。不得从
-`runTui()` 或 `runOneShot()` 中途截断来模拟 doctor，因为 runner 会跨入 session、model、skills
-和 MCP 等有副作用的边界。
-
-`runDoctor()` 接收 `main()` 冻结的 env/cwd/package metadata 与 probe dependencies；检查过程中
-不得再次直接读取或修改 `process.env`、cwd 或全局 writer。这样多个 sub-resolver 观察的是同一
-输入快照，测试也不需要修改全局进程状态。
-
-## 11. 模块拆分
+## 10. 模块拆分
 
 | 文件 | 责任 |
 | --- | --- |
@@ -830,8 +710,7 @@ snapshot 的 production tooling 子结果，因此不依赖 model/profile 子结
 | `src/cli/command-line.ts` | 从公共声明建立依赖轻量的 Commander tree、option occurrence/value 消歧、解析成 `CliCommand` |
 | `src/cli/output.ts` | exit 分类、同步 capture/async flush adapter、控制字符清理与有界公共错误 renderer |
 | `src/cli/prompt-source.ts` | 三种来源、bounded read、UTF-8/NUL/空内容校验 |
-| `src/cli/package-metadata.ts` | 从实际安装包读取 name/version/bin identity 与 Bun 最低兼容基线 |
-| `src/cli/doctor.ts` | production read-only loader probes、固定状态模型和脱敏报告 |
+| `src/cli/package-metadata.ts` | 从实际安装包读取 version 与启动所需 metadata |
 | `src/cli/main.ts` | 可导入的 `main()`、dynamic command loading、一次 public config resolution 与 dispatch |
 | `src/cli/index.ts` | `import.meta.main` executable guard、lazy `main()` import 与 `process.exitCode`；不拥有 command/runtime 逻辑 |
 | `src/cli/config.ts` | 从 P1.1 公共声明解析 `ResolvedPublicConfig` 并纯派生 `RunnerConfig`；不 import provider/tool implementation |
@@ -842,16 +721,15 @@ snapshot 的 production tooling 子结果，因此不依赖 model/profile 子结
 | `src/__tests__/cli-launcher.test.ts` | Node launcher 的 Bun lookup、stdio、普通 code 与 signal 传播 |
 | `src/__tests__/cli-main.test.ts` | import guard、lazy loading、config/Prompt/dispatch 顺序、输出排空与 exit code |
 | `src/__tests__/prompt-source.test.ts` | argument/stdin/file 的边界、保持与失败 |
-| `src/__tests__/doctor.test.ts` | 检查顺序、依赖图、production loader 覆盖、无副作用和脱敏 |
 | `scripts/verify-release-package.ts` | 从真实 tarball 验证公共 CLI |
 
 `src/agent`、`src/context`、`src/session` 和 TUI 交互语义不应因本文改变；TUI runner 移除深层
 process exit、改用配置快照属于 composition/lifecycle 边界调整，不得改变 `/quit`、resume、
 `/model`、`/clear` 或 `/fork` 的用户行为。
 
-## 12. 测试方案
+## 11. 测试方案
 
-### 12.1 Commander parser
+### 11.1 Commander parser
 
 - 空 argv -> TUI；
 - 根 command action 对空 argv 和单个顶层 profile 精确产出 TUI，不退化成 Commander 默认 help；
@@ -859,8 +737,8 @@ process exit、改用配置快照属于 composition/lifecycle 边界调整，不
 - `run --profile`/`run -p` 对 argument/stdin/file 均可用，并把 profile 记录在 run command；
 - `run` 未指定 profile 时保持 default profile/env mode，未知 profile 和 env mode 下显式
   profile 在 config boundary fast-fail；
-- 精确覆盖 `--profile kimi run "hello"`、`--profile kimi doctor`：Commander parse 可成功，
-  但 Tinker post-parse invariant 必须在配置和 runner 前返回 `2`；
+- 精确覆盖 `--profile kimi run "hello"`：Commander parse 可成功，但 Tinker post-parse
+  invariant 必须在配置和 runner 前返回 `2`；
 - `run [prompt]` 的三种合法来源，证明 `--stdin`/`--file` 不被 required argument 提前拒绝；
 - 缺 source、source 冲突、重复同类 source、excess positional；
 - 重复 `-p`/`--profile` 和 `--file` 是错误而不是 last-one-wins，重复 `--stdin` 不是幂等；
@@ -869,20 +747,20 @@ process exit、改用配置快照属于 composition/lifecycle 边界调整，不
 - `--file=-prompt.md`、`--profile=-name`、`-p-name` 的 attached leading-dash value 行为确定；
 - `--` 后以 `-` 开头的单 Prompt，argv occurrence/value 预检不得把其重新解释为 option；
 - 顶层和子命令未知 option；
-- 顶层、run、doctor help，以及 `commander.help`/`commander.helpDisplayed` 两条成功路径；
+- 顶层和 run help，以及 `commander.help`/`commander.helpDisplayed` 两条成功路径；
 - `--profile kimi --help`、`--profile kimi help run`、`run --profile kimi --help` 都不加载配置；
 - `--version`/`-V`；
-- 顶层、run、doctor usage error 使用各自固定 help hint；
+- 顶层和 run usage error 使用各自固定 help hint；
 - 拼写接近的未知 command/option 不输出 Commander suggestion；
 - help/version/usage error 不加载 workspace、config 或 selected-command runtime module；
 - 每次测试创建新的 Commander 实例，无状态泄漏。
 
-### 12.2 配置快照与派生
+### 11.2 配置快照与派生
 
 - env mode、profile mode 和全部 tooling config 每次 `main()` 最多执行一次 runtime
   resolution；
 - `main()` 启动后的原始 args/env/cwd 变化不影响本次调用快照；
-- `ResolvedPublicConfig` 不含 session ID，doctor 不分配 runtime identity；
+- `ResolvedPublicConfig` 不含 session ID；
 - one-shot 从选定 profile 派生一次 config，且 config failure 发生在 stdin/file 读取前；
 - TUI initial、resume、`/model`、`/clear` 和 `/fork` 从同一快照派生正确的新/existing session
   identity 与 profile，不重新读取 env/profile 文件；
@@ -891,7 +769,7 @@ process exit、改用配置快照属于 composition/lifecycle 边界调整，不
 - 显式持久化 default profile 可在独立写路径重新读取并验证目标文件，但不触发第二次 runtime
   resolution，也不替换当前快照。
 
-### 12.3 Prompt source
+### 11.3 Prompt source
 
 - argument 保留空格、tab、换行、引号、反斜杠、emoji 和前后空白；
 - stdin chunk 边界跨越多字节 UTF-8 code point；
@@ -907,34 +785,14 @@ process exit、改用配置快照属于 composition/lifecycle 边界调整，不
 - stdin/file 错误不包含正文或 secret，路径控制字符被转义且 detail 不超过 512 bytes；
 - 多 source 在任何读取前失败。
 
-### 12.4 Doctor
-
-- 完整 env mode、text profile、image profile；
-- 缺配置、错误 budget、未知 profile 字段；
-- workspace 不存在；
-- 无/合法/损坏 `.mcp.json` 与 `.tinker.json`；
-- 无/合法/损坏/越界/超限的 project instructions 与 project/user Agent Skills；instructions 精确
-  覆盖 AGENTS 优先、AGENTS 无效不回退、AGENTS 存在时不读取 CLAUDE 的 production 语义；
-- Bun runtime 等于或高于 `dependencies.bun` 时成功，低于基线、pre-release、非法版本或非
-  Bun runtime 时失败；
-- bundled ripgrep 与 effective ripgrep 分别成功/失败；override 无效时不得因 bundled 可用而
-  PASS，override 有效时也不能掩盖发布包缺失 bundled binary；
-- ripgrep probe 的 timeout、output cap、无 shell、child env allowlist、控制字符输出和非零 exit；
-- package、workspace、tooling config 和 bundled ripgrep 失败时精确断言 `SKIP` 依赖图，独立
-  检查继续；
-- check id、顺序、`RESULT PASS/FAIL`、三条 not-checked footer 和 stderr failure count 精确；
-- 输出不含注入的 API key 和 MCP secret；
-- 不创建 `.tinker`，不分配 session ID，不发网络请求，不启动 MCP，不激活或执行 skill。
-
-### 12.5 入口进程与发布包
+### 11.4 入口进程与发布包
 
 - import `main.ts` 或 `index.ts` 不执行 CLI、不写输出、不修改 `process.exitCode`；
 - import `index.ts` 不加载 `main.ts`/Commander；作为 executable 运行时，module/bootstrap import
   failure 只输出固定 reinstall 提示并返回 `1`；
-- package metadata 缺失、不可读、malformed 与语义 identity mismatch 分别覆盖 bootstrap
-  failure 和 doctor package failure，不泄漏底层 parser/path；
-- help/version/usage 进程不加载 TUI/runtime/tool/provider modules；doctor 只加载自己的只读
-  probe graph；
+- package metadata 缺失、不可读或 malformed 时作为 bootstrap failure，且不泄漏底层
+  parser/path；
+- help/version/usage 进程不加载 TUI/runtime/tool/provider modules；
 - config failure 不加载 TUI/one-shot runner，Prompt failure 不加载 one-shot runner；
 - TUI `/quit` 和 one-shot completion 都由 runner 正常返回，没有深层 `process.exit()`；
 - Node launcher 对缺 bundled Bun、spawn failure、普通 child code 和 signal termination 的传播
@@ -953,7 +811,6 @@ tinker run "release smoke"
 tinker run --profile <fixture-profile> "release smoke"
 printf 'release smoke' | tinker run --stdin
 tinker run --file <temporary-utf8-file>
-tinker doctor
 tinker --unknown
 tinker run --stdin --stdin
 tinker run --file --stdin
@@ -964,7 +821,7 @@ tinker run --file --stdin
 证明 argument/stdin/file 的精确文本进入同一个 canonical user message。发布 smoke 不调用
 真实 provider。
 
-## 13. README 与迁移说明
+## 12. README 与迁移说明
 
 README 的 one-shot 示例必须使用单个引用参数：
 
@@ -989,7 +846,7 @@ tinker run explain the project structure
 它记录为 CLI 输入收紧，并提示用户加引号或改用 `--stdin`/`--file`。发布准备应按
 `docs/releasing.md` 判断这项外部行为收紧对应的 SemVer，而不是把它当成内部重构。
 
-## 14. 实施顺序
+## 13. 实施顺序
 
 硬前置：先完成上位方案 P1.1，把 env/profile/tooling config resolution 上移到 CLI composition
 root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot 接收派生后的
@@ -1005,17 +862,15 @@ root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot
 4. 实现 `prompt-source.ts`、bounded stdin/file reader、errno 分类和安全错误 renderer。
 5. 按 parse -> invariant -> config snapshot/derive -> Prompt source -> dispatch 接通 one-shot，
    并验证 TUI 多 session 派生不重新读取配置。
-6. 实现 doctor，复用 production config、project-instruction、Agent Skills、MCP 和 project-command
-   parser，落实 bundled/effective ripgrep 与固定输出状态机。
-7. 更新 README、CHANGELOG、公共 docs renderer/checker 和发布 guide；CLI marker 只消费共享
+6. 更新 README、CHANGELOG、公共 docs renderer/checker 和发布 guide；CLI marker 只消费共享
    公共声明。
-8. 扩展真实 tarball 的 macOS/Linux 正负向 smoke。
-9. 运行完整质量门禁并回填本文实施结果。
+7. 扩展真实 tarball 的 macOS/Linux 正负向 smoke。
+8. 运行完整质量门禁并回填本文实施结果。
 
 不要先把 Commander action 直接连到现有 runner，再补输入和退出码测试；解析与副作用边界
 必须从第一步就分开。
 
-## 15. 完成定义
+## 14. 完成定义
 
 - [ ] `commander@^14.0.3` 与 Node `>=20` 安装合同一致。
 - [ ] Commander 与 README renderer 消费同一份无副作用 CLI 声明，没有第二份 usage 清单。
@@ -1034,7 +889,7 @@ root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot
       精确测试。
 - [ ] 未知 option、缺参数、多参数、重复逻辑 option、greedy option-looking value 和 source
       冲突在副作用前返回 `2`；attached leading-dash value 行为确定。
-- [ ] 顶层 profile 与 run/doctor 的冲突由显式 post-parse invariant 返回 `2`。
+- [ ] 顶层 profile 与 run 的冲突由显式 post-parse invariant 返回 `2`。
 - [ ] `run --profile`/`run -p` 为 one-shot 选择 profile，省略时使用 default profile/env mode。
 - [ ] argument、stdin、file 恰好三选一，没有隐式 stdin 或 variadic join。
 - [ ] public config failure 发生在 stdin/file 读取前，并与 usage/Prompt/runtime failure 使用固定
@@ -1045,16 +900,11 @@ root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot
       detail 上限有精确测试。
 - [ ] `runOneShot()` 不感知 Prompt source。
 - [ ] `main()` 是总错误边界，未预期异常不泄漏 stack/secret，也不重复 runner 已输出的错误。
-- [ ] doctor 只读、离线、脱敏，复用 production config/instruction/skill/project parser，不创建
-      session identity、不启动 MCP 或执行 skill。
-- [ ] doctor 的 Bun probe 接受等于或高于包声明基线的稳定版本，拒绝更低或不可识别版本。
-- [ ] doctor 分别验证 bundled/effective ripgrep，覆盖固定九项检查、`SKIP` 依赖图、三条限制
-      说明、最终 `RESULT` 行和 stderr failure count。
 - [ ] README 和 CHANGELOG 说明 shell quoting、stdin/file 以及旧 variadic 行为移除。
 - [ ] 真实 npm tarball 在 macOS、Linux 通过 CLI smoke。
 - [ ] `bun run check`、`bun run release:verify`、`git diff --check` 完整通过。
 
-## 16. 实施结果
+## 15. 实施结果
 
 待实现后回填：
 

@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 日期：2026-07-22
+- 日期：2026-07-23
 - 基线：Tinker v1.3.0
 - 性质：下一阶段实施路线图，不替代各阶段技术设计
 - 目标：把已经落地的运行时能力收敛成容易配置、可验证兼容、可稳定交付的产品能力
@@ -21,7 +21,7 @@ structured checkpoint、跨 session 记忆、多 agent 或云同步。
 
 ### 验收重点
 
-- 提供可从发布包直接运行的 `tinker --help`、`tinker --version` 和 `tinker doctor`。
+- 提供可从发布包直接运行的 `tinker --help` 和 `tinker --version`。
 - README 中的命令、环境变量、模型 profile、图片输入和 slash commands 与当前代码一致。
 - 配置文档与配置 parser 共享可校验的字段契约，避免再次漂移。
 - 处理当前依赖审计结果；无法立即消除的 advisory 必须记录影响范围和处理决定。
