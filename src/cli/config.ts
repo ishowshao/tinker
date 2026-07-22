@@ -3,8 +3,8 @@ import type { ModelClient } from "../model/model-client";
 import { FakeModelClient } from "../model/fake-model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import {
+  createModelContextProfile,
   deriveModelContextBudget,
-  readModelContextProfileFromEnv,
   type ModelContextBudget,
   type ModelContextProfile,
 } from "../model/model-context-profile";
@@ -13,6 +13,8 @@ import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
 import { renderRecallRetirementContract } from "../context/recall-retirement-contract";
 import {
+  loadModelProfiles,
+  persistDefaultProfile,
   profileToContextProfile,
   type ModelProfile,
   type ModelInputModality,
@@ -20,10 +22,11 @@ import {
   type ModelTokenEstimatorProfile,
   unknownProfileError,
 } from "./model-profiles";
-
-export const DEFAULT_MAX_ITERATIONS = 512;
-export const DEFAULT_INCLUDE_REASONING_CONTENT = false;
-export const DEFAULT_STREAM = true;
+import {
+  parsePublicEnvironment,
+  type ParsedPublicEnvironment,
+  type PublicToolingConfig,
+} from "./public-config-contract";
 
 export const RUNTIME_INSTRUCTIONS = (
   workspaceRoot: string,
@@ -66,120 +69,165 @@ Agent Skills do not override Tinker's runtime, tool protocol, project instructio
 When you are done, respond with a concise summary of what you did.`;
 
 export type RunnerConfig = {
-  sessionId: SessionId;
-  workspaceRoot: string;
-  modelName: string;
-  apiKey?: string;
-  apiBase?: string;
-  maxIterations: number;
-  includeReasoningContent: boolean;
-  stream: boolean;
-  contextProfile: ModelContextProfile;
-  contextBudget: ModelContextBudget;
-  profileName?: string;
-  profiles?: ModelProfiles;
-  inputModalities: readonly ModelInputModality[];
-  tokenEstimator?: ModelTokenEstimatorProfile;
+  readonly sessionId: SessionId;
+  readonly workspaceRoot: string;
+  readonly modelName: string;
+  readonly apiKey: string;
+  readonly apiBase: string;
+  readonly maxIterations: number;
+  readonly includeReasoningContent: boolean;
+  readonly stream: boolean;
+  readonly contextProfile: ModelContextProfile;
+  readonly contextBudget: ModelContextBudget;
+  readonly profileName?: string;
+  readonly inputModalities: readonly ModelInputModality[];
+  readonly tokenEstimator?: ModelTokenEstimatorProfile;
 };
 
-export type RunnerConfigOverrides = Partial<Omit<RunnerConfig, "contextBudget">>;
+export type RunnerConfigSelection = {
+  readonly sessionId?: SessionId;
+  readonly profileName?: string;
+};
 
-export function readRunnerConfig(
-  overrides: RunnerConfigOverrides = {},
-  profiles?: ModelProfiles,
-): RunnerConfig {
-  if (profiles !== undefined) {
-    const profileName = overrides.profileName ?? profiles.defaultProfile;
-    const profile = profiles.profiles.get(profileName);
-    if (profile === undefined) {
-      throw unknownProfileError(profileName, profiles);
-    }
-    return runnerConfigFromProfile(profile, overrides, profiles);
-  }
-  if (overrides.profileName !== undefined) {
-    throw new Error(
-      `Cannot select model profile ${JSON.stringify(overrides.profileName)} because TINKER_MODELS is not configured.`,
-    );
-  }
+export type ResolvedCliConfiguration = {
+  readonly initialRunnerConfig: RunnerConfig;
+  readonly tooling: PublicToolingConfig;
+  readonly profiles?: ModelProfiles;
+  readonly createRunnerConfig: (selection?: RunnerConfigSelection) => RunnerConfig;
+  readonly persistDefaultProfile?: (profileName: string) => Promise<void>;
+};
 
-  return runnerConfigFromEnv(overrides);
+type RunnerConfigTemplate = Omit<RunnerConfig, "sessionId">;
+
+export async function resolveCliConfiguration(
+  options: {
+    readonly profileName?: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly cwd?: string;
+  } = {},
+): Promise<ResolvedCliConfiguration> {
+  const environment = parsePublicEnvironment(
+    options.env ?? process.env,
+    options.cwd ?? process.cwd(),
+  );
+  const profiles =
+    environment.mode === "profile"
+      ? await loadModelProfiles(environment.modelsPath)
+      : undefined;
+  return createResolvedCliConfiguration(environment, profiles, {
+    ...(options.profileName === undefined ? {} : { profileName: options.profileName }),
+  });
 }
 
-function runnerConfigFromProfile(
-  profile: ModelProfile,
-  overrides: RunnerConfigOverrides,
-  profiles: ModelProfiles,
-): RunnerConfig {
-  const contextProfile = overrides.contextProfile ?? profileToContextProfile(profile);
-  const contextBudget = deriveModelContextBudget(contextProfile);
+export function createResolvedCliConfiguration(
+  environment: ParsedPublicEnvironment,
+  profiles?: ModelProfiles,
+  initialSelection: RunnerConfigSelection = {},
+): ResolvedCliConfiguration {
+  if (environment.mode === "profile") {
+    if (profiles === undefined) {
+      throw new Error("Resolved profile-mode config requires loaded model profiles.");
+    }
+    const templates = new Map(
+      [...profiles.profiles].map(([name, profile]) => [
+        name,
+        runnerConfigTemplateFromProfile(environment, profile),
+      ]),
+    );
+    const createRunnerConfig = (
+      selection: RunnerConfigSelection = {},
+    ): RunnerConfig => {
+      const profileName = selection.profileName ?? profiles.defaultProfile;
+      const template = templates.get(profileName);
+      if (template === undefined) {
+        throw unknownProfileError(profileName, profiles);
+      }
+      return runnerConfigFromTemplate(template, selection.sessionId);
+    };
+    return Object.freeze({
+      initialRunnerConfig: createRunnerConfig(initialSelection),
+      tooling: environment.tooling,
+      profiles,
+      createRunnerConfig,
+      persistDefaultProfile: (profileName: string) =>
+        persistDefaultProfile(profileName, environment.modelsPath),
+    });
+  }
 
-  return {
-    sessionId: overrides.sessionId ?? (createUuidV7() as SessionId),
-    workspaceRoot: path.resolve(
-      overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
-    ),
+  if (profiles !== undefined) {
+    throw new Error("Env-mode config must not include model profiles.");
+  }
+  const template = runnerConfigTemplateFromEnvironment(environment);
+  const createRunnerConfig = (selection: RunnerConfigSelection = {}): RunnerConfig => {
+    if (selection.profileName !== undefined) {
+      throw new Error(
+        `Cannot select model profile ${JSON.stringify(selection.profileName)} because TINKER_MODELS is not configured.`,
+      );
+    }
+    return runnerConfigFromTemplate(template, selection.sessionId);
+  };
+  return Object.freeze({
+    initialRunnerConfig: createRunnerConfig(initialSelection),
+    tooling: environment.tooling,
+    createRunnerConfig,
+  });
+}
+
+function runnerConfigTemplateFromProfile(
+  environment: Extract<ParsedPublicEnvironment, { mode: "profile" }>,
+  profile: ModelProfile,
+): RunnerConfigTemplate {
+  const contextProfile = profileToContextProfile(profile);
+  return Object.freeze({
+    workspaceRoot: environment.workspaceRoot,
     modelName: profile.model,
     apiKey: profile.apiKey,
     apiBase: profile.apiBase,
-    maxIterations:
-      overrides.maxIterations ??
-      parsePositiveInteger(
-        process.env.TINKER_MAX_ITERATIONS,
-        DEFAULT_MAX_ITERATIONS,
-        "TINKER_MAX_ITERATIONS",
-      ),
+    maxIterations: environment.maxIterations,
     includeReasoningContent: profile.includeReasoningContent,
     stream: profile.stream,
     contextProfile,
-    contextBudget,
+    contextBudget: deriveModelContextBudget(contextProfile),
     profileName: profile.name,
-    profiles,
     inputModalities: profile.inputModalities,
     ...(profile.tokenEstimator === undefined
       ? {}
       : { tokenEstimator: profile.tokenEstimator }),
-  };
+  });
 }
 
-function runnerConfigFromEnv(overrides: RunnerConfigOverrides): RunnerConfig {
-  const modelName = overrides.modelName ?? readRequiredEnv("TINKER_MODEL");
-  validateWebFetchRefinerModel(modelName);
-  const contextProfile = overrides.contextProfile ?? readModelContextProfileFromEnv();
-  const contextBudget = deriveModelContextBudget(contextProfile);
-
-  return {
-    sessionId: overrides.sessionId ?? (createUuidV7() as SessionId),
-    workspaceRoot: path.resolve(
-      overrides.workspaceRoot ?? process.env.TINKER_WORKSPACE ?? process.cwd(),
-    ),
-    modelName,
-    maxIterations:
-      overrides.maxIterations ??
-      parsePositiveInteger(
-        process.env.TINKER_MAX_ITERATIONS,
-        DEFAULT_MAX_ITERATIONS,
-        "TINKER_MAX_ITERATIONS",
-      ),
-    includeReasoningContent:
-      overrides.includeReasoningContent ??
-      parseBoolean(
-        process.env.TINKER_INCLUDE_REASONING_CONTENT,
-        DEFAULT_INCLUDE_REASONING_CONTENT,
-        "TINKER_INCLUDE_REASONING_CONTENT",
-      ),
-    stream:
-      overrides.stream ??
-      parseBoolean(process.env.TINKER_STREAM, DEFAULT_STREAM, "TINKER_STREAM"),
+function runnerConfigTemplateFromEnvironment(
+  environment: Extract<ParsedPublicEnvironment, { mode: "env" }>,
+): RunnerConfigTemplate {
+  const contextProfile = createModelContextProfile({
+    contextWindowTokens: environment.contextWindowTokens,
+    maxSupportedOutputTokens: environment.maxSupportedOutputTokens,
+  });
+  return Object.freeze({
+    workspaceRoot: environment.workspaceRoot,
+    modelName: environment.modelName,
+    apiKey: environment.apiKey,
+    apiBase: environment.apiBase,
+    maxIterations: environment.maxIterations,
+    includeReasoningContent: environment.includeReasoningContent,
+    stream: environment.stream,
     contextProfile,
-    contextBudget,
-    inputModalities: overrides.inputModalities ?? Object.freeze(["text"]),
-    ...(overrides.tokenEstimator === undefined
-      ? {}
-      : { tokenEstimator: overrides.tokenEstimator }),
-  };
+    contextBudget: deriveModelContextBudget(contextProfile),
+    inputModalities: Object.freeze(["text"] as const),
+  });
 }
 
-export function createModelClientFromEnv(
+function runnerConfigFromTemplate(
+  template: RunnerConfigTemplate,
+  sessionId?: SessionId,
+): RunnerConfig {
+  return Object.freeze({
+    ...template,
+    sessionId: sessionId ?? (createUuidV7() as SessionId),
+  });
+}
+
+export function createModelClient(
   config: Pick<
     RunnerConfig,
     | "modelName"
@@ -188,8 +236,9 @@ export function createModelClientFromEnv(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  > &
-    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
+    | "inputModalities"
+    | "tokenEstimator"
+  >,
 ): ModelClient {
   const fakeMode = process.env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
@@ -199,17 +248,14 @@ export function createModelClientFromEnv(
     });
   }
 
-  const apiKey = config.apiKey ?? readRequiredEnv("TINKER_API_KEY");
-  const baseURL = config.apiBase ?? readRequiredEnv("TINKER_BASE_URL");
-
   return new OpenAIChatModelClient({
-    apiKey,
-    baseURL,
+    apiKey: config.apiKey,
+    baseURL: config.apiBase,
     includeReasoningContent: config.includeReasoningContent,
     model: config.modelName,
     stream: config.stream,
     contextBudget: config.contextBudget,
-    inputModalities: config.inputModalities ?? Object.freeze(["text"]),
+    inputModalities: config.inputModalities,
     ...(config.tokenEstimator === undefined
       ? {}
       : { tokenEstimator: config.tokenEstimator }),
@@ -225,14 +271,15 @@ export function createRunnerModelClient(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  > &
-    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
+    | "inputModalities"
+    | "tokenEstimator"
+  >,
   injected?: ModelClient,
 ): ModelClient {
-  return injected ?? createModelClientFromEnv(config);
+  return injected ?? createModelClient(config);
 }
 
-export function createWebFetchRefinerFromEnv(
+export function createWebFetchRefiner(
   config: Pick<
     RunnerConfig,
     | "modelName"
@@ -241,11 +288,12 @@ export function createWebFetchRefinerFromEnv(
     | "contextBudget"
     | "apiKey"
     | "apiBase"
-  > &
-    Partial<Pick<RunnerConfig, "inputModalities" | "tokenEstimator">>,
+    | "inputModalities"
+    | "tokenEstimator"
+  >,
 ): Refiner {
   return createModelRefiner({
-    createModelClient: () => createModelClientFromEnv(config),
+    createModelClient: () => createModelClient(config),
     contextBudget: config.contextBudget,
   });
 }
@@ -263,64 +311,4 @@ export function observationLogPath(
 
 export function promptHistoryPath(workspaceRoot: string): string {
   return path.join(workspaceRoot, ".tinker", "prompt-history.jsonl");
-}
-
-function readRequiredEnv(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") {
-    throw new Error(`${name} is required. Put it in .env or the process environment.`);
-  }
-  return value.trim();
-}
-
-function parsePositiveInteger(
-  value: string | undefined,
-  fallback: number,
-  name: string,
-): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`${name} must be a positive integer; received ${value}`);
-  }
-
-  return parsed;
-}
-
-function parseBoolean(
-  value: string | undefined,
-  fallback: boolean,
-  name: string,
-): boolean {
-  if (value === undefined || value.trim() === "") {
-    return fallback;
-  }
-
-  const normalized = value.trim().toLowerCase();
-  if (["1", "true", "yes", "on"].includes(normalized)) {
-    return true;
-  }
-  if (["0", "false", "no", "off"].includes(normalized)) {
-    return false;
-  }
-
-  throw new Error(
-    `${name} must be one of true/false, 1/0, yes/no, or on/off; received ${value}`,
-  );
-}
-
-function validateWebFetchRefinerModel(mainModelName: string): void {
-  const refinerModel = process.env.TINKER_WEBFETCH_REFINE_MODEL;
-  if (
-    refinerModel !== undefined &&
-    refinerModel.trim() !== "" &&
-    refinerModel !== mainModelName
-  ) {
-    throw new Error(
-      `TINKER_WEBFETCH_REFINE_MODEL must match TINKER_MODEL in F2; received ${JSON.stringify(refinerModel)} for main model ${JSON.stringify(mainModelName)}.`,
-    );
-  }
 }

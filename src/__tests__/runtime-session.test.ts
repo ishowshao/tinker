@@ -30,6 +30,7 @@ import type { SessionHistoryReader } from "../session/session-history-reader";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { createDefaultTooling } from "../tools/registry";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 import {
   collectingEventSink,
   deterministicIdFactory,
@@ -309,6 +310,43 @@ class HugeObservationModel extends TestModelClient {
 }
 
 describe("RuntimeSession lifecycle", () => {
+  test("passes resolved tooling config to built-in and MCP composition", async () => {
+    const toolingConfig = Object.freeze({
+      ...DEFAULT_PUBLIC_TOOLING_CONFIG,
+      mcpTimeoutMs: 1234,
+      mcpMaxObservationChars: 5678,
+      webFetchRefineThreshold: 99,
+    });
+    let builtInConfig: unknown;
+    let mcpOptions: { timeoutMs?: number; maxObservationChars?: number } | undefined;
+    const input = {
+      ...createInput(new CapturingModel(), collectingEventSink(), "tooling-config"),
+      toolingConfig,
+    };
+    const session = await createRuntimeSession(input, {
+      createTooling: (options) => {
+        builtInConfig = options.toolingConfig;
+        return createDefaultTooling(options);
+      },
+      loadMcpConfig: async () => ({ servers: new Map() }),
+      createMcpManager: async (options) => {
+        mcpOptions = options;
+        return {
+          executors: [],
+          inventory: { servers: [] },
+          dispose: async () => undefined,
+        };
+      },
+    });
+
+    await session.dispose({ type: "oneshot_complete" });
+    expect(builtInConfig).toBe(toolingConfig);
+    expect(mcpOptions).toMatchObject({
+      timeoutMs: 1234,
+      maxObservationChars: 5678,
+    });
+  });
+
   test("owns ordered turns, events, and cross-turn messages", async () => {
     const sink = collectingEventSink();
     const model = new CapturingModel();

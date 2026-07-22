@@ -562,15 +562,14 @@ describe("turn cancellation", () => {
   test("aborts the ripgrep child process", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-cancel-rg-"));
     const executable = path.join(workspace, "slow-rg");
-    const previousCommand = process.env.TINKER_RIPGREP_PATH;
     const controller = new AbortController();
 
     try {
       await writeFile(executable, "#!/bin/sh\nexec sleep 30\n", "utf8");
       await chmod(executable, 0o755);
-      process.env.TINKER_RIPGREP_PATH = executable;
 
       const pending = ripGrep(["anything", workspace], {
+        command: executable,
         signal: controller.signal,
       });
       await Bun.sleep(20);
@@ -578,11 +577,6 @@ describe("turn cancellation", () => {
 
       expect(pending).rejects.toBeInstanceOf(TurnCancelledError);
     } finally {
-      if (previousCommand === undefined) {
-        delete process.env.TINKER_RIPGREP_PATH;
-      } else {
-        process.env.TINKER_RIPGREP_PATH = previousCommand;
-      }
       await rm(workspace, { recursive: true });
     }
   });

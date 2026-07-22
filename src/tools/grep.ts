@@ -32,6 +32,11 @@ type GrepArgs = {
 export type GrepToolOptions = {
   workspaceRoot: string;
   cwdState: CwdState;
+  ripgrep?: {
+    command?: string;
+    timeoutMs?: number;
+    maxBufferBytes?: number;
+  };
 };
 
 const ignoredDirectories = [
@@ -174,7 +179,10 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
       }
 
       const rgArgs = buildRipgrepArgs(input, mode, absoluteSearchPath);
-      const rg = await ripGrep(rgArgs, { signal: context.signal });
+      const rg = await ripGrep(rgArgs, {
+        signal: context.signal,
+        ...options.ripgrep,
+      });
 
       if (!rg.ok) {
         return grepFailure({

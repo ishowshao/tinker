@@ -11,6 +11,7 @@ import { buildOutputSnapshotFromText } from "./task-output-snapshot";
 import { defineToolExecutor } from "./types";
 import type { TaskOutputSnapshot } from "./task-output";
 import type { BashRawResult, ToolExecutionContext, ToolExecutor } from "./types";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
 type BashArgs = {
   command: string;
@@ -27,25 +28,16 @@ export type BashToolOptions = {
   maxTimeoutMs?: number;
 };
 
-const defaultForegroundTimeoutMs = 5_000;
-const defaultMaxForegroundTimeoutMs = 600_000;
-
 export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
   const maxTimeoutMs =
-    options.maxTimeoutMs ??
-    parsePositiveInteger(
-      process.env.TINKER_BASH_MAX_TIMEOUT_MS,
-      defaultMaxForegroundTimeoutMs,
-    );
+    options.maxTimeoutMs ?? DEFAULT_PUBLIC_TOOLING_CONFIG.bashMaxTimeoutMs;
   const defaultTimeoutMs =
-    options.defaultTimeoutMs ??
-    Math.min(
-      parsePositiveInteger(
-        process.env.TINKER_BASH_DEFAULT_TIMEOUT_MS,
-        defaultForegroundTimeoutMs,
-      ),
-      maxTimeoutMs,
+    options.defaultTimeoutMs ?? DEFAULT_PUBLIC_TOOLING_CONFIG.bashDefaultTimeoutMs;
+  if (defaultTimeoutMs > maxTimeoutMs) {
+    throw new Error(
+      `Bash default timeout must not exceed max timeout; received ${defaultTimeoutMs} > ${maxTimeoutMs}.`,
     );
+  }
 
   return defineToolExecutor("bash", {
     definition: {
@@ -161,7 +153,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
 
 export function parseBashArgs(
   args: unknown,
-  maxTimeoutMs = defaultMaxForegroundTimeoutMs,
+  maxTimeoutMs = DEFAULT_PUBLIC_TOOLING_CONFIG.bashMaxTimeoutMs,
 ): { ok: true; value: BashArgs } | { ok: false; error: string } {
   if (!isRecord(args)) {
     return { ok: false, error: "Bash arguments must be an object." };
@@ -399,15 +391,6 @@ function parseOptionalTimeout(
   }
 
   return { ok: true, value };
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function lastPipelineCommandName(command: string): string | undefined {

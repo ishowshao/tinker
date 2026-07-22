@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runOneShot } from "../cli/run-runner";
+import type { RunnerConfig } from "../cli/config";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 import { FakeModelClient } from "../model/fake-model-client";
 import type {
   ModelRequestOptions,
@@ -30,6 +32,24 @@ class MemoryWriter {
   write(chunk: string): void {
     this.output += chunk;
   }
+}
+
+function testRunnerConfig(input: {
+  sessionId: SessionId;
+  workspaceRoot: string;
+  modelName: string;
+}): RunnerConfig {
+  return {
+    ...input,
+    apiKey: "test-key",
+    apiBase: "https://api.example.test/v1",
+    maxIterations: 512,
+    includeReasoningContent: false,
+    stream: true,
+    contextProfile: TEST_CONTEXT_PROFILE,
+    contextBudget: TEST_CONTEXT_BUDGET,
+    inputModalities: Object.freeze(["text"] as const),
+  };
 }
 
 class BackgroundTaskModel extends TestModelClient {
@@ -105,10 +125,12 @@ describe("runOneShot", () => {
     try {
       await writeFile(path.join(workspace, "AGENTS.md"), instructions);
       const code = await runOneShot("finish", {
-        sessionId: "instruction-session" as SessionId,
-        workspaceRoot: workspace,
-        modelName: "test-model",
-        contextProfile: TEST_CONTEXT_PROFILE,
+        config: testRunnerConfig({
+          sessionId: "instruction-session" as SessionId,
+          workspaceRoot: workspace,
+          modelName: "test-model",
+        }),
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
         modelClient: model,
         stdout,
         stderr,
@@ -178,10 +200,12 @@ describe("runOneShot", () => {
     try {
       await writeFile(path.join(workspace, "AGENTS.md"), " \n");
       const code = await runOneShot("finish", {
-        sessionId: "invalid-instruction-session" as SessionId,
-        workspaceRoot: workspace,
-        modelName: "test-model",
-        contextProfile: TEST_CONTEXT_PROFILE,
+        config: testRunnerConfig({
+          sessionId: "invalid-instruction-session" as SessionId,
+          workspaceRoot: workspace,
+          modelName: "test-model",
+        }),
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
         modelClient: model,
         stdout: new MemoryWriter(),
         stderr,
@@ -210,10 +234,12 @@ describe("runOneShot", () => {
 
     try {
       const code = await runOneShot("Create notes.txt with one line: hello.", {
-        sessionId: "test-session" as SessionId,
-        workspaceRoot: workspace,
-        modelName: "fake",
-        contextProfile: TEST_CONTEXT_PROFILE,
+        config: testRunnerConfig({
+          sessionId: "test-session" as SessionId,
+          workspaceRoot: workspace,
+          modelName: "fake",
+        }),
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
         modelClient: new FakeModelClient("write-notes", {
           model: "fake",
           contextBudget: TEST_CONTEXT_BUDGET,
@@ -298,10 +324,12 @@ describe("runOneShot", () => {
 
     try {
       const code = await runOneShot("Start a background task.", {
-        sessionId: "background-session" as SessionId,
-        workspaceRoot: workspace,
-        modelName: "fake",
-        contextProfile: TEST_CONTEXT_PROFILE,
+        config: testRunnerConfig({
+          sessionId: "background-session" as SessionId,
+          workspaceRoot: workspace,
+          modelName: "fake",
+        }),
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
         modelClient: new BackgroundTaskModel(pidFilePath),
         stdout,
         stderr,

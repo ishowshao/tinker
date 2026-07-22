@@ -1,9 +1,15 @@
-import path from "node:path";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import {
   createModelContextProfile,
   type ModelContextProfile,
 } from "../model/model-context-profile";
+import {
+  MODEL_PROFILE_FIELDS,
+  MODEL_PROFILES_DOCUMENT_FIELDS,
+  MODEL_TOKEN_ESTIMATOR_FIELDS,
+  type ModelTokenEstimatorKind,
+  type ModelTokenEstimatorMaxRetries,
+} from "./public-config-contract";
 
 export type ModelProfile = {
   readonly name: string;
@@ -21,12 +27,12 @@ export type ModelProfile = {
 export type ModelInputModality = "text" | "image";
 
 export type ModelTokenEstimatorProfile = {
-  readonly kind: "moonshot-estimate-token-count-v1";
+  readonly kind: ModelTokenEstimatorKind;
   readonly model: string;
   readonly apiBase: string;
   readonly apiKey: string;
   readonly timeoutMs: number;
-  readonly maxRetries: 0;
+  readonly maxRetries: ModelTokenEstimatorMaxRetries;
 };
 
 export type ModelProfiles = {
@@ -34,24 +40,7 @@ export type ModelProfiles = {
   readonly profiles: ReadonlyMap<string, ModelProfile>;
 };
 
-export function modelsConfigPath(
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const value = env.TINKER_MODELS;
-  if (value === undefined || value.trim() === "") {
-    return undefined;
-  }
-  return path.isAbsolute(value) ? value : path.resolve(process.cwd(), value);
-}
-
-export async function loadModelProfiles(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<ModelProfiles | undefined> {
-  const configPath = modelsConfigPath(env);
-  if (configPath === undefined) {
-    return undefined;
-  }
-
+export async function loadModelProfiles(configPath: string): Promise<ModelProfiles> {
   let raw: string;
   try {
     raw = await readFile(configPath, "utf8");
@@ -67,13 +56,8 @@ export async function loadModelProfiles(
 
 export async function persistDefaultProfile(
   profileName: string,
-  env: NodeJS.ProcessEnv = process.env,
+  configPath: string,
 ): Promise<void> {
-  const configPath = modelsConfigPath(env);
-  if (configPath === undefined) {
-    return;
-  }
-
   let raw: string;
   try {
     raw = await readFile(configPath, "utf8");
@@ -128,6 +112,11 @@ export function parseModelProfiles(raw: string, sourcePath: string): ModelProfil
   if (!isRecord(json)) {
     throw new Error(`Model profiles ${sourcePath} must be a JSON object.`);
   }
+  assertKnownKeys(
+    json,
+    MODEL_PROFILES_DOCUMENT_FIELDS.map((field) => field.name),
+    `Model profiles ${sourcePath}`,
+  );
 
   const defaultProfile = json.default;
   if (typeof defaultProfile !== "string" || defaultProfile.trim() === "") {
@@ -238,45 +227,31 @@ function parseProfile(
 
   assertKnownKeys(
     value,
-    [
-      "model",
-      "apiBase",
-      "apiKey",
-      "contextWindowTokens",
-      "maxSupportedOutputTokens",
-      "includeReasoningContent",
-      "stream",
-      "inputModalities",
-      "tokenEstimator",
-    ],
+    MODEL_PROFILE_FIELDS.map((field) => field.name),
     where,
   );
 
-  const model = requireString(value.model, `${where}: "model"`);
-  const apiBase = requireString(value.apiBase, `${where}: "apiBase"`);
-  const apiKey = requireString(value.apiKey, `${where}: "apiKey"`);
+  const model = parseProfileString(value, "model", where);
+  const apiBase = parseProfileString(value, "apiBase", where);
+  const apiKey = parseProfileString(value, "apiKey", where);
 
-  const contextWindowTokens = requirePositiveInteger(
-    value.contextWindowTokens,
-    `${where}: "contextWindowTokens"`,
+  const contextWindowTokens = parseProfilePositiveInteger(
+    value,
+    "contextWindowTokens",
+    where,
   );
-  const maxSupportedOutputTokens = requirePositiveInteger(
-    value.maxSupportedOutputTokens,
-    `${where}: "maxSupportedOutputTokens"`,
+  const maxSupportedOutputTokens = parseProfilePositiveInteger(
+    value,
+    "maxSupportedOutputTokens",
+    where,
   );
 
-  const includeReasoningContent =
-    value.includeReasoningContent === undefined
-      ? false
-      : parseBoolean(
-          value.includeReasoningContent,
-          `${where}: "includeReasoningContent"`,
-        );
-
-  const stream =
-    value.stream === undefined
-      ? true
-      : parseBoolean(value.stream, `${where}: "stream"`);
+  const includeReasoningContent = parseProfileBoolean(
+    value,
+    "includeReasoningContent",
+    where,
+  );
+  const stream = parseProfileBoolean(value, "stream", where);
 
   const inputModalities = parseInputModalities(
     value.inputModalities,
@@ -316,7 +291,8 @@ function parseInputModalities(
   name: string,
 ): readonly ModelInputModality[] {
   if (value === undefined) {
-    return Object.freeze(["text"]);
+    const defaultValue = modelProfileField("inputModalities").defaultValue;
+    return defaultValue;
   }
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`${name} must be a non-empty array.`);
@@ -345,30 +321,125 @@ function parseTokenEstimator(value: unknown, name: string): ModelTokenEstimatorP
   }
   assertKnownKeys(
     value,
-    ["kind", "model", "apiBase", "apiKey", "timeoutMs", "maxRetries"],
+    MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => field.name),
     name,
   );
-  if (value.kind !== "moonshot-estimate-token-count-v1") {
-    throw new Error(`${name}.kind must be "moonshot-estimate-token-count-v1".`);
+  const kindField = tokenEstimatorField("kind");
+  if (value.kind !== kindField.literalValue) {
+    throw new Error(`${name}.kind must be ${JSON.stringify(kindField.literalValue)}.`);
   }
-  const model = requireString(value.model, `${name}.model`);
-  const apiBase = requireString(value.apiBase, `${name}.apiBase`);
-  const apiKey = requireString(value.apiKey, `${name}.apiKey`);
+  const model = parseTokenEstimatorString(value, "model", name);
+  const apiBase = parseTokenEstimatorString(value, "apiBase", name);
+  const apiKey = parseTokenEstimatorString(value, "apiKey", name);
+  const timeoutField = tokenEstimatorField("timeoutMs");
+  if (timeoutField.valueKind !== "positive-integer") {
+    throw new Error("Token estimator timeoutMs contract kind is invalid.");
+  }
   const timeoutMs = requirePositiveInteger(value.timeoutMs, `${name}.timeoutMs`);
-  if (timeoutMs < 1_000 || timeoutMs > 60_000) {
-    throw new Error(`${name}.timeoutMs must be between 1000 and 60000.`);
+  if (
+    timeoutField.minimum === undefined ||
+    timeoutField.maximum === undefined ||
+    timeoutMs < timeoutField.minimum ||
+    timeoutMs > timeoutField.maximum
+  ) {
+    throw new Error(
+      `${name}.timeoutMs must be between ${timeoutField.minimum} and ${timeoutField.maximum}.`,
+    );
   }
-  if (value.maxRetries !== 0) {
-    throw new Error(`${name}.maxRetries must be 0.`);
+  const maxRetriesField = tokenEstimatorField("maxRetries");
+  if (value.maxRetries !== maxRetriesField.literalValue) {
+    throw new Error(`${name}.maxRetries must be ${maxRetriesField.literalValue}.`);
   }
   return Object.freeze({
-    kind: value.kind,
+    kind: kindField.literalValue,
     model,
     apiBase,
     apiKey,
     timeoutMs,
-    maxRetries: 0,
+    maxRetries: maxRetriesField.literalValue,
   });
+}
+
+type ModelProfileFieldName = (typeof MODEL_PROFILE_FIELDS)[number]["name"];
+type ModelTokenEstimatorFieldName =
+  (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number]["name"];
+
+function modelProfileField<Name extends ModelProfileFieldName>(
+  name: Name,
+): Extract<(typeof MODEL_PROFILE_FIELDS)[number], { readonly name: Name }> {
+  const field = MODEL_PROFILE_FIELDS.find((candidate) => candidate.name === name);
+  if (field === undefined) {
+    throw new Error(`Missing model profile field contract for ${name}.`);
+  }
+  return field as Extract<
+    (typeof MODEL_PROFILE_FIELDS)[number],
+    { readonly name: Name }
+  >;
+}
+
+function tokenEstimatorField<Name extends ModelTokenEstimatorFieldName>(
+  name: Name,
+): Extract<(typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number], { readonly name: Name }> {
+  const field = MODEL_TOKEN_ESTIMATOR_FIELDS.find(
+    (candidate) => candidate.name === name,
+  );
+  if (field === undefined) {
+    throw new Error(`Missing token estimator field contract for ${name}.`);
+  }
+  return field as Extract<
+    (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number],
+    { readonly name: Name }
+  >;
+}
+
+function parseProfileString(
+  value: Record<string, unknown>,
+  name: "model" | "apiBase" | "apiKey",
+  where: string,
+): string {
+  const field = modelProfileField(name);
+  if (field.valueKind !== "non-empty-string") {
+    throw new Error(`Model profile field ${name} has an invalid contract kind.`);
+  }
+  return requireString(value[name], `${where}: ${JSON.stringify(name)}`);
+}
+
+function parseProfilePositiveInteger(
+  value: Record<string, unknown>,
+  name: "contextWindowTokens" | "maxSupportedOutputTokens",
+  where: string,
+): number {
+  const field = modelProfileField(name);
+  if (field.valueKind !== "positive-integer") {
+    throw new Error(`Model profile field ${name} has an invalid contract kind.`);
+  }
+  return requirePositiveInteger(value[name], `${where}: ${JSON.stringify(name)}`);
+}
+
+function parseProfileBoolean(
+  value: Record<string, unknown>,
+  name: "includeReasoningContent" | "stream",
+  where: string,
+): boolean {
+  const field = modelProfileField(name);
+  if (field.valueKind !== "boolean" || typeof field.defaultValue !== "boolean") {
+    throw new Error(`Model profile field ${name} has an invalid boolean contract.`);
+  }
+  return value[name] === undefined
+    ? field.defaultValue
+    : parseBoolean(value[name], `${where}: ${JSON.stringify(name)}`);
+}
+
+function parseTokenEstimatorString(
+  value: Record<string, unknown>,
+  name: "model" | "apiBase" | "apiKey",
+  where: string,
+): string {
+  const field = tokenEstimatorField(name);
+  if (field.valueKind !== "non-empty-string") {
+    throw new Error(`Token estimator field ${name} has an invalid contract kind.`);
+  }
+  return requireString(value[name], `${where}.${name}`);
 }
 
 function assertKnownKeys(

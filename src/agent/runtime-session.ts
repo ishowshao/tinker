@@ -92,6 +92,7 @@ import { TurnCancelledError } from "./turn-cancellation";
 import type { ToolCompletionInput } from "../context/protocol-frame";
 import type { BuiltContextRequest } from "../context/context-revision";
 import type { CommittedToolCompletion } from "./session-ledger";
+import type { PublicToolingConfig } from "../cli/public-config-contract";
 import type {
   IterationIdentity,
   RunAgentResult,
@@ -231,6 +232,7 @@ type CommonRuntimeSessionInput = {
         observationLogPath?: string;
       };
   webFetchRefiner?: Refiner;
+  toolingConfig?: PublicToolingConfig;
 };
 
 type CreateNewRuntimeSessionInput = CommonRuntimeSessionInput & {
@@ -531,6 +533,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         runtimeSession: session.context,
         historyReader: store.historyReader(),
         webFetchRefiner: input.webFetchRefiner,
+        toolingConfig: input.toolingConfig,
         ...(session.skillCatalog.skills.size === 0
           ? {}
           : {
@@ -544,6 +547,8 @@ class DefaultRuntimeSession implements RuntimeSession {
         session.mcpManager = await dependencies.createMcpManager({
           config: mcpConfig,
           runtimeSession: session.context,
+          timeoutMs: input.toolingConfig?.mcpTimeoutMs,
+          maxObservationChars: input.toolingConfig?.mcpMaxObservationChars,
         });
         for (const executor of session.mcpManager.executors) {
           session.tooling.registry.register(executor, "MCP");

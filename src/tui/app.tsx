@@ -42,12 +42,14 @@ import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { loadViewFile, type ViewFile } from "./view-file";
 import { writeClipboardText } from "./clipboard";
+import type { WorkspaceFileLister } from "./workspace-file-search";
 
 export type AppProps = {
   sessionController: TuiSessionController;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
   projectSlashCommands?: readonly ProjectSlashCommand[];
+  fileLister?: WorkspaceFileLister;
   profiles?: ModelProfiles;
   persistDefaultProfile?: (profileName: string) => Promise<void>;
   readViewFile?: (workspaceRoot: string, filePath: string) => Promise<ViewFile>;
@@ -647,6 +649,7 @@ export function App(props: AppProps) {
                 isDisabled={isRunning || isSessionOperation || isCopying}
                 history={props.history}
                 commands={availableCommands}
+                fileLister={props.fileLister}
                 importImage={binding.importImage}
                 verifyImageAssets={binding.verifyImageAssets}
                 onSubmit={onSubmit}

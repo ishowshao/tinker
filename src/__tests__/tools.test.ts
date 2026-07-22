@@ -23,6 +23,7 @@ import {
 } from "../tools/registry";
 import { DEFAULT_MAX_READ_CONTENT_BYTES } from "../tools/read";
 import { defineToolExecutor, type ToolExecutionContext } from "../tools/types";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -1665,28 +1666,23 @@ describe("Grep tool", () => {
 
   test("fails with a clear error when ripgrep is missing", async () => {
     await withGrepWorkspace(async (workspace) => {
-      const previous = process.env.TINKER_RIPGREP_PATH;
-      process.env.TINKER_RIPGREP_PATH = path.join(workspace, "missing-rg");
+      const tooling = createDefaultTooling({
+        workspaceRoot: workspace,
+        toolingConfig: {
+          ...DEFAULT_PUBLIC_TOOLING_CONFIG,
+          ripgrepPath: path.join(workspace, "missing-rg"),
+        },
+      });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Grep",
+        args: { pattern: "foo" },
+      });
 
-      try {
-        const tooling = createDefaultTooling({ workspaceRoot: workspace });
-        const raw = await tooling.runtime.execute({
-          providerToolCallId: "call_1",
-          name: "Grep",
-          args: { pattern: "foo" },
-        });
-
-        expect(raw.ok).toBe(false);
-        expect("error" in raw ? raw.error : "").toBe(
-          "Tinker's bundled ripgrep executable is unavailable. Reinstall tinker-agent.",
-        );
-      } finally {
-        if (previous === undefined) {
-          delete process.env.TINKER_RIPGREP_PATH;
-        } else {
-          process.env.TINKER_RIPGREP_PATH = previous;
-        }
-      }
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toBe(
+        "Tinker's bundled ripgrep executable is unavailable. Reinstall tinker-agent.",
+      );
     });
   });
 

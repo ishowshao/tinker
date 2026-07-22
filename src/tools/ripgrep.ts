@@ -1,12 +1,9 @@
 import { execFile } from "node:child_process";
-import { rgPath } from "@vscode/ripgrep";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
 export const RIPGREP_MISSING_ERROR =
   "Tinker's bundled ripgrep executable is unavailable. Reinstall tinker-agent.";
-
-const defaultTimeoutMs = 20_000;
-const defaultMaxBufferBytes = 20_000_000;
 
 export type RipgrepResult = {
   ok: boolean;
@@ -18,12 +15,13 @@ export type RipgrepResult = {
 
 export type RipgrepOptions = {
   signal: AbortSignal;
+  command?: string;
   timeoutMs?: number;
   maxBufferBytes?: number;
 };
 
-export function findRipgrepCommand(): string {
-  return process.env.TINKER_RIPGREP_PATH ?? rgPath;
+export function findRipgrepCommand(command?: string): string {
+  return command ?? DEFAULT_PUBLIC_TOOLING_CONFIG.ripgrepPath;
 }
 
 export async function ripGrep(
@@ -31,21 +29,28 @@ export async function ripGrep(
   options: RipgrepOptions,
 ): Promise<RipgrepResult> {
   throwIfTurnCancelled(options.signal);
-  const timeoutMs =
-    options.timeoutMs ??
-    parsePositiveInteger(process.env.TINKER_GREP_TIMEOUT_MS, defaultTimeoutMs);
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PUBLIC_TOOLING_CONFIG.grepTimeoutMs;
   const maxBufferBytes =
-    options.maxBufferBytes ??
-    parsePositiveInteger(
-      process.env.TINKER_GREP_MAX_BUFFER_BYTES,
-      defaultMaxBufferBytes,
-    );
+    options.maxBufferBytes ?? DEFAULT_PUBLIC_TOOLING_CONFIG.grepMaxBufferBytes;
+  const command = findRipgrepCommand(options.command);
 
-  const first = await runRipgrep(args, timeoutMs, maxBufferBytes, options.signal);
+  const first = await runRipgrep(
+    command,
+    args,
+    timeoutMs,
+    maxBufferBytes,
+    options.signal,
+  );
   if (first.retryWithSingleThread) {
     throwIfTurnCancelled(options.signal);
     return finalizeResult(
-      await runRipgrep(["-j", "1", ...args], timeoutMs, maxBufferBytes, options.signal),
+      await runRipgrep(
+        command,
+        ["-j", "1", ...args],
+        timeoutMs,
+        maxBufferBytes,
+        options.signal,
+      ),
     );
   }
 
@@ -62,6 +67,7 @@ type RipgrepAttempt = {
 };
 
 function runRipgrep(
+  command: string,
   args: string[],
   timeoutMs: number,
   maxBufferBytes: number,
@@ -74,7 +80,7 @@ function runRipgrep(
     }
 
     execFile(
-      findRipgrepCommand(),
+      command,
       args,
       { timeout: timeoutMs, maxBuffer: maxBufferBytes, signal },
       (error, stdout, stderr) => {
@@ -209,13 +215,4 @@ function isEagainError(
     error.message.includes("Resource temporarily unavailable") ||
     stderr.includes("Resource temporarily unavailable")
   );
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined || value.trim() === "") {
-    return fallback;
-  }
-
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }

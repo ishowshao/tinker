@@ -58,11 +58,8 @@ export async function createMcpManager(
   options: CreateMcpManagerOptions,
 ): Promise<McpManager> {
   const clientFactory = options.clientFactory ?? stdioClientFactory;
-  const timeoutMs =
-    options.timeoutMs ?? parsePositiveIntegerEnv("TINKER_MCP_TIMEOUT_MS");
-  const maxObservationChars =
-    options.maxObservationChars ??
-    parsePositiveIntegerEnv("TINKER_MCP_MAX_OBSERVATION_CHARS");
+  const timeoutMs = options.timeoutMs;
+  const maxObservationChars = options.maxObservationChars;
   const connections: McpClientConnection[] = [];
   const executors: ToolExecutor[] = [];
   const servers: McpServerInventory[] = [];
@@ -225,20 +222,6 @@ async function closeConnections(
       errors.push(error);
     }
   }
-}
-
-function parsePositiveIntegerEnv(name: string): number | undefined {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") {
-    return undefined;
-  }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive integer; received ${value}`);
-  }
-
-  return parsed;
 }
 
 async function stdioClientFactory(

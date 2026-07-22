@@ -31,6 +31,10 @@ import { ToolExecutionFatalError } from "./types";
 import type { SkillCatalogSnapshot } from "../skills/skill-loader";
 import type { SkillActivationCoordinator } from "../skills/skill-context";
 import { createSkillToolExecutor } from "../skills/skill-tool";
+import {
+  DEFAULT_PUBLIC_TOOLING_CONFIG,
+  type PublicToolingConfig,
+} from "../cli/public-config-contract";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
@@ -128,10 +132,12 @@ export function createDefaultTooling(options: {
   taskStopGraceMs?: number;
   skillCatalog?: SkillCatalogSnapshot;
   skillCoordinator?: SkillActivationCoordinator;
+  toolingConfig?: PublicToolingConfig;
 }): DefaultTooling {
   const snapshots: FileSnapshotStore = new Map();
   const registry = new ToolRegistry();
   const runtimeSession = options.runtimeSession;
+  const toolingConfig = options.toolingConfig ?? DEFAULT_PUBLIC_TOOLING_CONFIG;
   const cwdState = createCwdState(options.workspaceRoot);
   const taskManager = new ShellTaskManager({
     workspaceRoot: options.workspaceRoot,
@@ -149,6 +155,11 @@ export function createDefaultTooling(options: {
     createGrepToolExecutor({
       workspaceRoot: options.workspaceRoot,
       cwdState,
+      ripgrep: {
+        command: toolingConfig.ripgrepPath,
+        timeoutMs: toolingConfig.grepTimeoutMs,
+        maxBufferBytes: toolingConfig.grepMaxBufferBytes,
+      },
     }),
   );
   registry.register(
@@ -192,13 +203,15 @@ export function createDefaultTooling(options: {
       workspaceRoot: options.workspaceRoot,
       cwdState,
       taskManager,
+      defaultTimeoutMs: toolingConfig.bashDefaultTimeoutMs,
+      maxTimeoutMs: toolingConfig.bashMaxTimeoutMs,
     }),
   );
   registry.register(createTaskListToolExecutor({ taskManager }));
   registry.register(createTaskOutputToolExecutor({ taskManager }));
   registry.register(createTaskStopToolExecutor({ taskManager }));
 
-  const exaApiKey = options.exaApiKey ?? process.env.EXA_API_KEY;
+  const exaApiKey = options.exaApiKey ?? toolingConfig.exaApiKey;
   const hasExaKey = exaApiKey !== undefined && exaApiKey.trim() !== "";
 
   if (hasExaKey) {
@@ -209,6 +222,7 @@ export function createDefaultTooling(options: {
     createWebFetchToolExecutor({
       exaApiKey: hasExaKey ? exaApiKey : undefined,
       refiner: options.webFetchRefiner,
+      refineThreshold: toolingConfig.webFetchRefineThreshold,
     }),
   );
 

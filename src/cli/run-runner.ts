@@ -12,16 +12,17 @@ import {
 } from "../instructions/project-instructions";
 import {
   createRunnerModelClient,
-  createWebFetchRefinerFromEnv,
-  readRunnerConfig,
+  createWebFetchRefiner,
   RUNTIME_INSTRUCTIONS,
-  type RunnerConfigOverrides,
+  type RunnerConfig,
 } from "./config";
-import { loadModelProfiles } from "./model-profiles";
+import type { PublicToolingConfig } from "./public-config-contract";
 import { realpath } from "node:fs/promises";
 import { loadSkillCatalog } from "../skills/skill-loader";
 
-export type RunOneShotOptions = RunnerConfigOverrides & {
+export type RunOneShotOptions = {
+  config: RunnerConfig;
+  tooling: PublicToolingConfig;
   modelClient?: ModelClient;
   stdout?: WritableLike;
   stderr?: WritableLike;
@@ -30,7 +31,7 @@ export type RunOneShotOptions = RunnerConfigOverrides & {
 
 export async function runOneShot(
   userPrompt: string,
-  options: RunOneShotOptions = {},
+  options: RunOneShotOptions,
 ): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
@@ -40,9 +41,7 @@ export async function runOneShot(
   let exitCode = 1;
 
   try {
-    const profiles =
-      options.modelClient === undefined ? await loadModelProfiles() : undefined;
-    const config = readRunnerConfig(options, profiles);
+    const config = options.config;
     const workspaceRoot = await realpath(config.workspaceRoot);
     const projectInstructions = await loadProjectInstructions(workspaceRoot);
     const skillCatalog = await loadSkillCatalog({ workspaceRoot });
@@ -68,7 +67,8 @@ export async function runOneShot(
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:
         options.eventLogPath === false ? false : { eventLogPath: options.eventLogPath },
-      webFetchRefiner: createWebFetchRefinerFromEnv(config),
+      webFetchRefiner: createWebFetchRefiner(config),
+      toolingConfig: options.tooling,
     });
 
     const result = await session.executeTurn({

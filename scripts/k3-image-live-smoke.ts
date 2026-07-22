@@ -7,8 +7,7 @@ import {
   type RuntimeSession,
 } from "../src/agent/runtime-session";
 import type { UserMessage } from "../src/agent/types";
-import { readRunnerConfig } from "../src/cli/config";
-import { loadModelProfiles } from "../src/cli/model-profiles";
+import { resolveCliConfiguration, type RunnerConfig } from "../src/cli/config";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { runtimeIdFactory } from "../src/ids/runtime-id";
@@ -23,7 +22,7 @@ import { OpenAIChatModelClient } from "../src/model/openai-chat-model-client";
 const LIVE_ENABLE_ENV = "TINKER_LIVE_K3_IMAGE";
 const DEFAULT_PROFILE = "k3";
 
-type LiveConfig = ReturnType<typeof readRunnerConfig>;
+type LiveConfig = RunnerConfig;
 
 type HttpObservation = {
   kind: "chat" | "estimate";
@@ -63,18 +62,19 @@ if (process.env[LIVE_ENABLE_ENV] !== "1") {
 }
 
 const profileName = process.argv[2] ?? DEFAULT_PROFILE;
-const profiles = await loadModelProfiles();
-if (profiles === undefined) {
+const configuration = await resolveCliConfiguration({ profileName });
+if (configuration.profiles === undefined) {
   throw new Error("TINKER_MODELS must point to a model profile file.");
 }
 
 const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-k3-image-live-"));
 let activeSession: RuntimeSession | undefined;
 try {
-  const config = readRunnerConfig(
-    { workspaceRoot: workspace, profileName, maxIterations: 4 },
-    profiles,
-  );
+  const config = {
+    ...configuration.initialRunnerConfig,
+    workspaceRoot: workspace,
+    maxIterations: 4,
+  };
   const profileImageCapabilityEnabled = config.inputModalities.includes("image");
   const probeConfig = liveProbeConfig(config);
   await writeVisualFixture(workspace, "red-a.png", "#e00000", "A");
@@ -597,6 +597,7 @@ async function createLiveSession(
       modelClient: createClient(config, observedFetch, true),
       presentationSinks: [sink],
       persistence: false,
+      toolingConfig: configuration.tooling,
     },
     { loadMcpConfig: async () => undefined },
   );

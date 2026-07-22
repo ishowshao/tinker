@@ -7,11 +7,12 @@ import {
 } from "../src/agent/runtime-session";
 import type { AssistantMessage } from "../src/agent/types";
 import {
-  createModelClientFromEnv,
-  readRunnerConfig,
+  createModelClient,
+  resolveCliConfiguration,
   RUNTIME_INSTRUCTIONS,
+  type RunnerConfig,
 } from "../src/cli/config";
-import { loadModelProfiles } from "../src/cli/model-profiles";
+import type { PublicToolingConfig } from "../src/cli/public-config-contract";
 import type {
   ContextCompactionResult,
   ContextRetirementResult,
@@ -133,14 +134,10 @@ export async function runI4ActiveRecallEvaluation(input: {
   negativeOnly?: boolean;
   caseId?: string;
 }): Promise<I4ActiveRecallReport> {
-  const profiles = await loadModelProfiles();
-  const config = readRunnerConfig(
-    {
-      maxIterations: 8,
-      ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
-    },
-    profiles,
-  );
+  const configuration = await resolveCliConfiguration({
+    ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
+  });
+  const config = { ...configuration.initialRunnerConfig, maxIterations: 8 };
   const views = input.views ?? allViews;
   const trialsPerView = input.trialsPerView ?? 1;
   if (!Number.isSafeInteger(trialsPerView) || trialsPerView < 1) {
@@ -174,8 +171,9 @@ export async function runI4ActiveRecallEvaluation(input: {
             entry,
             view,
             trial,
-            provider: createModelClientFromEnv(config),
+            provider: createModelClient(config),
             config,
+            tooling: configuration.tooling,
           }),
         );
       }
@@ -213,7 +211,8 @@ async function runTrial(input: {
   view: ActiveRecallView;
   trial: number;
   provider: ModelClient;
-  config: ReturnType<typeof readRunnerConfig>;
+  config: RunnerConfig;
+  tooling: PublicToolingConfig;
 }): Promise<I4ActiveRecallTrial> {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-i4-recall-"));
   const recorder = new ActiveRecallRecorder();
@@ -243,6 +242,7 @@ async function runTrial(input: {
         modelClient: model,
         presentationSinks: [recorder],
         persistence: false,
+        toolingConfig: input.tooling,
       },
       {
         loadMcpConfig: async () => undefined,

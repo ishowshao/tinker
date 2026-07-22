@@ -1,17 +1,24 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
-  DEFAULT_MAX_ITERATIONS,
-  createModelClientFromEnv,
-  readRunnerConfig,
+  createResolvedCliConfiguration,
+  resolveCliConfiguration,
   RUNTIME_INSTRUCTIONS,
 } from "../cli/config";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
+  DEFAULT_PUBLIC_TOOLING_CONFIG,
+  MODEL_PROFILE_FIELDS,
+  MODEL_TOKEN_ESTIMATOR_FIELDS,
+  PUBLIC_CONFIG_FIELDS,
+  parsePublicEnvironment,
+} from "../cli/public-config-contract";
+import {
   CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
   renderRecallRetirementContract,
 } from "../context/recall-retirement-contract";
-import { TEST_CONTEXT_PROFILE } from "./test-runtime";
-
 const TEST_PROFILES_JSON = JSON.stringify({
   default: "deepseek",
   profiles: {
@@ -37,316 +44,324 @@ const TEST_PROFILES: ModelProfiles = parseModelProfiles(
   "/test/models.json",
 );
 
-describe("runner config", () => {
-  test("requires an explicit model name", () => {
-    withEnv("TINKER_MODEL", undefined, () => {
-      expect(() => readRunnerConfig({ contextProfile: TEST_CONTEXT_PROFILE })).toThrow(
-        "TINKER_MODEL is required",
-      );
+const TEST_CWD = "/test/tinker-cwd";
+
+function envMode(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    TINKER_MODEL: "test-model",
+    TINKER_BASE_URL: "https://api.example.test/v1",
+    TINKER_API_KEY: "test-key",
+    TINKER_CONTEXT_WINDOW_TOKENS: String(256 * 1_024),
+    TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: String(64 * 1_024),
+    ...overrides,
+  };
+}
+
+describe("public config contract", () => {
+  test("freezes the exact public environment variable list", () => {
+    expect(PUBLIC_CONFIG_FIELDS.map((field) => field.name)).toEqual([
+      "TINKER_MODELS",
+      "TINKER_MODEL",
+      "TINKER_BASE_URL",
+      "TINKER_API_KEY",
+      "TINKER_CONTEXT_WINDOW_TOKENS",
+      "TINKER_MAX_SUPPORTED_OUTPUT_TOKENS",
+      "TINKER_INCLUDE_REASONING_CONTENT",
+      "TINKER_STREAM",
+      "TINKER_WEBFETCH_REFINE_MODEL",
+      "TINKER_WORKSPACE",
+      "TINKER_MAX_ITERATIONS",
+      "EXA_API_KEY",
+      "TINKER_MCP_TIMEOUT_MS",
+      "TINKER_MCP_MAX_OBSERVATION_CHARS",
+      "TINKER_BASH_DEFAULT_TIMEOUT_MS",
+      "TINKER_BASH_MAX_TIMEOUT_MS",
+      "TINKER_GREP_TIMEOUT_MS",
+      "TINKER_GREP_MAX_BUFFER_BYTES",
+      "TINKER_WEBFETCH_REFINE_THRESHOLD",
+      "TINKER_RIPGREP_PATH",
+    ]);
+    expect(Object.isFrozen(PUBLIC_CONFIG_FIELDS)).toBe(true);
+    expect(PUBLIC_CONFIG_FIELDS.every((field) => Object.isFrozen(field))).toBe(true);
+  });
+
+  test("declares secrets, defaults, and profile primitive types once", () => {
+    expect(
+      PUBLIC_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
+    ).toEqual(["TINKER_API_KEY", "EXA_API_KEY"]);
+    expect(DEFAULT_PUBLIC_TOOLING_CONFIG).toMatchObject({
+      mcpTimeoutMs: 60_000,
+      mcpMaxObservationChars: 40_000,
+      bashDefaultTimeoutMs: 5_000,
+      bashMaxTimeoutMs: 600_000,
+      grepTimeoutMs: 20_000,
+      grepMaxBufferBytes: 20_000_000,
+      webFetchRefineThreshold: 2_000,
+    });
+    expect(MODEL_PROFILE_FIELDS.map((field) => field.name)).toEqual([
+      "model",
+      "apiBase",
+      "apiKey",
+      "contextWindowTokens",
+      "maxSupportedOutputTokens",
+      "includeReasoningContent",
+      "stream",
+      "inputModalities",
+      "tokenEstimator",
+    ]);
+    expect(
+      MODEL_PROFILE_FIELDS.find((field) => field.name === "stream")?.defaultValue,
+    ).toBe(true);
+    expect(MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => field.name)).toEqual([
+      "kind",
+      "model",
+      "apiBase",
+      "apiKey",
+      "timeoutMs",
+      "maxRetries",
+    ]);
+  });
+});
+
+describe("public environment parser", () => {
+  test("requires every env-mode model field", () => {
+    for (const name of [
+      "TINKER_MODEL",
+      "TINKER_BASE_URL",
+      "TINKER_API_KEY",
+      "TINKER_CONTEXT_WINDOW_TOKENS",
+      "TINKER_MAX_SUPPORTED_OUTPUT_TOKENS",
+    ]) {
+      const env = envMode();
+      delete env[name];
+      expect(() => parsePublicEnvironment(env, TEST_CWD)).toThrow(name);
+    }
+  });
+
+  test("resolves defaults, workspace paths, and the model budget", () => {
+    const environment = parsePublicEnvironment(
+      envMode({ TINKER_WORKSPACE: "workspace" }),
+      TEST_CWD,
+    );
+    expect(environment).toMatchObject({
+      mode: "env",
+      workspaceRoot: path.join(TEST_CWD, "workspace"),
+      maxIterations: 512,
+      modelName: "test-model",
+      includeReasoningContent: false,
+      stream: true,
+      tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
+    });
+    const config = createResolvedCliConfiguration(environment).initialRunnerConfig;
+    expect(config.contextBudget).toMatchObject({
+      requestMaxOutputTokens: 65_536,
+      inputBudgetTokens: 196_608,
+      triggerTokens: 157_286,
+      triggerRatio: 0.8,
     });
   });
 
-  test("requires an explicit model context profile", () => {
-    withEnvValues(
-      {
-        TINKER_CONTEXT_WINDOW_TOKENS: undefined,
-        TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: undefined,
-      },
-      () => {
-        expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
-          "TINKER_CONTEXT_WINDOW_TOKENS is required",
-        );
-      },
-    );
-  });
-
-  test("derives strict DeepSeek and 256K budgets", () => {
-    withEnvValues(
-      {
-        TINKER_CONTEXT_WINDOW_TOKENS: "1048576",
-        TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "393216",
-      },
-      () => {
-        expect(
-          readRunnerConfig({ modelName: "test-model" }).contextBudget,
-        ).toMatchObject({
-          requestMaxOutputTokens: 131_072,
-          inputBudgetTokens: 917_504,
-          triggerTokens: 734_003,
-          triggerRatio: 0.8,
-        });
-      },
-    );
-
-    withEnvValues(
-      {
-        TINKER_CONTEXT_WINDOW_TOKENS: String(256 * 1_024),
-        TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: String(64 * 1_024),
-      },
-      () => {
-        expect(
-          readRunnerConfig({ modelName: "test-model" }).contextBudget,
-        ).toMatchObject({
-          requestMaxOutputTokens: 65_536,
-          inputBudgetTokens: 196_608,
-          triggerTokens: 157_286,
-        });
-      },
-    );
-  });
-
-  test("fast-fails invalid profile values and incompatible limits", () => {
-    for (const invalid of ["", "0", "-1", "1.5", "128K", "9007199254740992"]) {
-      withEnvValues(
-        {
-          TINKER_CONTEXT_WINDOW_TOKENS: invalid,
-          TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "1",
-        },
-        () => {
-          expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
-            "TINKER_CONTEXT_WINDOW_TOKENS",
-          );
-        },
+  test("accepts every documented boolean alias case-insensitively", () => {
+    for (const value of ["true", "1", "yes", "on", "TRUE", "On"]) {
+      const environment = parsePublicEnvironment(
+        envMode({ TINKER_INCLUDE_REASONING_CONTENT: value }),
+        TEST_CWD,
+      );
+      expect(environment.mode === "env" && environment.includeReasoningContent).toBe(
+        true,
       );
     }
+    for (const value of ["false", "0", "no", "off", "FALSE", "Off"]) {
+      const environment = parsePublicEnvironment(
+        envMode({ TINKER_STREAM: value }),
+        TEST_CWD,
+      );
+      expect(environment.mode === "env" && environment.stream).toBe(false);
+    }
+    expect(() =>
+      parsePublicEnvironment(envMode({ TINKER_STREAM: "maybe" }), TEST_CWD),
+    ).toThrow("TINKER_STREAM must be one of");
+  });
 
-    withEnvValues(
-      {
+  test("fast-fails every invalid public positive integer", () => {
+    for (const name of [
+      "TINKER_CONTEXT_WINDOW_TOKENS",
+      "TINKER_MAX_SUPPORTED_OUTPUT_TOKENS",
+      "TINKER_MAX_ITERATIONS",
+      "TINKER_MCP_TIMEOUT_MS",
+      "TINKER_MCP_MAX_OBSERVATION_CHARS",
+      "TINKER_BASH_DEFAULT_TIMEOUT_MS",
+      "TINKER_BASH_MAX_TIMEOUT_MS",
+      "TINKER_GREP_TIMEOUT_MS",
+      "TINKER_GREP_MAX_BUFFER_BYTES",
+      "TINKER_WEBFETCH_REFINE_THRESHOLD",
+    ]) {
+      for (const invalid of ["0", "-1", "1.5", "1e3", "not-a-number"]) {
+        expect(() =>
+          parsePublicEnvironment(envMode({ [name]: invalid }), TEST_CWD),
+        ).toThrow(name);
+      }
+    }
+  });
+
+  test("validates cross-field relationships before runner creation", () => {
+    const incompatibleContext = parsePublicEnvironment(
+      envMode({
         TINKER_CONTEXT_WINDOW_TOKENS: "100",
         TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "101",
-      },
-      () => {
-        expect(() => readRunnerConfig({ modelName: "test-model" })).toThrow(
-          "maxSupportedOutputTokens must not exceed contextWindowTokens",
-        );
-      },
+      }),
+      TEST_CWD,
     );
-  });
-
-  test("rejects a WebFetch refiner model that differs from the main model", () => {
-    withEnv("TINKER_WEBFETCH_REFINE_MODEL", "other-model", () => {
-      expect(() =>
-        readRunnerConfig({
-          modelName: "main-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
+    expect(() => createResolvedCliConfiguration(incompatibleContext)).toThrow(
+      "maxSupportedOutputTokens must not exceed contextWindowTokens",
+    );
+    expect(() =>
+      parsePublicEnvironment(
+        envMode({
+          TINKER_BASH_DEFAULT_TIMEOUT_MS: "5001",
+          TINKER_BASH_MAX_TIMEOUT_MS: "5000",
         }),
-      ).toThrow("TINKER_WEBFETCH_REFINE_MODEL must match TINKER_MODEL");
-    });
+        TEST_CWD,
+      ),
+    ).toThrow(
+      "TINKER_BASH_DEFAULT_TIMEOUT_MS must not exceed TINKER_BASH_MAX_TIMEOUT_MS",
+    );
+    expect(() =>
+      parsePublicEnvironment(
+        envMode({ TINKER_WEBFETCH_REFINE_MODEL: "other-model" }),
+        TEST_CWD,
+      ),
+    ).toThrow("TINKER_WEBFETCH_REFINE_MODEL must match TINKER_MODEL");
   });
 
-  test("does not include reasoning content by default", () => {
-    withEnv("TINKER_INCLUDE_REASONING_CONTENT", undefined, () => {
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).includeReasoningContent,
-      ).toBe(false);
-    });
-  });
-
-  test("enables reasoning content with env flag", () => {
-    withEnv("TINKER_INCLUDE_REASONING_CONTENT", "true", () => {
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).includeReasoningContent,
-      ).toBe(true);
-    });
-  });
-
-  test("rejects invalid reasoning content env flag", () => {
-    withEnv("TINKER_INCLUDE_REASONING_CONTENT", "maybe", () => {
-      expect(() =>
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }),
-      ).toThrow("TINKER_INCLUDE_REASONING_CONTENT must be one of");
-    });
-  });
-
-  test("streams by default", () => {
-    withEnv("TINKER_STREAM", undefined, () => {
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).stream,
-      ).toBe(true);
-    });
-  });
-
-  test("disables streaming with env flag", () => {
-    withEnv("TINKER_STREAM", "false", () => {
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).stream,
-      ).toBe(false);
-    });
-  });
-
-  test("rejects invalid stream env flag", () => {
-    withEnv("TINKER_STREAM", "maybe", () => {
-      expect(() =>
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }),
-      ).toThrow("TINKER_STREAM must be one of");
-    });
-  });
-
-  test("reads max iterations from the new environment variable", () => {
-    withEnv("TINKER_MAX_ITERATIONS", "7", () => {
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).maxIterations,
-      ).toBe(7);
-    });
-  });
-
-  test("allows long-running turns by default", () => {
-    withEnv("TINKER_MAX_ITERATIONS", undefined, () => {
-      expect(DEFAULT_MAX_ITERATIONS).toBe(512);
-      expect(
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }).maxIterations,
-      ).toBe(512);
-    });
-  });
-
-  test("fast-fails an invalid max iterations value", () => {
-    withEnv("TINKER_MAX_ITERATIONS", "0", () => {
-      expect(() =>
-        readRunnerConfig({
-          modelName: "test-model",
-          contextProfile: TEST_CONTEXT_PROFILE,
-        }),
-      ).toThrow("TINKER_MAX_ITERATIONS must be a positive integer");
+  test("parses all tooling overrides once", () => {
+    const environment = parsePublicEnvironment(
+      envMode({
+        EXA_API_KEY: "exa-key",
+        TINKER_MCP_TIMEOUT_MS: "1",
+        TINKER_MCP_MAX_OBSERVATION_CHARS: "2",
+        TINKER_BASH_DEFAULT_TIMEOUT_MS: "3",
+        TINKER_BASH_MAX_TIMEOUT_MS: "4",
+        TINKER_GREP_TIMEOUT_MS: "5",
+        TINKER_GREP_MAX_BUFFER_BYTES: "6",
+        TINKER_WEBFETCH_REFINE_THRESHOLD: "7",
+        TINKER_RIPGREP_PATH: "/diagnostic/rg",
+      }),
+      TEST_CWD,
+    );
+    expect(environment.tooling).toEqual({
+      exaApiKey: "exa-key",
+      mcpTimeoutMs: 1,
+      mcpMaxObservationChars: 2,
+      bashDefaultTimeoutMs: 3,
+      bashMaxTimeoutMs: 4,
+      grepTimeoutMs: 5,
+      grepMaxBufferBytes: 6,
+      webFetchRefineThreshold: 7,
+      ripgrepPath: "/diagnostic/rg",
     });
   });
 });
 
 describe("profile resolution", () => {
-  test("uses the JSON default profile when no override is given", () => {
-    withEnv("TINKER_MODEL", "ignored-legacy-value", () => {
-      const config = readRunnerConfig({}, TEST_PROFILES);
-      expect(config.modelName).toBe("deepseek-chat");
-      expect(config.profileName).toBe("deepseek");
-    });
-  });
-
-  test("uses the override profile name when it matches", () => {
-    withEnv("TINKER_MODEL", "ignored-legacy-value", () => {
-      const config = readRunnerConfig({ profileName: "glm" }, TEST_PROFILES);
-      expect(config.modelName).toBe("glm-4.6");
-      expect(config.profileName).toBe("glm");
-    });
-  });
-
-  test("fast-fails an unknown explicit profile and lists valid names", () => {
-    expect(() => readRunnerConfig({ profileName: "typo" }, TEST_PROFILES)).toThrow(
-      'Unknown model profile "typo". Available profiles: deepseek, glm.',
+  function profileEnvironment(overrides: NodeJS.ProcessEnv = {}) {
+    return parsePublicEnvironment(
+      {
+        TINKER_MODELS: "config/models.json",
+        TINKER_MODEL: "ignored",
+        TINKER_STREAM: "invalid-but-inapplicable",
+        ...overrides,
+      },
+      TEST_CWD,
     );
-  });
+  }
 
-  test("ignores TINKER_MODEL entirely when TINKER_MODELS is set", () => {
-    withEnv("TINKER_MODEL", "glm", () => {
-      const config = readRunnerConfig({}, TEST_PROFILES);
-      expect(config.modelName).toBe("deepseek-chat");
-      expect(config.profileName).toBe("deepseek");
+  test("uses the JSON default and creates named configs without rereading env", () => {
+    const resolved = createResolvedCliConfiguration(
+      profileEnvironment(),
+      TEST_PROFILES,
+    );
+    expect(resolved.initialRunnerConfig).toMatchObject({
+      modelName: "deepseek-chat",
+      profileName: "deepseek",
+      apiKey: "sk-deepseek",
+      apiBase: "https://api.deepseek.com/v1",
+      stream: true,
+    });
+    expect(resolved.createRunnerConfig({ profileName: "glm" })).toMatchObject({
+      modelName: "glm-4.6",
+      profileName: "glm",
     });
   });
 
-  test("passes apiKey and apiBase from the resolved profile", () => {
-    withEnv("TINKER_MODEL", undefined, () => {
-      const config = readRunnerConfig({}, TEST_PROFILES);
-      expect(config.apiKey).toBe("sk-deepseek");
-      expect(config.apiBase).toBe("https://api.deepseek.com/v1");
-    });
+  test("fast-fails invalid mode/profile combinations", () => {
+    expect(() =>
+      createResolvedCliConfiguration(profileEnvironment(), TEST_PROFILES, {
+        profileName: "typo",
+      }),
+    ).toThrow('Unknown model profile "typo". Available profiles: deepseek, glm.');
+    expect(() =>
+      createResolvedCliConfiguration(
+        parsePublicEnvironment(envMode(), TEST_CWD),
+        undefined,
+        { profileName: "glm" },
+      ),
+    ).toThrow('Cannot select model profile "glm"');
   });
 
-  test("passes the stream flag from the resolved profile", () => {
+  test("pre-resolves every profile before handing config to a runner", () => {
     const profiles = parseModelProfiles(
       JSON.stringify({
-        default: "legacy",
+        default: "valid",
         profiles: {
-          legacy: {
-            model: "legacy-model",
-            apiBase: "https://legacy.example/v1",
-            apiKey: "sk-legacy",
-            contextWindowTokens: 256 * 1024,
-            maxSupportedOutputTokens: 64 * 1024,
-            stream: false,
+          valid: {
+            model: "valid-model",
+            apiBase: "https://valid.example/v1",
+            apiKey: "valid-key",
+            contextWindowTokens: 256 * 1_024,
+            maxSupportedOutputTokens: 64 * 1_024,
+          },
+          unusable: {
+            model: "unusable-model",
+            apiBase: "https://unusable.example/v1",
+            apiKey: "unusable-key",
+            contextWindowTokens: 1,
+            maxSupportedOutputTokens: 1,
           },
         },
       }),
       "/test/models.json",
     );
-
-    expect(readRunnerConfig({}, TEST_PROFILES).stream).toBe(true);
-    expect(readRunnerConfig({}, profiles).stream).toBe(false);
-  });
-
-  test("falls back to env vars when profiles is undefined", () => {
-    withEnvValues(
-      {
-        TINKER_MODEL: "env-model",
-        TINKER_CONTEXT_WINDOW_TOKENS: "1048576",
-        TINKER_MAX_SUPPORTED_OUTPUT_TOKENS: "393216",
-      },
-      () => {
-        const config = readRunnerConfig();
-        expect(config.modelName).toBe("env-model");
-        expect(config.profileName).toBeUndefined();
-      },
+    expect(() =>
+      createResolvedCliConfiguration(profileEnvironment(), profiles),
+    ).toThrow(
+      "Derived requestMaxOutputTokens must be smaller than contextWindowTokens",
     );
   });
 
-  test("rejects an explicit profile when profiles are not configured", () => {
-    expect(() => readRunnerConfig({ profileName: "glm" })).toThrow(
-      'Cannot select model profile "glm" because TINKER_MODELS is not configured.',
-    );
-  });
-});
-
-describe("model client config", () => {
-  test("requires the Tinker API key and base URL variables", () => {
-    const config = {
-      modelName: "test-model",
-      includeReasoningContent: false,
-      stream: true,
-      contextBudget: readRunnerConfig({
-        modelName: "test-model",
-        contextProfile: TEST_CONTEXT_PROFILE,
-      }).contextBudget,
-    };
-
-    withEnv("TINKER_API_KEY", undefined, () => {
-      expect(() => createModelClientFromEnv(config)).toThrow(
-        "TINKER_API_KEY is required",
-      );
-    });
-
-    withEnvValues(
-      {
-        TINKER_API_KEY: "test-key",
-        TINKER_BASE_URL: undefined,
-      },
-      () => {
-        expect(() => createModelClientFromEnv(config)).toThrow(
-          "TINKER_BASE_URL is required",
-        );
-      },
-    );
+  test("composition-root resolution loads the configured profile file", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "tinker-config-root-"));
+    const configPath = path.join(directory, "models.json");
+    try {
+      await writeFile(configPath, TEST_PROFILES_JSON);
+      const resolved = await resolveCliConfiguration({
+        cwd: directory,
+        env: {
+          TINKER_MODELS: "models.json",
+          TINKER_WORKSPACE: ".",
+        },
+        profileName: "glm",
+      });
+      expect(resolved.initialRunnerConfig).toMatchObject({
+        workspaceRoot: directory,
+        modelName: "glm-4.6",
+        profileName: "glm",
+      });
+      expect(resolved.profiles?.profiles.size).toBe(2);
+      expect(resolved.persistDefaultProfile).toBeFunction();
+    } finally {
+      await rm(directory, { recursive: true });
+    }
   });
 });
 
@@ -388,49 +403,3 @@ describe("system prompt", () => {
     );
   });
 });
-
-function withEnv(name: string, value: string | undefined, callback: () => void): void {
-  const previous = process.env[name];
-
-  try {
-    if (value === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = value;
-    }
-
-    callback();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = previous;
-    }
-  }
-}
-
-function withEnvValues(
-  values: Record<string, string | undefined>,
-  callback: () => void,
-): void {
-  const entries = Object.entries(values);
-  const previous = new Map(entries.map(([name]) => [name, process.env[name]]));
-  try {
-    for (const [name, value] of entries) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-    callback();
-  } finally {
-    for (const [name, value] of previous) {
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
-      }
-    }
-  }
-}

@@ -7,11 +7,10 @@ import {
 } from "../src/agent/runtime-session";
 import type { AssistantMessage } from "../src/agent/types";
 import {
-  createModelClientFromEnv,
-  readRunnerConfig,
+  createModelClient,
+  resolveCliConfiguration,
   RUNTIME_INSTRUCTIONS,
 } from "../src/cli/config";
-import { loadModelProfiles } from "../src/cli/model-profiles";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { buildSystemPrompt } from "../src/instructions/project-instructions";
@@ -61,16 +60,15 @@ export async function runI3ProviderSmoke(
   profileName?: string,
 ): Promise<I3ProviderSmokeResult> {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-i3-provider-"));
-  const profiles = await loadModelProfiles();
-  const config = readRunnerConfig(
-    {
-      workspaceRoot: workspace,
-      maxIterations: 8,
-      ...(profileName === undefined ? {} : { profileName }),
-    },
-    profiles,
-  );
-  const provider = createModelClientFromEnv(config);
+  const configuration = await resolveCliConfiguration({
+    ...(profileName === undefined ? {} : { profileName }),
+  });
+  const config = {
+    ...configuration.initialRunnerConfig,
+    workspaceRoot: workspace,
+    maxIterations: 8,
+  };
+  const provider = createModelClient(config);
   const model = new ProviderSmokeModel(provider, historicalMarker);
   const events = new ProviderSmokeEventSink();
   const systemPrompt = buildSystemPrompt({
@@ -97,6 +95,7 @@ export async function runI3ProviderSmoke(
         modelClient: model,
         presentationSinks: [events],
         persistence: false,
+        toolingConfig: configuration.tooling,
       },
       {
         loadMcpConfig: async () => undefined,

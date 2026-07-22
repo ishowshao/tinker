@@ -14,21 +14,6 @@ export type ModelContextBudget = ModelContextProfile & {
   triggerTokens: number;
 };
 
-export function readModelContextProfileFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): ModelContextProfile {
-  return createModelContextProfile({
-    contextWindowTokens: parseRequiredTokenCount(
-      env.TINKER_CONTEXT_WINDOW_TOKENS,
-      "TINKER_CONTEXT_WINDOW_TOKENS",
-    ),
-    maxSupportedOutputTokens: parseRequiredTokenCount(
-      env.TINKER_MAX_SUPPORTED_OUTPUT_TOKENS,
-      "TINKER_MAX_SUPPORTED_OUTPUT_TOKENS",
-    ),
-  });
-}
-
 export function createModelContextProfile(
   input: ModelContextProfile,
 ): ModelContextProfile {
@@ -100,21 +85,6 @@ export function assertMatchingContextBudget(
       );
     }
   }
-}
-
-function parseRequiredTokenCount(value: string | undefined, name: string): number {
-  if (value === undefined || value.trim() === "") {
-    throw new Error(`${name} is required; received ${displayValue(value)}.`);
-  }
-  if (!/^\d+$/.test(value)) {
-    throw new Error(
-      `${name} must be a positive safe integer token count; received ${displayValue(value)}.`,
-    );
-  }
-
-  const parsed = Number(value);
-  requirePositiveSafeInteger(parsed, name, value);
-  return parsed;
 }
 
 function requirePositiveSafeInteger(

@@ -1,4 +1,5 @@
 import { cancellationError, throwIfTurnCancelled } from "../../agent/turn-cancellation";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../../cli/public-config-contract";
 import { defineToolExecutor } from "../types";
 import type { ToolExecutionContext, ToolExecutor, WebFetchRawResult } from "../types";
 import type { WebFetchBackend, WebFetchBackendResult, WebFetchRoute } from "./backend";
@@ -25,7 +26,6 @@ export type WebFetchToolOptions = {
   browserBackend?: WebFetchBackend | false;
 };
 
-export const WEB_FETCH_DEFAULT_REFINE_THRESHOLD = 2000;
 export const WEB_FETCH_DEFAULT_CACHE_TTL_MS = 15 * 60 * 1000;
 
 type CacheEntry = {
@@ -50,11 +50,7 @@ export function createWebFetchToolExecutor(
       : (options.browserBackend ??
         (isBrowserBackendAvailable() ? createBrowserWebFetchBackend() : undefined));
   const refineThreshold =
-    options.refineThreshold ??
-    parsePositiveInteger(
-      process.env.TINKER_WEBFETCH_REFINE_THRESHOLD,
-      WEB_FETCH_DEFAULT_REFINE_THRESHOLD,
-    );
+    options.refineThreshold ?? DEFAULT_PUBLIC_TOOLING_CONFIG.webFetchRefineThreshold;
   const cacheTtlMs = options.cacheTtlMs ?? WEB_FETCH_DEFAULT_CACHE_TTL_MS;
   const cache = new Map<string, CacheEntry>();
 
@@ -282,15 +278,6 @@ function pruneCache(cache: Map<string, CacheEntry>): void {
       cache.delete(key);
     }
   }
-}
-
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
-  if (value === undefined || value.trim() === "") {
-    return fallback;
-  }
-
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -8,10 +8,9 @@ import type {
   ToolExecutionContext,
   ToolExecutor,
 } from "../tools/types";
+import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
 export const MCP_TOOL_NAME_PREFIX = "mcp__";
-export const DEFAULT_MCP_TIMEOUT_MS = 60_000;
-export const DEFAULT_MCP_MAX_OBSERVATION_CHARS = 40_000;
 
 export function mcpToolName(serverName: string, toolName: string): string {
   return `${MCP_TOOL_NAME_PREFIX}${serverName}__${toolName}`;
@@ -48,9 +47,9 @@ export function createMcpToolExecutor(
   options: CreateMcpToolExecutorOptions,
 ): ToolExecutor {
   const toolName = mcpToolName(options.serverName, options.tool.name);
-  const timeoutMs = options.timeoutMs ?? DEFAULT_MCP_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PUBLIC_TOOLING_CONFIG.mcpTimeoutMs;
   const maxObservationChars =
-    options.maxObservationChars ?? DEFAULT_MCP_MAX_OBSERVATION_CHARS;
+    options.maxObservationChars ?? DEFAULT_PUBLIC_TOOLING_CONFIG.mcpMaxObservationChars;
 
   const base = {
     toolName,

@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：待实施。
+- 状态：实施中。
 - 日期：2026-07-22。
 - 基线：Tinker `1.3.0`，commit `7822852dad23`。
 - 上位路线图：[`product-hardening-roadmap.md`](product-hardening-roadmap.md)。
@@ -475,6 +475,8 @@ publish workflow 继续在被 tag 的 Ubuntu source 上重新执行 `check` 和
 阶段内按以下顺序落地。每一步都保持可测试，不把所有变化堆到最后一次联调。
 
 ### P1.1 冻结公共声明
+
+**状态：已完成（2026-07-23）。**
 
 - 建立 `public-config-contract.ts`；
 - 把现有 env/profile parser 迁移到声明源；

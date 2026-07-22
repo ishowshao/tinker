@@ -72,6 +72,35 @@ describe("parseModelProfiles", () => {
     );
   });
 
+  test("rejects unknown top-level and estimator fields", () => {
+    expect(() =>
+      parseModelProfiles(
+        JSON.stringify({
+          ...JSON.parse(VALID_JSON),
+          unexpected: true,
+        }),
+        "/test/models.json",
+      ),
+    ).toThrow('unknown field "unexpected"');
+    expect(() =>
+      parseModelProfiles(
+        profileJson({
+          inputModalities: ["text", "image"],
+          tokenEstimator: {
+            kind: "moonshot-estimate-token-count-v1",
+            model: "kimi-k3",
+            apiBase: "https://api.moonshot.test/v1",
+            apiKey: "estimator-key",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            unexpected: true,
+          },
+        }),
+        "/test/models.json",
+      ),
+    ).toThrow('unknown field "unexpected"');
+  });
+
   test("rejects a missing default field", () => {
     const json = JSON.stringify({ profiles: {} });
     expect(() => parseModelProfiles(json, "/test/models.json")).toThrow(
@@ -421,7 +450,7 @@ describe("model profiles file", () => {
       os.tmpdir(),
       `tinker-missing-models-${crypto.randomUUID()}.json`,
     );
-    const error = await loadModelProfiles({ TINKER_MODELS: missingPath }).catch(
+    const error = await loadModelProfiles(missingPath).catch(
       (caught: unknown) => caught,
     );
     expect(error).toBeInstanceOf(Error);
@@ -435,7 +464,7 @@ describe("model profiles file", () => {
     const configPath = path.join(directory, "models.json");
     try {
       await writeFile(configPath, VALID_JSON, { mode: 0o600 });
-      await persistDefaultProfile("gpt-4o", { TINKER_MODELS: configPath });
+      await persistDefaultProfile("gpt-4o", configPath);
       const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
         default: string;
       };
@@ -450,9 +479,9 @@ describe("model profiles file", () => {
     const configPath = path.join(directory, "models.json");
     try {
       await writeFile(configPath, VALID_JSON, { mode: 0o600 });
-      const error = await persistDefaultProfile("typo", {
-        TINKER_MODELS: configPath,
-      }).catch((caught: unknown) => caught);
+      const error = await persistDefaultProfile("typo", configPath).catch(
+        (caught: unknown) => caught,
+      );
       expect(error).toBeInstanceOf(Error);
       expect((error as Error).message).toContain(
         "Available profiles: deepseek, gpt-4o",

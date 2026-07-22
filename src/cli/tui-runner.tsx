@@ -28,27 +28,20 @@ import {
 } from "../tui/tui-session-controller";
 import {
   createRunnerModelClient,
-  createWebFetchRefinerFromEnv,
+  createWebFetchRefiner,
   promptHistoryPath,
-  readRunnerConfig,
   RUNTIME_INSTRUCTIONS,
+  type ResolvedCliConfiguration,
   type RunnerConfig,
 } from "./config";
-import {
-  loadModelProfiles,
-  persistDefaultProfile,
-  resolveSessionProfileName,
-  type ModelProfile,
-} from "./model-profiles";
+import { resolveSessionProfileName, type ModelProfile } from "./model-profiles";
 import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
+import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 
-export async function runTui(options: { profileName?: string } = {}): Promise<void> {
-  const profiles = await loadModelProfiles();
-  const config = readRunnerConfig(
-    options.profileName !== undefined ? { profileName: options.profileName } : {},
-    profiles,
-  );
+export async function runTui(configuration: ResolvedCliConfiguration): Promise<void> {
+  const profiles = configuration.profiles;
+  const config = configuration.initialRunnerConfig;
   const workspaceRoot = await realpath(config.workspaceRoot);
   let controller: DefaultTuiSessionController | undefined;
   let instance: ReturnType<typeof render> | undefined;
@@ -84,7 +77,8 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         projectInstruction: projectInstructionManifest(projectInstructions),
         skillCatalog,
         presentationSinks: [sink],
-        webFetchRefiner: createWebFetchRefinerFromEnv(sessionConfig),
+        webFetchRefiner: createWebFetchRefiner(sessionConfig),
+        toolingConfig: configuration.tooling,
       };
       if (mode === "resume") {
         return createRuntimeSession({
@@ -121,15 +115,10 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
       const resumeConfig =
         profiles === undefined
           ? { ...config, sessionId }
-          : readRunnerConfig(
-              {
-                sessionId,
-                profileName: resolveSessionProfileName(profiles, summary),
-                workspaceRoot: config.workspaceRoot,
-                maxIterations: config.maxIterations,
-              },
-              profiles,
-            );
+          : configuration.createRunnerConfig({
+              sessionId,
+              profileName: resolveSessionProfileName(profiles, summary),
+            });
       const runtimeSession = await createSessionForConfig(
         resumeConfig,
         "resume",
@@ -195,15 +184,10 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         throw new Error("Model profiles are not configured.");
       }
       return createNewSessionBinding(
-        readRunnerConfig(
-          {
-            sessionId: createUuidV7() as SessionId,
-            workspaceRoot: config.workspaceRoot,
-            profileName: profile.name,
-            maxIterations: config.maxIterations,
-          },
-          profiles,
-        ),
+        configuration.createRunnerConfig({
+          sessionId: createUuidV7() as SessionId,
+          profileName: profile.name,
+        }),
       );
     };
 
@@ -218,15 +202,10 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         throw new Error("Current session does not have a model profile.");
       }
       return createNewSessionBinding(
-        readRunnerConfig(
-          {
-            sessionId,
-            workspaceRoot: config.workspaceRoot,
-            profileName: current.profileName,
-            maxIterations: config.maxIterations,
-          },
-          profiles,
-        ),
+        configuration.createRunnerConfig({
+          sessionId,
+          profileName: current.profileName,
+        }),
       );
     };
 
@@ -251,7 +230,12 @@ export async function runTui(options: { profileName?: string } = {}): Promise<vo
         history={promptHistory}
         projectSlashCommands={projectSlashCommands}
         profiles={profiles}
-        persistDefaultProfile={persistDefaultProfile}
+        persistDefaultProfile={configuration.persistDefaultProfile}
+        fileLister={createWorkspaceFileLister({
+          command: configuration.tooling.ripgrepPath,
+          timeoutMs: configuration.tooling.grepTimeoutMs,
+          maxBufferBytes: configuration.tooling.grepMaxBufferBytes,
+        })}
         onQuit={() => {
           quitRequested = true;
         }}
