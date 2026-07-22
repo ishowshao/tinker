@@ -222,7 +222,8 @@ export function PromptInput(props: PromptInputProps) {
     if (mention === undefined || locked) {
       return;
     }
-    if (props.importImage === undefined) {
+    const importImage = props.importImage;
+    if (importImage === undefined) {
       insertFilePath(filePath);
       return;
     }
@@ -236,8 +237,10 @@ export function PromptInput(props: PromptInputProps) {
       phase: { kind: "attaching", operationId },
       error: undefined,
     }));
-    void props
-      .importImage(filePath, controller.signal, captured.attachments.length + 1)
+    void Promise.resolve()
+      .then(() =>
+        importImage(filePath, controller.signal, captured.attachments.length + 1),
+      )
       .then((imported) => {
         setState((current) => {
           if (

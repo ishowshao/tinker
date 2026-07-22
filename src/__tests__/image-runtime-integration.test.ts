@@ -13,6 +13,7 @@ import type { IterationIdentity, TurnIdentity, UserMessage } from "../agent/type
 import type { AgentEvent } from "../events/types";
 import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import type { ImportedImageAsset } from "../image/image-asset-store";
+import { ImageNotRecognizedError } from "../image/image-probe";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
@@ -23,6 +24,34 @@ import {
 } from "./test-runtime";
 
 describe("RuntimeSession image admission", () => {
+  test("classifies regular files before rejecting image input for a text-only model", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-text-file-selection-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    const sink = collectingEventSink();
+    let session: RuntimeSession | undefined;
+    try {
+      await writeFile(path.join(workspace, "app.ts"), "export const value = 1;\n");
+      session = await createRuntimeSession(
+        runtimeInput(workspace, sessionId, textClient(), sink.events, "new"),
+        { loadMcpConfig: async () => undefined },
+      );
+      expect(session.supportsImageInput()).toBe(false);
+
+      let importResult: Promise<ImportedImageAsset> | undefined;
+      expect(() => {
+        importResult = session?.importImage("app.ts", new AbortController().signal, 1);
+      }).not.toThrow();
+      const error = await importResult?.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ImageNotRecognizedError);
+    } finally {
+      await session?.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("reuses the accepted payload and skips re-estimation when a resumed anchor covers images", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-image-runtime-"));
     const sessionId = runtimeIdFactory.createSessionId();
@@ -275,6 +304,20 @@ function imageClient(fetchImpl: typeof fetch): OpenAIChatModelClient {
     },
     stream: false,
     fetch: fetchImpl,
+  });
+}
+
+function textClient(): OpenAIChatModelClient {
+  return new OpenAIChatModelClient({
+    apiKey: "test-key",
+    baseURL: "https://api.example.test/v1",
+    model: "text-model",
+    contextBudget: TEST_CONTEXT_BUDGET,
+    inputModalities: ["text"],
+    stream: false,
+    fetch: stubFetch(async (input) => {
+      throw new Error(`Unexpected text model request: ${requestUrl(input)}`);
+    }),
   });
 }
 

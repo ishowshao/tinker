@@ -3,6 +3,7 @@ import { render } from "ink-testing-library";
 import { PromptInput, type PromptSubmission } from "../tui/components/prompt-input";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { imageAssetIdForBytes, type ImageAssetRef } from "../image/image-types";
+import { ImageNotRecognizedError } from "../image/image-probe";
 import type { LoadedPromptHistoryRecord } from "../tui/prompt-history";
 
 const ARROW_UP = "\u001b[A";
@@ -10,6 +11,35 @@ const ESCAPE = "\u001b";
 const KEY_DELAY = 20;
 
 describe("PromptInput image transactions", () => {
+  test("selects AGENTS.md with Tab and keeps a text-only prompt usable", async () => {
+    const submissions: PromptSubmission[] = [];
+    const view = render(
+      <PromptInput
+        modelName="text-model"
+        workspaceRoot="/workspace"
+        fileLister={async () => ["AGENTS.md"]}
+        importImage={() => {
+          throw new ImageNotRecognizedError("Selected file is not an image.");
+        }}
+        onSubmit={(submission) => {
+          submissions.push(submission);
+          return true;
+        }}
+      />,
+    );
+    try {
+      await press(view.stdin, "@AGE");
+      await waitForFrame(view.lastFrame, "AGENTS.md");
+      await press(view.stdin, "\t", "verified", "\r");
+
+      expect(submissions.map((submission) => submission.userMessage.content)).toEqual([
+        "AGENTS.md verified",
+      ]);
+    } finally {
+      view.cleanup();
+    }
+  });
+
   test("attaches from @, locks admission, retains rejection, and clears only on acceptance", async () => {
     const firstOutcome = deferred<boolean>();
     const submissions: PromptSubmission[] = [];

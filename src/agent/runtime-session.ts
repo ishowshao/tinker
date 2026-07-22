@@ -870,16 +870,13 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.input.modelClient.inputModalities?.includes("image") === true;
   }
 
-  importImage(
+  async importImage(
     sourcePath: string,
     signal: AbortSignal,
     prospectiveMessageImageCount: number,
   ): Promise<ImportedImageAsset> {
     if (this.state !== "ready") {
       throw new Error(`Cannot import an image while RuntimeSession is ${this.state}.`);
-    }
-    if (!this.supportsImageInput()) {
-      throw new Error("Current model profile does not support image input.");
     }
     if (
       !Number.isSafeInteger(prospectiveMessageImageCount) ||
@@ -888,18 +885,35 @@ class DefaultRuntimeSession implements RuntimeSession {
     ) {
       throw new Error("Prospective Prompt image count is invalid.");
     }
-    const activeImageCount = this.input.modelClient.prepare(
-      this.requireLedger().buildCommittedModelRequest(
-        this.requireTooling().registry.definitions(),
-      ).request,
-    ).mediaOccurrenceCount;
-    const aggregateImageCount = activeImageCount + prospectiveMessageImageCount;
-    if (aggregateImageCount > IMAGE_INPUT_POLICY.maxImagesPerRequest) {
-      throw new ModelRequestMediaAggregateError(
-        `Model request would have ${aggregateImageCount} images; maximum is ${IMAGE_INPUT_POLICY.maxImagesPerRequest}.`,
-      );
+    const assertImageAllowed = () => {
+      if (this.state !== "ready") {
+        throw new Error(
+          `Cannot import an image while RuntimeSession is ${this.state}.`,
+        );
+      }
+      if (!this.supportsImageInput()) {
+        throw new Error("Current model profile does not support image input.");
+      }
+      const activeImageCount = this.input.modelClient.prepare(
+        this.requireLedger().buildCommittedModelRequest(
+          this.requireTooling().registry.definitions(),
+        ).request,
+      ).mediaOccurrenceCount;
+      const aggregateImageCount = activeImageCount + prospectiveMessageImageCount;
+      if (aggregateImageCount > IMAGE_INPUT_POLICY.maxImagesPerRequest) {
+        throw new ModelRequestMediaAggregateError(
+          `Model request would have ${aggregateImageCount} images; maximum is ${IMAGE_INPUT_POLICY.maxImagesPerRequest}.`,
+        );
+      }
+    };
+
+    if (this.supportsImageInput()) {
+      assertImageAllowed();
     }
-    return this.assetStore.importWorkspaceFile(sourcePath, { signal });
+    return this.assetStore.importWorkspaceFile(sourcePath, {
+      signal,
+      accept: assertImageAllowed,
+    });
   }
 
   async verifyImageAssets(
