@@ -7,11 +7,14 @@ import {
 } from "../src/agent/runtime-session";
 import type { AssistantMessage } from "../src/agent/types";
 import {
-  createModelClient,
-  resolveCliConfiguration,
-  RUNTIME_INSTRUCTIONS,
+  deriveRunnerConfig,
+  resolvePublicConfig,
   type RunnerConfig,
 } from "../src/cli/config";
+import {
+  createModelClient,
+  RUNTIME_INSTRUCTIONS,
+} from "../src/cli/runner-dependencies";
 import type { PublicToolingConfig } from "../src/cli/public-config-contract";
 import type {
   ContextCompactionResult,
@@ -33,6 +36,8 @@ import { stableJsonStringify, sha256 } from "../src/model/model-request-prefligh
 import { renderRecallRetirementContract } from "../src/context/recall-retirement-contract";
 import { RECALL_TOOL_DEFINITION } from "../src/tools/recall";
 import type { RecallRawResult } from "../src/tools/types";
+import { createUuidV7 } from "../src/ids/uuid-v7";
+import type { SessionId } from "../src/ids/runtime-id";
 import {
   ACTIVE_RECALL_MANIFEST_HASH,
   ACTIVE_RECALL_MANIFEST_VERSION,
@@ -134,10 +139,17 @@ export async function runI4ActiveRecallEvaluation(input: {
   negativeOnly?: boolean;
   caseId?: string;
 }): Promise<I4ActiveRecallReport> {
-  const configuration = await resolveCliConfiguration({
-    ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
+  const configuration = await resolvePublicConfig({
+    env: process.env,
+    cwd: process.cwd(),
   });
-  const config = { ...configuration.initialRunnerConfig, maxIterations: 8 };
+  const config = {
+    ...deriveRunnerConfig(configuration, {
+      sessionId: createUuidV7() as SessionId,
+      ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
+    }),
+    maxIterations: 8,
+  };
   const views = input.views ?? allViews;
   const trialsPerView = input.trialsPerView ?? 1;
   if (!Number.isSafeInteger(trialsPerView) || trialsPerView < 1) {

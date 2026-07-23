@@ -10,12 +10,12 @@ import {
   loadProjectInstructions,
   projectInstructionManifest,
 } from "../instructions/project-instructions";
+import { type RunnerConfig } from "./config";
 import {
   createRunnerModelClient,
   createWebFetchRefiner,
   RUNTIME_INSTRUCTIONS,
-  type RunnerConfig,
-} from "./config";
+} from "./runner-dependencies";
 import type { PublicToolingConfig } from "./public-config-contract";
 import { realpath } from "node:fs/promises";
 import { loadSkillCatalog } from "../skills/skill-loader";
@@ -27,6 +27,7 @@ export type RunOneShotOptions = {
   stdout?: WritableLike;
   stderr?: WritableLike;
   eventLogPath?: string | false;
+  env?: NodeJS.ProcessEnv;
 };
 
 export async function runOneShot(
@@ -50,7 +51,11 @@ export async function runOneShot(
       runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
       projectInstructions,
     });
-    const modelClient = createRunnerModelClient(config, options.modelClient);
+    const modelClient = createRunnerModelClient(
+      config,
+      options.modelClient,
+      options.env,
+    );
     session = await createRuntimeSession({
       selection: { mode: "new", sessionId: config.sessionId },
       workspaceRoot,
@@ -67,7 +72,7 @@ export async function runOneShot(
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:
         options.eventLogPath === false ? false : { eventLogPath: options.eventLogPath },
-      webFetchRefiner: createWebFetchRefiner(config),
+      webFetchRefiner: createWebFetchRefiner(config, options.env),
       toolingConfig: options.tooling,
     });
 

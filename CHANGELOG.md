@@ -5,6 +5,19 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+### Added
+
+- Add stable `tinker --help`, `tinker --version`, and `tinker help run` command
+  surfaces with explicit usage errors and exit codes.
+- Let one-shot runs read an exact Prompt from explicit stdin or a UTF-8 text file,
+  with bounded input and strict encoding validation.
+
+### Changed
+
+- Require `tinker run` to receive exactly one shell-quoted Prompt argument,
+  `--stdin`, or `--file <path>`. The former unquoted variadic form is no longer
+  joined automatically; quote a short Prompt or use stdin/file input instead.
+
 ## [1.3.0] - 2026-07-22
 
 ### Added

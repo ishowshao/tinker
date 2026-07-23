@@ -7,10 +7,16 @@ import {
   type RuntimeSession,
 } from "../src/agent/runtime-session";
 import type { UserMessage } from "../src/agent/types";
-import { resolveCliConfiguration, type RunnerConfig } from "../src/cli/config";
+import {
+  deriveRunnerConfig,
+  resolvePublicConfig,
+  type RunnerConfig,
+} from "../src/cli/config";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { runtimeIdFactory } from "../src/ids/runtime-id";
+import type { SessionId } from "../src/ids/runtime-id";
+import { createUuidV7 } from "../src/ids/uuid-v7";
 import {
   ImageAssetStore,
   type ImportedImageAsset,
@@ -62,8 +68,11 @@ if (process.env[LIVE_ENABLE_ENV] !== "1") {
 }
 
 const profileName = process.argv[2] ?? DEFAULT_PROFILE;
-const configuration = await resolveCliConfiguration({ profileName });
-if (configuration.profiles === undefined) {
+const configuration = await resolvePublicConfig({
+  env: process.env,
+  cwd: process.cwd(),
+});
+if (configuration.mode !== "profile") {
   throw new Error("TINKER_MODELS must point to a model profile file.");
 }
 
@@ -71,7 +80,10 @@ const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-k3-image-live-"))
 let activeSession: RuntimeSession | undefined;
 try {
   const config = {
-    ...configuration.initialRunnerConfig,
+    ...deriveRunnerConfig(configuration, {
+      sessionId: createUuidV7() as SessionId,
+      profileName,
+    }),
     workspaceRoot: workspace,
     maxIterations: 4,
   };

@@ -6,11 +6,11 @@ import {
   type RuntimeSession,
 } from "../src/agent/runtime-session";
 import type { AssistantMessage } from "../src/agent/types";
+import { deriveRunnerConfig, resolvePublicConfig } from "../src/cli/config";
 import {
   createModelClient,
-  resolveCliConfiguration,
   RUNTIME_INSTRUCTIONS,
-} from "../src/cli/config";
+} from "../src/cli/runner-dependencies";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { buildSystemPrompt } from "../src/instructions/project-instructions";
@@ -23,6 +23,8 @@ import type {
   PreparedModelRequest,
 } from "../src/model/model-client";
 import { estimatePromptSegments } from "../src/model/token-estimator";
+import { createUuidV7 } from "../src/ids/uuid-v7";
+import type { SessionId } from "../src/ids/runtime-id";
 
 const fixtureTurnCount = 10;
 const historicalMarker = `i3-provider-marker-${crypto.randomUUID()}`;
@@ -60,11 +62,15 @@ export async function runI3ProviderSmoke(
   profileName?: string,
 ): Promise<I3ProviderSmokeResult> {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-i3-provider-"));
-  const configuration = await resolveCliConfiguration({
-    ...(profileName === undefined ? {} : { profileName }),
+  const configuration = await resolvePublicConfig({
+    env: process.env,
+    cwd: process.cwd(),
   });
   const config = {
-    ...configuration.initialRunnerConfig,
+    ...deriveRunnerConfig(configuration, {
+      sessionId: createUuidV7() as SessionId,
+      ...(profileName === undefined ? {} : { profileName }),
+    }),
     workspaceRoot: workspace,
     maxIterations: 8,
   };

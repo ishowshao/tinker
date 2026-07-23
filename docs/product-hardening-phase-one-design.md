@@ -483,6 +483,8 @@ runner config。
 
 ### P1.2 CLI
 
+**状态：已完成（2026-07-23）。**
+
 - 硬前置：P1.1 必须已经把 config resolution 上移到 CLI composition root，并让
   TUI/one-shot runner 接收 resolved config；禁止在 CLI 与 runner 各解析一次；
 - 完整实施
@@ -606,7 +608,7 @@ matrix。
 
 只有以下项目全部满足，阶段一才可标记完成：
 
-- [ ] 独立 CLI 技术方案的完成定义全部满足。
+- [x] 独立 CLI 技术方案的完成定义全部满足。
 - [ ] 公共 env/profile 字段有单一声明源，tooling 不再散落解释公共 env。
 - [ ] README 命令、配置、profile、图片和 slash commands 与实现一致；机械事实位于唯一 marker
   受控段落。

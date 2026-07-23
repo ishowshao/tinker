@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  createResolvedCliConfiguration,
-  resolveCliConfiguration,
-  RUNTIME_INSTRUCTIONS,
+  createResolvedPublicConfig,
+  deriveRunnerConfig,
+  resolvePublicConfig,
 } from "../cli/config";
+import { RUNTIME_INSTRUCTIONS } from "../cli/runner-dependencies";
+import type { SessionId } from "../ids/runtime-id";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
   DEFAULT_PUBLIC_TOOLING_CONFIG,
@@ -45,6 +47,7 @@ const TEST_PROFILES: ModelProfiles = parseModelProfiles(
 );
 
 const TEST_CWD = "/test/tinker-cwd";
+const TEST_SESSION_ID = "test-config-session" as SessionId;
 
 function envMode(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
@@ -152,7 +155,9 @@ describe("public environment parser", () => {
       stream: true,
       tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
     });
-    const config = createResolvedCliConfiguration(environment).initialRunnerConfig;
+    const config = deriveRunnerConfig(createResolvedPublicConfig(environment), {
+      sessionId: TEST_SESSION_ID,
+    });
     expect(config.contextBudget).toMatchObject({
       requestMaxOutputTokens: 65_536,
       inputBudgetTokens: 196_608,
@@ -212,7 +217,7 @@ describe("public environment parser", () => {
       }),
       TEST_CWD,
     );
-    expect(() => createResolvedCliConfiguration(incompatibleContext)).toThrow(
+    expect(() => createResolvedPublicConfig(incompatibleContext)).toThrow(
       "maxSupportedOutputTokens must not exceed contextWindowTokens",
     );
     expect(() =>
@@ -277,34 +282,34 @@ describe("profile resolution", () => {
   }
 
   test("uses the JSON default and creates named configs without rereading env", () => {
-    const resolved = createResolvedCliConfiguration(
-      profileEnvironment(),
-      TEST_PROFILES,
-    );
-    expect(resolved.initialRunnerConfig).toMatchObject({
+    const resolved = createResolvedPublicConfig(profileEnvironment(), TEST_PROFILES);
+    expect(deriveRunnerConfig(resolved, { sessionId: TEST_SESSION_ID })).toMatchObject({
       modelName: "deepseek-chat",
       profileName: "deepseek",
       apiKey: "sk-deepseek",
       apiBase: "https://api.deepseek.com/v1",
       stream: true,
     });
-    expect(resolved.createRunnerConfig({ profileName: "glm" })).toMatchObject({
-      modelName: "glm-4.6",
-      profileName: "glm",
-    });
+    expect(
+      deriveRunnerConfig(resolved, {
+        sessionId: TEST_SESSION_ID,
+        profileName: "glm",
+      }),
+    ).toMatchObject({ modelName: "glm-4.6", profileName: "glm" });
+    expect(resolved).not.toHaveProperty("sessionId");
   });
 
   test("fast-fails invalid mode/profile combinations", () => {
     expect(() =>
-      createResolvedCliConfiguration(profileEnvironment(), TEST_PROFILES, {
-        profileName: "typo",
-      }),
+      deriveRunnerConfig(
+        createResolvedPublicConfig(profileEnvironment(), TEST_PROFILES),
+        { sessionId: TEST_SESSION_ID, profileName: "typo" },
+      ),
     ).toThrow('Unknown model profile "typo". Available profiles: deepseek, glm.');
     expect(() =>
-      createResolvedCliConfiguration(
-        parsePublicEnvironment(envMode(), TEST_CWD),
-        undefined,
-        { profileName: "glm" },
+      deriveRunnerConfig(
+        createResolvedPublicConfig(parsePublicEnvironment(envMode(), TEST_CWD)),
+        { sessionId: TEST_SESSION_ID, profileName: "glm" },
       ),
     ).toThrow('Cannot select model profile "glm"');
   });
@@ -332,9 +337,7 @@ describe("profile resolution", () => {
       }),
       "/test/models.json",
     );
-    expect(() =>
-      createResolvedCliConfiguration(profileEnvironment(), profiles),
-    ).toThrow(
+    expect(() => createResolvedPublicConfig(profileEnvironment(), profiles)).toThrow(
       "Derived requestMaxOutputTokens must be smaller than contextWindowTokens",
     );
   });
@@ -344,21 +347,48 @@ describe("profile resolution", () => {
     const configPath = path.join(directory, "models.json");
     try {
       await writeFile(configPath, TEST_PROFILES_JSON);
-      const resolved = await resolveCliConfiguration({
+      const resolved = await resolvePublicConfig({
         cwd: directory,
         env: {
           TINKER_MODELS: "models.json",
           TINKER_WORKSPACE: ".",
         },
-        profileName: "glm",
       });
-      expect(resolved.initialRunnerConfig).toMatchObject({
+      expect(
+        deriveRunnerConfig(resolved, {
+          sessionId: TEST_SESSION_ID,
+          profileName: "glm",
+        }),
+      ).toMatchObject({
         workspaceRoot: directory,
         modelName: "glm-4.6",
         profileName: "glm",
       });
-      expect(resolved.profiles?.profiles.size).toBe(2);
+      expect(resolved.mode).toBe("profile");
+      if (resolved.mode !== "profile") {
+        throw new Error("Expected profile mode.");
+      }
+      expect(resolved.profiles.profiles.size).toBe(2);
       expect(resolved.persistDefaultProfile).toBeFunction();
+
+      await resolved.persistDefaultProfile("glm");
+      expect(JSON.parse(await readFile(configPath, "utf8"))).toMatchObject({
+        default: "glm",
+      });
+      expect(
+        deriveRunnerConfig(resolved, { sessionId: TEST_SESSION_ID }),
+      ).toMatchObject({ modelName: "deepseek-chat", profileName: "deepseek" });
+
+      await writeFile(
+        configPath,
+        TEST_PROFILES_JSON.replace("glm-4.6", "externally-mutated-model"),
+      );
+      expect(
+        deriveRunnerConfig(resolved, {
+          sessionId: TEST_SESSION_ID,
+          profileName: "glm",
+        }),
+      ).toMatchObject({ modelName: "glm-4.6", profileName: "glm" });
     } finally {
       await rm(directory, { recursive: true });
     }

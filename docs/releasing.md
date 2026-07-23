@@ -106,9 +106,10 @@ bun run release:verify
 git diff --check
 ```
 
-`release:verify` checks the actual npm tarball, the globally installed `tinker`
-command, bundled Bun, bundled ripgrep, license metadata, and required bundled
-dependency patches.
+`release:verify` checks the actual npm tarball in a clean global prefix, bundled
+Bun and ripgrep, license metadata, required dependency patches, CLI help/version
+and usage errors, and exact argument/stdin/file Prompt delivery through the offline
+fake model.
 
 Review the change scope, then commit and push it:
 

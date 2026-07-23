@@ -41,10 +41,29 @@ tinker
 
 # Run a one-shot prompt
 tinker run "explain the project structure"
+
+# Inspect the installed command surface
+tinker --help
+tinker --version
 ```
 
 The npm package includes its own Bun runtime. To run Tinker from a source checkout,
-install Bun 1.3 or later, then use `bun install` followed by `bun run tinker`.
+install Bun 1.3.14 or later, then use `bun install` followed by `bun run tinker`.
+
+`run` accepts exactly one Prompt source: one shell-quoted argument, explicit stdin,
+or a UTF-8 text file. Use stdin for multiline code, private patches, or Prompt text
+containing secrets so it does not become a command-line argument:
+
+```bash
+printf '%s\n' 'Review `$HOME`, *.ts, and "quotes" literally.' | tinker run --stdin
+tinker run --file prompts/review.md
+```
+
+Tinker does not reconstruct shell expansions or join multiple positional arguments.
+Use `tinker run "one quoted prompt"`; the former unquoted variadic form now fails
+with a usage error. File paths are resolved from the current directory and may point
+outside the configured workspace. You are responsible for Prompt-file permissions
+and cleanup.
 
 ### Slash Commands
 
@@ -138,10 +157,11 @@ exist and be valid; Tinker does not silently fall back when it cannot be loaded.
 }
 ```
 
-You can also start TUI with a specific profile:
+You can also select profiles explicitly for the TUI or one-shot command:
 
 ```bash
-bun run tinker --profile gpt-4o
+tinker --profile gpt-4o
+tinker run --profile gpt-4o "explain the project structure"
 ```
 
 Switching models creates a new session. The previous session is preserved and
@@ -185,15 +205,31 @@ truncated content.
 
 ## Commands
 
+The installed package exposes this public CLI:
+
+<!-- BEGIN GENERATED: PUBLIC CLI COMMANDS -->
+| Command | Description |
+| --- | --- |
+| `tinker` | Start the interactive terminal interface. |
+| `tinker --profile <profile-name>` | Start the TUI with a selected model profile. |
+| `tinker run [--profile <profile-name>] <prompt>` | Submit one shell-quoted prompt argument. |
+| `tinker run [--profile <profile-name>] --stdin` | Read the prompt from standard input until EOF. |
+| `tinker run [--profile <profile-name>] --file <path>` | Read the prompt from a UTF-8 text file. |
+| `tinker --help` | Show top-level CLI help. |
+| `tinker help run` | Show one-shot command help. |
+| `tinker --version` | Print the installed package version. |
+<!-- END GENERATED: PUBLIC CLI COMMANDS -->
+
+Repository development commands are separate from the installed CLI:
+
 ```bash
 bun install              # Install dependencies
 bun run tinker           # Start the interactive TUI
-bun run tinker run "..." # Run a one-shot CLI prompt
 bun test                 # Run test suite
 bun run typecheck        # TypeScript type checking (tsc --noEmit)
 bun run lint             # ESLint (zero warnings required)
 bun run format           # Biome code formatting
-bun run check            # Full check: typecheck + format + lint + test
+bun run check            # Full check: types + format + lint + docs + tests + benchmark smoke
 ```
 
 ## Project Structure

@@ -1,34 +1,41 @@
 #!/usr/bin/env bun
-import { runOneShot } from "./run-runner";
-import { runTui } from "./tui-runner";
-import { resolveCliConfiguration } from "./config";
 
-const [, , command, ...args] = process.argv;
+type MainModule = typeof import("./main");
 
-if (command === "run") {
-  const prompt = args.join(" ").trim();
-
-  if (prompt === "") {
-    process.stderr.write('Usage: tinker run "prompt"\n');
-    process.exit(2);
+export async function runExecutable(
+  input: {
+    readonly args: readonly string[];
+    readonly stdin: AsyncIterable<unknown>;
+    readonly stdout: NodeJS.WriteStream;
+    readonly stderr: NodeJS.WriteStream;
+    readonly cwd: string;
+    readonly env: NodeJS.ProcessEnv;
+  } = {
+    args: process.argv.slice(2),
+    stdin: process.stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    cwd: process.cwd(),
+    env: process.env,
+  },
+  loadMain: () => Promise<MainModule> = () => import("./main"),
+): Promise<number> {
+  let mainModule: MainModule;
+  try {
+    mainModule = await loadMain();
+  } catch {
+    input.stderr.write("Tinker failed to start. Reinstall tinker-agent.\n");
+    return 1;
   }
 
-  const configuration = await resolveCliConfiguration();
-  const exitCode = await runOneShot(prompt, {
-    config: configuration.initialRunnerConfig,
-    tooling: configuration.tooling,
-  });
-  process.exit(exitCode);
-}
-
-if (command === "--profile" || command === "-p") {
-  const profileName = args[0];
-  if (profileName === undefined) {
-    process.stderr.write("Usage: tinker --profile <profile-name>\n");
-    process.exit(2);
+  try {
+    return await mainModule.main(input);
+  } catch {
+    input.stderr.write("Tinker failed unexpectedly.\n");
+    return 1;
   }
-  await runTui(await resolveCliConfiguration({ profileName }));
-  process.exit(0);
 }
 
-await runTui(await resolveCliConfiguration());
+if (import.meta.main) {
+  process.exitCode = await runExecutable();
+}

@@ -27,21 +27,31 @@ import {
   type TuiSessionBinding,
 } from "../tui/tui-session-controller";
 import {
-  createRunnerModelClient,
-  createWebFetchRefiner,
   promptHistoryPath,
-  RUNTIME_INSTRUCTIONS,
-  type ResolvedCliConfiguration,
+  deriveRunnerConfig,
+  type ResolvedPublicConfig,
   type RunnerConfig,
 } from "./config";
+import {
+  createRunnerModelClient,
+  createWebFetchRefiner,
+  RUNTIME_INSTRUCTIONS,
+} from "./runner-dependencies";
 import { resolveSessionProfileName, type ModelProfile } from "./model-profiles";
 import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 
-export async function runTui(configuration: ResolvedCliConfiguration): Promise<void> {
-  const profiles = configuration.profiles;
-  const config = configuration.initialRunnerConfig;
+export type RunTuiOptions = {
+  readonly publicConfig: ResolvedPublicConfig;
+  readonly initialRunnerConfig: RunnerConfig;
+  readonly env: NodeJS.ProcessEnv;
+};
+
+export async function runTui(options: RunTuiOptions): Promise<void> {
+  const profiles =
+    options.publicConfig.mode === "profile" ? options.publicConfig.profiles : undefined;
+  const config = options.initialRunnerConfig;
   const workspaceRoot = await realpath(config.workspaceRoot);
   let controller: DefaultTuiSessionController | undefined;
   let instance: ReturnType<typeof render> | undefined;
@@ -57,7 +67,11 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
       sessionId: SessionId,
       sink: EventSink,
     ): Promise<RuntimeSession> => {
-      const modelClient = createRunnerModelClient(sessionConfig);
+      const modelClient = createRunnerModelClient(
+        sessionConfig,
+        undefined,
+        options.env,
+      );
       const projectInstructions = await loadProjectInstructions(workspaceRoot);
       const skillCatalog = await loadSkillCatalog({ workspaceRoot });
       const common = {
@@ -77,8 +91,8 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
         projectInstruction: projectInstructionManifest(projectInstructions),
         skillCatalog,
         presentationSinks: [sink],
-        webFetchRefiner: createWebFetchRefiner(sessionConfig),
-        toolingConfig: configuration.tooling,
+        webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
+        toolingConfig: options.publicConfig.tooling,
       };
       if (mode === "resume") {
         return createRuntimeSession({
@@ -112,13 +126,12 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
     ): Promise<ManagedTuiSessionBinding> => {
       const deferred = new DeferredProjectionSink();
       const summary = await catalog.get(sessionId);
-      const resumeConfig =
-        profiles === undefined
-          ? { ...config, sessionId }
-          : configuration.createRunnerConfig({
-              sessionId,
-              profileName: resolveSessionProfileName(profiles, summary),
-            });
+      const resumeConfig = deriveRunnerConfig(options.publicConfig, {
+        sessionId,
+        ...(profiles === undefined
+          ? {}
+          : { profileName: resolveSessionProfileName(profiles, summary) }),
+      });
       const runtimeSession = await createSessionForConfig(
         resumeConfig,
         "resume",
@@ -184,7 +197,7 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
         throw new Error("Model profiles are not configured.");
       }
       return createNewSessionBinding(
-        configuration.createRunnerConfig({
+        deriveRunnerConfig(options.publicConfig, {
           sessionId: createUuidV7() as SessionId,
           profileName: profile.name,
         }),
@@ -196,13 +209,15 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
     ): Promise<ManagedTuiSessionBinding> => {
       const sessionId = createUuidV7() as SessionId;
       if (profiles === undefined) {
-        return createNewSessionBinding({ ...config, sessionId });
+        return createNewSessionBinding(
+          deriveRunnerConfig(options.publicConfig, { sessionId }),
+        );
       }
       if (current.profileName === undefined) {
         throw new Error("Current session does not have a model profile.");
       }
       return createNewSessionBinding(
-        configuration.createRunnerConfig({
+        deriveRunnerConfig(options.publicConfig, {
           sessionId,
           profileName: current.profileName,
         }),
@@ -230,11 +245,15 @@ export async function runTui(configuration: ResolvedCliConfiguration): Promise<v
         history={promptHistory}
         projectSlashCommands={projectSlashCommands}
         profiles={profiles}
-        persistDefaultProfile={configuration.persistDefaultProfile}
+        persistDefaultProfile={
+          options.publicConfig.mode === "profile"
+            ? options.publicConfig.persistDefaultProfile
+            : undefined
+        }
         fileLister={createWorkspaceFileLister({
-          command: configuration.tooling.ripgrepPath,
-          timeoutMs: configuration.tooling.grepTimeoutMs,
-          maxBufferBytes: configuration.tooling.grepMaxBufferBytes,
+          command: options.publicConfig.tooling.ripgrepPath,
+          timeoutMs: options.publicConfig.tooling.grepTimeoutMs,
+          maxBufferBytes: options.publicConfig.tooling.grepMaxBufferBytes,
         })}
         onQuit={() => {
           quitRequested = true;

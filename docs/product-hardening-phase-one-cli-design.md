@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-- 状态：待实施。
+- 状态：已完成（2026-07-23）。
 - 日期：2026-07-23。
 - 基线：Tinker `1.3.0`，commit `7822852dad23`。
 - 上位方案：[`product-hardening-phase-one-design.md`](product-hardening-phase-one-design.md)。
@@ -73,8 +73,10 @@ tinker run explain $HOME *.ts
 
 1. 顶层 CLI 使用 `commander@^14.0.3`。
 2. Commander 只拥有命令语法、help/version 和解析期错误，不拥有业务配置或 runtime。
-3. Commander、runner 和 `main()` 都不直接终止进程；Node launcher 与 Bun executable guard
-   只设置最终 `process.exitCode`，让 stdout/stderr 自然排空。子进程被 signal 终止时仍按原
+3. Commander、`main()` 和 one-shot runner 都不直接终止进程；Node launcher 与 Bun
+   executable guard 的普通路径只设置最终 `process.exitCode`，让 stdout/stderr 自然排空。
+   TUI `/quit` 是唯一例外：完成 Ink、session、MCP 和 background task 清理后显式
+   `process.exit(0)`，避免 Bun 被残留 TTY handle 保持存活。子进程被 signal 终止时仍按原
    signal 转发。
 4. `run` 的 Prompt 来源固定为单个位置参数、`--stdin`、`--file <path>` 三选一。
 5. 顶层 `--profile`/`-p` 属于默认 TUI 命令；`run` 声明自己的同名 option，用于选择
@@ -640,10 +642,10 @@ if (import.meta.main) {
 
 dynamic import failure 使用固定 reinstall 提示；第二层 catch 只是 `main()` 违反 total-boundary
 合同后的最后兜底，不输出 stack。正常命令错误必须由 `main()` 分类。`main()` 返回 exit code，
-不调用 `process.exit()`；`runTui()`、`runOneShot()` 和 Commander override 也不得调用
-它。TUI `/quit` 必须完成 Ink、session、MCP 和 background task 清理后正常返回，让 executable
-guard 统一设置 `process.exitCode`。强制退出会跳过 stdout/stderr 的自然排空，因此不能作为
-“确保 CLI 结束”的手段。
+不调用 `process.exit()`；`runOneShot()` 和 Commander override 也不得调用它。TUI `/quit`
+必须先调用 Ink `exit()`，等待 `waitUntilExit()`，再完成 session、MCP 和 background task 清理，
+最后由 `runTui()` 显式 `process.exit(0)`。该调用只允许位于成功清理后的 `/quit` 分支；更早强制
+退出会跳过持久化或 stdout/stderr 排空，仍然禁止。
 
 `bin/tinker.js` 同样改为可返回 code 的 launcher 函数；缺少 bundled Bun 或 spawn failure 时
 输出不含底层 message 的固定 reinstall 提示并返回 `1`，正常 child completion 赋给
@@ -715,17 +717,18 @@ exit code 同时可观察。
 | `src/cli/index.ts` | `import.meta.main` executable guard、lazy `main()` import 与 `process.exitCode`；不拥有 command/runtime 逻辑 |
 | `src/cli/config.ts` | 从 P1.1 公共声明解析 `ResolvedPublicConfig` 并纯派生 `RunnerConfig`；不 import provider/tool implementation |
 | `src/cli/runner-dependencies.ts` | selected runner 才加载的 model client、refiner 与 runtime dependency factory（名称可按实现微调） |
-| `src/cli/tui-runner.tsx` | 接收配置快照；可纯派生多 session config；不读取 env/profile，不调用 `process.exit()` |
+| `src/cli/tui-runner.tsx` | 接收配置快照；可纯派生多 session config；不读取 env/profile；仅在 `/quit` 完成全部清理后显式退出 |
 | `src/cli/run-runner.ts` | 接收 resolved `RunnerConfig` 和 Prompt string；不理解 Prompt source，也不再加载 env/profile |
 | `src/__tests__/command-line.test.ts` | 命令语法、help/version、Commander error mapping |
 | `src/__tests__/cli-launcher.test.ts` | Node launcher 的 Bun lookup、stdio、普通 code 与 signal 传播 |
 | `src/__tests__/cli-main.test.ts` | import guard、lazy loading、config/Prompt/dispatch 顺序、输出排空与 exit code |
+| `src/__tests__/cli-pty.test.ts`、`fixtures/pty-host.py` | 在真实 controlling PTY 中启动完整 TUI、提交 `/quit` 并验证进程退出 |
 | `src/__tests__/prompt-source.test.ts` | argument/stdin/file 的边界、保持与失败 |
 | `scripts/verify-release-package.ts` | 从真实 tarball 验证公共 CLI |
 
-`src/agent`、`src/context`、`src/session` 和 TUI 交互语义不应因本文改变；TUI runner 移除深层
-process exit、改用配置快照属于 composition/lifecycle 边界调整，不得改变 `/quit`、resume、
-`/model`、`/clear` 或 `/fork` 的用户行为。
+`src/agent`、`src/context`、`src/session` 和 TUI 交互语义不应因本文改变；TUI runner 改用配置
+快照，但保留 `/quit` 完成清理后的显式进程退出，不得改变 resume、`/model`、`/clear` 或
+`/fork` 的用户行为。
 
 ## 11. 测试方案
 
@@ -794,7 +797,9 @@ process exit、改用配置快照属于 composition/lifecycle 边界调整，不
   parser/path；
 - help/version/usage 进程不加载 TUI/runtime/tool/provider modules；
 - config failure 不加载 TUI/one-shot runner，Prompt failure 不加载 one-shot runner；
-- TUI `/quit` 和 one-shot completion 都由 runner 正常返回，没有深层 `process.exit()`；
+- TUI `/quit` 在真实 controlling PTY 中完成清理并于 2 秒内以 code `0` 退出；测试失败清理整个
+  PTY 进程组，不遗留 Bun 子进程；
+- one-shot completion 正常返回，不调用深层 `process.exit()`；
 - Node launcher 对缺 bundled Bun、spawn failure、普通 child code 和 signal termination 的传播
   行为有进程级测试，普通路径不调用 `process.exit()`；
 - 通过 pipe 捕获足够大的注入输出，证明 stdout/stderr 完整排空后进程才以目标 code 退出；
@@ -858,7 +863,8 @@ root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot
 2. 建立纯 command tree、重复/缺值消歧、输出注入、exit override、固定 usage hint 和
    post-parse invariant 测试。
 3. 拆分可导入的 `main.ts` 与 guarded `index.ts`，建立 selected-command dynamic import，重构
-   Node launcher 的 code/signal 传播，并让 TUI/one-shot lifecycle 不再调用 `process.exit()`。
+   Node launcher 的 code/signal 传播；one-shot lifecycle 不调用 `process.exit()`，TUI 仅在
+   `/quit` 完成全部清理后显式退出。
 4. 实现 `prompt-source.ts`、bounded stdin/file reader、errno 分类和安全错误 renderer。
 5. 按 parse -> invariant -> config snapshot/derive -> Prompt source -> dispatch 接通 one-shot，
    并验证 TUI 多 session 派生不重新读取配置。
@@ -872,44 +878,45 @@ root，形成第 8.2 节的 immutable snapshot 与 pure derive 边界。one-shot
 
 ## 14. 完成定义
 
-- [ ] `commander@^14.0.3` 与 Node `>=20` 安装合同一致。
-- [ ] Commander 与 README renderer 消费同一份无副作用 CLI 声明，没有第二份 usage 清单。
-- [ ] P1.1 已先完成 config 上移；每个 `tui`/`run` 进程只执行一次 public config resolution，
+- [x] `commander@^14.0.3` 与 Node `>=20` 安装合同一致。
+- [x] Commander 与 README renderer 消费同一份无副作用 CLI 声明，没有第二份 usage 清单。
+- [x] P1.1 已先完成 config 上移；每个 `tui`/`run` 进程只执行一次 public config resolution，
       one-shot 派生一次，TUI 从同一快照按 session 生命周期纯派生且不生成多余 session ID。
-- [ ] config boundary 不 import provider/tool implementation；model client/refiner/runtime factory 只
+- [x] config boundary 不 import provider/tool implementation；model client/refiner/runtime factory 只
       随 selected runner 加载。
-- [ ] `main.ts`、`index.ts` 可安全 import，且 import `index.ts` 不加载 Commander；help/version/
+- [x] `main.ts`、`index.ts` 可安全 import，且 import `index.ts` 不加载 Commander；help/version/
       usage 不加载 TUI/runtime/tool/provider；config/Prompt 成功后才 dynamic import selected runner。
-- [ ] Node launcher、Bun guard、`main()`、Commander 和 runner 的普通路径不调用
-      `process.exit()`；TUI cleanup 与 stdout/stderr flush 完成后只设置 `process.exitCode`，child
-      signal 仍以原 signal 传播。
-- [ ] 所有已声明命令、help 和 version 在无 model 配置时行为确定。
-- [ ] `--version` 输出裸 package version，Commander version getter 不含程序名前缀。
-- [ ] 顶层/root action、`run [prompt]`、全部 help 成功 code 与当前 command 固定 usage hint 有
+- [x] Node launcher、Bun guard、`main()`、Commander 和 one-shot runner 的普通路径不调用
+      `process.exit()`；TUI `/quit` 在 cleanup 完成后显式退出，child signal 仍以原 signal 传播。
+- [x] 真实 PTY 回归测试会启动完整 TUI、提交 `/quit`，并断言 2 秒内以 code `0` 退出。
+- [x] 所有已声明命令、help 和 version 在无 model 配置时行为确定。
+- [x] `--version` 输出裸 package version，Commander version getter 不含程序名前缀。
+- [x] 顶层/root action、`run [prompt]`、全部 help 成功 code 与当前 command 固定 usage hint 有
       精确测试。
-- [ ] 未知 option、缺参数、多参数、重复逻辑 option、greedy option-looking value 和 source
+- [x] 未知 option、缺参数、多参数、重复逻辑 option、greedy option-looking value 和 source
       冲突在副作用前返回 `2`；attached leading-dash value 行为确定。
-- [ ] 顶层 profile 与 run 的冲突由显式 post-parse invariant 返回 `2`。
-- [ ] `run --profile`/`run -p` 为 one-shot 选择 profile，省略时使用 default profile/env mode。
-- [ ] argument、stdin、file 恰好三选一，没有隐式 stdin 或 variadic join。
-- [ ] public config failure 发生在 stdin/file 读取前，并与 usage/Prompt/runtime failure 使用固定
+- [x] 顶层 profile 与 run 的冲突由显式 post-parse invariant 返回 `2`。
+- [x] `run --profile`/`run -p` 为 one-shot 选择 profile，省略时使用 default profile/env mode。
+- [x] argument、stdin、file 恰好三选一，没有隐式 stdin 或 variadic join。
+- [x] public config failure 发生在 stdin/file 读取前，并与 usage/Prompt/runtime failure 使用固定
       exit-code 分类。
-- [ ] Prompt 校验有 1 MiB 上限、fatal UTF-8、NUL 和非空合同。
-- [ ] 合法 Prompt 的文本不 trim、不换行规范化、不追加换行。
-- [ ] Prompt errno 映射、跨平台同义错误、stdin listener cleanup、路径控制字符与 512-byte
+- [x] Prompt 校验有 1 MiB 上限、fatal UTF-8、NUL 和非空合同。
+- [x] 合法 Prompt 的文本不 trim、不换行规范化、不追加换行。
+- [x] Prompt errno 映射、跨平台同义错误、stdin listener cleanup、路径控制字符与 512-byte
       detail 上限有精确测试。
-- [ ] `runOneShot()` 不感知 Prompt source。
-- [ ] `main()` 是总错误边界，未预期异常不泄漏 stack/secret，也不重复 runner 已输出的错误。
-- [ ] README 和 CHANGELOG 说明 shell quoting、stdin/file 以及旧 variadic 行为移除。
-- [ ] 真实 npm tarball 在 macOS、Linux 通过 CLI smoke。
-- [ ] `bun run check`、`bun run release:verify`、`git diff --check` 完整通过。
+- [x] `runOneShot()` 不感知 Prompt source。
+- [x] `main()` 是总错误边界，未预期异常不泄漏 stack/secret，也不重复 runner 已输出的错误。
+- [x] README 和 CHANGELOG 说明 shell quoting、stdin/file 以及旧 variadic 行为移除。
+- [x] 真实 npm tarball 在 macOS、Linux 通过 CLI smoke。
+- [x] `bun run check`、`bun run release:verify`、`git diff --check` 完整通过。
 
 ## 15. 实施结果
 
-待实现后回填：
-
-- 完成 commit：待定。
-- Commander/Bun package smoke：待定。
-- macOS CLI smoke：待定。
-- Linux CLI smoke：待定。
-- 最终命令与 Prompt source 测试数：待定。
+- 完成 commit：未创建；实现与验证位于当前工作区。
+- Commander/Bun package smoke：`commander@14.0.3`、包内 Bun `1.3.14` 与真实 npm tarball
+  干净 prefix 安装通过。
+- macOS CLI smoke：`bun run release:verify` 在 `darwin` 通过。
+- Linux CLI smoke：`node:20-bookworm` + Bun `1.3.14` 容器内先执行
+  `bun install --frozen-lockfile`，再执行 `bun run release:verify`，结果通过。
+- 真实 PTY `/quit` 回归：移除显式退出时 2 秒超时；恢复修复后约 500 ms 以 code `0` 退出。
+- 最终命令与 Prompt source 测试数：43 项 CLI 专项测试；完整 `bun test` 735 项通过。
