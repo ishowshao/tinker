@@ -495,6 +495,8 @@ runner config。
 
 ### P1.3 README 契约同步
 
+**状态：已完成（2026-07-23）。**
+
 - 修正 README 五类已知漂移；
 - 增加 README 唯一 marker、纯 renderer、显式 `docs:generate` 和只读 `docs:check`；
 - 从代码声明生成 CLI、公共环境变量、profile 和内置 slash command 受控段落；
@@ -609,10 +611,10 @@ matrix。
 只有以下项目全部满足，阶段一才可标记完成：
 
 - [x] 独立 CLI 技术方案的完成定义全部满足。
-- [ ] 公共 env/profile 字段有单一声明源，tooling 不再散落解释公共 env。
-- [ ] README 命令、配置、profile、图片和 slash commands 与实现一致；机械事实位于唯一 marker
+- [x] 公共 env/profile 字段有单一声明源，tooling 不再散落解释公共 env。
+- [x] README 命令、配置、profile、图片和 slash commands 与实现一致；机械事实位于唯一 marker
   受控段落。
-- [ ] `docs:generate` 确定、原子、幂等；`docs:check` 只读且已进入 `bun run check`。
+- [x] `docs:generate` 确定、原子、幂等；`docs:check` 只读且已进入 `bun run check`。
 - [ ] 当前 audit 已修复或存在合规、未过期的精确例外；无 critical/high。
 - [ ] Dependabot 使用 Bun ecosystem，并以真实 PR 证明同步文本 `bun.lock`。
 - [ ] macOS、Linux 都从真实 npm tarball 的干净 prefix 通过 package smoke。

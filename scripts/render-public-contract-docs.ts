@@ -1,9 +1,80 @@
+import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { diffLines } from "diff";
+import { parseModelProfiles } from "../src/cli/model-profiles";
 import { PUBLIC_CLI_CONTRACT } from "../src/cli/public-cli-contract";
+import {
+  MODEL_PROFILE_FIELDS,
+  MODEL_TOKEN_ESTIMATOR_FIELDS,
+  PUBLIC_CONFIG_FIELDS,
+  type ModelProfileField,
+  type ModelTokenEstimatorField,
+  type PublicConfigField,
+} from "../src/cli/public-config-contract";
+import { SLASH_COMMANDS } from "../src/tui/slash-commands";
 
 export const PUBLIC_CLI_BEGIN_MARKER = "<!-- BEGIN GENERATED: PUBLIC CLI COMMANDS -->";
 export const PUBLIC_CLI_END_MARKER = "<!-- END GENERATED: PUBLIC CLI COMMANDS -->";
+export const PUBLIC_ENVIRONMENT_BEGIN_MARKER =
+  "<!-- BEGIN GENERATED: PUBLIC ENVIRONMENT VARIABLES -->";
+export const PUBLIC_ENVIRONMENT_END_MARKER =
+  "<!-- END GENERATED: PUBLIC ENVIRONMENT VARIABLES -->";
+export const MODEL_PROFILE_BEGIN_MARKER =
+  "<!-- BEGIN GENERATED: MODEL PROFILE FIELDS -->";
+export const MODEL_PROFILE_END_MARKER = "<!-- END GENERATED: MODEL PROFILE FIELDS -->";
+export const BUILT_IN_SLASH_COMMANDS_BEGIN_MARKER =
+  "<!-- BEGIN GENERATED: BUILT-IN SLASH COMMANDS -->";
+export const BUILT_IN_SLASH_COMMANDS_END_MARKER =
+  "<!-- END GENERATED: BUILT-IN SLASH COMMANDS -->";
+
+export type GeneratedSectionName =
+  | "PUBLIC CLI COMMANDS"
+  | "PUBLIC ENVIRONMENT VARIABLES"
+  | "MODEL PROFILE FIELDS"
+  | "BUILT-IN SLASH COMMANDS";
+
+type GeneratedSection = {
+  readonly name: GeneratedSectionName;
+  readonly beginMarker: string;
+  readonly endMarker: string;
+  readonly render: () => string;
+};
+
+type LocatedSection = GeneratedSection & {
+  readonly beginOffset: number;
+  readonly endOffset: number;
+};
+
+const GENERATED_SECTIONS: readonly GeneratedSection[] = Object.freeze([
+  Object.freeze({
+    name: "PUBLIC CLI COMMANDS",
+    beginMarker: PUBLIC_CLI_BEGIN_MARKER,
+    endMarker: PUBLIC_CLI_END_MARKER,
+    render: renderPublicCliCommands,
+  }),
+  Object.freeze({
+    name: "PUBLIC ENVIRONMENT VARIABLES",
+    beginMarker: PUBLIC_ENVIRONMENT_BEGIN_MARKER,
+    endMarker: PUBLIC_ENVIRONMENT_END_MARKER,
+    render: renderPublicEnvironmentVariables,
+  }),
+  Object.freeze({
+    name: "MODEL PROFILE FIELDS",
+    beginMarker: MODEL_PROFILE_BEGIN_MARKER,
+    endMarker: MODEL_PROFILE_END_MARKER,
+    render: renderModelProfileFields,
+  }),
+  Object.freeze({
+    name: "BUILT-IN SLASH COMMANDS",
+    beginMarker: BUILT_IN_SLASH_COMMANDS_BEGIN_MARKER,
+    endMarker: BUILT_IN_SLASH_COMMANDS_END_MARKER,
+    render: renderBuiltInSlashCommands,
+  }),
+]);
+
+const MAX_DIFF_LINES = 48;
+const MAX_DIFF_LINE_LENGTH = 240;
 
 export function renderPublicCliCommands(): string {
   const contract = PUBLIC_CLI_CONTRACT;
@@ -11,74 +82,166 @@ export function renderPublicCliCommands(): string {
   const runProfile = longFlags(contract.run.profileOption.flags);
   const help = longFlags(contract.helpFlags);
   const version = longFlags(contract.versionFlags);
-  const runCommand = contract.run.command.split(" ")[0];
-  const helpCommand = contract.helpCommand.command.split(" ")[0];
-  if (runCommand === undefined || helpCommand === undefined) {
-    throw new Error("Public CLI command declarations must not be empty.");
-  }
+  const runCommand = firstCommandWord(contract.run.command);
+  const helpCommand = firstCommandWord(contract.helpCommand.command);
   const rows = [
     ["`tinker`", contract.tui.description],
     [`\`tinker ${profile}\``, "Start the TUI with a selected model profile."],
     [
-      `\`tinker run [${runProfile}] ${contract.run.promptSources[0].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[0].syntax}\``,
       contract.run.promptSources[0].description,
     ],
     [
-      `\`tinker run [${runProfile}] ${contract.run.promptSources[1].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[1].syntax}\``,
       contract.run.promptSources[1].description,
     ],
     [
-      `\`tinker run [${runProfile}] ${contract.run.promptSources[2].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[2].syntax}\``,
       contract.run.promptSources[2].description,
     ],
     [`\`tinker ${help}\``, "Show top-level CLI help."],
     [`\`tinker ${helpCommand} ${runCommand}\``, "Show one-shot command help."],
     [`\`tinker ${version}\``, "Print the installed package version."],
   ];
+  return renderTable(["Command", "Description"], rows);
+}
+
+export function renderPublicEnvironmentVariables(): string {
+  const rows = PUBLIC_CONFIG_FIELDS.map((field) => [
+    `\`${field.name}\``,
+    publicConfigArea(field),
+    field.appliesIn === "always" ? "All modes" : "Env mode",
+    publicConfigRequired(field),
+    publicValueKind(field.valueKind),
+    publicConfigDefault(field),
+    field.secret ? "Yes" : "No",
+    field.description,
+  ]);
+  return renderTable(
+    [
+      "Variable",
+      "Area",
+      "Applies",
+      "Required",
+      "Type",
+      "Default",
+      "Secret",
+      "Description",
+    ],
+    rows,
+  );
+}
+
+export function renderModelProfileFields(): string {
+  const profileRows = MODEL_PROFILE_FIELDS.map((field) => [
+    `\`${field.name}\``,
+    field.name === "tokenEstimator" ? "With image" : field.required ? "Yes" : "No",
+    modelProfileValueKind(field),
+    modelProfileDefault(field),
+    field.secret ? "Yes" : "No",
+    field.description,
+  ]);
+  const estimatorRows = MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => [
+    `\`${field.name}\``,
+    tokenEstimatorConstraint(field),
+    field.secret ? "Yes" : "No",
+    field.description,
+  ]);
+  const textDocument = createProfileExample(false);
+  const imageDocument = createProfileExample(true);
+
+  parseModelProfiles(JSON.stringify(textDocument), "README text profile example");
+  parseModelProfiles(JSON.stringify(imageDocument), "README image profile example");
+
   return [
-    "| Command | Description |",
-    "| --- | --- |",
-    ...rows.map(([command, description]) => `| ${command} | ${description} |`),
+    "Profile fields:",
+    "",
+    renderTable(
+      ["Field", "Required", "Type / constraint", "Default", "Secret", "Description"],
+      profileRows,
+    ),
+    "",
+    "`tokenEstimator` fields:",
+    "",
+    renderTable(["Field", "Type / constraint", "Secret", "Description"], estimatorRows),
+    "",
+    "Text-only profile example:",
+    "",
+    "```json",
+    JSON.stringify(textDocument, null, 2),
+    "```",
+    "",
+    "Image-capable profile example:",
+    "",
+    "```json",
+    JSON.stringify(imageDocument, null, 2),
+    "```",
   ].join("\n");
 }
 
-export function updatePublicCliSection(markdown: string): string {
-  const beginOffsets = markerOffsets(markdown, PUBLIC_CLI_BEGIN_MARKER);
-  const endOffsets = markerOffsets(markdown, PUBLIC_CLI_END_MARKER);
-  if (beginOffsets.length !== 1 || endOffsets.length !== 1) {
-    throw new Error("README must contain exactly one PUBLIC CLI COMMANDS marker pair.");
-  }
-  const begin = beginOffsets[0];
-  const end = endOffsets[0];
-  if (begin === undefined || end === undefined || begin >= end) {
-    throw new Error("README PUBLIC CLI COMMANDS markers are out of order.");
-  }
-  const contentStart = begin + PUBLIC_CLI_BEGIN_MARKER.length;
-  return `${markdown.slice(0, contentStart)}\n${renderPublicCliCommands()}\n${markdown.slice(end)}`;
+export function renderBuiltInSlashCommands(): string {
+  return renderTable(
+    ["Command", "Description"],
+    SLASH_COMMANDS.map((command) => [`\`${command.usage}\``, command.description]),
+  );
 }
 
-async function run(): Promise<void> {
-  const mode = process.argv[2];
-  if (mode !== "--write" && mode !== "--check") {
-    throw new Error("Usage: render-public-contract-docs.ts --write|--check");
+export function updatePublicContractSections(markdown: string): string {
+  const sections = locateGeneratedSections(markdown);
+  let generated = markdown;
+  for (const section of [...sections].reverse()) {
+    generated = replaceLocatedSection(generated, section, section.render());
   }
-  const readmePath = path.join(import.meta.dir, "..", "README.md");
-  const current = await readFile(readmePath, "utf8");
-  const generated = updatePublicCliSection(current);
-  if (mode === "--check") {
-    if (generated !== current) {
-      throw new Error(
-        "README PUBLIC CLI COMMANDS section is stale. Run bun run docs:generate.",
-      );
-    }
+  return generated;
+}
+
+export function assertPublicContractDocsCurrent(markdown: string): void {
+  const sections = locateGeneratedSections(markdown);
+  const stale = sections.flatMap((section) => {
+    const actual = sectionBody(markdown, section);
+    const expected = `\n${section.render()}\n`;
+    return actual === expected ? [] : [{ section, actual, expected }];
+  });
+  if (stale.length === 0) {
     return;
   }
+
+  const names = stale.map(({ section }) => section.name).join(", ");
+  const details = boundedDiff(
+    stale.map(({ section, actual, expected }) => ({
+      name: section.name,
+      actual,
+      expected,
+    })),
+  );
+  throw new Error(
+    `README generated sections are stale: ${names}. Run bun run docs:generate.\n${details}`,
+  );
+}
+
+export function updatePublicCliSection(markdown: string): string {
+  const section = locateSingleSection(markdown, GENERATED_SECTIONS[0]);
+  return replaceLocatedSection(markdown, section, renderPublicCliCommands());
+}
+
+export async function runPublicContractDocs(
+  mode: "write" | "check",
+  readmePath: string,
+): Promise<void> {
+  const current = await readFile(readmePath, "utf8");
+  if (mode === "check") {
+    assertPublicContractDocsCurrent(current);
+    return;
+  }
+
+  const generated = updatePublicContractSections(current);
   if (generated === current) {
     return;
   }
-  const temporaryPath = `${readmePath}.${process.pid}.tmp`;
+
+  const temporaryPath = `${readmePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporaryPath, generated);
+    await writeFile(temporaryPath, generated, { encoding: "utf8", flag: "wx" });
     await rename(temporaryPath, readmePath);
   } finally {
     await rm(temporaryPath).catch((error: unknown) => {
@@ -87,6 +250,262 @@ async function run(): Promise<void> {
       }
     });
   }
+}
+
+function locateGeneratedSections(markdown: string): readonly LocatedSection[] {
+  const sections = GENERATED_SECTIONS.map((section) =>
+    locateSingleSection(markdown, section),
+  );
+  const actualMarkers = sections
+    .flatMap((section) => [
+      { marker: section.beginMarker, offset: section.beginOffset },
+      { marker: section.endMarker, offset: section.endOffset },
+    ])
+    .sort((left, right) => left.offset - right.offset)
+    .map(({ marker }) => marker);
+  const expectedMarkers = GENERATED_SECTIONS.flatMap((section) => [
+    section.beginMarker,
+    section.endMarker,
+  ]);
+  if (
+    actualMarkers.length !== expectedMarkers.length ||
+    actualMarkers.some((marker, index) => marker !== expectedMarkers[index])
+  ) {
+    throw new Error(
+      `README generated markers must appear in this fixed order: ${expectedMarkers.join(" -> ")}.`,
+    );
+  }
+  return sections;
+}
+
+function locateSingleSection(
+  markdown: string,
+  section: GeneratedSection | undefined,
+): LocatedSection {
+  if (section === undefined) {
+    throw new Error("Missing generated section declaration.");
+  }
+  const beginOffsets = markerOffsets(markdown, section.beginMarker);
+  const endOffsets = markerOffsets(markdown, section.endMarker);
+  if (beginOffsets.length !== 1 || endOffsets.length !== 1) {
+    throw new Error(
+      `README must contain exactly one ${section.name} marker pair; found ${beginOffsets.length} begin and ${endOffsets.length} end markers.`,
+    );
+  }
+  const beginOffset = beginOffsets[0];
+  const endOffset = endOffsets[0];
+  if (
+    beginOffset === undefined ||
+    endOffset === undefined ||
+    beginOffset >= endOffset
+  ) {
+    throw new Error(`README ${section.name} markers are reversed or crossed.`);
+  }
+  return { ...section, beginOffset, endOffset };
+}
+
+function replaceLocatedSection(
+  markdown: string,
+  section: LocatedSection,
+  rendered: string,
+): string {
+  const contentStart = section.beginOffset + section.beginMarker.length;
+  return `${markdown.slice(0, contentStart)}\n${rendered}\n${markdown.slice(section.endOffset)}`;
+}
+
+function sectionBody(markdown: string, section: LocatedSection): string {
+  const contentStart = section.beginOffset + section.beginMarker.length;
+  return markdown.slice(contentStart, section.endOffset);
+}
+
+function createProfileExample(image: boolean): Record<string, unknown> {
+  const profileName = image ? "image" : "text";
+  const profileValues: Readonly<Record<string, unknown>> = Object.freeze({
+    model: image ? "example-vision-model" : "example-text-model",
+    apiBase: "https://api.example.com/v1",
+    apiKey: "your-model-api-key",
+    contextWindowTokens: 128_000,
+    maxSupportedOutputTokens: 8_192,
+    includeReasoningContent: false,
+    stream: true,
+    inputModalities: image ? ["text", "image"] : ["text"],
+    tokenEstimator: createTokenEstimatorExample(),
+  });
+  const profile = Object.fromEntries(
+    MODEL_PROFILE_FIELDS.filter(
+      (field) => field.name !== "tokenEstimator" || image,
+    ).map((field) => [field.name, profileValues[field.name]]),
+  );
+  return {
+    default: profileName,
+    profiles: {
+      [profileName]: profile,
+    },
+  };
+}
+
+function createTokenEstimatorExample(): Record<string, unknown> {
+  const values: Readonly<Record<string, unknown>> = Object.freeze({
+    model: "example-token-estimator",
+    apiBase: "https://estimator.example.com/v1",
+    apiKey: "your-estimator-api-key",
+    timeoutMs: 30_000,
+  });
+  return Object.fromEntries(
+    MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => [
+      field.name,
+      tokenEstimatorExampleValue(field, values),
+    ]),
+  );
+}
+
+function publicConfigArea(field: PublicConfigField): string {
+  switch (field.section) {
+    case "model":
+      return "Model";
+    case "workspace":
+      return "Workspace";
+    case "tooling":
+      return "Tooling";
+  }
+}
+
+function publicConfigRequired(field: PublicConfigField): string {
+  switch (field.requiredIn) {
+    case "always":
+      return "Always";
+    case "env-mode":
+      return "Env mode";
+    case "never":
+      return "No";
+  }
+}
+
+function publicValueKind(kind: PublicConfigField["valueKind"]): string {
+  switch (kind) {
+    case "non-empty-string":
+      return "Non-empty string";
+    case "positive-integer":
+      return "Positive integer";
+    case "boolean":
+      return "Boolean";
+  }
+}
+
+function publicConfigDefault(field: PublicConfigField): string {
+  if (field.defaultValue !== undefined) {
+    return codeValue(field.defaultValue);
+  }
+  if (field.defaultSource === "process-cwd") {
+    return "Process cwd";
+  }
+  if (field.defaultSource === "bundled-ripgrep") {
+    return "Bundled ripgrep";
+  }
+  return "—";
+}
+
+function modelProfileValueKind(field: ModelProfileField): string {
+  switch (field.valueKind) {
+    case "non-empty-string":
+      return "Non-empty string";
+    case "positive-integer":
+      return "Positive integer";
+    case "boolean":
+      return "JSON boolean";
+    case "input-modalities":
+      return "Normalized modality array";
+    case "token-estimator":
+      return "Object";
+  }
+}
+
+function modelProfileDefault(field: ModelProfileField): string {
+  return field.defaultValue === undefined ? "—" : codeValue(field.defaultValue);
+}
+
+function tokenEstimatorConstraint(field: ModelTokenEstimatorField): string {
+  if (field.literalValue !== undefined) {
+    return `Literal ${codeValue(field.literalValue)}`;
+  }
+  if (field.minimum !== undefined && field.maximum !== undefined) {
+    return `Integer ${field.minimum}–${field.maximum}`;
+  }
+  return publicValueKind(field.valueKind as PublicConfigField["valueKind"]);
+}
+
+function tokenEstimatorExampleValue(
+  field: ModelTokenEstimatorField,
+  values: Readonly<Record<string, unknown>>,
+): unknown {
+  return field.literalValue ?? values[field.name];
+}
+
+function codeValue(value: string | number | boolean | readonly string[]): string {
+  return `\`${JSON.stringify(value)}\``;
+}
+
+function renderTable(
+  headers: readonly string[],
+  rows: readonly (readonly string[])[],
+): string {
+  return [
+    `| ${headers.map(escapeTableCell).join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`,
+    ...rows.map((row) => `| ${row.map((cell) => escapeTableCell(cell)).join(" | ")} |`),
+  ].join("\n");
+}
+
+function escapeTableCell(value: string): string {
+  return value.replaceAll("|", "\\|").replaceAll("\n", " ");
+}
+
+function boundedDiff(
+  stale: readonly {
+    readonly name: GeneratedSectionName;
+    readonly actual: string;
+    readonly expected: string;
+  }[],
+): string {
+  const lines: string[] = [];
+  let truncated = false;
+  for (const entry of stale) {
+    if (lines.length >= MAX_DIFF_LINES) {
+      truncated = true;
+      break;
+    }
+    lines.push(`--- ${entry.name} (current)`, `+++ ${entry.name} (expected)`);
+    for (const change of diffLines(entry.actual, entry.expected)) {
+      if (change.added !== true && change.removed !== true) {
+        continue;
+      }
+      const prefix = change.added === true ? "+" : "-";
+      const changedLines = change.value.split("\n");
+      if (changedLines.at(-1) === "") {
+        changedLines.pop();
+      }
+      for (const line of changedLines) {
+        if (lines.length >= MAX_DIFF_LINES) {
+          truncated = true;
+          break;
+        }
+        lines.push(`${prefix}${truncateDiffLine(line)}`);
+      }
+      if (truncated) {
+        break;
+      }
+    }
+  }
+  if (truncated) {
+    lines.push("... diff truncated ...");
+  }
+  return lines.join("\n");
+}
+
+function truncateDiffLine(line: string): string {
+  return line.length <= MAX_DIFF_LINE_LENGTH
+    ? line
+    : `${line.slice(0, MAX_DIFF_LINE_LENGTH)}…`;
 }
 
 function markerOffsets(markdown: string, marker: string): number[] {
@@ -113,6 +532,14 @@ function longFlags(flags: string): string {
   return long;
 }
 
+function firstCommandWord(command: string): string {
+  const first = command.split(" ")[0];
+  if (first === undefined || first === "") {
+    throw new Error("Public CLI command declarations must not be empty.");
+  }
+  return first;
+}
+
 function isNotFound(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -120,6 +547,15 @@ function isNotFound(error: unknown): boolean {
     "code" in error &&
     error.code === "ENOENT"
   );
+}
+
+async function run(): Promise<void> {
+  const mode = process.argv[2];
+  if (mode !== "--write" && mode !== "--check") {
+    throw new Error("Usage: render-public-contract-docs.ts --write|--check");
+  }
+  const readmePath = path.join(import.meta.dir, "..", "README.md");
+  await runPublicContractDocs(mode === "--write" ? "write" : "check", readmePath);
 }
 
 if (import.meta.main) {

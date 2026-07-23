@@ -1,24 +1,66 @@
 export type SlashCommand = {
-  name: string;
-  description: string;
+  readonly name: string;
+  readonly description: string;
+  readonly usage?: string;
 };
 
-export const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { name: "status", description: "Show session and context details" },
-  { name: "skills", description: "Show available and active Agent Skills" },
-  { name: "mcp", description: "Show MCP servers and runtime tools" },
+export type BuiltInSlashCommand = SlashCommand & {
+  readonly usage: string;
+};
+
+export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
+  {
+    name: "status",
+    usage: "/status",
+    description: "Show session and context details",
+  },
+  {
+    name: "skills",
+    usage: "/skills",
+    description: "Show available and active Agent Skills",
+  },
+  {
+    name: "mcp",
+    usage: "/mcp",
+    description: "Show MCP servers and runtime tools",
+  },
   {
     name: "compact",
+    usage: "/compact [retire]",
     description: "Swap tool output or retire a cold history prefix",
   },
-  { name: "clear", description: "Start a new session and clear conversation" },
-  { name: "fork", description: "Clone the current session" },
-  { name: "view", description: "View a local UTF-8 text file" },
-  { name: "copy", description: "Copy the last response as Markdown" },
-  { name: "model", description: "Switch model profile (new session)" },
-  { name: "resume", description: "Choose or resume a session" },
-  { name: "session", description: "Manage stored sessions" },
-  { name: "quit", description: "Exit the TUI" },
+  {
+    name: "clear",
+    usage: "/clear",
+    description: "Start a new session and clear conversation",
+  },
+  { name: "fork", usage: "/fork", description: "Clone the current session" },
+  {
+    name: "view",
+    usage: "/view <path>",
+    description: "View a local UTF-8 text file",
+  },
+  {
+    name: "copy",
+    usage: "/copy",
+    description: "Copy the last response as Markdown",
+  },
+  {
+    name: "model",
+    usage: "/model [profile-name]",
+    description: "Switch model profile (new session)",
+  },
+  {
+    name: "resume",
+    usage: "/resume [session-id]",
+    description: "Choose or resume a session",
+  },
+  {
+    name: "session",
+    usage: "/session delete <session-id> --confirm",
+    description: "Manage stored sessions",
+  },
+  { name: "quit", usage: "/quit", description: "Exit the TUI" },
 ];
 
 export type ParsedSlashCommand =
@@ -48,12 +90,12 @@ export class SlashCommandError extends Error {
 export function parseSlashCommand(input: string): ParsedSlashCommand {
   const trimmed = input.trim();
   if (trimmed === "/view") {
-    throw new SlashCommandError("Usage: /view <path>");
+    throw slashCommandUsageError("view");
   }
   if (trimmed.startsWith("/view ") || trimmed.startsWith("/view\t")) {
     const filePath = trimmed.slice(5).trim();
     if (filePath === "") {
-      throw new SlashCommandError("Usage: /view <path>");
+      throw slashCommandUsageError("view");
     }
     return { type: "view", filePath };
   }
@@ -70,7 +112,7 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     if (tokens.length === 1) {
       return { type: "mcp" };
     }
-    throw new SlashCommandError("Usage: /mcp");
+    throw slashCommandUsageError("mcp");
   }
   if (command === "/compact") {
     if (tokens.length === 1) {
@@ -79,25 +121,25 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     if (tokens.length === 2 && tokens[1] === "retire") {
       return { type: "compact_retire" };
     }
-    throw new SlashCommandError("Usage: /compact [retire]");
+    throw slashCommandUsageError("compact");
   }
   if (command === "/clear") {
     if (tokens.length === 1) {
       return { type: "clear" };
     }
-    throw new SlashCommandError("Usage: /clear");
+    throw slashCommandUsageError("clear");
   }
   if (command === "/fork") {
     if (tokens.length === 1) {
       return { type: "fork" };
     }
-    throw new SlashCommandError("Usage: /fork");
+    throw slashCommandUsageError("fork");
   }
   if (command === "/copy") {
     if (tokens.length === 1) {
       return { type: "copy" };
     }
-    throw new SlashCommandError("Usage: /copy");
+    throw slashCommandUsageError("copy");
   }
   if (command === "/quit" && tokens.length === 1) {
     return { type: "quit" };
@@ -109,7 +151,7 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     if (tokens.length === 2) {
       return { type: "model_switch", profileName: tokens[1] };
     }
-    throw new SlashCommandError("Usage: /model [profile-name]");
+    throw slashCommandUsageError("model");
   }
   if (command === "/resume") {
     if (tokens.length === 1) {
@@ -118,7 +160,7 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
     if (tokens.length === 2) {
       return { type: "resume", sessionId: parsePublicSessionId(tokens[1]) };
     }
-    throw new SlashCommandError("Usage: /resume [session-id]");
+    throw slashCommandUsageError("resume");
   }
   if (command === "/session") {
     if (tokens.length === 4 && tokens[1] === "delete" && tokens[3] === "--confirm") {
@@ -127,7 +169,7 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
         sessionId: parsePublicSessionId(tokens[2]),
       };
     }
-    throw new SlashCommandError("Usage: /session delete <session-id> --confirm");
+    throw slashCommandUsageError("session");
   }
   throw new SlashCommandError(`Unknown command: ${trimmed}`);
 }
@@ -166,5 +208,15 @@ function parsePublicSessionId(value: string): SessionId {
   } catch {
     throw new SlashCommandError(`Invalid session ID: ${value}`);
   }
+}
+
+function slashCommandUsageError(
+  name: (typeof SLASH_COMMANDS)[number]["name"],
+): SlashCommandError {
+  const command = SLASH_COMMANDS.find((candidate) => candidate.name === name);
+  if (command === undefined) {
+    throw new Error(`Missing built-in slash command declaration for ${name}.`);
+  }
+  return new SlashCommandError(`Usage: ${command.usage}`);
 }
 import { parseSessionId, type SessionId } from "../ids/runtime-id";

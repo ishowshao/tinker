@@ -73,7 +73,8 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     appliesIn: "env-mode",
     secret: false,
     section: "model",
-    description: "Maximum output-token count supported by the model.",
+    description:
+      "Maximum output-token count supported by the model; must not exceed the context window.",
   }),
   publicField({
     name: "TINKER_INCLUDE_REASONING_CONTENT",
@@ -262,7 +263,8 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     valueKind: "positive-integer",
     required: true,
     secret: false,
-    description: "Maximum output-token count supported by the model.",
+    description:
+      "Maximum output-token count supported by the model; must not exceed contextWindowTokens.",
   }),
   profileField({
     name: "includeReasoningContent",
@@ -286,14 +288,15 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     required: false,
     defaultValue: Object.freeze(["text"] as const),
     secret: false,
-    description: "Accepted model input modalities.",
+    description:
+      'Accepted model input modalities; normalizes to ["text"] or ["text", "image"].',
   }),
   profileField({
     name: "tokenEstimator",
     valueKind: "token-estimator",
     required: false,
     secret: true,
-    description: "Required independent token estimator for image profiles.",
+    description: "Independent token estimator required for image profiles.",
   }),
 ]);
 
