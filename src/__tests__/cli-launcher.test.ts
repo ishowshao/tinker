@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -19,7 +20,7 @@ describe("CLI executable boundaries", () => {
   test("loads version from the installed package metadata source", async () => {
     expect(await loadPackageMetadata()).toMatchObject({
       name: "tinker-agent",
-      version: "1.3.0",
+      version: "1.4.0",
     });
   });
 
@@ -166,7 +167,7 @@ describe("CLI executable boundaries", () => {
       stderr: "pipe",
     });
     expect(version.exitCode).toBe(0);
-    expect(version.stdout.toString()).toBe("1.3.0\n");
+    expect(version.stdout.toString()).toBe("1.4.0\n");
     expect(version.stderr.toString()).toBe("");
 
     const help = Bun.spawnSync({
@@ -200,19 +201,29 @@ describe("CLI executable boundaries", () => {
       TINKER_WORKSPACE: workspace,
     });
     try {
-      const result = Bun.spawnSync({
-        cmd: ["node", path.join(repositoryRoot, "bin", "tinker.js"), "run", "--stdin"],
-        cwd: workspace,
-        env,
-        stdin: Buffer.from("launcher stdin\nsecond line\n"),
-        stdout: "pipe",
-        stderr: "pipe",
+      const child = spawn(
+        "node",
+        [path.join(repositoryRoot, "bin", "tinker.js"), "run", "--stdin"],
+        {
+          cwd: workspace,
+          env,
+          stdio: "pipe",
+        },
+      );
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.stdin.end("launcher stdin\nsecond line\n");
+      const exitCode = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout.toString()).toContain(
+      expect(exitCode).toBe(0);
+      expect(Buffer.concat(stdout).toString()).toContain(
         "Fake model received: launcher stdin\nsecond line\n",
       );
-      expect(result.stderr.toString()).toBe("");
+      expect(Buffer.concat(stderr).toString()).toBe("");
     } finally {
       await rm(workspace, { recursive: true });
     }
