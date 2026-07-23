@@ -2,11 +2,11 @@
 
 ## 文档状态
 
-- 状态：待实施。
+- 状态：阶段 A（Harness 基础）已实施；阶段 B 至 E 待实施。
 - 日期：2026-07-23。
 - 范围：TUI 真实 PTY harness、确定性测试依赖和关键用户旅程。
-- 当前基线：`src/__tests__/cli-pty.test.ts` 中已有一条真实 PTY `/quit`
-  回归测试。
+- 当前基线：`src/__tests__/cli-pty.test.ts` 中的真实 PTY `/quit`
+  回归测试已迁移到共享 harness。
 
 本文定义 Tinker 后续真实 PTY 自动化测试的共同基础和分阶段测试清单。它不把现有
 Ink 组件测试重复搬到更慢的进程测试中，而是验证用户通过真实终端完成一段操作后，
@@ -55,7 +55,7 @@ bun test
               -> CLI -> Ink App -> RuntimeSession
 ```
 
-这条路径是真实的，但现有 harness 仍有以下限制：
+这条路径是真实的，但阶段 A 实施前的 harness 有以下限制：
 
 1. PTY 启动、等待、退出和清理逻辑全部写在单个测试文件中，无法复用；
 2. 测试把所有终端字节追加到一个字符串，再使用 `includes()` 判断，无法区分旧画面
@@ -126,6 +126,7 @@ tool call、observation、canonical persistence 和 TUI event 路径。
 ```text
 src/__tests__/
   cli-pty.test.ts                 # P0 核心旅程和已有 /quit
+  pty-tui-harness.test.ts         # screen、输入编码、控制协议和诊断
   cli-pty-session.test.ts         # resume、clear、fork、model、delete
   cli-pty-input.test.ts           # Prompt、slash、@、viewer、图片
   cli-pty-extensions.test.ts      # context、Skills、MCP、copy
@@ -151,7 +152,7 @@ Bun test process
   └─ python3 pty-host.py
        ├─ stdin/stdout: PTY bytes
        ├─ stderr: host diagnostics
-       ├─ control fd: resize commands
+       ├─ local control socket: resize/signal JSON Lines
        └─ pty child process group
             -> node bin/tinker.js
                -> bundled Bun
@@ -223,21 +224,34 @@ interface PtyTuiHarness {
 
   signalTui(signal: NodeJS.Signals): Promise<void>;
   waitForExit(timeoutMs?: number): Promise<PtyProcessExit | undefined>;
+  wrapperExit(): PtyProcessExit | undefined;
+  tuiExit(): PtyProcessExit | undefined;
+  diagnosticText(expectedCondition: string): string;
   dispose(): Promise<void>;
 }
 ```
+
+普通单进程 case 使用 `withPtyTui()` 包住场景主体；它始终调用 `dispose()`，并在场景和
+清理同时失败时用 `AggregateError` 保留两边证据。需要显式管理多个前后进程或验证
+temporary root 清理本身时，才直接使用底层 `startPtyTui()`。
 
 `type()` 发送普通 UTF-8 字节；`paste()` 必须发送真实 bracketed paste 边界；`press()`
 统一维护按键 escape sequence，测试文件不自行散落 `\x1b[A` 等常量。
 
 ### 6.4 PTY host 控制协议
 
-继续使用 Python 标准库 `pty.fork()`，不引入 native `node-pty` 编译依赖。扩展
-`pty-host.py` 时保持三条通道分离：
+继续使用 Python 标准库 `pty.fork()`，不引入 native `node-pty` 编译依赖。`pty-host.py`
+保持三条通道分离：
 
 - stdin/stdout 只传 TUI 的 PTY 字节；
 - stderr 只写 host 异常和诊断；
-- 独立 control pipe 接收 JSON Lines 控制消息，并返回确认。
+- temporary root 内权限为 `0600` 的本机 Unix domain socket 接收 JSON Lines 控制消息，
+  并返回确认。
+
+控制通道不使用 Bun `child_process` 的额外双工 stdio fd。该 fd 在快速退出时可能先于
+末尾 child 状态消息关闭，无法稳定证明 wrapper 与 TUI child 都已退出。Unix domain
+socket 仍是独立的本机 fd 通道，不混入 PTY stdout 或 host stderr，并在 host 退出时由
+双方关闭和删除。
 
 第一版控制消息需要：
 
@@ -278,9 +292,9 @@ VT 实现必须至少正确处理：
 - viewport resize；
 - UTF-8、组合字符和宽字符列宽。
 
-实现时应选择成熟的 test-only headless terminal emulator，并封装在
+实现使用 test-only 的 `@xterm/headless` 和 `@xterm/addon-unicode11`，并封装在
 `pty-terminal-screen.ts` 后面。不要在仓库里手写一个只够当前 `/quit` 通过的不完整 ANSI
-parser。具体依赖作为 devDependency 锁入 `bun.lock`，生产包不得依赖它。
+parser。这两个依赖作为 devDependency 锁入 `bun.lock`，生产包不依赖它们。
 
 `screenText()` 返回当前 viewport 的纯文本投影，移除每行尾部空格和末尾全空行，但不
 折叠普通正文中的内部空格。对于会因终端宽度换行的 notice，测试可以通过专用
@@ -522,7 +536,7 @@ homeRoot
 
 - 用户视角：Tinker 在已经执行过一次副作用后崩溃，重启可以恢复，不会重复执行工具。
 - 操作：`pty-interrupted-tool` 先完成一次带唯一 marker 的 Write，再阻塞下一次 model
-  request；测试通过 host control pipe 只向 Tinker child 发送 SIGKILL。新进程打开
+  request；测试通过 host control channel 只向 Tinker child 发送 SIGKILL。新进程打开
   `/resume` 并选择 interrupted session。
 - Screen：picker 清楚显示 interrupted；恢复后的 Timeline 保留已完成工具结果和中断
   terminal state。
@@ -664,6 +678,8 @@ homeRoot
 ## 11. 分阶段实施顺序
 
 ### 阶段 A：Harness 基础
+
+状态：已完成（2026-07-23）。
 
 1. 抽出 `PtyTuiHarness` 和环境隔离；
 2. 扩展 `pty-host.py` resize control；

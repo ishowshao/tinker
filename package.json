@@ -61,12 +61,12 @@
     "docs:generate": "bun scripts/render-public-contract-docs.ts --write",
     "docs:check": "bun scripts/render-public-contract-docs.ts --check",
     "tinker": "bun src/cli/index.ts",
-    "check": "bun run typecheck && bun run format:check && bun run lint && bun run docs:check && bun test && bun run bench:smoke",
+    "check": "bun run typecheck && bun run format:check && bun run lint && bun run docs:check && bun run test && bun run bench:smoke",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --max-warnings=0",
     "lint:fix": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --fix",
-    "test": "bun test",
+    "test": "FORCE_COLOR=0 bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -99,6 +99,8 @@
     "@types/chrome": "^0.2.2",
     "@types/react": "^19.2.17",
     "@types/turndown": "^5.0.6",
+    "@xterm/addon-unicode11": "0.9.0",
+    "@xterm/headless": "6.0.0",
     "eslint": "^10.6.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.7.0",
