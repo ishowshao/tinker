@@ -2,12 +2,12 @@
 
 ## 文档状态
 
-- 状态：阶段 A（Harness 基础）和阶段 B（P0 核心旅程）已实施；阶段 C 至 E
+- 状态：阶段 A（Harness 基础）、阶段 B（P0）和全部 P1 用例已实施；P2 与阶段 E
   待实施。
 - 日期：2026-07-24。
 - 范围：TUI 真实 PTY harness、确定性测试依赖和关键用户旅程。
-- 当前基线：`src/__tests__/cli-pty.test.ts` 中的 PTY-001 至 PTY-008
-  已通过共享 harness 进入默认测试门禁。
+- 当前基线：PTY-001 至 PTY-008、PTY-101 至 PTY-112 已通过共享 harness
+  进入默认测试门禁。
 
 本文定义 Tinker 后续真实 PTY 自动化测试的共同基础和分阶段测试清单。它不把现有
 Ink 组件测试重复搬到更慢的进程测试中，而是验证用户通过真实终端完成一段操作后，
@@ -28,8 +28,9 @@ Ink 组件测试重复搬到更慢的进程测试中，而是验证用户通过�
 4. workspace、SQLite、剪贴板和子进程等持久化或外部副作用的检查入口。
 
 第一批已经把已有 `/quit` 用例迁移到统一 harness，并补齐普通双轮对话、`Esc`
-取消、工具调用、后台任务清理、正常 `/resume` 和异常中断恢复。P0 已全部进入默认
-`bun run check`；后续再扩展输入交互、session 命令、context、图片、Skills 和 MCP。
+取消、工具调用、后台任务清理、正常 `/resume` 和异常中断恢复。P1 已继续覆盖输入交互、
+session 命令、context、图片、Skills 和 MCP。P0/P1 已全部进入默认 `bun run check`；
+后续扩展 P2 的 session 保护、终端边界和图片 admission maintenance。
 
 ## 2. 背景与问题
 
@@ -555,6 +556,8 @@ homeRoot
 
 ## 9. P1：核心产品功能用例
 
+实施状态：PTY-101 至 PTY-112 已完成（2026-07-24），无 skip、无 retry。
+
 ### PTY-101：多行粘贴、光标编辑与 Prompt 历史
 
 - 用户视角：粘贴多行中文或代码、移动光标编辑并提交时，模型收到的内容与画面一致；
@@ -704,10 +707,15 @@ homeRoot
 
 ### 阶段 C：session、输入与本地命令
 
+状态：已完成（2026-07-24）。
+
 实现 PTY-101 到 PTY-109。`/clear`、`/fork`、`/resume` 的 fixture 必须由真实前序进程
 创建；`/copy` 按平台能力单独串行。
 
 ### 阶段 D：图片、Skills、MCP 与终端边界
+
+状态：P1 部分 PTY-110 至 PTY-112 已完成（2026-07-24）；P2 部分 PTY-201 至
+PTY-203 待实施。
 
 实现 PTY-110 到 PTY-203。图片 fake adapter、VT 宽字符和 dynamic resize 都先有针对性
 harness 测试，再进入完整 TUI case。
@@ -736,8 +744,13 @@ bun test src/__tests__/cli-pty-session.test.ts
 bun test src/__tests__/cli-pty-input.test.ts
 bun test src/__tests__/cli-pty-extensions.test.ts
 bun test src/__tests__/cli-pty-terminal.test.ts
+TINKER_TEST_LIVE_CLIPBOARD=1 bun test src/__tests__/cli-pty-session.test.ts \
+  -t "live macOS system clipboard"
 bun run check
 ```
+
+系统剪贴板命令只在有桌面 session 的 macOS 上显式执行；默认离线门禁不注册该变体，
+因此不会产生 skip，也不会读写开发者剪贴板。
 
 ## 13. 完成标准
 

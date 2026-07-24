@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -28,6 +30,17 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
 server.setRequestHandler(CallToolRequestSchema, (request) => {
   if (request.params.name === "echo") {
     const message = request.params.arguments?.message;
+    const callLog = process.env.TINKER_TEST_MCP_CALL_LOG;
+    if (callLog !== undefined && callLog !== "") {
+      appendFileSync(
+        path.resolve(callLog),
+        `${JSON.stringify({
+          name: request.params.name,
+          arguments: request.params.arguments ?? {},
+        })}\n`,
+        "utf8",
+      );
+    }
     return { content: [{ type: "text", text: `echo: ${String(message)}` }] };
   }
 

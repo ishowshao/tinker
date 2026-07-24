@@ -1,12 +1,20 @@
+import { createHash } from "node:crypto";
+import { appendFile } from "node:fs/promises";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
 import { cancellationError } from "../agent/turn-cancellation";
+import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
+import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
+import type { InputTokenEstimator } from "./input-token-estimator";
 import type { ModelContextBudget } from "./model-context-profile";
 import type {
+  MaterializedModelRequest,
   ModelClient,
+  ModelMaterializeOptions,
   ModelMessageProtocol,
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
+  PreparedMediaDescriptor,
   PreparedModelRequest,
   PreparedPromptSegment,
 } from "./model-client";
@@ -14,21 +22,71 @@ import { sha256, stableJsonStringify } from "./model-request-preflight";
 import { estimatePromptSegments } from "./token-estimator";
 
 export class FakeModelClient implements ModelClient {
-  readonly inputModalities = Object.freeze(["text"] as const);
+  readonly inputModalities: readonly ("text" | "image")[];
+  readonly inputTokenEstimator?: InputTokenEstimator;
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
     adapter: "fake",
     serializationVersion: "fake-v1",
   });
   private steps = 0;
   private readonly preparedInputs = new WeakMap<object, ModelRequestInput>();
+  private readonly materializedRequests = new WeakSet<object>();
 
   constructor(
     private readonly mode: string,
     private readonly options: {
       model: string;
       contextBudget: ModelContextBudget;
+      inputModalities?: readonly ("text" | "image")[];
+      requestLogPath?: string;
+      tokenEstimator?: {
+        kind: "moonshot-estimate-token-count-v1";
+        model: string;
+        apiBase: string;
+        timeoutMs: number;
+        maxRetries: 0;
+      };
     },
-  ) {}
+  ) {
+    this.inputModalities = Object.freeze([
+      ...(options.inputModalities ?? (["text"] as const)),
+    ]);
+    if (!this.inputModalities.includes("text")) {
+      throw new Error('Fake model input modalities must include "text".');
+    }
+    if (
+      this.inputModalities.includes("image") &&
+      options.tokenEstimator === undefined
+    ) {
+      throw new Error("Image-capable fake model requires a token estimator.");
+    }
+    if (options.tokenEstimator !== undefined) {
+      const estimator = options.tokenEstimator;
+      const endpoint = tokenEstimatorEndpoint(estimator.apiBase);
+      this.inputTokenEstimator = Object.freeze({
+        kind: estimator.kind,
+        compatibility: Object.freeze({
+          kind: estimator.kind,
+          coverageVersion: "full-request-v1",
+          model: estimator.model,
+          endpoint,
+          timeoutMs: estimator.timeoutMs,
+          maxRetries: estimator.maxRetries,
+        }),
+        async estimate(
+          request: MaterializedModelRequest,
+          estimateOptions: { signal: AbortSignal },
+        ) {
+          estimateOptions.signal.throwIfAborted();
+          return Object.freeze({
+            inputTokens: estimatePromptSegments(request.promptSegments).totalTokens,
+            source: "provider_estimated" as const,
+            coverage: "full_request" as const,
+          });
+        },
+      });
+    }
+  }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {
     const toolSegments = input.tools.map(
@@ -38,6 +96,10 @@ export class FakeModelClient implements ModelClient {
       }),
     );
     const messageSegments = input.messages.map(toPromptSegment);
+    const mediaOccurrenceCount = messageSegments.reduce(
+      (total, segment) => total + (segment.media?.length ?? 0),
+      0,
+    );
     const requestConfigHash = sha256(
       stableJsonStringify({
         adapter: this.messageProtocol.adapter,
@@ -45,6 +107,10 @@ export class FakeModelClient implements ModelClient {
         mode: this.mode,
         model: this.options.model,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
+        inputModalities: this.inputModalities,
+        ...(this.inputTokenEstimator === undefined
+          ? {}
+          : { tokenEstimator: this.inputTokenEstimator.compatibility }),
       }),
     );
     const prepared: PreparedModelRequest = Object.freeze({
@@ -61,7 +127,7 @@ export class FakeModelClient implements ModelClient {
         toolSegments.map((segment) => segment.normalizedText).join("\n"),
       ),
       requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
-      mediaOccurrenceCount: 0,
+      mediaOccurrenceCount,
       assistantReplaySegments: (message: AssistantMessage) => [
         toPromptSegment(message),
       ],
@@ -73,6 +139,59 @@ export class FakeModelClient implements ModelClient {
     return prepared;
   }
 
+  async materialize(
+    prepared: PreparedModelRequest,
+    options: ModelMaterializeOptions,
+  ): Promise<MaterializedModelRequest> {
+    const input = this.preparedInputs.get(prepared);
+    if (input === undefined) {
+      throw new Error("Fake model request was not prepared by this client.");
+    }
+    options.signal.throwIfAborted();
+    if (prepared.mediaOccurrenceCount > IMAGE_INPUT_POLICY.maxImagesPerRequest) {
+      throw new Error(
+        `Fake model request has ${prepared.mediaOccurrenceCount} images; maximum is ${IMAGE_INPUT_POLICY.maxImagesPerRequest}.`,
+      );
+    }
+    if (prepared.mediaOccurrenceCount > 0 && !this.inputModalities.includes("image")) {
+      throw new Error("Current fake model profile does not support image input.");
+    }
+
+    const assets = distinctPreparedAssets(prepared.promptSegments);
+    const materializedAssets: Array<{
+      readonly assetId: ImageAssetId;
+      readonly byteLength: number;
+      readonly bytesSha256: string;
+    }> = [];
+    for (const asset of assets.values()) {
+      options.signal.throwIfAborted();
+      const bytes = await options.assetStore.readVerified(asset, {
+        signal: options.signal,
+      });
+      materializedAssets.push(
+        Object.freeze({
+          assetId: asset.assetId,
+          byteLength: bytes.byteLength,
+          bytesSha256: createHash("sha256").update(bytes).digest("hex"),
+        }),
+      );
+    }
+    options.signal.throwIfAborted();
+
+    const payload = Object.freeze({
+      ...(prepared.payload as Record<string, unknown>),
+      materializedAssets: Object.freeze(materializedAssets),
+    });
+    const materialized = Object.freeze({
+      ...prepared,
+      payload,
+      bodyBytes: Buffer.byteLength(stableJsonStringify(payload), "utf8"),
+    });
+    this.preparedInputs.set(materialized, input);
+    this.materializedRequests.add(materialized);
+    return materialized;
+  }
+
   async request(
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
@@ -82,6 +201,18 @@ export class FakeModelClient implements ModelClient {
       throw new Error("Fake model request was not prepared by this client.");
     }
     this.steps += 1;
+    if (this.options.requestLogPath !== undefined) {
+      await appendFile(
+        this.options.requestLogPath,
+        `${stableJsonStringify({
+          mode: this.mode,
+          model: this.options.model,
+          prompt: lastUserMessage(input.messages),
+          requestNumber: this.steps,
+        })}\n`,
+        "utf8",
+      );
+    }
 
     if (this.mode === "write-notes") {
       return this.writeNotes(input, prepared, options);
@@ -112,6 +243,42 @@ export class FakeModelClient implements ModelClient {
     }
     if (this.mode === "pty-fail-once") {
       return this.ptyFailOnce(input, prepared);
+    }
+    if (this.mode === "pty-prompt-input") {
+      return this.ptyPromptInput(input, prepared);
+    }
+    if (this.mode === "pty-file-command") {
+      return this.ptyFileCommand(input, prepared);
+    }
+    if (this.mode === "pty-clear") {
+      return this.ptyClear(input, prepared);
+    }
+    if (this.mode === "pty-fork") {
+      return this.ptyFork(input, prepared, options);
+    }
+    if (this.mode === "pty-model-switch") {
+      return this.ptyModelSwitch(input, prepared);
+    }
+    if (this.mode === "pty-viewer") {
+      return this.ptyViewer(input, prepared);
+    }
+    if (this.mode === "pty-copy") {
+      return this.ptyCopy(input, prepared);
+    }
+    if (this.mode === "pty-context-heavy") {
+      return this.ptyContextHeavy(input, prepared, options);
+    }
+    if (this.mode === "pty-image") {
+      return this.ptyImage(input, prepared);
+    }
+    if (this.mode === "pty-local-panels") {
+      return this.ptyLocalPanels(input, prepared);
+    }
+    if (this.mode === "pty-skill-activate") {
+      return this.ptySkillActivate(input, prepared, options);
+    }
+    if (this.mode === "pty-mcp-call") {
+      return this.ptyMcpCall(input, prepared, options);
     }
 
     return outputWithUsage(
@@ -379,6 +546,283 @@ export class FakeModelClient implements ModelClient {
     throw new Error(`Unexpected pty-fail-once prompt: ${JSON.stringify(prompt)}.`);
   }
 
+  private ptyPromptInput(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "first\n>second\n中文<") {
+      return textOutput(prepared, "PTY_PROMPT_FIRST_DONE");
+    }
+    if (prompt === "草稿-恢复") {
+      requireExactMessage(input.messages, "user", "first\n>second\n中文<");
+      requireExactMessage(input.messages, "assistant", "PTY_PROMPT_FIRST_DONE");
+      return textOutput(prepared, "PTY_PROMPT_DRAFT_DONE");
+    }
+    if (prompt === "草稿-恢复-重提") {
+      requireExactMessage(input.messages, "user", "草稿-恢复");
+      requireExactMessage(input.messages, "assistant", "PTY_PROMPT_DRAFT_DONE");
+      return textOutput(prepared, "PTY_PROMPT_HISTORY_DONE");
+    }
+    throw new Error(`Unexpected pty-prompt-input prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyFileCommand(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "open src/index.ts now") {
+      return textOutput(prepared, "PTY_FILE_SELECTION_DONE");
+    }
+    if (prompt === "Review shallow and deep files.\nReturn exact marker.") {
+      requireExactMessage(input.messages, "user", "open src/index.ts now");
+      requireExactMessage(input.messages, "assistant", "PTY_FILE_SELECTION_DONE");
+      return textOutput(prepared, "PTY_PROJECT_COMMAND_DONE");
+    }
+    throw new Error(`Unexpected pty-file-command prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyClear(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_CLEAR_SEED") {
+      return textOutput(prepared, "PTY_CLEAR_SEED_DONE");
+    }
+    if (prompt === "PTY_CLEAR_CONTINUE") {
+      requireExactMessage(input.messages, "user", "PTY_CLEAR_SEED");
+      requireExactMessage(input.messages, "assistant", "PTY_CLEAR_SEED_DONE");
+      return textOutput(prepared, "PTY_CLEAR_CONTINUED");
+    }
+    throw new Error(`Unexpected pty-clear prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyFork(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["Write"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_FORK_SEED") {
+      const write = toolMessagesAfterLastUser(input.messages).find(
+        (message) => message.name === "Write",
+      );
+      if (write === undefined) {
+        return toolCallOutput(prepared, options, "Write", {
+          file_path: "pty-fork-shared.txt",
+          content: "PTY_FORK_SHARED_HISTORY\n",
+        });
+      }
+      if (!write.content.includes("Write succeeded")) {
+        throw new Error("PTY fork seed Write did not succeed.");
+      }
+      return textOutput(prepared, "PTY_FORK_SEED_DONE");
+    }
+    if (prompt === "CLONE_ONLY") {
+      requireForkSeed(input.messages);
+      requireNoMessage(input.messages, "user", "SOURCE_ONLY");
+      return textOutput(prepared, "PTY_CLONE_ONLY_DONE");
+    }
+    if (prompt === "SOURCE_ONLY") {
+      requireForkSeed(input.messages);
+      requireNoMessage(input.messages, "user", "CLONE_ONLY");
+      return textOutput(prepared, "PTY_SOURCE_ONLY_DONE");
+    }
+    throw new Error(`Unexpected pty-fork prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyModelSwitch(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_MODEL_ALPHA_TURN") {
+      throw new Error(`Unexpected pty-model-switch prompt: ${JSON.stringify(prompt)}.`);
+    }
+    if (this.options.model !== "alpha-model") {
+      throw new Error(
+        `PTY model switch dispatched to ${JSON.stringify(this.options.model)}.`,
+      );
+    }
+    return textOutput(prepared, "PTY_MODEL_ALPHA_DONE");
+  }
+
+  private ptyViewer(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_VIEW_SEED") {
+      return textOutput(prepared, "PTY_VIEW_SEED_DONE");
+    }
+    if (prompt === "PTY_VIEW_CONTINUE") {
+      requireExactMessage(input.messages, "user", "PTY_VIEW_SEED");
+      requireExactMessage(input.messages, "assistant", "PTY_VIEW_SEED_DONE");
+      return textOutput(prepared, "PTY_VIEW_CONTINUED");
+    }
+    throw new Error(`Unexpected pty-viewer prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyCopy(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_COPY_MARKDOWN") {
+      throw new Error(`Unexpected pty-copy prompt: ${JSON.stringify(prompt)}.`);
+    }
+    return textOutput(prepared, ptyCopyMarkdownResponse());
+  }
+
+  private ptyContextHeavy(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["Read", "Recall"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_CONTEXT_HEAVY") {
+      const read = toolMessagesAfterLastUser(input.messages).find(
+        (message) => message.name === "Read",
+      );
+      if (read === undefined) {
+        return toolCallOutput(prepared, options, "Read", {
+          file_path: "context-heavy.txt",
+        });
+      }
+      if (!read.content.includes("PTY_CONTEXT_ORIGINAL_MARKER")) {
+        throw new Error("PTY context Read did not return the original marker.");
+      }
+      return textOutput(prepared, "PTY_CONTEXT_HEAVY_DONE");
+    }
+    if (/^PTY_CONTEXT_PAD_[1-9]$/u.test(prompt)) {
+      return textOutput(prepared, `${prompt}_DONE`);
+    }
+    if (prompt === "PTY_CONTEXT_RECALL") {
+      return recallMarker(
+        input,
+        prepared,
+        options,
+        "PTY_CONTEXT_ORIGINAL_MARKER",
+        "PTY_CONTEXT_RECALLED",
+      );
+    }
+    throw new Error(`Unexpected pty-context-heavy prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyImage(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "[Image #1] describe fixture") {
+      throw new Error(`Unexpected pty-image prompt: ${JSON.stringify(prompt)}.`);
+    }
+    const user = [...input.messages]
+      .reverse()
+      .find(
+        (message): message is Extract<AgentMessage, { role: "user" }> =>
+          message.role === "user",
+      );
+    const attachment = user?.attachments?.[0];
+    if (
+      user?.attachments?.length !== 1 ||
+      attachment === undefined ||
+      attachment.label !== "[Image #1]" ||
+      attachment.originalName !== "fixture.png"
+    ) {
+      throw new Error("PTY image request has unexpected canonical attachment data.");
+    }
+    const payload = prepared.payload as {
+      readonly materializedAssets?: readonly {
+        readonly assetId: ImageAssetId;
+        readonly byteLength: number;
+        readonly bytesSha256: string;
+      }[];
+    };
+    const materialized = payload.materializedAssets?.[0];
+    if (
+      !this.materializedRequests.has(prepared) ||
+      prepared.mediaOccurrenceCount !== 1 ||
+      payload.materializedAssets?.length !== 1 ||
+      materialized?.assetId !== attachment.assetId ||
+      materialized.byteLength !== attachment.byteLength ||
+      !/^[0-9a-f]{64}$/u.test(materialized.bytesSha256)
+    ) {
+      throw new Error("PTY image request was not materialized from the asset store.");
+    }
+    return textOutput(prepared, "PTY_IMAGE_DONE");
+  }
+
+  private ptyLocalPanels(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_LOCAL_AFTER_PANELS") {
+      throw new Error(`Unexpected pty-local-panels prompt: ${JSON.stringify(prompt)}.`);
+    }
+    requireTools(input, ["Skill", "mcp__fixture__echo"]);
+    return textOutput(prepared, "PTY_LOCAL_AFTER_PANELS_DONE");
+  }
+
+  private ptySkillActivate(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["Skill"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_SKILL_START") {
+      const skill = toolMessagesAfterLastUser(input.messages).find(
+        (message) => message.name === "Skill",
+      );
+      if (skill === undefined) {
+        return toolCallOutput(prepared, options, "Skill", {
+          name: "pty-review",
+        });
+      }
+      if (!skill.content.includes("PTY_SKILL_INSTRUCTIONS")) {
+        throw new Error("PTY Skill result did not contain the fixture instructions.");
+      }
+      return textOutput(prepared, "PTY_SKILL_DONE");
+    }
+    if (prompt === "PTY_SKILL_AFTER_RESUME") {
+      requireExactMessage(input.messages, "user", "PTY_SKILL_START");
+      requireExactMessage(input.messages, "assistant", "PTY_SKILL_DONE");
+      requireSystemContent(input.messages, "PTY_SKILL_INSTRUCTIONS");
+      return textOutput(prepared, "PTY_SKILL_RESUMED");
+    }
+    throw new Error(`Unexpected pty-skill-activate prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private ptyMcpCall(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["mcp__fixture__echo"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_MCP_START") {
+      throw new Error(`Unexpected pty-mcp-call prompt: ${JSON.stringify(prompt)}.`);
+    }
+    const echo = toolMessagesAfterLastUser(input.messages).find(
+      (message) => message.name === "mcp__fixture__echo",
+    );
+    if (echo === undefined) {
+      return toolCallOutput(prepared, options, "mcp__fixture__echo", {
+        message: "PTY_MCP_PAYLOAD",
+      });
+    }
+    if (!echo.content.includes("echo: PTY_MCP_PAYLOAD")) {
+      throw new Error("PTY MCP echo returned unexpected content.");
+    }
+    return textOutput(prepared, "PTY_MCP_DONE\n\necho: PTY_MCP_PAYLOAD");
+  }
+
   private writeNotes(
     input: ModelRequestInput,
     prepared: PreparedModelRequest,
@@ -607,6 +1051,51 @@ function requireMessage(
   }
 }
 
+function requireExactMessage(
+  messages: AgentMessage[],
+  role: "user" | "assistant",
+  content: string,
+): void {
+  const found = messages.some(
+    (message) => message.role === role && message.content === content,
+  );
+  if (!found) {
+    throw new Error(
+      `Fake PTY context is missing exact ${role} content ${JSON.stringify(content)}.`,
+    );
+  }
+}
+
+function requireNoMessage(
+  messages: AgentMessage[],
+  role: "user" | "assistant",
+  content: string,
+): void {
+  const found = messages.some(
+    (message) => message.role === role && message.content === content,
+  );
+  if (found) {
+    throw new Error(
+      `Fake PTY context unexpectedly contains ${role} content ${JSON.stringify(content)}.`,
+    );
+  }
+}
+
+function requireSystemContent(messages: AgentMessage[], content: string): void {
+  const found = messages.some(
+    (message) => message.role === "system" && message.content.includes(content),
+  );
+  if (!found) {
+    throw new Error(`Fake PTY system surface is missing ${content}.`);
+  }
+}
+
+function requireForkSeed(messages: AgentMessage[]): void {
+  requireExactMessage(messages, "user", "PTY_FORK_SEED");
+  requireExactMessage(messages, "assistant", "PTY_FORK_SEED_DONE");
+  requireToolMessage(messages, "Write", "Write succeeded");
+}
+
 function requireToolMessage(
   messages: AgentMessage[],
   name: string,
@@ -652,6 +1141,26 @@ function lastMessageIndex(
 }
 
 function toPromptSegment(message: AgentMessage): PreparedPromptSegment {
+  if (message.role === "user" && message.attachments !== undefined) {
+    const media = message.attachments.map(
+      (attachment): PreparedMediaDescriptor =>
+        Object.freeze({
+          assetId: attachment.assetId,
+          label: attachment.label,
+          range: Object.freeze({ ...attachment.range }),
+          mimeType: attachment.mimeType,
+          byteLength: attachment.byteLength,
+          width: attachment.width,
+          height: attachment.height,
+          planningTokens: IMAGE_INPUT_POLICY.planningTokensPerImage,
+        }),
+    );
+    return Object.freeze({
+      kind: "user",
+      normalizedText: message.content,
+      media: Object.freeze(media),
+    });
+  }
   return {
     kind:
       message.role === "system"
@@ -661,4 +1170,87 @@ function toPromptSegment(message: AgentMessage): PreparedPromptSegment {
           : message.role,
     normalizedText: stableJsonStringify(message),
   };
+}
+
+function distinctPreparedAssets(
+  segments: readonly PreparedPromptSegment[],
+): Map<ImageAssetId, ImageAssetRef> {
+  const assets = new Map<ImageAssetId, ImageAssetRef>();
+  for (const segment of segments) {
+    for (const media of segment.media ?? []) {
+      const asset = Object.freeze({
+        assetId: media.assetId,
+        mimeType: media.mimeType,
+        byteLength: media.byteLength,
+        width: media.width,
+        height: media.height,
+      });
+      const existing = assets.get(media.assetId);
+      if (
+        existing !== undefined &&
+        stableJsonStringify(existing) !== stableJsonStringify(asset)
+      ) {
+        throw new Error(`Conflicting fake image descriptors for ${media.assetId}.`);
+      }
+      assets.set(media.assetId, asset);
+    }
+  }
+  return assets;
+}
+
+function tokenEstimatorEndpoint(apiBase: string): string {
+  const base = new URL(apiBase.endsWith("/") ? apiBase : `${apiBase}/`);
+  base.username = "";
+  base.password = "";
+  base.search = "";
+  base.hash = "";
+  return new URL("tokenizers/estimate-token-count", base).toString();
+}
+
+function recallMarker(
+  input: ModelRequestInput,
+  prepared: PreparedModelRequest,
+  options: ModelRequestOptions,
+  marker: string,
+  finalText: string,
+): ModelRequestOutput {
+  const latestRecallResult = toolMessagesAfterLastUser(input.messages)
+    .filter((message) => message.name === "Recall")
+    .at(-1);
+  if (latestRecallResult === undefined) {
+    return toolCallOutput(prepared, options, "Recall", {
+      mode: "search",
+      query: marker,
+    });
+  }
+  if (latestRecallResult.content.startsWith("Recall searched")) {
+    const source = latestRecallResult.content.match(
+      /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
+    )?.[1];
+    if (source === undefined) {
+      throw new Error("Fake PTY Recall search did not return a source.");
+    }
+    return toolCallOutput(prepared, options, "Recall", {
+      mode: "get",
+      source,
+    });
+  }
+  if (!latestRecallResult.content.includes(marker)) {
+    throw new Error(`Fake PTY Recall get did not recover ${marker}.`);
+  }
+  return textOutput(prepared, finalText);
+}
+
+export function ptyCopyMarkdownResponse(): string {
+  return [
+    "# PTY canonical Markdown",
+    "",
+    "```ts",
+    'export const marker = "PTY_COPY_CODE";',
+    "```",
+    "",
+    Array.from({ length: 240 }, (_, index) => `long-${index}`).join(" "),
+    "",
+    "PTY_COPY_END",
+  ].join("\n");
 }

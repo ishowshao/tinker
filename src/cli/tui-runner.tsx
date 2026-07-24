@@ -41,6 +41,7 @@ import { resolveSessionProfileName, type ModelProfile } from "./model-profiles";
 import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
+import { clipboardWriterForEnvironment } from "../tui/clipboard";
 
 export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
@@ -255,6 +256,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
           timeoutMs: options.publicConfig.tooling.grepTimeoutMs,
           maxBufferBytes: options.publicConfig.tooling.grepMaxBufferBytes,
         })}
+        writeClipboard={clipboardWriterForEnvironment(options.env)}
         onQuit={() => {
           quitRequested = true;
         }}

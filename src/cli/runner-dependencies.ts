@@ -64,6 +64,14 @@ export function createModelClient(
     return new FakeModelClient(fakeMode, {
       model: config.modelName,
       contextBudget: config.contextBudget,
+      inputModalities: config.inputModalities,
+      ...(config.tokenEstimator === undefined
+        ? {}
+        : { tokenEstimator: config.tokenEstimator }),
+      ...(env.TINKER_TEST_FAKE_MODEL_REQUEST_LOG === undefined ||
+      env.TINKER_TEST_FAKE_MODEL_REQUEST_LOG === ""
+        ? {}
+        : { requestLogPath: env.TINKER_TEST_FAKE_MODEL_REQUEST_LOG }),
     });
   }
 

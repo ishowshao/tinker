@@ -973,6 +973,7 @@ function isolatedTuiEnvironment(
       delete environment[name];
     }
   }
+  delete environment.FORCE_COLOR;
   Object.assign(environment, {
     TINKER_API_KEY: "pty-placeholder-key",
     TINKER_BASE_URL: "https://api.example.test/v1",
