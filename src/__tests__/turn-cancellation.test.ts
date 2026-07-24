@@ -462,9 +462,7 @@ describe("turn cancellation", () => {
         { signal: controller.signal },
       );
 
-      const pids = (await waitForFile(pidFile)).split(" ").map(Number);
-      parentPid = pids[0] ?? 0;
-      childPid = pids[1] ?? 0;
+      [parentPid, childPid] = await waitForProcessIds(pidFile);
       expect(isProcessAlive(parentPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
 
@@ -624,17 +622,26 @@ function testExecutor(name: string, execute: ToolExecutor["execute"]): ToolExecu
   };
 }
 
-async function waitForFile(filePath: string): Promise<string> {
+async function waitForProcessIds(filePath: string): Promise<[number, number]> {
   const deadline = Date.now() + 2_000;
   while (Date.now() < deadline) {
     try {
-      return await readFile(filePath, "utf8");
+      const content = await readFile(filePath, "utf8");
+      const match = /^([1-9]\d*) ([1-9]\d*)$/.exec(content);
+      if (match) {
+        const parentPid = Number(match[1]);
+        const childPid = Number(match[2]);
+        if (Number.isSafeInteger(parentPid) && Number.isSafeInteger(childPid)) {
+          return [parentPid, childPid];
+        }
+      }
     } catch {
-      await Bun.sleep(10);
+      // The shell has not created the PID file yet.
     }
+    await Bun.sleep(10);
   }
 
-  throw new Error(`Timed out waiting for file: ${filePath}`);
+  throw new Error(`Timed out waiting for process IDs in file: ${filePath}`);
 }
 
 async function waitForProcessExit(pid: number): Promise<void> {
