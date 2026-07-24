@@ -67,7 +67,8 @@ context 统计或 compaction。
 ### 按键行为
 
 - TUI 空闲时，`Esc` 继续保留现有输入行为，例如关闭 slash command 建议列表。
-- turn 运行时，第一个 `Esc` 发起取消，App 立即用本地瞬态显示 `cancelling`。
+- turn 运行时，第一个 `Esc` 发起取消；若取消收尾跨过至少一次实际渲染，App 用本地
+  瞬态显示 `cancelling`，瞬间完成时允许直接显示 `cancelled`。
 - 取消请求发出后再次按 `Esc` 不执行额外动作。
 - 输入框在取消收尾完成前保持禁用；完成后 footer 显示 `cancelled` 并重新可用。
 - 下一次提交 `run.started` 后，footer 从 `cancelled` 正常回到 `running`。
@@ -603,11 +604,12 @@ Write、Edit、Read、Glob、TaskList、TaskOutput 和 TaskStop 只需按各自�
 
 ### TUI 和事件
 
-- 运行中按 Esc 触发一次 abort，显示 cancelling，完成后输入重新可用。
+- 运行中按 Esc 触发一次 abort；若取消收尾仍在进行则显示 cancelling，瞬间完成时可直接
+  显示 cancelled，完成后输入重新可用。
 - running 状态重复按 Esc 不重复调用 abort。
 - 空闲时 Esc 仍关闭 slash command 建议。
-- 按 Esc 后、`run.cancelled` 前，`TuiState.status` 仍为 running，Footer 通过 App 本地
-  覆盖显示 cancelling。
+- 按 Esc 后、`run.cancelled` 前若存在可渲染间隔，`TuiState.status` 仍为 running，
+  Footer 通过 App 本地覆盖显示 cancelling。
 - 收到 `run.cancelled` 后清除本地覆盖，Footer 显示 event store 的 cancelled。
 - event stream 和 JSONL 中不产生 `run.cancelling`。
 - `run.cancelled` 将 active model 或 tool timeline item 标为 cancelled。
@@ -633,7 +635,8 @@ bun run check
 ## 手工验收
 
 1. 启动 TUI，提交一个会让模型等待较久的请求，在模型响应前按 `Esc`。
-2. 确认界面先显示 cancelling，随后显示 cancelled；没有 failed，输入框恢复可用。
+2. 确认界面最终显示 cancelled；若取消收尾没有瞬间完成，应先显示 cancelling。整个过程
+   没有 failed，输入框恢复可用。
 3. 立即提交一个普通问题，确认仍在同一 TUI session 中正常响应。
 4. 让 agent 执行前台 `sleep` 并输出自身及子进程 PID，在执行期间按 `Esc`。
 5. 确认取消完成后父子进程都不存在，日志文件内容已经落盘。

@@ -502,7 +502,9 @@ homeRoot
 
 - 用户视角：模型卡住时按 `Esc` 只取消当前 turn，不退出 TUI，随后可以继续提问。
 - 操作：第一轮进入 `pty-cancel-then-echo` 阻塞状态，按 Esc；完成取消后提交第二轮。
-- Transcript：本轮出现 Running、cancelling 和 cancelled 顺序。
+- Transcript：本轮从 Running 进入 cancelled。若取消收尾跨过至少一次实际渲染而出现
+  cancelling，其顺序必须是 Running、cancelling、cancelled；取消瞬间完成时允许直接从
+  Running 进入 cancelled。
 - Screen：取消后仍是同一个 session，第二轮得到最终回答。
 - Durable result：第一轮以 cancelled terminal state 持久化，第二轮 completed；消息协议验证
   通过。

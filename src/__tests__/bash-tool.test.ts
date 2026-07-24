@@ -9,6 +9,7 @@ import {
   type TestToolCallInput,
 } from "./test-runtime";
 import { ObservationBuilder } from "../observation/observation-builder";
+import type { ShellTaskManager, ShellTaskSnapshot } from "../tools/bash-task";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
 
@@ -257,37 +258,49 @@ describe("Bash tool", () => {
       const realSubdir = await realpath(path.join(workspace, "subdir"));
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
 
-      const cdRaw = asBashRawResult(
-        await tooling.runtime.execute({
-          providerToolCallId: "call_1",
-          name: "Bash",
-          args: { command: "cd subdir" },
-        }),
-      );
-      expect(cdRaw.ok).toBe(true);
-      expect(tooling.bashState.cwd).toBe(realSubdir);
+      try {
+        const cdRaw = asBashRawResult(
+          await tooling.runtime.execute({
+            providerToolCallId: "call_1",
+            name: "Bash",
+            args: { command: "cd subdir" },
+          }),
+        );
+        expect(cdRaw.ok).toBe(true);
+        expect(tooling.bashState.cwd).toBe(realSubdir);
 
-      const pwdRaw = asBashRawResult(
-        await tooling.runtime.execute({
-          providerToolCallId: "call_2",
-          name: "Bash",
-          args: { command: "pwd" },
-        }),
-      );
-      expect(pwdRaw.preview).toBe(realSubdir);
+        const pwdRaw = asBashRawResult(
+          await tooling.runtime.execute({
+            providerToolCallId: "call_2",
+            name: "Bash",
+            args: { command: "pwd" },
+          }),
+        );
+        expect(pwdRaw.preview).toBe(realSubdir);
 
-      const backgroundRaw = asBashRawResult(
-        await tooling.runtime.execute({
-          providerToolCallId: "call_3",
-          name: "Bash",
-          args: {
-            command: "cd ..; sleep 0.05; pwd",
-            run_in_background: true,
-          },
-        }),
-      );
-      await waitForFileContent(backgroundRaw.outputFilePath, realWorkspace);
-      expect(tooling.bashState.cwd).toBe(realSubdir);
+        const backgroundRaw = asBashRawResult(
+          await tooling.runtime.execute({
+            providerToolCallId: "call_3",
+            name: "Bash",
+            args: {
+              command: "cd ..; sleep 0.05; pwd",
+              run_in_background: true,
+            },
+          }),
+        );
+        const completedTask = await waitForTaskTerminal(
+          tooling.taskManager,
+          backgroundRaw.taskId,
+        );
+        expect(completedTask.status).toBe("completed");
+        expect(completedTask.exitCode).toBe(0);
+        expect(await readFile(backgroundRaw.outputFilePath, "utf8")).toContain(
+          realWorkspace,
+        );
+        expect(tooling.bashState.cwd).toBe(realSubdir);
+      } finally {
+        await tooling.dispose();
+      }
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -359,5 +372,33 @@ async function waitForFileContent(filePath: string, expected: string): Promise<v
 
   throw new Error(
     `Timed out waiting for ${JSON.stringify(expected)} in ${filePath}. Last content: ${lastContent}`,
+  );
+}
+
+async function waitForTaskTerminal(
+  taskManager: ShellTaskManager,
+  taskId: string,
+): Promise<ShellTaskSnapshot> {
+  const deadline = Date.now() + 2_000;
+  let lastStatus = "missing";
+
+  while (Date.now() < deadline) {
+    const task = taskManager.inspectTask(taskId)?.task;
+    if (task !== undefined) {
+      lastStatus = task.status;
+      if (
+        task.status === "completed" ||
+        task.status === "failed" ||
+        task.status === "killed"
+      ) {
+        return task;
+      }
+    }
+
+    await Bun.sleep(10);
+  }
+
+  throw new Error(
+    `Timed out waiting for task ${taskId} to finish. Last status: ${lastStatus}`,
   );
 }
