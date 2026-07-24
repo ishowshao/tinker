@@ -2,11 +2,12 @@
 
 ## 文档状态
 
-- 状态：阶段 A（Harness 基础）已实施；阶段 B 至 E 待实施。
-- 日期：2026-07-23。
+- 状态：阶段 A（Harness 基础）和阶段 B（P0 核心旅程）已实施；阶段 C 至 E
+  待实施。
+- 日期：2026-07-24。
 - 范围：TUI 真实 PTY harness、确定性测试依赖和关键用户旅程。
-- 当前基线：`src/__tests__/cli-pty.test.ts` 中的真实 PTY `/quit`
-  回归测试已迁移到共享 harness。
+- 当前基线：`src/__tests__/cli-pty.test.ts` 中的 PTY-001 至 PTY-008
+  已通过共享 harness 进入默认测试门禁。
 
 本文定义 Tinker 后续真实 PTY 自动化测试的共同基础和分阶段测试清单。它不把现有
 Ink 组件测试重复搬到更慢的进程测试中，而是验证用户通过真实终端完成一段操作后，
@@ -26,9 +27,9 @@ Ink 组件测试重复搬到更慢的进程测试中，而是验证用户通过�
 3. 进程退出状态；
 4. workspace、SQLite、剪贴板和子进程等持久化或外部副作用的检查入口。
 
-第一批先把已有 `/quit` 用例迁移到统一 harness，再补普通双轮对话、`Esc` 取消、
-工具调用、后台任务清理、正常 `/resume` 和异常中断恢复。P0 全部进入默认
-`bun run check` 后，再扩展输入交互、session 命令、context、图片、Skills 和 MCP。
+第一批已经把已有 `/quit` 用例迁移到统一 harness，并补齐普通双轮对话、`Esc`
+取消、工具调用、后台任务清理、正常 `/resume` 和异常中断恢复。P0 已全部进入默认
+`bun run check`；后续再扩展输入交互、session 命令、context、图片、Skills 和 MCP。
 
 ## 2. 背景与问题
 
@@ -477,6 +478,8 @@ homeRoot
 
 ## 8. P0：默认门禁的第一批用例
 
+实施状态：PTY-001 至 PTY-008 已完成（2026-07-24），无 skip、无 retry。
+
 ### PTY-001：空闲 `/quit` 正常退出
 
 - 用户视角：启动 Tinker 后输入 `/quit`，应在两秒内回到 shell，退出码为 `0`。
@@ -690,6 +693,8 @@ homeRoot
 阶段 A 完成定义：PTY-001 通过；临时删除 `process.exit(0)` 时会稳定变红；恢复后稳定变绿。
 
 ### 阶段 B：P0 核心旅程
+
+状态：已完成（2026-07-24）。
 
 按 PTY-002 到 PTY-008 顺序落地。先扩展 named fake modes，再写对应 PTY case；每次只
 增加满足当前 case 的最小 fake 行为，不先实现完整场景框架。

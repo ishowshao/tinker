@@ -30,6 +30,10 @@ export class PtyTerminalScreen {
     return this.currentColumns;
   }
 
+  get bracketedPasteMode(): boolean {
+    return this.terminal.modes.bracketedPasteMode;
+  }
+
   write(data: string | Uint8Array): Promise<void> {
     const write = this.pendingWrite.then(
       () =>

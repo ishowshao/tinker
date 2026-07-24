@@ -31,6 +31,21 @@ export type StartPtyTuiInput = {
   readonly homeFiles?: Readonly<Record<string, string | Uint8Array>>;
 };
 
+export type PtyTuiFixtureInput = {
+  readonly workspaceFiles?: Readonly<Record<string, string | Uint8Array>>;
+  readonly homeFiles?: Readonly<Record<string, string | Uint8Array>>;
+};
+
+export interface PtyTuiFixture {
+  readonly workspaceRoot: string;
+  readonly homeRoot: string;
+
+  start(
+    input: Pick<StartPtyTuiInput, "fakeModel" | "rows" | "columns" | "environment">,
+  ): Promise<PtyTuiHarness>;
+  dispose(): Promise<void>;
+}
+
 export type PtyProcessExit = {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -58,6 +73,7 @@ export interface PtyTuiHarness {
   resize(rows: number, columns: number): Promise<void>;
 
   screenText(): string;
+  promptReady(): boolean;
   transcriptText(): string;
   markTranscript(): number;
   transcriptSince(mark: number): string;
@@ -151,6 +167,7 @@ export async function startPtyTui(input: StartPtyTuiInput): Promise<PtyTuiHarnes
       homeRoot,
       workspaceRoot,
       environment: isolatedTuiEnvironment(input, homeRoot, workspaceRoot),
+      removeTemporaryRootOnDispose: true,
     });
     try {
       await harness.waitUntilHostReady();
@@ -179,6 +196,76 @@ export async function startPtyTui(input: StartPtyTuiInput): Promise<PtyTuiHarnes
     }
     throw error;
   }
+}
+
+export async function createPtyTuiFixture(
+  input: PtyTuiFixtureInput = {},
+): Promise<PtyTuiFixture> {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "tinker-pty-"));
+  const homeRoot = path.join(temporaryRoot, "home");
+  const workspaceRoot = path.join(temporaryRoot, "workspace");
+  await Promise.all([
+    mkdir(homeRoot, { recursive: true }),
+    mkdir(workspaceRoot, { recursive: true }),
+  ]);
+
+  try {
+    await Promise.all([
+      writeFixtureFiles(workspaceRoot, input.workspaceFiles),
+      writeFixtureFiles(homeRoot, input.homeFiles),
+    ]);
+  } catch (error) {
+    await removeTemporaryRoot(temporaryRoot);
+    throw error;
+  }
+
+  let disposed = false;
+  return {
+    workspaceRoot,
+    homeRoot,
+    async start(startInput) {
+      if (disposed) {
+        throw new Error("Cannot start a PTY from a disposed fixture.");
+      }
+      if (startInput.fakeModel.trim() === "") {
+        throw new Error("PTY fakeModel must be a non-empty string.");
+      }
+      const rows = positiveInteger(startInput.rows ?? DEFAULT_ROWS, "rows");
+      const columns = positiveInteger(startInput.columns ?? DEFAULT_COLUMNS, "columns");
+      const harness = new PtyTuiHarnessImpl({
+        scenario: startInput.fakeModel,
+        rows,
+        columns,
+        temporaryRoot,
+        homeRoot,
+        workspaceRoot,
+        environment: isolatedTuiEnvironment(startInput, homeRoot, workspaceRoot),
+        removeTemporaryRootOnDispose: false,
+      });
+      try {
+        await harness.waitUntilHostReady();
+        return harness;
+      } catch (error) {
+        try {
+          await harness.dispose();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Shared PTY harness startup and cleanup both failed.",
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
+    },
+    async dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      await removeTemporaryRoot(temporaryRoot);
+    },
+  };
 }
 
 export async function withPtyTui<T>(
@@ -220,6 +307,7 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
 
   private readonly scenario: string;
   private readonly temporaryRoot: string;
+  private readonly removeTemporaryRootOnDispose: boolean;
   private readonly controlSocketPath: string;
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly screen: PtyTerminalScreen;
@@ -245,9 +333,11 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
     readonly homeRoot: string;
     readonly workspaceRoot: string;
     readonly environment: NodeJS.ProcessEnv;
+    readonly removeTemporaryRootOnDispose: boolean;
   }) {
     this.scenario = input.scenario;
     this.temporaryRoot = input.temporaryRoot;
+    this.removeTemporaryRootOnDispose = input.removeTemporaryRootOnDispose;
     this.homeRoot = input.homeRoot;
     this.workspaceRoot = input.workspaceRoot;
     this.controlSocketPath = path.join(input.temporaryRoot, "control.sock");
@@ -369,6 +459,13 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
 
   screenText(): string {
     return this.screen.text();
+  }
+
+  promptReady(): boolean {
+    return (
+      this.screen.bracketedPasteMode &&
+      this.screen.text().includes('Enter a coding request, or "/" for commands')
+    );
   }
 
   transcriptText(): string {
@@ -625,10 +722,12 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
       errors.push(errorFromUnknown(error));
     }
 
-    try {
-      await removeTemporaryRoot(this.temporaryRoot);
-    } catch (error) {
-      errors.push(errorFromUnknown(error));
+    if (this.removeTemporaryRootOnDispose) {
+      try {
+        await removeTemporaryRoot(this.temporaryRoot);
+      } catch (error) {
+        errors.push(errorFromUnknown(error));
+      }
     }
 
     if (errors.length > 0) {

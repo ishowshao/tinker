@@ -23,6 +23,11 @@ test("projects the current Unicode VT screen instead of accumulated output", asy
     expect(screen.text()).toBe("宽字符");
     expect(screen.rows).toBe(2);
     expect(screen.columns).toBe(10);
+
+    await screen.write("\x1b[?2004h");
+    expect(screen.bracketedPasteMode).toBe(true);
+    await screen.write("\x1b[?2004l");
+    expect(screen.bracketedPasteMode).toBe(false);
   } finally {
     screen.dispose();
   }
