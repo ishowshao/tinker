@@ -40,7 +40,7 @@ history；退休历史仍由 `Recall search/get` 从原始消息和 FTS 索引�
 6. 退休边界之前的 swap override 继续作为 immutable 审计记录保存在 SQLite，但退出
    active override manifest；不删除、不重写、不复制这些记录。
 7. 新增 `recall-first-retirement-v1` 策略：至少保护最近 8 个完整已结束 turns，并优先选择
-   能达到 60% input budget target 的最小退休前缀。
+   能达到 30% input budget target 的最小退休前缀。
 8. I3 只提供 benchmark-forced 路径和显式的空闲态 `/compact retire`；现有无参数
    `/compact` 继续严格执行 swap-only。runtime pressure 仍只做 I1 shadow planning，不能
    自动提交任何 revision。
@@ -520,7 +520,7 @@ Recall 精确取回，不因失败状态永久占据 active context。
 
 ```ts
 const protectedRecentTurnCount = 8;
-const targetInputRatio = 0.6;
+const targetInputRatio = 0.3;
 ```
 
 最近 8 个完整已结束 turns 全量保留。由于 retirement 只在完全 idle 的 session 执行，不存在
@@ -582,7 +582,7 @@ type PrefixRetirementPlanningResult =
 
 1. 验证 trigger、active revision、surface、Recall contract、tool schema 和 current snapshot。
 2. 从 active turns 中排除最近 8 个，得到按 turn number 升序排列的合法 boundary。
-3. target 使用当前 input budget 的 60%；benchmark-forced 可传更小 target，但必须是正安全整数。
+3. target 使用当前 input budget 的 30%；benchmark-forced 可传更小 target，但必须是正安全整数。
 4. 每个 candidate boundary 表示“退休它之前的全部 active turns，并从该 turn 开始保留”。
 5. candidate 越向后，active messages 必须是前一个 candidate 的严格子集，raw/guarded estimate
    不得增加；违反单调性立即 fast-fail。
@@ -1215,7 +1215,7 @@ I3 按本文边界交付时，automatic retirement 仍未启用：
   `recall_contract_version`、revision-chain trigger 和 decoder 由同一 schema fingerprint
   固定。
 - compiler 的 active ordinals 现在严格为 `{1} U [keep, tail]`；planner 固定保护最近 8 个
-  closed turns，以 60% input budget 为生产 target，并用确定性二分查找与相邻 boundary
+  closed turns，以 30% input budget 为生产 target，并用确定性二分查找与相邻 boundary
   复验选择最小达标前缀。退休自身不调用 provider、不执行工具。
 - `commitPrefixRetirementRevision()` 在单个 transaction 中校验 boundary、canonical hash、
   active override manifest、measurement 清除和 active CAS；六个 transaction fault point
@@ -1290,7 +1290,7 @@ Recall-only task success 后才启用 automatic retirement。
    placeholder。**
 4. **`keepFromOrdinal` 只能指向保留 turn 的 user message，并跨 revision 单调前移。**
 5. **stored override 永不删除；active override 由 revision number 与 keep boundary 纯派生。**
-6. **`recall-first-retirement-v1` 固定保护最近 8 turns，以 60% input budget 为 target，选择
+6. **`recall-first-retirement-v1` 固定保护最近 8 turns，以 30% input budget 为 target，选择
    达标所需的最小退休前缀。**
 7. **无参数 `/compact` 保持 swap-only；只有显式 `/compact retire` 才执行冷退休。**
 8. **I3 retirement 自身零模型调用、零工具执行、零摘要、零 checkpoint。**

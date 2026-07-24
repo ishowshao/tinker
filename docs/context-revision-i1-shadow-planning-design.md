@@ -366,7 +366,7 @@ const shadowSwapPolicyV1 = {
   version: "shadow-swap-v1",
   minimumObservationBytes: 8 * 1024,
   protectedRecentTurnCount: 8,
-  targetInputRatio: 0.6,
+  targetInputRatio: 0.3,
 } as const;
 
 type ShadowSwapPolicyV1 = typeof shadowSwapPolicyV1;
@@ -377,7 +377,7 @@ type ShadowSwapPolicyV1 = typeof shadowSwapPolicyV1;
 - 8 KiB 来自 G0 本地聚合的实际分界，当前历史中有 54 条达到该大小；
 - G0 确定性 workload 的 tool observation 约 14 KiB，可以稳定覆盖候选路径；
 - 最近 8 turns 是保守保护区，不与 TUI policy 共享常量，避免把展示策略误当语义策略；
-- 当前 trigger 是 input budget 的 80%，shadow target 先用 60% 形成足够回差；
+- 当前 trigger 是 input budget 的 80%，shadow target 使用 30% 形成足够回差；
 - 这些值在 I1 是审计版本的一部分，不写入 `ModelContextBudget` 或 runtime contract；
   I2 只有在基线结果稳定后才能把它们升级为活动策略。
 
@@ -565,7 +565,7 @@ request，以免污染 anchor、calibration 或 last provider usage。它只使�
 运行时 target：
 
 ```text
-floor(inputBudgetTokens * 0.60)
+floor(inputBudgetTokens * 0.30)
 ```
 
 算法：
@@ -1001,7 +1001,7 @@ I2 不得把 shadow event 当恢复来源，也不得跳过 I1 compiler 另写�
 5. **相同 revision 的稳定性以 prepared segment hash chain 做 append-only 审计。**
 6. **第一批候选只覆盖 closed、旧、大体积、结构化、可 Recall 且属于明确 allowlist 的
    tool observation；placeholder 是温层表示，不是永久索引。**
-7. **shadow target 暂定 input budget 的 60%，policy 带版本并由正式基线校准。**
+7. **shadow target 使用 input budget 的 30%，policy 带版本并由正式基线校准。**
 8. **hypothetical revision 只做 full estimate，不复用 provider anchor，不污染
    ContextMeter。**
 9. **正常无候选/不足是诊断 outcome；canonical、revision、active prefix 损坏则立即

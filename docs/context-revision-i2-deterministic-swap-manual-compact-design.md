@@ -589,7 +589,7 @@ const swapOnlyPolicyV1 = {
   version: "swap-only-v1",
   minimumObservationBytes: 8 * 1_024,
   protectedRecentTurnCount: 8,
-  targetInputRatio: 0.6,
+  targetInputRatio: 0.3,
 } as const;
 ```
 
@@ -602,12 +602,12 @@ const swapOnlyPolicyV1 = {
 `/compact` 的 target 始终是：
 
 ```text
-floor(inputBudgetTokens * 0.60)
+floor(inputBudgetTokens * 0.30)
 ```
 
 手动路径不要求当前 pressure 已达到 80% trigger。原因是：
 
-- 用户可能希望在 60%~80% 之间主动建立回差；
+- 用户可能希望在 30%~80% 之间主动建立回差；
 - admission request 可能因 candidate prompt 超预算而失败，此时 session 已回到 idle，用户
   必须仍能运行 `/compact`；若 committed view 尚高于 target，它可以先缩小活动前缀；
 - manual 是显式操作，不需要自动触发门槛替用户做决定。
@@ -1183,7 +1183,7 @@ notice 只展示 revision number、数量和 token 聚合，不展示 message/so
 ### 13.5 超预算恢复体验
 
 当前 admission preflight 会在 user frame 写入前拒绝超预算 candidate prompt，session 随后仍
-是 ready。用户仍可执行 `/compact`；若 committed view 高于 60% target 且存在候选，它会先
+是 ready。用户仍可执行 `/compact`；若 committed view 高于 30% target 且存在候选，它会先
 缩小 active view，再由用户重新提交原 prompt。若 committed view 已低于 target，命令明确
 no-op，不能保证为一个本身极大的 candidate prompt 腾出足够预算。
 
@@ -1441,8 +1441,8 @@ validation 路径，不能通过弱化 hash/protocol 校验换性能。
 - 已 active-swapped message 给出 `already_swapped` exclusion，不再成为 candidate。
 - prospective view 使用 active + newly selected overrides。
 - 相同 snapshot 得到相同新增集合、manifest 和 plan hash。
-- manual 在 pressure normal 但 >60% target 时仍规划。
-- <=60% target 返回 `below_target`。
+- manual 在 pressure normal 但 >30% target 时仍规划。
+- <=30% target 返回 `below_target`。
 - `target_reached` 选择达到 target 的最小排序前缀。
 - 候选耗尽仍严格缩小返回带 plan 的 `insufficient_candidates`。
 - 无新增候选不创建空 plan。
@@ -1509,7 +1509,7 @@ revision、measurement 为空、active view 可完整编译。
 - Esc 不被误解释为 turn cancellation。
 
 再用真实 PTY 验证一次：使用显式的小预算测试 profile 和 fake model，执行能产生 >8 KiB
-observation 的 turn，使 committed view 高于 60% target；回到 idle 后输入 `/compact`，看到
+observation 的 turn，使 committed view 高于 30% target；回到 idle 后输入 `/compact`，看到
 成功 notice，再继续下一 turn 并正常 `/quit`。测试 profile 只存在于测试 harness，不成为
 production 隐藏配置。
 
@@ -1559,7 +1559,7 @@ resume / cancellation / Recall verification
 
 ### 19.11 真实 provider smoke
 
-使用当前显式 model profile 做一次受控 smoke。为了避免为达到 60% target 人为发送巨大
+使用当前显式 model profile 做一次受控 smoke。为了避免为达到 30% target 人为发送巨大
 prompt，fixture 通过 benchmark-only trigger 调用同一个 ContextManager commit path；该入口
 不暴露为用户 flag 或环境变量：
 
@@ -1784,9 +1784,9 @@ I3 不能把 I2 的逐条 placeholder 当永久目录，也不能删除它们对
 4. **I2 所有 revision 固定 `keepFromOrdinal = 1`，只替换 closed frame 内 allowlisted tool
    observation 的 content。**
 5. **active、prospective 和 resume 共用同一 compiler/validator/renderer contract。**
-6. **`swap-only-v1` 沿用 I1 的 8 KiB、最近 8 turns 和 60% target，但获得活动提交权限；
+6. **`swap-only-v1` 沿用 I1 的 8 KiB、最近 8 turns 和 30% target，但获得活动提交权限；
    renderer 仍是 `swap-observation-v1`。**
-7. **手动 `/compact` 不要求达到 80% trigger；低于 60% target 时 no-op。**
+7. **手动 `/compact` 不要求达到 80% trigger；低于 30% target 时 no-op。**
 8. **候选不足但仍严格缩小时提交 `insufficient_candidates` revision，不在 I2 自动进入冷
    退休或摘要。**
 9. **重型 planning/prepare 在 transaction 外完成；revision、new overrides、measurement

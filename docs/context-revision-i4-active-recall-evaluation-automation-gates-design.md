@@ -715,7 +715,7 @@ closed current snapshot
   -> replan swap from current snapshot
   -> commit at most one swap revision
   -> rebuild and remeasure
-  -> at/below 60% target: stop
+  -> at/below 30% target: stop
   -> automatic retirement not requested/qualified: stop, report manual retirement available
   -> replan prefix retirement from new current snapshot
   -> commit at most one retirement revision
