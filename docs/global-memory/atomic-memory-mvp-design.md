@@ -306,6 +306,29 @@ ON memories(created_at DESC);
 静默丢数据，并显示一次纯 TUI 本地提示。MVP 不提供 re-embed；开发阶段需要更换
 embedding 模型时，关闭 Tinker 后删除整个 MVP 数据库重新积累。
 
+首次 schema v1 创建也是 schema initialization，必须与未来 migration 使用相同的
+`BEGIN IMMEDIATE` 串行化边界：
+
+1. 打开连接并设置 5 秒 `busy_timeout`；
+2. 在 transaction 外启用并验证 WAL mode；
+3. 执行 `BEGIN IMMEDIATE`；
+4. 取得写锁后重新读取 schema 状态；
+5. 空数据库在同一个 transaction 中创建全部 table、index 和 `memory_meta`；
+6. 已初始化数据库在锁内读取 schema version 和 embedding identity；
+7. 成功时 `COMMIT`，任何失败都 `ROLLBACK`。
+
+不能用锁外的“数据库是否为空”判断决定初始化，也不能用 `CREATE TABLE IF NOT EXISTS`
+代替串行化。后者无法保证多条 metadata 与 schema 原子提交，还可能掩盖不兼容结构。
+`PRAGMA journal_mode = WAL` 不能放进 active transaction；它与等待写锁任一步骤超过
+`busy_timeout` 都按 Memory 初始化失败处理。
+
+两个进程同时首次启动时，第二个进程等待写锁，取得锁后必须重新读取状态并按“已初始化”
+路径验证，不能继续执行等待前选定的创建路径。如果等待超过 5 秒，本次 Memory 初始化按
+第十节降级：当前进程不创建 coordinator、不注册工具并显示一次 notice，TUI 继续启动。
+
+如果并发初始化进程使用不同的 embedding identity，先提交的进程确定数据库 identity；后
+取得锁的进程只禁用自己的 Memory，不修改、迁移或覆盖已有数据库。
+
 ## 七、MemorySearch
 
 ### 7.1 工具定义
@@ -580,6 +603,7 @@ TUI 开始退出时：
 ### M1：存储和向量基础
 
 - 用户级安全目录与 SQLite schema；
+- `BEGIN IMMEDIATE` 串行化首次 schema 创建；
 - embedding BLOB 编解码、归一化、cosine；
 - exact duplicate 幂等；
 - 多连接 WAL/busy timeout；
@@ -627,6 +651,11 @@ TUI 开始退出时：
 - 初始化降级后不创建 worker、不注册 `MemorySearch`，并且只显示一次纯 TUI 本地 notice；
 - memory 初始化 notice 不形成 Turn，不写 prompt history 或 canonical history；
 - `apiKey` 轮换不影响打开已有数据库；
+- 两个独立连接通过 barrier 同时首次初始化同一路径时，最终得到一份完整 schema 和
+  metadata，双方都不执行重复创建；
+- schema 初始化写锁等待超过 5 秒时只禁用当前进程 Memory，TUI 正常启动；
+- 并发初始化使用不同 embedding identity 时先提交者确定 identity，后提交者只降级自己的
+  Memory；
 - completed 触发，failed/cancelled/interrupted 不触发；
 - 一个 Turn 可产生 0、1、4 条记忆，5 条或非法 JSON 整批拒绝；
 - 提取输入包含完整 user message、所有 assistant content/reasoning、非 MemorySearch tool
