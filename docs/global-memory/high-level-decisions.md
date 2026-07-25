@@ -141,6 +141,10 @@ search unavailable，并继续提供 FTS5 搜索。不能静默把 FTS-only 结�
 Embedding model 独立于工作模型和记忆提取模型配置。全局记忆搜索将结合关键词召回与
 向量召回；具体融合和排序策略留待后续设计。
 
+第一版使用智谱 `embedding-3`，采用默认的 `2048` 维输出，请求地址为
+`https://open.bigmodel.cn/api/paas/v4/embeddings`。其认证复用 `glm-5.2` profile 的
+`apiKey`，但 embedding 配置仍与该工作模型 profile 的其他配置保持独立。
+
 ### 5.4 Workspace 关系
 
 搜索时所有 workspace 的记忆完全同权：
