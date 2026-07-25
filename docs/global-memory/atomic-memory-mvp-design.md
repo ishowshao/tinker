@@ -84,6 +84,7 @@ relation、CAS、lease、generation 或管理 UI。
 - 用户可见的记忆列表、状态页、删除或 clear；
 - ANN、向量缓存、原生向量扩展；
 - 独立 memory profile；
+- 超长 Turn 的截断、分块、分层提取或候选收敛；
 - 持久化提取队列、退出 drain 或 worker 重试；
 - schema 中为上述未来能力预留的空字段或空表。
 
@@ -185,6 +186,18 @@ history、模型实际看到的 observation，不读取只用于内部诊断的 
 
 提取是一次无工具的独立模型请求，使用当前 Session profile。它不进入 agent loop，不写入
 canonical history，也不发布普通 Turn 事件。
+
+发送请求前，使用当前 Session profile 的 context contract 对完整提取请求做 preflight。
+如果完整请求超过该模型的 context：
+
+- 跳过整个 Turn 的记忆提取；
+- 不截断、不分块，也不只提取其中一部分；
+- 不调用提取模型，不生成候选记忆；
+- 记录 `extraction_input_too_large` 诊断；
+- 不重试，不使当前或后续主 Session fault。
+
+这是 MVP 的明确 best-effort 缺口，不是 embedding 限制。embedding 只接收长度受限的单条
+原子记忆或搜索 query，不接收完整 Turn。
 
 模型必须只返回：
 
@@ -460,6 +473,7 @@ Memory 不进入：
 
 以下错误只影响本次 memory 操作：
 
+- 完整提取请求超过当前提取模型的 context；
 - 记忆提取模型失败或返回非法 JSON；
 - 敏感信息检测拒绝候选；
 - embedding 网络或响应失败；
@@ -548,6 +562,7 @@ TUI 开始退出时：
   observation 和 workspace；
 - `MemorySearch` observation 被代码过滤，其他 tool observation 保留；
 - 提取 prompt 默认空数组，并明确要求证据不足时不生成记忆；
+- 完整提取请求超过当前 Session profile context 时整条跳过，不调用模型、不截断、不写库；
 - queue 并发度为 1、容量 64、满时丢最老未开始项；
 - 退出取消当前项并丢弃剩余项；
 - 记忆文本 byte limit、精确 hash 幂等和 secret 拒绝；
@@ -598,3 +613,21 @@ bun run check
 
 完成 MVP 后先基于实际记忆数量、提取质量、主动工具调用率、top-5 命中率和错误率决定
 下一步。没有证据前，不默认进入完整高层方案。
+
+## 十五、开放问题
+
+### 15.1 超长 Turn 的记忆提取
+
+一个 completed Turn 可能因为大量 tool observation、图片或长文本而超过当前提取模型的
+context。MVP 按第五节合同跳过整个 Turn，不尝试恢复。
+
+只有真实使用数据显示这类跳过达到不可接受的频率，才进一步设计处理方式。候选方向包括：
+
+- 按 protocol Frame 或消息边界分块；
+- 单独切分超大的 tool observation；
+- 各块只生成临时候选记忆；
+- 对候选执行一次或递归执行全局去重与收敛；
+- 只把最终 0 到 4 条记忆写入数据库。
+
+后续设计必须继续满足：不静默截断、不把中间候选写库、不突破每 Turn 最多 4 条记忆，也不
+因为提取失败影响主 Session。MVP 不为这些方向预建接口或持久化结构。
