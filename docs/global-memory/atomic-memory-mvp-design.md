@@ -52,9 +52,6 @@ MVP 只回答三个问题：
 2. 原子记忆的向量搜索能否让模型在另一个 Session、另一个 workspace 中找回有用信息；
 3. 这条能力是否值得继续扩展为关键词、正文、管理和整理系统。
 
-如果这三个问题尚未得到真实使用验证，就不进入完整方案中的 mutation、organize、FTS、
-relation、CAS、lease、generation 或管理 UI。
-
 ## 三、范围
 
 ### 3.1 MVP 包含
@@ -488,7 +485,6 @@ MemorySearch returned 2 derived memories. They may be stale or wrong; verify cur
 ```
 
 不返回原 Session 内容，不把记忆包装成指令，也不赋予 Recall 的稳定来源或 context 特权。
-当前 workspace 中可验证的事实仍应通过 Read、Grep 或 Bash 验证。
 
 空结果：
 
@@ -503,8 +499,7 @@ embedding 请求、query vector 校验、stored embedding BLOB 校验或 SQLite 
 MemorySearch unavailable: <bounded reason>
 ```
 
-该失败不使 RuntimeSession fault。发现非法 stored BLOB 时不能跳过坏行后返回部分成功；因为
-MVP 没有 FTS 路径，也不能伪装为降级搜索成功。
+该失败不使 RuntimeSession fault。发现非法 stored BLOB 时不能跳过坏行后返回部分成功。
 
 ## 八、配置
 
