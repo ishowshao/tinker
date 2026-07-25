@@ -130,9 +130,7 @@ Vec1。文档日期对应的实施基线是 `sqlite-vec` v0.1.9。
 
 - 不在运行时下载 extension；
 - 不使用宽松版本范围；
-- 数据库记录实际加载的 extension version；
 - macOS 和 Linux CI 必须真实验证 Bun 加载、插入、查询、更新和删除；
-- extension 升级需要显式验证并重建 vector index。
 
 相关上游依据：
 
@@ -148,7 +146,7 @@ unavailable，并继续提供 FTS5 搜索。不能静默把 FTS-only 结果伪�
 ### 5.3 Embedding
 
 Embedding model 独立于工作模型和记忆提取模型配置。全局记忆搜索将结合关键词召回与
-向量召回；具体融合、排序和重建策略留待后续设计。
+向量召回；具体融合和排序策略留待后续设计。
 
 ### 5.4 Workspace 关系
 
@@ -321,7 +319,7 @@ Session history。`tinker memory ...` 是用户直接调用的管理命令，不
 - 当前进程 worker 的 queued、running、succeeded、failed 和 dropped 计数；
 - 全局 active、unorganized、superseded 和 conflict 计数；
 - 最近一次提取与整理的时间和错误摘要；
-- FTS、vector 和 embedding space 状态。
+- FTS、vector 和 embedding 状态。
 
 ## 八、可演化记忆与整理
 
@@ -363,7 +361,7 @@ tinker memory organize
 
 整理器不是事实核查器。没有反证、冲突或用户修正时，一条看似合理的错误记忆不一定能被
 自动识别，因此模型和用户仍然需要修改、删除记忆的能力。整理也不能替代写入时必须保证的
-数据库完整性、embedding 空间隔离和敏感信息边界。
+数据库与 vector 数据完整性，以及敏感信息边界。
 
 整理只依赖已经保存的派生记忆及其来源元数据，不要求重新打开原 Session 或读取原文。
 旧信息如何保留、普通搜索是否展示 superseded 记录，以及冲突和重复整理的具体持久化方式，
@@ -435,5 +433,4 @@ tinker memory organize
 
 - 模型工具的完整 JSON Schema 和 observation 形状；
 - 关键词匹配、semantic cue 向量候选折叠，以及两路结果的聚合与排序算法；
-- 整理操作如何保留版本、表达冲突并保证可重复执行；
-- embedding model 变更后的索引重建方式；
+- 整理操作如何保留版本、表达冲突并保证可重复执行。

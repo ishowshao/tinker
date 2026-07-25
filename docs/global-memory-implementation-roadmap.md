@@ -79,7 +79,7 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 ### 2.2 当前缺口
 
 - 没有独立的 `src/memory` 领域层，也没有用户级全局数据目录。
-- 没有 embedding client、embedding space contract 或 vector index。
+- 没有 embedding client、embedding 配置 contract 或 vector index。
 - `package.json` 没有 `sqlite-vec` 依赖，也没有安装包内加载原生 extension 的验证。
 - TUI 和 one-shot 当前共用同一套默认工具注册，尚无 entry capability manifest。
 - CLI 只区分 TUI 与 `tinker run`；所有运行命令都会先进入当前 session/model 配置解析。
@@ -95,7 +95,7 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 | 能力 | 所有者 | 生命周期 |
 | --- | --- | --- |
 | 全局数据库、FTS、vector index | `src/memory` | 用户级，跨 workspace |
-| 记忆查询、mutation、rebuild、status | `MemoryService` | 由 composition root 注入 |
+| 记忆查询、mutation、status | `MemoryService` | 由 composition root 注入 |
 | completed Turn 安全读取 | `src/session` 的只读 reader | 按 Session/Turn 引用读取 |
 | Memory 模型工具 adapter | `src/tools` | 随当前 RuntimeSession tool surface |
 | 提取与整理 worker | TUI `runTui()` 创建的进程级 memory runtime | 整个 TUI 进程最多一个 |
@@ -170,7 +170,7 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 #### 数据与状态
 
 - 全局目录和数据库文件的最终路径。
-- Memory ID、version、store generation、evidence ID 和 embedding space ID 的格式。
+- Memory ID、version、store generation 和 evidence ID 的格式。
 - 逻辑记忆、版本、evidence、来源、unorganized、superseded 和 conflict 的状态机。
 - organizer 是否保留完整旧版本、如何表示 supersede 关系和 unresolved conflict。
 - exact normalized-content 幂等规则以及 reinforcement 的记录方式。
@@ -183,15 +183,12 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 - 每条 Memory 的 vector candidate 折叠规则。
 - FTS 与 vector 的固定候选数、聚合公式、稳定 tie-breaker 和最终固定结果数。
 - active、unorganized、superseded、conflict 各状态是否进入普通搜索。
-- vector unavailable、embedding unavailable、rebuild required 和 partial result 的返回形状。
+- vector unavailable、embedding unavailable 和 partial result 的返回形状。
 - `tinker memory search <query>` 如何从单个用户 query 驱动关键词和语义两条路径。
 
-#### Embedding 与 rebuild
+#### Embedding
 
-- embedding endpoint、model、credential、dimension、timeout 和空间身份的配置形状。
-- embedding model 或 `sqlite-vec` 版本改变时，online rebuild、staging index 和原子切换
-  方式。
-- rebuild 与普通读写并发时的 active space、generation 和失败恢复语义。
+- embedding endpoint、model、credential、dimension、metric 和 timeout 的配置形状。
 
 #### 失败分类
 
@@ -224,7 +221,7 @@ GM0 只冻结会影响首个数据库 schema、混合搜索和跨阶段错误语
 
 - Bun 在 macOS 和 Linux 加载 extension。
 - 创建 `vec0`、插入、cosine KNN、更新、删除和重开数据库。
-- extension version 可被读取并写入数据库元数据。
+- 实际加载的 extension 与固定依赖版本一致。
 - `npm pack` 后从干净全局安装前缀仍能加载 extension。
 - extension 缺失、架构不匹配和 vector table 损坏时能够与普通 FTS 数据库打开失败区分。
 
@@ -236,7 +233,7 @@ GM0 只冻结会影响首个数据库 schema、混合搜索和跨阶段错误语
 
 ### 4.6 晋级门槛
 
-- 上位文档“待后续讨论”的四项内容全部有明确阶段归属，GM1/GM2 所需部分已经冻结。
+- 上位文档“待后续讨论”的三项内容全部有明确阶段归属，GM1/GM2 所需部分已经冻结。
 - 不再存在会要求 GM3 后破坏首个公开数据库 schema 的已知未决项。
 - macOS、Linux 和安装包原型都通过；失败路径能够保留 FTS 能力。
 - 本阶段不注册任何生产 Memory 命令、工具或 worker。
@@ -308,9 +305,8 @@ schema。
 - 把 `src/memory` 和 extension 所需运行文件纳入 npm package files，并让 release verifier
   检查实际安装位置，而不是只在源码 checkout 中验证。
 - 增加独立 embedding client；不把 embedding 塞入工作模型 `ModelClient` 接口。
-- 定义并持久化 embedding space identity，包括 model、dimension、metric、协议版本和实际
-  extension version；不持久化 credential。
-- 为每条 semantic cue 单独生成和保存 vector，并保持 cue 文本可用于 rebuild。
+- 按 GM0 冻结的 embedding model、dimension 和 metric 创建单一 vector index。
+- 为每条 semantic cue 单独生成和保存 vector，并持久化对应 cue 文本。
 - create/update 的执行顺序固定为：
   1. 在 transaction 外验证文本、生成所需 embeddings；
   2. 打开短 transaction；
@@ -322,13 +318,11 @@ schema。
 - vector hits 先按 Memory ID 折叠，再按 GM0 冻结算法与 FTS hits 聚合。
 - 搜索固定有界，不向工具调用方开放分页或 limit。
 - 普通搜索默认不按 workspace 过滤或提权。
-- 实现 embedding space rebuild、进度、失败恢复和原子激活。
 - extension 加载或 vector query 失败时：
   - 保留 FTS 查询；
   - 返回明确 degraded 状态和原因；
-  - status 显示 vector unavailable 或 rebuild required。
-- 在本阶段结束时冻结并记录 global memory schema v1；之后的结构变化必须走显式 migration
-  或可证明安全的派生索引 rebuild。
+  - status 显示 vector unavailable。
+- 在本阶段结束时冻结并记录 global memory schema v1。
 
 ### 6.3 明确不做
 
@@ -342,18 +336,16 @@ schema。
 - 同一 Memory 的多 cue 命中只返回一条逻辑结果。
 - keywords 命中、vector 命中、双路命中和稳定 tie-breaker 都符合冻结算法。
 - vector unavailable 时结果明确标记为 FTS-only，且不会返回伪造 semantic score。
-- embedding model、dimension 或 extension version 改变时不会混用旧空间。
-- rebuild 期间旧 active space 可继续服务，失败后仍保持旧空间。
 - 多进程搜索与写入并发时，查询只看到提交前或提交后的完整版本。
 - macOS、Linux CI 真实执行 load/insert/query/update/delete/reopen。
 - `release:verify` 从实际 npm tarball 的干净安装前缀验证 extension。
-- 使用固定规模 fixture 记录写入、FTS、KNN、混合搜索、rebuild 时间和 RSS 基线；具体门槛
+- 使用固定规模 fixture 记录写入、FTS、KNN、混合搜索时间和 RSS 基线；具体门槛
   在 GM0 详细设计中冻结。
 
 ### 6.5 晋级门槛
 
 - 两个平台和发布包都通过真实 extension 验证。
-- schema v1、embedding space 和 rebuild 合同冻结。
+- schema v1 和 embedding 配置合同冻结。
 - vector 降级不影响 FTS，也不阻止主 Tinker session。
 - benchmark 与 fault matrix 达到 GM0 门槛。
 - `bun run check` 通过。
@@ -549,7 +541,7 @@ GM3 的 status 面板和命令扩展为真实显示：
 - 当前 TUI 进程 worker queued、running、succeeded、failed、dropped；
 - 最近一次提取时间、来源和 bounded error summary；
 - 全局 active、unorganized、superseded、conflict；
-- FTS、vector、embedding space 和 rebuild 状态。
+- FTS、vector 和 embedding 状态。
 
 standalone `tinker memory status` 没有当前 TUI 的内存计数，因此明确显示 worker 不属于本
 进程，同时仍展示持久化的最近提取诊断和全局计数。
@@ -697,7 +689,6 @@ tinker memory organize
 - CI 在 macOS、Linux 继续执行真实 vector CRUD/reopen。
 - 建立全局 Memory benchmark 和 fault suite，覆盖：
   - 大量 Memory 和多 cue 的 FTS/KNN/聚合；
-  - rebuild；
   - 多进程读写与 organize lease；
   - worker 队列和退出；
   - store busy、provider failure、embedding failure、extension failure；
@@ -732,7 +723,7 @@ tinker memory organize
 5. vector 不可用时 FTS 保持可用且所有入口明确降级。
 6. clear 能阻止旧 worker 和旧 organizer 结果回写。
 7. Memory 内容源过滤、secret rejection 和 observation 警告通过负向测试。
-8. 多进程 write、lease、rebuild 和 busy timeout 行为可重复。
+8. 多进程 write、lease 和 busy timeout 行为可重复。
 9. macOS、Linux、npm tarball、fake client 和真实 provider/embedding smoke 全部通过。
 10. `bun run check` 通过，README 和生成公共 contract 无漂移。
 
@@ -742,7 +733,7 @@ tinker memory organize
 | --- | --- | --- |
 | GM0 | GM1 | schema/search/config/security 未决项已冻结，sqlite-vec 原型通过 |
 | GM1 | GM2 | CAS、generation、幂等、权限和并发 write plane 稳定 |
-| GM2 | GM3 | 混合搜索、rebuild、双平台和安装包 extension 验证通过 |
+| GM2 | GM3 | 混合搜索、双平台和安装包 extension 验证通过 |
 | GM3 | GM4 | 用户已有 search/status/delete/clear，显式工具语义稳定 |
 | GM4 | GM5 | 自动提取不 fault Session，安全投影和 worker 生命周期稳定 |
 | GM5 | GM6 | 手动 organizer、CAS、lease、取消和搜索状态语义稳定 |
@@ -823,7 +814,7 @@ MemoryController 的 owner 是 TUI composition root。session disposal 不能关
 
 1. global schema 与状态机；
 2. keywords/semantic cues 的限制和搜索聚合；
-3. embedding space 与 rebuild；
+3. embedding 配置与 vector schema；
 4. CAS、generation、lease 和幂等；
 5. vector 降级与 status 合同；
 6. `sqlite-vec` 双平台及安装包资格脚本。
