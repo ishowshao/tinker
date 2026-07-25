@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-25
-- 状态：讨论中
+- 状态：高层方向已确认；GM0 存储与搜索合同已冻结
 - 文档性质：高层决策记录
 
 本文只记录当前已经达成共识的产品方向、能力边界和用户入口，不展开数据库 schema、
@@ -364,8 +364,9 @@ tinker memory organize
 
 写入路径只做便宜、确定性的幂等：
 
-- 模型 mutation 使用 ToolCall 身份防止同一次调用重复执行；
-- 自动提取使用 Session、Turn 和候选内容 hash 防止同一候选重放；
+- 当前 agent loop 不重放已执行 ToolCall；模型 mutation 使用 `expected_version` CAS；
+- 自动提取把 Session、Turn 和候选内容 hash 合成非空 source fingerprint，防止同一候选
+  重放；
 - 完全相同的规范化内容不创建新记录，而是记录新的 evidence/reinforcement；
 - `clear` 之后，旧 store generation 的任务不能再回写结果。
 
@@ -379,6 +380,9 @@ tinker memory organize
 - 删除前已经开始的旧工作不能立即恢复被删除的记忆；
 - 未来新的 Turn 提供新证据时，可以重新形成同类记忆；
 - 第一版不提供 suppression 或永久 forget 规则。
+
+第一版 delete 推进全局 store generation，使删除前已经开始、尚未提交的异步任务全部
+失效；这是避免增加 per-Memory tombstone 的简化选择。删除后的新任务使用新 generation。
 
 如果未来需要“永远不要记住这类内容”，应单独设计 suppression 能力，不重载 delete。
 
@@ -422,8 +426,11 @@ tinker memory organize
 
 ## 十一、待后续讨论
 
-以下内容尚未形成最终决策：
+以下内容已有明确阶段归属：
 
-- 模型工具的完整 JSON Schema 和 observation 形状；
-- 关键词匹配、semantic cue 向量候选折叠，以及两路结果的聚合与排序算法；
-- 整理操作如何保留版本、表达冲突并保证可重复执行。
+- 模型工具的完整 JSON Schema 和 observation 形状在 GM3 开始前冻结；
+- 关键词匹配、semantic cue 向量候选折叠，以及两路结果的聚合与排序算法已经由
+  [`global-memory-storage-search-design.md`](global-memory-storage-search-design.md) 冻结；
+- GM0 已冻结 schema v1 不保留逐次 update 历史、不预建 organizer/relations；旧逻辑
+  Memory 保留、supersede/conflict relation、action 幂等、batch、lease 和交互合同在 GM5
+  开始前统一冻结并通过 migration 增加。
