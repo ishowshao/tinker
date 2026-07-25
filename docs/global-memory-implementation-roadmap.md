@@ -18,11 +18,11 @@
 全局记忆建议按以下七个阶段顺序实施：
 
 ```text
-GM0  跨阶段合同冻结与 sqlite-vec 资格验证
+GM0  跨阶段合同冻结与 TypeScript 向量资格验证
   ↓
 GM1  全局存储与确定性写入基础
   ↓
-GM2  Embedding、sqlite-vec 与混合搜索
+GM2  Embedding、TypeScript 精确向量检索与混合搜索
   ↓
 GM3  显式记忆竖切：模型工具 + CLI/TUI 管理
   ↓
@@ -37,7 +37,7 @@ GM6  空闲自动整理与发布收口
 
 | 阶段 | 阶段结束时得到的结果 | 是否新增公开能力 |
 | --- | --- | --- |
-| GM0 | 未决合同冻结，原生扩展和失败边界被真实验证 | 否 |
+| GM0 | 未决合同冻结，向量持久化、精确计算和性能基线被真实验证 | 否 |
 | GM1 | 安全、并发可用、支持 CAS 和 generation 的全局数据库 | 否 |
 | GM2 | 关键词与向量混合搜索完整可用，首个公开 schema 冻结 | 否 |
 | GM3 | TUI 模型可显式 CRUD；用户可搜索、查看状态、删除和清空 | 是 |
@@ -53,7 +53,8 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 
 1. 在系统自动积累数据前，用户已经可以检查和移除数据。
 2. 在系统自动改变已有记忆前，用户已经可以手动运行、观察和中断同一套整理引擎。
-3. vector 路径没有通过 macOS、Linux 和安装包验证前，不把混合搜索暴露为产品能力。
+3. vector 路径的正确性和性能没有通过 macOS、Linux 和安装包验证前，不把混合搜索暴露为
+   产品能力。
 4. 每个阶段只开放已经完整实现的入口，不提前注册返回占位错误的命令或工具。
 
 ## 二、当前代码基线与实施含义
@@ -79,8 +80,7 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 ### 2.2 当前缺口
 
 - 没有独立的 `src/memory` 领域层，也没有用户级全局数据目录。
-- 没有 embedding client、embedding 配置 contract 或 vector index。
-- `package.json` 没有 `sqlite-vec` 依赖，也没有安装包内加载原生 extension 的验证。
+- 没有 embedding client、embedding 配置 contract、向量持久化或精确 cosine 搜索。
 - TUI 和 one-shot 当前共用同一套默认工具注册，尚无 entry capability manifest。
 - CLI 只区分 TUI 与 `tinker run`；所有运行命令都会先进入当前 session/model 配置解析。
 - SessionStore 没有按单个 completed Turn 输出“可供记忆提取的安全投影”的只读接口。
@@ -94,7 +94,7 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 
 | 能力 | 所有者 | 生命周期 |
 | --- | --- | --- |
-| 全局数据库、FTS、vector index | `src/memory` | 用户级，跨 workspace |
+| 全局数据库、FTS、向量数据与搜索 | `src/memory` | 用户级，跨 workspace |
 | 记忆查询、mutation、status | `MemoryService` | 由 composition root 注入 |
 | completed Turn 安全读取 | `src/session` 的只读 reader | 按 Session/Turn 引用读取 |
 | Memory 模型工具 adapter | `src/tools` | 随当前 RuntimeSession tool surface |
@@ -158,12 +158,13 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 - 从 GM3 起，每个公开字段都进入公共 contract、README 生成、CLI/TUI parser 和测试。
 - 每个包含源码、依赖、脚本或运行配置的阶段都必须通过 `bun run check`。
 
-## 四、GM0：跨阶段合同冻结与 sqlite-vec 资格验证
+## 四、GM0：跨阶段合同冻结与 TypeScript 向量资格验证
 
 ### 4.1 目标
 
 在修改生产代码前，解决会影响数据库和所有后继阶段的未决问题，并用最小原型验证
-`sqlite-vec` 在 Tinker 实际发布形态中可用。
+普通 SQLite BLOB 加 TypeScript 精确 cosine 搜索在 Tinker 实际发布形态中正确且性能
+可接受。
 
 ### 4.2 GM0 必须冻结的跨阶段合同
 
@@ -193,8 +194,8 @@ GM1 和 GM2 是隐藏的基础阶段，不注册 Memory 工具，不增加 `/mem
 #### 失败分类
 
 - 显式错误的 embedding 配置何时属于启动失败。
-- extension unavailable、vector query failure、store busy、CAS conflict、generation mismatch
-  和 corruption 的稳定分类。
+- embedding unavailable、vector data invalid、vector query failure、store busy、CAS conflict、
+  generation mismatch 和 corruption 的稳定分类。
 - 哪些错误只影响本次操作，哪些使整个 MemoryService unavailable；两者都不能被错误提升为
   RuntimeSession canonical fault。
 
@@ -215,34 +216,38 @@ GM0 只冻结会影响首个数据库 schema、混合搜索和跨阶段错误语
 其中 organizer 的持久化状态机和旧版本保留方式仍属于 GM0，因为它们会影响 GM1 schema；
 自由文本 prompt、面板布局和调度细节留到使用它们的阶段。
 
-### 4.4 原生扩展资格验证
+### 4.4 TypeScript 精确向量资格验证
 
-使用一个不进入生产入口的最小脚本验证上位文档选定的精确 `sqlite-vec` 版本：
+使用一个不进入生产入口的最小脚本验证上位文档选定的普通 SQLite BLOB 与 TypeScript
+精确 cosine 路径：
 
-- Bun 在 macOS 和 Linux 加载 extension。
-- 创建 `vec0`、插入、cosine KNN、更新、删除和重开数据库。
-- 实际加载的 extension 与固定依赖版本一致。
-- `npm pack` 后从干净全局安装前缀仍能加载 extension。
-- extension 缺失、架构不匹配和 vector table 损坏时能够与普通 FTS 数据库打开失败区分。
+- embedding 按冻结维度转换为 little-endian Float32 BLOB，并能在重开数据库后逐值读取。
+- 写入时拒绝维度错误、非有限值和零范数，持久化前只归一化一次。
+- query embedding 只归一化一次；TypeScript 点积结果与固定 cosine fixture 一致。
+- 同一 Memory 的多个 cue 先折叠为一条逻辑候选，排序和 tie-breaker 可重复。
+- 创建、插入、搜索、更新、删除和重开不依赖原生向量扩展或运行时下载。
+- BLOB 长度错误、非法浮点值和向量数据损坏能够与普通 FTS 数据库打开失败区分。
+- 固定规模 fixture 在 macOS、Linux 记录首次搜索、热搜索和 RSS，并达到 GM0 冻结的门槛。
+- `npm pack` 后从干净全局安装前缀运行同一搜索资格脚本。
 
 ### 4.5 交付物
 
 - GM1/GM2 存储与搜索详细技术设计。
 - 跨阶段数据状态机、失败分类和后续设计检查点。
-- `sqlite-vec` 资格报告和已知平台边界。
+- TypeScript 精确向量资格报告和性能基线。
 
 ### 4.6 晋级门槛
 
 - 上位文档“待后续讨论”的三项内容全部有明确阶段归属，GM1/GM2 所需部分已经冻结。
 - 不再存在会要求 GM3 后破坏首个公开数据库 schema 的已知未决项。
-- macOS、Linux 和安装包原型都通过；失败路径能够保留 FTS 能力。
+- macOS、Linux 和安装包原型的正确性与性能都通过；向量失败路径能够保留 FTS 能力。
 - 本阶段不注册任何生产 Memory 命令、工具或 worker。
 
 ## 五、GM1：全局存储与确定性写入基础
 
 ### 5.1 目标
 
-建立不依赖模型、不依赖 vector extension、可以承受多进程并发的全局记忆 write plane。
+建立不依赖模型、embedding 或向量搜索，可以承受多进程并发的全局记忆 write plane。
 
 ### 5.2 实施范围
 
@@ -270,7 +275,7 @@ GM1 的生产 composition root 不打开该数据库。数据库只由单元/集
 
 ### 5.3 明确不做
 
-- 不增加 embedding client、`sqlite-vec` 或 vector table。
+- 不增加 embedding client、向量 BLOB 或向量搜索。
 - 不实现最终 `MemorySearch` 聚合。
 - 不注册模型工具、CLI 子命令或 TUI slash command。
 - 不读取 Session 或启动 worker。
@@ -292,7 +297,7 @@ GM1 的生产 composition root 不打开该数据库。数据库只由单元/集
 - repository API 不泄露 SessionStore、TUI 或 provider 类型。
 - `bun run check` 通过。
 
-## 六、GM2：Embedding、sqlite-vec 与混合搜索
+## 六、GM2：Embedding、TypeScript 精确向量检索与混合搜索
 
 ### 6.1 目标
 
@@ -301,24 +306,26 @@ schema。
 
 ### 6.2 实施范围
 
-- 以精确版本加入 `sqlite-vec` 依赖和加载器，不使用运行时下载。
-- 把 `src/memory` 和 extension 所需运行文件纳入 npm package files，并让 release verifier
-  检查实际安装位置，而不是只在源码 checkout 中验证。
+- 不增加原生向量依赖或运行时下载。
+- 把 `src/memory` 纳入 npm package files，并让 release verifier 从实际安装位置执行搜索，
+  而不是只在源码 checkout 中验证。
 - 增加独立 embedding client；不把 embedding 塞入工作模型 `ModelClient` 接口。
-- 按 GM0 冻结的 embedding model、dimension 和 metric 创建单一 vector index。
-- 为每条 semantic cue 单独生成和保存 vector，并持久化对应 cue 文本。
+- 按 GM0 冻结的 embedding model、dimension、metric 和 BLOB 格式建立单一向量存储合同。
+- 为每条 semantic cue 单独生成 embedding，验证并归一化为 little-endian Float32 BLOB，
+  同时持久化对应 cue 文本。
 - create/update 的执行顺序固定为：
-  1. 在 transaction 外验证文本、生成所需 embeddings；
+  1. 在 transaction 外验证文本、生成所需 embeddings，并完成向量验证和归一化；
   2. 打开短 transaction；
   3. 重新检查 generation、version 和幂等；
   4. 原子提交逻辑记录、FTS 和全部 vectors。
 - 实现 `MemorySearch` 两条独立候选路径：
   - keywords 只查询 keywords FTS；
-  - query 只生成 query embedding 并执行精确 cosine KNN。
+  - query 只生成并归一化一次 query embedding，再以 TypeScript 流式扫描 cue BLOB 并计算
+    精确 cosine。
 - vector hits 先按 Memory ID 折叠，再按 GM0 冻结算法与 FTS hits 聚合。
 - 搜索固定有界，不向工具调用方开放分页或 limit。
 - 普通搜索默认不按 workspace 过滤或提权。
-- extension 加载或 vector query 失败时：
+- embedding 请求不可用、向量数据无效或 vector query 失败时：
   - 保留 FTS 查询；
   - 返回明确 degraded 状态和原因；
   - status 显示 vector unavailable。
@@ -329,22 +336,23 @@ schema。
 - 不注册 Memory 模型工具。
 - 不增加 `tinker memory` 或 `/memory`。
 - 不读取 Session，不自动提取，不整理记忆。
-- 不增加 ANN、reranker、workspace boost 或 content search。
+- 不增加 ANN、进程内向量缓存、reranker、workspace boost 或 content search。
 
 ### 6.4 重点验证
 
 - 同一 Memory 的多 cue 命中只返回一条逻辑结果。
 - keywords 命中、vector 命中、双路命中和稳定 tie-breaker 都符合冻结算法。
 - vector unavailable 时结果明确标记为 FTS-only，且不会返回伪造 semantic score。
+- 维度错误、非有限值、零范数、BLOB 长度错误和损坏数据都得到稳定失败分类。
 - 多进程搜索与写入并发时，查询只看到提交前或提交后的完整版本。
-- macOS、Linux CI 真实执行 load/insert/query/update/delete/reopen。
-- `release:verify` 从实际 npm tarball 的干净安装前缀验证 extension。
-- 使用固定规模 fixture 记录写入、FTS、KNN、混合搜索时间和 RSS 基线；具体门槛
+- macOS、Linux CI 真实执行 BLOB insert/query/update/delete/reopen 和精确 cosine 搜索。
+- `release:verify` 从实际 npm tarball 的干净安装前缀验证相同的向量搜索路径。
+- 使用固定规模 fixture 记录写入、FTS、精确 cosine、混合搜索时间和 RSS 基线；具体门槛
   在 GM0 详细设计中冻结。
 
 ### 6.5 晋级门槛
 
-- 两个平台和发布包都通过真实 extension 验证。
+- 两个平台和发布包都通过 TypeScript 精确向量搜索验证。
 - schema v1 和 embedding 配置合同冻结。
 - vector 降级不影响 FTS，也不阻止主 Tinker session。
 - benchmark 与 fault matrix 达到 GM0 门槛。
@@ -682,16 +690,16 @@ tinker memory organize
 - README 和公共生成文档完整描述 Memory 配置、工具面、CLI、slash commands、隐私边界、
   vector 降级、best-effort 提取和整理阈值。
 - release tarball 验证：
-  - 全局安装后加载精确 `sqlite-vec`；
+  - 全局安装后执行 TypeScript 精确 cosine 和混合搜索；
   - 创建安全全局目录；
   - status、search、delete/clear 非交互保护；
   - TUI 与 one-shot 的工具面差异。
-- CI 在 macOS、Linux 继续执行真实 vector CRUD/reopen。
+- CI 在 macOS、Linux 继续执行真实向量 BLOB CRUD/reopen 和精确 cosine 搜索。
 - 建立全局 Memory benchmark 和 fault suite，覆盖：
-  - 大量 Memory 和多 cue 的 FTS/KNN/聚合；
+  - 大量 Memory 和多 cue 的 FTS/精确 cosine/聚合；
   - 多进程读写与 organize lease；
   - worker 队列和退出；
-  - store busy、provider failure、embedding failure、extension failure；
+  - store busy、provider failure、embedding failure、无效或损坏的向量 BLOB；
   - clear generation 与 stale task。
 - 真实端到端 smoke 至少覆盖：
   1. workspace A completed Turn 自动提取；
@@ -707,7 +715,7 @@ tinker memory organize
 - 全局 daemon、云同步、多人共享或跨机器复制。
 - one-shot 自动提取或自动整理。
 - Recall/compaction 特殊语义。
-- ANN、SQLite Vec1、reranker 或 workspace boost。
+- ANN、原生向量扩展、独立向量服务、reranker 或 workspace boost。
 - suppression、永久主题屏蔽或删除 tombstone 规则。
 - 自动事实核查。
 - 为早期未公开的 GM1/GM2 测试数据库增加兼容迁移。
@@ -731,9 +739,9 @@ tinker memory organize
 
 | 从 | 到 | 必须先证明 |
 | --- | --- | --- |
-| GM0 | GM1 | schema/search/config/security 未决项已冻结，sqlite-vec 原型通过 |
+| GM0 | GM1 | schema/search/config/security 未决项已冻结，TypeScript 精确向量原型通过 |
 | GM1 | GM2 | CAS、generation、幂等、权限和并发 write plane 稳定 |
-| GM2 | GM3 | 混合搜索、双平台和安装包 extension 验证通过 |
+| GM2 | GM3 | 混合搜索、双平台和安装包 TypeScript 向量验证通过 |
 | GM3 | GM4 | 用户已有 search/status/delete/clear，显式工具语义稳定 |
 | GM4 | GM5 | 自动提取不 fault Session，安全投影和 worker 生命周期稳定 |
 | GM5 | GM6 | 手动 organizer、CAS、lease、取消和搜索状态语义稳定 |
@@ -814,9 +822,9 @@ MemoryController 的 owner 是 TUI composition root。session disposal 不能关
 
 1. global schema 与状态机；
 2. keywords/semantic cues 的限制和搜索聚合；
-3. embedding 配置与 vector schema；
+3. embedding 配置与向量 BLOB schema；
 4. CAS、generation、lease 和幂等；
 5. vector 降级与 status 合同；
-6. `sqlite-vec` 双平台及安装包资格脚本。
+6. TypeScript 精确向量搜索的双平台、性能及安装包资格脚本。
 
 该设计通过后再实施 GM1；GM3、GM4 和 GM5/GM6 分别保留独立技术设计和审批点。

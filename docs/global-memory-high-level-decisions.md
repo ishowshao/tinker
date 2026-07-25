@@ -120,28 +120,21 @@ worker 不在模型客户端已有重试之外增加自己的重试循环。单�
 当前选择以 SQLite 作为本地存储基础：
 
 - 使用 FTS5 提供关键词搜索；
-- 使用 `sqlite-vec` 的 `vec0` virtual table 提供精确 cosine KNN；
-- 不依赖 ChromaDB 一类需要额外服务进程的系统。
+- 每条 semantic cue 的 embedding 以归一化 Float32 BLOB 保存在普通 SQLite 表中；
+- 使用 TypeScript 流式扫描向量并计算精确 cosine 相似度；
+- 不引入额外原生向量依赖，也不依赖额外服务进程。
 
-第一版固定使用 `sqlite-vec` 的稳定版本，不采用其 alpha ANN 实现，也不采用 SQLite
-Vec1。文档日期对应的实施基线是 `sqlite-vec` v0.1.9。
+第一版采用精确向量搜索，不使用 ANN。写入时验证 embedding 维度、有限值和非零范数，
+归一化后再持久化；搜索时只归一化一次 query embedding，逐条计算点积，并先把同一条
+Memory 的多个 semantic cue 折叠为一条逻辑候选。
 
-`sqlite-vec` 作为 Tinker 的固定版本依赖随包分发：
+向量数据与记忆正文、关键词 FTS 在同一个短 transaction 中原子提交。macOS 和 Linux CI
+以及最终 npm 安装包必须真实验证向量 BLOB 的插入、读取、更新、删除、重开和精确 cosine
+结果。第一版不增加进程内向量缓存，避免多个 Tinker 进程之间产生缓存同步和失效语义。
 
-- 不在运行时下载 extension；
-- 不使用宽松版本范围；
-- macOS 和 Linux CI 必须真实验证 Bun 加载、插入、查询、更新和删除；
-
-相关上游依据：
-
-- [`sqlite-vec` Bun integration](https://alexgarcia.xyz/sqlite-vec/js.html)
-- [`sqlite-vec` KNN queries](https://alexgarcia.xyz/sqlite-vec/features/knn.html)
-- [`sqlite-vec` releases](https://github.com/asg017/sqlite-vec/releases)
-- [SQLite Vec1 user manual](https://sqlite.org/vec1/doc/trunk/doc/vec1intro.md)
-
-如果 `sqlite-vec` 加载或 vector index 查询失败，系统必须明确显示 vector search
-unavailable，并继续提供 FTS5 搜索。不能静默把 FTS-only 结果伪装成完整混合召回，也不能
-因此阻止 Tinker 主 Session 继续工作。
+如果 embedding 请求不可用、向量数据无效或向量计算失败，系统必须明确显示 vector
+search unavailable，并继续提供 FTS5 搜索。不能静默把 FTS-only 结果伪装成完整混合召回，
+也不能因此阻止 Tinker 主 Session 继续工作。
 
 ### 5.3 Embedding
 
@@ -425,7 +418,7 @@ tinker memory organize
 - 不保证整理器能够独立识别没有反证的错误记忆。
 - 不因 failed 或 cancelled Turn 回滚已经提交的模型记忆 mutation。
 - 不把 delete 解释为永久 suppression。
-- 不在第一版使用 alpha ANN 或 SQLite Vec1。
+- 不在第一版使用 ANN、原生向量扩展或独立向量服务。
 
 ## 十一、待后续讨论
 
