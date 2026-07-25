@@ -51,16 +51,19 @@ compaction 的组成部分。
 failed、cancelled 或仍在执行中的 Turn 不作为自动提取来源。一个 completed Turn 可以产生
 零条、一条或多条候选记忆；并非每个 Turn 都必须形成记忆。
 
-### 3.2 提取结果
+### 3.2 记忆条目与提取结果
 
-提取结果可以包含：
+每条候选记忆由三个模型生成的部分组成：
 
-- 关键词；
-- 短语；
-- 简短段落；
-- 用于区分信息性质的结构化字段。
+- `keywords`：用于关键词召回的精确检索锚点；
+- `semantic_cues`：一条或多条简短、自包含的语义线索，每条线索独立参与向量召回；
+- `content`：相对完整的记忆正文，保存细节、原因、约束和适用范围。
 
-全局记忆库不保存 Turn 原文。记忆内容是模型对 Turn 的提炼结果，而不是历史消息的复制。
+`semantic_cues` 的数量必须有固定上限，避免单条记忆通过堆积大量线索获得不合理的召回
+优势；具体上限留待完整设计确定。同一条记忆的多条 semantic cue 可以覆盖不同召回角度，
+但必须仍然指向同一个逻辑主题，否则应拆成多条记忆。
+
+全局记忆库不保存 Turn 原文。`content` 是模型对 Turn 的提炼结果，而不是历史消息的复制。
 
 ### 3.3 记忆处理模型
 
@@ -170,35 +173,90 @@ Embedding model 独立于工作模型和记忆提取模型配置。全局记忆�
 - schema 迁移通过 `BEGIN IMMEDIATE` 串行化；
 - `clear` 推进全局 store generation，使清空前的 worker 结果失效。
 
-等待写锁超时后，本次记忆操作以普通失败结束，不使 RuntimeSession fault。记录版本如何
-进入模型工具参数仍由后续工具 schema 设计决定。
+等待写锁超时后，本次记忆操作以普通失败结束，不使 RuntimeSession fault。
+`MemoryUpdate` 和 `MemoryDelete` 通过 `expected_version` 执行 compare-and-swap；版本冲突
+的具体 observation 形状留待后续设计。
 
 ## 六、模型能力
 
 模型侧提供普通工具完成以下操作：
 
 - 搜索记忆；
-- 写入记忆；
+- 按 ID 精确读取记忆；
+- 创建记忆；
 - 修改已有记忆；
 - 删除单条记忆。
 
 这些工具属于普通 agent tool，不拥有 Recall 的 context 或 compaction 特殊语义。
 
-当前只确认了能力范围，尚未冻结模型可见的工具名称、参数 schema、修改前置条件和并发
-冲突行为。批量 `clear` 当前只出现在用户管理 API 中，没有被纳入模型工具能力。
+### 6.1 工具名称与参数
+
+模型可见的工具名称和顶层参数形状确定为：
+
+```ts
+MemorySearch {
+  query: string
+  keywords: string[]
+}
+
+MemoryGet {
+  id: string
+}
+
+MemoryCreate {
+  keywords: string[]
+  semantic_cues: string[]
+  content: string
+}
+
+MemoryUpdate {
+  id: string
+  expected_version: number
+  keywords: string[]
+  semantic_cues: string[]
+  content: string
+}
+
+MemoryDelete {
+  id: string
+  expected_version: number
+}
+```
+
+`MemorySearch` 的两个输入分别驱动不同的召回路径：
+
+- `keywords` 由模型显式提供，只与记忆条目的 `keywords` 执行关键词匹配；系统不先从
+  `query` 中自动提取关键词；
+- `query` 是模型对所需记忆的语义描述。系统为它生成一个 embedding，并与每条记忆的各个
+  `semantic_cues` embedding 执行向量匹配；
+- `content` 不参与关键词或向量搜索，只在按 ID 精确读取记忆时提供相对完整的内容；
+- 关键词候选与向量候选最终在逻辑 Memory 层聚合，同一条记忆的多个 semantic cue 不能被
+  当成多条独立结果。
+
+第一版 `MemorySearch` 不向模型提供分页或返回数量参数，服务端使用固定的有界结果数量。
+关键词规范化和匹配规则、单条记忆的 semantic cue 数量上限、向量候选按 Memory 折叠的
+规则，以及关键词和向量结果的聚合与排序算法留待完整设计确定。
+
+`MemoryCreate` 和 `MemoryUpdate` 都接收完整的 `keywords`、`semantic_cues` 和 `content`。
+三部分作为同一条逻辑记忆原子提交，避免检索入口与完整正文来自不同版本。
+`MemoryUpdate.expected_version` 和 `MemoryDelete.expected_version` 是必须满足的提交
+前置条件；版本不匹配时不能覆盖或删除更新后的记忆。
+
+批量 `clear` 当前只出现在用户管理 API 中，没有被纳入模型工具能力。各工具的完整 JSON
+Schema、字段长度和数组数量限制、成功与失败 observation 形状尚未冻结。
 
 不同运行入口拥有不同的 memory tool surface：
 
-| 运行入口     | `MemorySearch` | 写入、修改、删除工具 | 自动提取 |
-| ------------ | -------------- | -------------------- | -------- |
-| TUI          | 支持           | 支持                 | 支持     |
-| `tinker run` | 支持           | 不注册               | 不支持   |
+| 运行入口     | `MemorySearch` | `MemoryGet` | `MemoryCreate`、`MemoryUpdate`、`MemoryDelete` | 自动提取 |
+| ------------ | -------------- | ----------- | ------------------------------------------------ | -------- |
+| TUI          | 支持           | 支持        | 支持                                             | 支持     |
+| `tinker run` | 支持           | 支持        | 不注册                                           | 不支持   |
 
-one-shot 模型完全看不到记忆写入、修改和删除工具，而不是看到工具后在执行时被拒绝。这个
-限制只属于当前运行入口；one-shot 创建的 Session 以后通过 TUI 恢复时，使用 TUI 的完整
-memory tool surface。
+one-shot 模型完全看不到 `MemoryCreate`、`MemoryUpdate` 和 `MemoryDelete`，而不是看到
+工具后在执行时被拒绝。这个限制只属于当前运行入口；one-shot 创建的 Session 以后通过 TUI
+恢复时，使用 TUI 的完整 memory tool surface。
 
-### 6.1 模型 mutation 的提交语义
+### 6.2 模型 mutation 的提交语义
 
 成功的记忆写入、修改和删除在工具调用自己的 SQLite transaction 中立即提交，不等待
 Turn 进入 completed。Turn 后续变为 failed 或 cancelled 时，已经成功提交的记忆变更不
@@ -375,6 +433,7 @@ tinker memory organize
 
 以下内容尚未形成最终决策：
 
-- 模型工具的具体名称、参数和 observation 形状；
+- 模型工具的完整 JSON Schema 和 observation 形状；
+- 关键词匹配、semantic cue 向量候选折叠，以及两路结果的聚合与排序算法；
 - 整理操作如何保留版本、表达冲突并保证可重复执行；
 - embedding model 变更后的索引重建方式；
