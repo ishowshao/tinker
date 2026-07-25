@@ -61,7 +61,7 @@ relation、CAS、lease、generation 或管理 UI。
 
 - 只从 TUI 的 completed Turn 自动提取；
 - 每个 completed Turn 产生 0 到 4 条原子记忆；
-- 提取使用当前 Session 的 model profile；
+- 所有 Turn 固定使用显式配置的 `memoryProfile` 提取；
 - 记忆文本使用独立 `embeddingProfile` 生成 embedding；
 - 所有 workspace 共用一个用户级 SQLite；
 - 精确 cosine 搜索；
@@ -83,7 +83,7 @@ relation、CAS、lease、generation 或管理 UI。
 - reinforce、supersede、conflict、relation；
 - 用户可见的记忆列表、状态页、删除或 clear；
 - ANN、向量缓存、原生向量扩展；
-- 独立 memory profile；
+- 多 memory profile、运行时切换或热更新；
 - 超长 Turn 的截断、分块、分层提取或候选收敛；
 - 持久化提取队列、退出 drain 或 worker 重试；
 - schema 中为上述未来能力预留的空字段或空表。
@@ -157,10 +157,13 @@ hook 自身的失败不得使 RuntimeSession fault。
 - TUI 退出时取消当前请求并丢弃队列，不等待 drain；
 - Session 切换不会创建第二个 worker。
 
-任务保存 `workspaceRoot + sessionId + turnId` 以及该 Session 的不可变提取 profile
-快照。worker 开始处理时，从该 workspace 的 Session SQLite 读取已经提交的 Turn，不在
-队列中复制 Turn 原文。这样 Session 切换后仍可使用产生该 Turn 时的模型处理旧任务，并
-保持上位文档的引用语义。
+任务只保存 `workspaceRoot + sessionId + turnId`。worker 开始处理时，从该 workspace 的
+Session SQLite 读取已经提交的 Turn，不在队列中复制 Turn 原文。
+
+`MemoryCoordinator` 在 TUI 启动时根据固定 `memoryProfile` 创建并持有自己的 extraction
+client；它不接收、持有或复用任何 RuntimeSession 的 model client。`/model`、`/resume`
+和 `/clear` 创建或销毁 Session 时，都不改变 coordinator 的 client，也不改变已经排队任务
+的提取模型。
 
 ### 5.3 提取输入
 
@@ -184,10 +187,10 @@ history、模型实际看到的 observation，不读取只用于内部诊断的 
 
 ### 5.4 提取请求与输出
 
-提取是一次无工具的独立模型请求，使用当前 Session profile。它不进入 agent loop，不写入
+提取是一次无工具的独立模型请求，使用固定 `memoryProfile`。它不进入 agent loop，不写入
 canonical history，也不发布普通 Turn 事件。
 
-发送请求前，使用当前 Session profile 的 context contract 对完整提取请求做 preflight。
+发送请求前，使用 `memoryProfile` 的 context contract 对完整提取请求做 preflight。
 如果完整请求超过该模型的 context：
 
 - 跳过整个 Turn 的记忆提取；
@@ -198,6 +201,10 @@ canonical history，也不发布普通 Turn 事件。
 
 这是 MVP 的明确 best-effort 缺口，不是 embedding 限制。embedding 只接收长度受限的单条
 原子记忆或搜索 query，不接收完整 Turn。
+
+如果来源 Turn 包含图片而 `memoryProfile` 不支持 image input，MVP 同样跳过整个 Turn，
+记录 `extraction_input_modality_unsupported` 诊断，不移除图片后降级为 text-only
+提取。
 
 模型必须只返回：
 
@@ -295,9 +302,9 @@ ON memories(created_at DESC);
 - v1 只接受精确 schema version，不做旧版迁移，因为 MVP 之前没有正式 memory schema。
 
 打开数据库时校验 schema、权限、embedding identity 和 BLOB 长度。结构错误或当前 profile
-与已有向量不兼容时，memory 子系统启动失败，不自动重建、混用或静默丢数据。MVP 不提供
-re-embed；开发阶段需要更换 embedding 模型时，关闭 Tinker 后删除整个 MVP 数据库重新
-积累。
+与已有向量不兼容时，当前进程不启用 memory，但 TUI 继续启动；系统不自动重建、混用或
+静默丢数据，并显示一次纯 TUI 本地提示。MVP 不提供 re-embed；开发阶段需要更换
+embedding 模型时，关闭 Tinker 后删除整个 MVP 数据库重新积累。
 
 ## 七、MemorySearch
 
@@ -369,8 +376,10 @@ MemorySearch unavailable: <bounded reason>
 
 ## 八、配置
 
-MVP 增加一个独立、可选、单例的 `embeddingProfile`。它属于 embedding 请求，不复用也
-不引用任一工作模型 profile：
+MVP 使用两个固定配置：
+
+- `memoryProfile` 是字符串，引用现有 `profiles` 中负责提取原子记忆的工作模型 profile；
+- `embeddingProfile` 是独立、单例的 embedding 请求 profile。
 
 ```json
 {
@@ -378,8 +387,12 @@ MVP 增加一个独立、可选、单例的 `embeddingProfile`。它属于 embed
   "profiles": {
     "work-model": {
       "...": "现有工作模型字段"
+    },
+    "memory-model": {
+      "...": "现有工作模型字段"
     }
   },
+  "memoryProfile": "memory-model",
   "embeddingProfile": {
     "name": "zhipu-embedding-3",
     "kind": "openai-compatible",
@@ -393,21 +406,28 @@ MVP 增加一个独立、可选、单例的 `embeddingProfile`。它属于 embed
 
 固定合同：
 
+- `memoryProfile` 必须是非空字符串，并精确引用 `profiles` 中一个合法 profile；
+- `MemoryCoordinator` 在 TUI 启动时解析一次 `memoryProfile` 并创建自己的 extraction
+  client；运行期间不重新读取配置；
+- `/model`、`/resume` 和 `/clear` 不改变当前进程的 `memoryProfile`；
+- RuntimeSession 与 coordinator 分别创建和拥有自己的 model client，不共享实例；
 - `name` 是非空稳定标识，用于确认数据库中的既有向量仍属于同一 embedding 空间；
 - `kind` 在 MVP 中只接受 `"openai-compatible"`；
 - `model`、`apiBase` 和 `apiKey` 是非空字符串；
 - `dimensions` 是正整数；
 - client 向 `${apiBase}/embeddings` 发送请求；
 - timeout 和已有 model client 范围内的 retry 使用代码常量，不增加配置项；
-- 记忆提取仍复用产生该 Turn 的当前 Session profile；
-- `embeddingProfile` 存在但字段错误时，TUI 启动 fast-fail；
-- `embeddingProfile` 不存在时，memory 视为未启用：TUI 不注册 `MemorySearch`，也不启动
-  worker；
-- env-only 模式没有 `embeddingProfile`，因此 MVP 暂不提供 memory。
+- `memoryProfile` 和 `embeddingProfile` 都不存在时，memory 视为未启用；
+- 只配置其中一个、引用不存在的 `memoryProfile` 或任一字段错误时，TUI 启动 fast-fail；
+- env-only 模式没有这两个 profile 配置，因此 MVP 暂不提供 memory。
 
 MVP 只需要同时维护一套可比较的全局向量，因此不增加 `embeddingProfiles` map、default
 选择或运行时切换。单例 profile 已经消除了工作模型命名耦合；只有实际出现多套全局记忆库
 或 re-embed 需求时，才值得扩展为多 profile。
+
+固定 `memoryProfile` 可能与当前 Session 使用不同供应商。完整 Turn 会发送给
+`memoryProfile` 对应的供应商，这是用户通过显式配置作出的隐私选择；Tinker 不自动选择或
+改写该 profile。
 
 ## 九、组件边界
 
@@ -427,7 +447,8 @@ src/memory/
 
 职责：
 
-- `MemoryCoordinator`：进程级队列、取消、提取编排和工具 executor 所有权；
+- `MemoryCoordinator`：进程级队列、取消、提取编排、固定 extraction/embedding client 和
+  工具 executor 所有权；
 - `MemoryStore`：全局 SQLite、schema、权限、短 transaction 和向量流式读取；
 - `CompletedTurnReader`：按 workspace/session/turn 精确读取已完成 Turn 的允许字段；
 - `MemoryExtractor`：构造提取请求并严格解析 `{ memories: string[] }`；
@@ -439,14 +460,16 @@ src/memory/
 
 现有层的改动控制在：
 
-- `src/cli/tui-runner.tsx`：创建和销毁唯一的 `MemoryCoordinator`，注入每个 TUI Session；
+- `src/cli/tui-runner.tsx`：初始化 memory；成功时创建和销毁唯一的
+  `MemoryCoordinator` 并注入每个 TUI Session，store 不可用时向 App 传递一次本地
+  `memory disabled` notice；
 - `src/agent/runtime-session.ts`：completed Turn 提交后调用可选的轻量 hook；
 - `src/tools/registry.ts`：显式接收并注册可选 executor；
 - `src/tools/types.ts` 与 observation 层：增加 `memory_search` raw result 和渲染；
 - `src/cli/public-config-contract.ts` 与 `src/cli/model-profiles.ts`：声明并严格解析可选
-  `embeddingProfile`；
-- config/profile 装配：把当前 Session model client 与独立 `embeddingProfile` 提供给
-  coordinator。
+  `memoryProfile` 与 `embeddingProfile`；
+- config/profile 装配：解析固定 `memoryProfile`，由 coordinator 创建独立 extraction
+  client；RuntimeSession model client 不跨边界共享。
 
 Memory 不进入：
 
@@ -458,22 +481,62 @@ Memory 不进入：
 
 ## 十、失败与生命周期语义
 
-### 10.1 启动时 fast-fail
+启动爆炸半径固定为：
 
-以下错误在启用 memory 的 TUI 启动时失败：
+| 状态                                           | TUI                           | Memory                            |
+| ---------------------------------------------- | ----------------------------- | --------------------------------- |
+| `memoryProfile` 与 `embeddingProfile` 均未配置 | 正常启动                      | 正常关闭，不提示                  |
+| 只配置一个、引用不存在或任一配置违反合同       | 启动失败                      | 不初始化                          |
+| 两个配置合法，但环境或全局 store 不可用        | 正常启动并显示一次本地 notice | 当前进程禁用，不注册工具或 worker |
+| 两个配置合法，环境和全局 store 均可用          | 正常启动                      | 正常启用                          |
 
-- `embeddingProfile` 存在但无法解析；
-- `embeddingProfile` 与已有数据库的 embedding identity 不一致；
+### 10.1 配置错误 fast-fail
+
+`memoryProfile` 和 `embeddingProfile` 都不存在表示用户没有启用 memory，不是错误。任一
+配置存在即表示明确的启用意图；以下配置合同错误使整个 TUI 启动失败：
+
+- 只配置 `memoryProfile` 或只配置 `embeddingProfile`；
+- `memoryProfile` 不是非空字符串或没有引用一个已有合法 profile；
+- 缺少必填字段或包含未知字段；
+- `name`、`model`、`apiBase` 或 `apiKey` 不是非空字符串；
+- `kind` 不是 `"openai-compatible"`；
+- `dimensions` 不是正整数；
+- `apiBase` 不是合法 URL。
+
+这里的 fast-fail 只覆盖可以直接归因于用户显式配置的确定性错误。启动时不通过网络请求探测
+provider，因此认证失败、endpoint 不可达或 provider 返回错误不属于启动配置错误。
+
+### 10.2 Memory 初始化失败
+
+合法配置不保证当前机器上的全局 memory store 可用。以下问题只禁用当前 TUI 进程的 memory，
+不能阻止 Tinker 主 TUI 启动：
+
 - memory 目录或数据库权限不安全；
-- schema version 或 schema 结构错误；
-- SQLite 无法启用必需的 WAL/busy timeout；
-- 明确的 embedding endpoint/model 配置不合法。
+- 目录或数据库无法创建、打开或写入；
+- schema version 不支持或 schema 结构损坏；
+- embedding profile identity 与已有数据库不一致；
+- embedding BLOB 完整性校验失败；
+- SQLite 无法启用 WAL 或 5 秒 `busy_timeout`。
 
-### 10.2 运行时降级
+初始化失败后遵循固定行为：
+
+- 不创建 `MemoryCoordinator`，不启动 worker；
+- 不向任何 RuntimeSession 注册 `MemorySearch`；
+- TUI 显示一次 `memory disabled: <bounded reason>` 本地 notice；
+- notice 不形成 agent Turn，不写 prompt history，不进入 canonical Session history；
+- 完整错误写入诊断日志；
+- 不自动 chmod 既有文件，不重建、迁移、删除或覆盖数据库。
+
+Memory 初始化必须在创建首个 RuntimeSession 的 tool surface 之前完成，避免先注册工具再在
+执行阶段拒绝。恢复旧 Session 时，现有 context surface refresh 负责接受
+`MemorySearch` 缺席这一工具面变化。
+
+### 10.3 运行时降级
 
 以下错误只影响本次 memory 操作：
 
 - 完整提取请求超过当前提取模型的 context；
+- 来源 Turn 包含图片但 `memoryProfile` 不支持 image input；
 - 记忆提取模型失败或返回非法 JSON；
 - 敏感信息检测拒绝候选；
 - embedding 网络或响应失败；
@@ -484,7 +547,7 @@ Memory 不进入：
 后台失败记录到诊断日志；MVP 不为此新增状态面板。工具搜索失败通过 observation 立即对模型
 可见。任何后台 memory 失败都不得改变当前 Turn 的 completed 状态。
 
-### 10.3 退出
+### 10.4 退出
 
 TUI 开始退出时：
 
@@ -553,16 +616,25 @@ TUI 开始退出时：
 
 至少覆盖：
 
-- `embeddingProfile` 缺失时不启动 memory，非法时 fast-fail；
-- profile 的 name/model/dimensions 与已有数据库不一致时 fast-fail，apiKey 轮换不影响
-  打开；
+- `memoryProfile` 与 `embeddingProfile` 都缺失时不启动 memory，也不提示；
+- 只配置其中一个、`memoryProfile` 引用不存在或任一配置非法时 fast-fail；
+- coordinator 创建并持有自己的 extraction client，不接收 RuntimeSession model client；
+- profile A Session 的任务入队后切换到 profile B，提取仍使用固定 `memoryProfile`；
+- 旧 RuntimeSession dispose 后，已入队任务仍能使用 coordinator client 完成；
+- profile 的 name/model/dimensions 与已有数据库不一致时禁用 memory，但 TUI 正常启动；
+- memory 权限、SQLite open、schema、WAL 或 BLOB 完整性失败时禁用 memory，但 TUI 正常
+  启动；
+- 初始化降级后不创建 worker、不注册 `MemorySearch`，并且只显示一次纯 TUI 本地 notice；
+- memory 初始化 notice 不形成 Turn，不写 prompt history 或 canonical history；
+- `apiKey` 轮换不影响打开已有数据库；
 - completed 触发，failed/cancelled/interrupted 不触发；
 - 一个 Turn 可产生 0、1、4 条记忆，5 条或非法 JSON 整批拒绝；
 - 提取输入包含完整 user message、所有 assistant content/reasoning、非 MemorySearch tool
   observation 和 workspace；
 - `MemorySearch` observation 被代码过滤，其他 tool observation 保留；
 - 提取 prompt 默认空数组，并明确要求证据不足时不生成记忆；
-- 完整提取请求超过当前 Session profile context 时整条跳过，不调用模型、不截断、不写库；
+- 完整提取请求超过 `memoryProfile` context 时整条跳过，不调用模型、不截断、不写库；
+- 图片 Turn 遇到 text-only `memoryProfile` 时整条跳过，不移除图片后继续提取；
 - queue 并发度为 1、容量 64、满时丢最老未开始项；
 - 退出取消当前项并丢弃剩余项；
 - 记忆文本 byte limit、精确 hash 幂等和 secret 拒绝；
