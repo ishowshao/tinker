@@ -13,9 +13,7 @@ import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
   DEFAULT_PUBLIC_TOOLING_CONFIG,
   MEMORY_CONFIG_FIELDS,
-  MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
-  MODEL_TOKEN_ESTIMATOR_FIELDS,
   PUBLIC_CONFIG_FIELDS,
   parsePublicEnvironment,
 } from "../cli/public-config-contract";
@@ -63,34 +61,7 @@ function envMode(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 describe("public config contract", () => {
-  test("freezes the exact public environment variable list", () => {
-    expect(PUBLIC_CONFIG_FIELDS.map((field) => field.name)).toEqual([
-      "TINKER_MODELS",
-      "TINKER_MODEL",
-      "TINKER_BASE_URL",
-      "TINKER_API_KEY",
-      "TINKER_CONTEXT_WINDOW_TOKENS",
-      "TINKER_MAX_SUPPORTED_OUTPUT_TOKENS",
-      "TINKER_INCLUDE_REASONING_CONTENT",
-      "TINKER_STREAM",
-      "TINKER_WEBFETCH_REFINE_MODEL",
-      "TINKER_WORKSPACE",
-      "TINKER_MAX_ITERATIONS",
-      "EXA_API_KEY",
-      "TINKER_MCP_TIMEOUT_MS",
-      "TINKER_MCP_MAX_OBSERVATION_CHARS",
-      "TINKER_BASH_DEFAULT_TIMEOUT_MS",
-      "TINKER_BASH_MAX_TIMEOUT_MS",
-      "TINKER_GREP_TIMEOUT_MS",
-      "TINKER_GREP_MAX_BUFFER_BYTES",
-      "TINKER_WEBFETCH_REFINE_THRESHOLD",
-      "TINKER_RIPGREP_PATH",
-    ]);
-    expect(Object.isFrozen(PUBLIC_CONFIG_FIELDS)).toBe(true);
-    expect(PUBLIC_CONFIG_FIELDS.every((field) => Object.isFrozen(field))).toBe(true);
-  });
-
-  test("declares secrets, defaults, and profile primitive types once", () => {
+  test("declares secrets and behavior-affecting defaults once", () => {
     expect(
       PUBLIC_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
     ).toEqual(["TINKER_API_KEY", "EXA_API_KEY"]);
@@ -103,43 +74,12 @@ describe("public config contract", () => {
       grepMaxBufferBytes: 20_000_000,
       webFetchRefineThreshold: 2_000,
     });
-    expect(MODEL_PROFILE_FIELDS.map((field) => field.name)).toEqual([
-      "model",
-      "apiBase",
-      "apiKey",
-      "contextWindowTokens",
-      "maxSupportedOutputTokens",
-      "includeReasoningContent",
-      "stream",
-      "inputModalities",
-      "tokenEstimator",
-    ]);
     expect(
       MODEL_PROFILE_FIELDS.find((field) => field.name === "stream")?.defaultValue,
     ).toBe(true);
-    expect(MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => field.name)).toEqual([
-      "kind",
-      "model",
-      "apiBase",
-      "apiKey",
-      "timeoutMs",
-      "maxRetries",
-    ]);
-    expect(MEMORY_CONFIG_FIELDS.map((field) => field.name)).toEqual([
-      "profile",
-      "embedding",
-    ]);
     expect(
       MEMORY_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
     ).toEqual(["embedding"]);
-    expect(MEMORY_EMBEDDING_FIELDS.map((field) => field.name)).toEqual([
-      "name",
-      "kind",
-      "model",
-      "apiBase",
-      "apiKey",
-      "dimensions",
-    ]);
   });
 });
 

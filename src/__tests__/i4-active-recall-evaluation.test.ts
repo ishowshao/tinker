@@ -48,11 +48,13 @@ describe("I4 active Recall evaluation manifest", () => {
     }
   });
 
-  test("has unique case ids and a stable sha256 manifest identity", () => {
+  test("has unique case ids and matches the qualified frozen manifest", () => {
     expect(new Set(ACTIVE_RECALL_CASES.map((entry) => entry.id)).size).toBe(
       ACTIVE_RECALL_CASES.length,
     );
-    expect(ACTIVE_RECALL_MANIFEST_HASH).toMatch(/^[a-f0-9]{64}$/);
+    expect(ACTIVE_RECALL_MANIFEST_HASH).toBe(
+      I4_ACTIVE_RECALL_QUALIFICATION.manifestSha256,
+    );
   });
 });
 

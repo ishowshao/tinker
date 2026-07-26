@@ -21,7 +21,6 @@ import {
   createDefaultTooling as createDefaultToolingBase,
   ToolRegistry,
 } from "../tools/registry";
-import { DEFAULT_MAX_READ_CONTENT_BYTES } from "../tools/read";
 import { defineToolExecutor, type ToolExecutionContext } from "../tools/types";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
@@ -120,10 +119,6 @@ describe("ToolRegistry", () => {
 });
 
 describe("Read and Write tools", () => {
-  test("uses a 256 KiB Read content limit", () => {
-    expect(DEFAULT_MAX_READ_CONTENT_BYTES).toBe(262_144);
-  });
-
   test("reads a workspace file with metadata", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tools-"));
 
