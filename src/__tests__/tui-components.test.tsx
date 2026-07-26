@@ -243,6 +243,20 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("renders the elapsed time next to the running footer status", () => {
+    const seconds = render(<Footer status="running" elapsedMs={12_000} />);
+    expect(seconds.lastFrame()).toContain("• Running 12s");
+    seconds.cleanup();
+
+    const minutes = render(<Footer status="running" elapsedMs={95_400} />);
+    expect(minutes.lastFrame()).toContain("• Running 1m 35s");
+    minutes.cleanup();
+
+    const hours = render(<Footer status="running" elapsedMs={3_723_000} />);
+    expect(hours.lastFrame()).toContain("• Running 1h 2m 3s");
+    hours.cleanup();
+  });
+
   test("renders context usage in the prompt input status bar", () => {
     const normal = render(
       <PromptInput
@@ -322,6 +336,64 @@ describe("tui components", () => {
     await submitInput(stdin, "/nope");
     await Bun.sleep(25);
     expect(lastFrame()).not.toContain("Estimator");
+    cleanup();
+  });
+
+  test("counts the elapsed seconds of the active turn and stops when it finishes", async () => {
+    const projectionStore = createProjectionStore();
+    const startedAt = new Date(Date.now() - 5_000).toISOString();
+    await projectionStore.append({
+      ...testRuntime.turn,
+      type: "turn.started",
+      eventSequence: 1,
+      timestamp: startedAt,
+      data: { userPrompt: promptProjection("counting prompt") },
+    });
+    const { lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(projectionStore, async () =>
+          completedResult(),
+        )}
+      />,
+    );
+
+    const elapsedPattern = /• Running (\d+)s/;
+    await waitForFrame(
+      lastFrame,
+      (frame) => elapsedPattern.test(frame),
+      "the running footer to show an elapsed counter",
+    );
+    const firstSeconds = Number(elapsedPattern.exec(lastFrame() ?? "")?.[1]);
+    // The clock is quantized to whole seconds, so a 5s-old turn reads 4s or 5s.
+    expect(firstSeconds).toBeGreaterThanOrEqual(4);
+
+    await waitForFrame(
+      lastFrame,
+      (frame) => {
+        const match = elapsedPattern.exec(frame);
+        return match !== undefined && match !== null && Number(match[1]) > firstSeconds;
+      },
+      "the elapsed counter to tick",
+    );
+
+    await projectionStore.append({
+      ...testRuntime.turn,
+      type: "turn.finished",
+      eventSequence: 2,
+      timestamp: new Date(Date.parse(startedAt) + 9_000).toISOString(),
+      data: {
+        status: "completed",
+        finalText: "done",
+        lastIteration: testRuntime.iteration,
+        messageCount: 2,
+      },
+    });
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("Worked for 9s"),
+      "the finished footer",
+    );
+    expect(lastFrame()).not.toContain("• Running");
     cleanup();
   });
 

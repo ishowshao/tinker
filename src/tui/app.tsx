@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput } from "ink";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import { boundedMemoryError, type StoredMemorySummary } from "../memory/contracts";
 import {
@@ -139,6 +139,8 @@ export function App(props: AppProps) {
   const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
   const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
+
+  const runningElapsedMs = useElapsedMs(state.activeTurn?.startedAt);
 
   useEffect(() => {
     if (readGitBranch === undefined) {
@@ -656,6 +658,7 @@ export function App(props: AppProps) {
             <Footer
               status={isCancelling ? "cancelling" : state.status}
               workedForMs={state.workedForMs}
+              elapsedMs={runningElapsedMs}
             />
           </Box>
           <Box marginTop={1} flexDirection="column">
@@ -696,6 +699,42 @@ export function App(props: AppProps) {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const ELAPSED_TICK_MS = 1_000;
+
+// The wall clock, quantized to whole ticks so a render pass reads one stable
+// value and re-renders at most once per second.
+function readElapsedClockMs(): number {
+  return Math.floor(Date.now() / ELAPSED_TICK_MS) * ELAPSED_TICK_MS;
+}
+
+// Counts up while a turn is active. The interval only exists while `startedAt`
+// is defined, so an idle TUI keeps no timer running.
+function useElapsedMs(startedAt: string | undefined): number | undefined {
+  const subscribe = useCallback(
+    (onClockTick: () => void) => {
+      if (startedAt === undefined) {
+        return () => undefined;
+      }
+
+      const timer = setInterval(onClockTick, ELAPSED_TICK_MS);
+      return () => clearInterval(timer);
+    },
+    [startedAt],
+  );
+  const nowMs = useSyncExternalStore(subscribe, readElapsedClockMs, readElapsedClockMs);
+
+  if (startedAt === undefined) {
+    return undefined;
+  }
+
+  const startedAtMs = Date.parse(startedAt);
+  if (!Number.isFinite(startedAtMs)) {
+    throw new Error(`Invalid turn start timestamp: ${startedAt}`);
+  }
+
+  return Math.max(0, nowMs - startedAtMs);
 }
 
 export function formatContextCompactionNotice(result: ContextCompactionResult): string {

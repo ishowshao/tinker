@@ -4,6 +4,7 @@ import { Text } from "ink";
 export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
   workedForMs?: number;
+  elapsedMs?: number;
 };
 
 export function Footer(props: FooterProps) {
@@ -14,7 +15,7 @@ export function Footer(props: FooterProps) {
 
     return (
       <StatusMessage variant="success">
-        Worked for {formatWorkedDuration(props.workedForMs)}
+        Worked for {formatDuration(props.workedForMs)}
       </StatusMessage>
     );
   }
@@ -24,7 +25,11 @@ export function Footer(props: FooterProps) {
   }
 
   if (props.status === "running") {
-    return <Text color="yellow">• Running</Text>;
+    if (props.elapsedMs === undefined) {
+      return <Text color="yellow">• Running</Text>;
+    }
+
+    return <Text color="yellow">{`• Running ${formatDuration(props.elapsedMs)}`}</Text>;
   }
 
   if (props.status === "cancelling") {
@@ -38,9 +43,9 @@ export function Footer(props: FooterProps) {
   return <StatusMessage variant="info">idle</StatusMessage>;
 }
 
-function formatWorkedDuration(durationMs: number): string {
+function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
-    throw new Error(`Invalid worked duration: ${durationMs}`);
+    throw new Error(`Invalid duration: ${durationMs}`);
   }
 
   const totalSeconds = Math.floor(durationMs / 1000);
