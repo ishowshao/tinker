@@ -155,6 +155,108 @@ describe("MemoryStore", () => {
     }
   });
 
+  test("lists a complete read-only snapshot in creation and ID order", async () => {
+    const fixture = await createFixture();
+    const timestamps = ["2026-07-25T09:00:00.000Z", "2026-07-26T10:00:00.000Z"];
+    const ids = [
+      "00000000-0000-7000-8000-00000000000a",
+      "00000000-0000-7000-8000-00000000000b",
+      "00000000-0000-7000-8000-00000000000c",
+    ];
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => timestamps.shift()!,
+        createMemoryId: () => ids.shift()!,
+      });
+      expect(store.listStoredMemories()).toEqual([]);
+      store.insertBatch({
+        ...fixture.source,
+        workspaceRoot: "/workspace/older",
+        candidates: [
+          {
+            text: "older memory",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.insertBatch({
+        ...fixture.source,
+        workspaceRoot: "/workspace/newer",
+        candidates: [
+          {
+            text: "newer first",
+            embedding: normalizeEmbedding([0, 1, 0], 3),
+          },
+          {
+            text: "newer second",
+            embedding: normalizeEmbedding([0, 0, 1], 3),
+          },
+        ],
+      });
+
+      expect(store.listStoredMemories()).toEqual([
+        {
+          memoryId: "00000000-0000-7000-8000-00000000000c",
+          text: "newer second",
+          sourceWorkspace: "/workspace/newer",
+          createdAt: "2026-07-26T10:00:00.000Z",
+        },
+        {
+          memoryId: "00000000-0000-7000-8000-00000000000b",
+          text: "newer first",
+          sourceWorkspace: "/workspace/newer",
+          createdAt: "2026-07-26T10:00:00.000Z",
+        },
+        {
+          memoryId: "00000000-0000-7000-8000-00000000000a",
+          text: "older memory",
+          sourceWorkspace: "/workspace/older",
+          createdAt: "2026-07-25T09:00:00.000Z",
+        },
+      ]);
+      store.close();
+      expect(() => store.listStoredMemories()).toThrow("store is closed");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("lists memories without decoding embeddings and rejects an invalid row", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      const inserted = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "stored memory",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      }).inserted[0];
+      const database = new Database(fixture.paths.database);
+      database
+        .query("UPDATE memories SET embedding = ? WHERE memory_id = ?")
+        .run(new Uint8Array([1]), inserted.memoryId);
+      expect(store.listStoredMemories()).toHaveLength(1);
+
+      database
+        .query("UPDATE memories SET created_at = ? WHERE memory_id = ?")
+        .run("not-a-timestamp", inserted.memoryId);
+      database.close();
+      expect(() => store.listStoredMemories()).toThrow("UTC ISO-8601 timestamp");
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("rolls back the whole batch when a later insert fails", async () => {
     const fixture = await createFixture();
     const duplicateId = "00000000-0000-7000-8000-000000000001";

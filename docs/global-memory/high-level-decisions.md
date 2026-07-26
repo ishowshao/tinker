@@ -290,7 +290,7 @@ TUI 提供对应的 `/memory` 命令：
 CLI 与 TUI 应访问同一份全局记忆，而不是维护各自的数据副本。具体展示形式、确认交互和
 输出格式遵循以下契约：
 
-- `/memory` 无参数时等价于 `/memory status`；
+- `/memory` 无参数时打开当前已存原子记忆的只读浏览器；
 - `/memory search` 使用可滚动的全屏结果面板；
 - `/memory status` 使用全局状态面板；
 - `/memory organize` 显示整理进度，Esc 可以中断；

@@ -8,6 +8,10 @@
   [`high-level-decisions.md`](high-level-decisions.md)
 - 目标：以最少能力验证“Turn 可以形成跨 Session 记忆，模型以后可以主动找回”这条闭环
 
+> 2026-07-26 follow-up：atomic MVP 本身仍不包含用户管理面；其后新增了
+> [`tui-memory-browser-design.md`](tui-memory-browser-design.md) 定义的只读 `/memory`
+> 浏览器。该 follow-up 不改变 `MemorySearch`、自动提取、schema v1 或 one-shot 边界。
+
 本文是一个刻意收缩的可实施方案。上位文档仍描述全量产品方向；凡是本文明确暂缓的能力，
 都不属于 MVP，不能为了未来兼容而提前加入字段、抽象或入口。
 

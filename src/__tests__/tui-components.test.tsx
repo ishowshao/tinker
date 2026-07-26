@@ -349,6 +349,112 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("opens /memory locally from one fixed snapshot and restores prompt input", async () => {
+    let runCalls = 0;
+    let listCalls = 0;
+    const history = new PromptHistory();
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(
+          createProjectionStore(),
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+        )}
+        history={history}
+        listStoredMemories={() => {
+          listCalls += 1;
+          return [
+            {
+              memoryId: "memory-1",
+              text: "Tinker changes require bun run check.",
+              sourceWorkspace: "/tmp/tinker",
+              createdAt: "2026-07-26T06:32:00.000Z",
+            },
+          ];
+        }}
+      />,
+    );
+
+    await submitInput(stdin, "/memory");
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("Global memory"),
+      "the memory browser to open",
+    );
+    expect(lastFrame()).toContain("Tinker changes require bun run check.");
+    expect(lastFrame()).not.toContain('Enter a coding request, or "/" for commands');
+    expect(listCalls).toBe(1);
+    expect(runCalls).toBe(0);
+    expect(history.entries).toEqual([]);
+
+    await Bun.sleep(25);
+    expect(listCalls).toBe(1);
+    await writeInputUntilFrame(
+      stdin,
+      "\u001b",
+      lastFrame,
+      (frame) => !frame.includes("Global memory"),
+      "the memory browser to close",
+    );
+    expect(lastFrame()).toContain('Enter a coding request, or "/" for commands');
+
+    await submitInput(stdin, "normal prompt");
+    await Bun.sleep(25);
+    expect(runCalls).toBe(1);
+    cleanup();
+  });
+
+  test("reports unavailable memory locally without leaving a half-open panel", async () => {
+    const unconfigured = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+      />,
+    );
+    await submitInput(unconfigured.stdin, "/memory");
+    await Bun.sleep(25);
+    expect(unconfigured.lastFrame()).toContain("memory disabled: not configured");
+    expect(unconfigured.lastFrame()).not.toContain("Global memory");
+    unconfigured.cleanup();
+
+    const initializationFailed = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+        memoryDisabledNotice="memory disabled: incompatible database"
+      />,
+    );
+    await submitInput(initializationFailed.stdin, "/memory");
+    await Bun.sleep(25);
+    expect(initializationFailed.lastFrame()).toContain(
+      "memory disabled: incompatible database",
+    );
+    expect(initializationFailed.lastFrame()).not.toContain("Global memory");
+    initializationFailed.cleanup();
+
+    const readFailed = render(
+      <App
+        sessionController={createSessionController(createProjectionStore(), async () =>
+          completedResult(),
+        )}
+        listStoredMemories={() => {
+          throw new Error("database\nread failed");
+        }}
+      />,
+    );
+    await submitInput(readFailed.stdin, "/memory");
+    await Bun.sleep(25);
+    expect(readFailed.lastFrame()).toContain(
+      "memory unavailable: database read failed",
+    );
+    expect(readFailed.lastFrame()).not.toContain("Global memory");
+    readFailed.cleanup();
+  });
+
   test("shows current runtime MCP tools locally without running the agent", async () => {
     let runCalls = 0;
     const snapshot: McpInventorySnapshot = {

@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-26
-- 状态：待实现
+- 状态：已实现并验证
 - 文档性质：独立重写的收窄实施方案
 - 上位文档：
   [`high-level-decisions.md`](high-level-decisions.md)
@@ -433,7 +433,7 @@ atomic MVP 文档记录的是当时已经实现并验证的范围，其中“不
 docs/global-memory/
   high-level-decisions.md
   atomic-memory-mvp-design.md
-  tui-memory-browser-simplified-design.md
+  tui-memory-browser-design.md
 
 src/memory/
   contracts.ts

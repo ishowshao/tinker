@@ -1,6 +1,7 @@
 import { Box, Text, useApp, useInput } from "ink";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import { boundedMemoryError, type StoredMemorySummary } from "../memory/contracts";
 import {
   ContextManagerError,
   type ContextCompactionResult,
@@ -18,6 +19,7 @@ import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
 import { FileViewer, FileViewerLoading } from "./components/file-viewer";
+import { MemoryBrowser } from "./components/memory-browser";
 import {
   PromptInput,
   type PromptMaintenanceAction,
@@ -60,6 +62,8 @@ export type AppProps = {
   writeClipboard?: (markdown: string) => Promise<void>;
   onQuit?: () => void;
   initialNotice?: string;
+  listStoredMemories?: () => readonly StoredMemorySummary[];
+  memoryDisabledNotice?: string;
 };
 
 type ResumePickerState =
@@ -112,6 +116,9 @@ export function App(props: AppProps) {
     ModelPickerState | undefined
   >(undefined);
   const [fileView, setFileView] = useState<FileViewState | undefined>(undefined);
+  const [memoryView, setMemoryView] = useState<
+    readonly StoredMemorySummary[] | undefined
+  >(undefined);
   const [viewError, setViewError] = useState<string | undefined>(undefined);
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
@@ -275,6 +282,20 @@ export function App(props: AppProps) {
   const closeFileView = () => {
     fileViewRequest.current += 1;
     setFileView(undefined);
+  };
+
+  const openMemoryView = () => {
+    if (props.listStoredMemories === undefined) {
+      setNotice(props.memoryDisabledNotice ?? "memory disabled: not configured");
+      return;
+    }
+    try {
+      const snapshot = props.listStoredMemories();
+      setNotice(undefined);
+      setMemoryView(snapshot);
+    } catch (error) {
+      setNotice(`memory unavailable: ${boundedMemoryError(error)}`);
+    }
   };
 
   const openFileView = (filePath: string) => {
@@ -455,6 +476,10 @@ export function App(props: AppProps) {
           openFileView(command.filePath);
           return true;
         }
+        if (command.type === "memory") {
+          openMemoryView();
+          return true;
+        }
         if (command.type === "copy") {
           copyLastResponse();
           return true;
@@ -584,6 +609,8 @@ export function App(props: AppProps) {
         <FileViewerLoading filePath={fileView.filePath} onCancel={closeFileView} />
       ) : fileView?.status === "ready" ? (
         <FileViewer file={fileView.file} onClose={closeFileView} />
+      ) : memoryView !== undefined ? (
+        <MemoryBrowser memories={memoryView} onClose={() => setMemoryView(undefined)} />
       ) : resumePicker?.status === "loading" ? (
         <ResumeSessionPickerLoading onCancel={closeResumePicker} />
       ) : resumePicker?.status === "ready" ? (

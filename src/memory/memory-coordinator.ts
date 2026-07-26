@@ -19,6 +19,7 @@ import {
   type MemoryExtractionRejectedCounts,
   type MemoryPaths,
   type MemorySearchDiagnostic,
+  type StoredMemorySummary,
 } from "./contracts";
 import {
   OpenAICompatibleEmbeddingClient,
@@ -147,6 +148,10 @@ export class MemoryCoordinator implements CompletedTurnHook {
       search: (query, signal) => this.search(query, signal, input),
       recordInvalidCall: (queryBytes) => this.recordInvalidSearch(queryBytes, input),
     });
+  }
+
+  listStoredMemories(): readonly StoredMemorySummary[] {
+    return this.store.listStoredMemories();
   }
 
   dispose(): void {

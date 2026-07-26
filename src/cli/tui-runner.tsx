@@ -278,6 +278,12 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
           quitRequested = true;
         }}
         initialNotice={memoryNotice}
+        memoryDisabledNotice={memoryNotice}
+        listStoredMemories={
+          memoryCoordinator === undefined
+            ? undefined
+            : () => memoryCoordinator.listStoredMemories()
+        }
       />,
     );
     await instance.waitUntilExit();

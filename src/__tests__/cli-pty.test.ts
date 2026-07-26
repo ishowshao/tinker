@@ -4,6 +4,9 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
 import { sessionDatabasePath } from "../session/session-store";
+import { runtimeIdFactory } from "../ids/runtime-id";
+import { MemoryStore, resolveMemoryPaths } from "../memory/memory-store";
+import { normalizeEmbedding } from "../memory/vector";
 import {
   createPtyTuiFixture,
   type PtyTuiHarness,
@@ -576,10 +579,136 @@ test(
   { timeout: 30_000 },
 );
 
+test(
+  "PTY-009: browses a stored global-memory snapshot and restores the prompt",
+  async () => {
+    const fixture = await createPtyTuiFixture({
+      workspaceFiles: { "models.json": memoryBrowserModelProfilesJson() },
+    });
+    const timestamps = [
+      "2026-07-24T08:00:00.000Z",
+      "2026-07-25T09:00:00.000Z",
+      "2026-07-26T10:00:00.000Z",
+    ];
+    let harness: PtyTuiHarness | undefined;
+    try {
+      const store = await MemoryStore.open({
+        paths: resolveMemoryPaths(fixture.homeRoot),
+        embedding: {
+          name: "pty-memory-space",
+          kind: "openai-compatible",
+          model: "pty-embedding",
+          dimensions: 3,
+        },
+        clock: () => timestamps.shift()!,
+      });
+      const source = {
+        sessionId: runtimeIdFactory.createSessionId(),
+        turnId: runtimeIdFactory.createTurnId(),
+      };
+      store.insertBatch({
+        ...source,
+        workspaceRoot: "/workspace/oldest",
+        candidates: [
+          {
+            text: [
+              "OLDEST_LINE_1",
+              "OLDEST_LINE_2",
+              "OLDEST_LINE_3",
+              "OLDEST_FINAL_MEMORY",
+            ].join("\n"),
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.insertBatch({
+        ...source,
+        workspaceRoot: "/workspace/middle",
+        candidates: [
+          {
+            text: "MIDDLE_MEMORY",
+            embedding: normalizeEmbedding([0, 1, 0], 3),
+          },
+        ],
+      });
+      store.insertBatch({
+        ...source,
+        workspaceRoot: "/workspace/newest",
+        candidates: [
+          {
+            text: "NEWEST_MEMORY",
+            embedding: normalizeEmbedding([0, 0, 1], 3),
+          },
+        ],
+      });
+      store.close();
+
+      harness = await fixture.start({
+        fakeModel: "pty-memory-browser",
+        rows: 9,
+        columns: 100,
+        environment: { TINKER_MODELS: "models.json" },
+      });
+      await submitPrompt(harness, "/memory");
+      await harness.waitForScreen("NEWEST_MEMORY");
+      const initial = harness.screenText();
+      expect(initial).toContain("/workspace/newest");
+      expect(initial).toContain("MIDDLE_MEMORY");
+      expect(initial.indexOf("NEWEST_MEMORY")).toBeLessThan(
+        initial.indexOf("MIDDLE_MEMORY"),
+      );
+      expect(initial).not.toContain("OLDEST_FINAL_MEMORY");
+
+      await harness.press("end");
+      await harness.waitForScreen("OLDEST_FINAL_MEMORY");
+      await harness.press("escape");
+      await harness.waitForPromptReady();
+
+      const restoredTurn = harness.markTranscript();
+      await submitPrompt(harness, "PTY_MEMORY_AFTER");
+      await harness.waitForTranscript("Fake model received: PTY_MEMORY_AFTER", {
+        since: restoredTurn,
+      });
+      await harness.waitForPromptReady();
+      await quitTui(harness);
+    } finally {
+      await harness?.dispose();
+      await fixture.dispose();
+    }
+  },
+  { timeout: 30_000 },
+);
+
 async function waitForInitialFrame(harness: PtyTuiHarness): Promise<void> {
   await harness.waitForScreen("Tinker", {
     timeoutMs: 10_000,
     message: "initial Tinker frame",
+  });
+}
+
+function memoryBrowserModelProfilesJson(): string {
+  return JSON.stringify({
+    default: "work",
+    profiles: {
+      work: {
+        model: "pty-test-model",
+        apiBase: "https://api.example.test/v1",
+        apiKey: "pty-placeholder-key",
+        contextWindowTokens: 128 * 1_024,
+        maxSupportedOutputTokens: 16 * 1_024,
+      },
+    },
+    memory: {
+      profile: "work",
+      embedding: {
+        name: "pty-memory-space",
+        kind: "openai-compatible",
+        model: "pty-embedding",
+        apiBase: "https://embedding.example.test/v1",
+        apiKey: "pty-embedding-key",
+        dimensions: 3,
+      },
+    },
   });
 }
 

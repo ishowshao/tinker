@@ -75,6 +75,15 @@ describe("parseSlashCommand", () => {
     expect(() => parseSlashCommand("/mcp verbose")).toThrow("Usage: /mcp");
   });
 
+  test("parses the read-only memory browser without arguments", () => {
+    expect(parseSlashCommand("/memory")).toEqual({ type: "memory" });
+    expect(parseSlashCommand("/memory   ")).toEqual({ type: "memory" });
+    expect(() => parseSlashCommand("/memory search")).toThrow("Usage: /memory");
+    expect(matchSlashCommands("/mem").map((command) => command.name)).toEqual([
+      "memory",
+    ]);
+  });
+
   test("keeps /compact swap-only and parses explicit prefix retirement", () => {
     expect(parseSlashCommand("/compact")).toEqual({ type: "compact" });
     expect(parseSlashCommand("/compact retire")).toEqual({

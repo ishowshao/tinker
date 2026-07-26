@@ -25,6 +25,11 @@ export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
     description: "Show MCP servers and runtime tools",
   },
   {
+    name: "memory",
+    usage: "/memory",
+    description: "Browse stored global memories",
+  },
+  {
     name: "compact",
     usage: "/compact [retire]",
     description: "Swap tool output or retire a cold history prefix",
@@ -67,6 +72,7 @@ export type ParsedSlashCommand =
   | { type: "status" }
   | { type: "skills" }
   | { type: "mcp" }
+  | { type: "memory" }
   | { type: "compact" }
   | { type: "compact_retire" }
   | { type: "clear" }
@@ -113,6 +119,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "mcp" };
     }
     throw slashCommandUsageError("mcp");
+  }
+  if (command === "/memory") {
+    if (tokens.length === 1) {
+      return { type: "memory" };
+    }
+    throw slashCommandUsageError("memory");
   }
   if (command === "/compact") {
     if (tokens.length === 1) {

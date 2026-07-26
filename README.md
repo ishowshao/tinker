@@ -335,6 +335,7 @@ complete fixed policy and persistence contract.
 | `/status` | Show session and context details |
 | `/skills` | Show available and active Agent Skills |
 | `/mcp` | Show MCP servers and runtime tools |
+| `/memory` | Browse stored global memories |
 | `/compact [retire]` | Swap tool output or retire a cold history prefix |
 | `/clear` | Start a new session and clear conversation |
 | `/fork` | Clone the current session |

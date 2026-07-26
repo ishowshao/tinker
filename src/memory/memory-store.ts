@@ -13,6 +13,7 @@ import {
   type MemoryEmbeddingIdentity,
   type MemoryPaths,
   type MemorySearchMatch,
+  type StoredMemorySummary,
   type MemoryWriteBatch,
   type MemoryWriteResult,
 } from "./contracts";
@@ -262,6 +263,33 @@ export class MemoryStore {
         left.memoryId.localeCompare(right.memoryId),
     );
     return Object.freeze(matches.slice(0, limit));
+  }
+
+  listStoredMemories(): readonly StoredMemorySummary[] {
+    this.requireOpen();
+    const memories: StoredMemorySummary[] = [];
+    const rows = this.database
+      .query(
+        `SELECT memory_id, text, source_workspace, created_at
+         FROM memories
+         ORDER BY created_at DESC, memory_id DESC`,
+      )
+      .iterate();
+    for (const rowValue of rows) {
+      const row = sqlRecord(rowValue, "memory row");
+      memories.push(
+        Object.freeze({
+          memoryId: sqlString(row.memory_id, "memory_id"),
+          text: sqlString(row.text, "memory text"),
+          sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+          createdAt: requireUtcTimestamp(
+            sqlString(row.created_at, "memory created_at"),
+            "memory created_at",
+          ),
+        }),
+      );
+    }
+    return Object.freeze(memories);
   }
 
   count(): number {

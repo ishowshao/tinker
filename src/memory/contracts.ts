@@ -62,6 +62,13 @@ export type MemorySearchMatch = {
   readonly createdAt: string;
 };
 
+export type StoredMemorySummary = {
+  readonly memoryId: string;
+  readonly text: string;
+  readonly sourceWorkspace: string;
+  readonly createdAt: string;
+};
+
 export type MemoryExtractionRejectedCounts = {
   readonly duplicate: number;
   readonly secret: number;
