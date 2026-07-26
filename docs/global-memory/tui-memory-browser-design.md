@@ -132,7 +132,29 @@ Global memory
 记忆正文最多 512 UTF-8 bytes，但在窄终端中仍可能换成多行。面板不能同时维护“数据库页”、
 “视口页”和“选中条目”三套位置。
 
-组件在收到记忆 snapshot 后，根据当前终端列宽把所有记录铺平成固定物理行：
+组件把宽度测量和列宽布局分成两个阶段。收到记忆 snapshot 后，先生成只依赖
+`memories`、不依赖终端列宽的测量结果：
+
+```ts
+type MeasuredMemoryText = {
+  readonly text: string;
+  readonly unitEndOffsets: Uint32Array;
+  readonly unitColumns: Uint8Array;
+  readonly hardBreaks: Uint8Array;
+};
+
+type MeasuredMemory = {
+  readonly memory: StoredMemorySummary;
+  readonly measuredText: MeasuredMemoryText;
+};
+```
+
+测量阶段按 Unicode code point 遍历正文，对每个 unit 调用一次 `Bun.stringWidth()`，并记录
+UTF-16 end offset、显示列宽和显式换行。结果使用紧凑数值数组，不能为每个字符创建常驻
+JavaScript object。
+
+第二阶段根据当前正文列宽，只使用上述数值数组做整数累加和 hard break 判断，把所有记录
+铺平成固定物理行：
 
 ```ts
 type MemoryDisplayLine =
@@ -147,7 +169,8 @@ type MemoryDisplayLine =
       readonly kind: "text";
       readonly memoryIndex: number;
       readonly memoryId: string;
-      readonly text: string;
+      readonly startOffset: number;
+      readonly endOffset: number;
     }
   | {
       readonly kind: "separator";
@@ -156,8 +179,24 @@ type MemoryDisplayLine =
     };
 ```
 
-正文使用 `Bun.stringWidth()` 按终端列宽预先折行。metadata 始终只占一行，workspace 使用
-`wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
+`MemoryDisplayLine` 的正文行保存原文 slice 边界，不复制整条记忆正文。metadata 始终只占
+一行，workspace 使用 `wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
+
+两个阶段使用独立 memo：
+
+```ts
+const measuredMemories = useMemo(
+  () => measureMemories(props.memories),
+  [props.memories],
+);
+const displayLines = useMemo(
+  () => layoutMeasuredMemories(measuredMemories, contentWidth),
+  [measuredMemories, contentWidth],
+);
+```
+
+`layoutMeasuredMemories()` 禁止调用 `Bun.stringWidth()`。终端列宽变化只能触发第二阶段，不能
+重复 Unicode 宽度测量。
 
 组件只维护：
 
@@ -169,7 +208,27 @@ const [topLine, setTopLine] = useState(0);
 
 本次没有可执行的条目操作，因此不增加 selected memory 或条目 cursor。
 
-### 4.3 按键
+### 4.3 resize 计算边界
+
+本设计只复用 FileViewer 的按键、`topLine`、viewport slice 和 clamp 语义，不声称拥有
+FileViewer 相同的计算复杂度。FileViewer 的源文件已经是固定逻辑行，而 memory browser
+需要根据列宽生成物理行。
+
+每次终端列宽变化时，第二阶段仍会遍历全部预计算 unit 并重新建立行 descriptor，因此是
+O(total text units + physical lines)。本次接受该全量整数布局，但固定以下边界：
+
+- resize 路径不调用 `Bun.stringWidth()`；
+- resize 路径不重新读取 SQLite；
+- resize 路径不复制完整记忆正文；
+- 测量结果在整个面板 snapshot 生命周期内复用；
+- 不为 resize 增加数据库分页或记忆数量硬上限。
+
+如果真实规模下全量整数布局仍造成可感知卡顿，下一步应改成以
+`{ memoryIndex, lineOffset }` 表示的惰性 viewport anchor，只折行当前视口附近的条目。不能
+用只有 `topMemoryIndex` 的模型代替，因为单条 512-byte 记忆在窄或矮终端中可能高于整个
+视口，没有条目内 line offset 就无法查看完整正文。
+
+### 4.4 按键
 
 - `↑`、`k`：向上滚动一行；
 - `↓`、`j`：向下滚动一行；
@@ -183,7 +242,7 @@ const [topLine, setTopLine] = useState(0);
 复用 `file-viewer.tsx` 已导出的 `parseMouseWheelInput()`。不为本功能重构通用 viewer
 framework，也不支持水平滚动；正文通过折行展示，workspace 单行中间截断。
 
-### 4.4 snapshot 生命周期
+### 4.5 snapshot 生命周期
 
 每次打开 `/memory` 时同步读取一次数据库，形成该次面板的固定 snapshot。面板打开后不再
 读取或观察数据库变化。
@@ -192,7 +251,7 @@ completed Turn 的后台提取可能在主响应结束后仍在进行，因此�
 最新记忆可能尚未提交。这是允许的。用户关闭面板后再次执行 `/memory`，才会创建新的
 snapshot。
 
-### 4.5 空库
+### 4.6 空库
 
 数据库可用但没有记录时，面板显示：
 
@@ -268,7 +327,9 @@ ORDER BY created_at DESC, memory_id DESC;
 
 本次也不设置任意的“最近 2000 条”硬上限，因为 `/memory` 的合同是查看当前已存记忆，而不是
 只查看一个不可配置的最近子集。如果真实使用证明全量读取或行缓冲导致可感知卡顿，再根据
-实际数量和耗时单独设计限制或分页，不能提前猜测阈值。
+实际数量和耗时调整 UI 布局策略，不能提前猜测数据库阈值。数据库全量读取和 resize
+全量布局是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者按 4.3 的两阶段模型
+避免重复 Unicode 宽度测量。
 
 ## 六、所有权和生命周期
 
@@ -484,7 +545,11 @@ src/__tests__/
 - 空库状态；
 - metadata 和完整正文；
 - 长正文按 terminal columns 折行；
-- 中文和宽字符使用 `Bun.stringWidth()` 正确计算；
+- 中文、宽字符和组合字符使用 `Bun.stringWidth()` 正确测量；
+- snapshot 不变时宽度测量结果保持引用稳定；
+- 连续改变列宽只执行整数布局，不再次调用 `Bun.stringWidth()`；
+- resize 布局不复制完整记忆正文；
+- 多次连续 resize 后仍能访问一条高于视口的完整 512-byte 记忆；
 - 绝对 workspace 路径在窄终端使用 `truncate-middle`；
 - 行滚动、PgUp/PgDn、Home/End；
 - 鼠标滚轮；
@@ -541,6 +606,7 @@ src/__tests__/
 - 浏览使用已有 coordinator 持有的唯一 store；
 - 不读取 embedding，不做数据库分页，不增加 schema；
 - 面板使用固定行缓冲，长正文和窄路径不会破坏布局；
+- Unicode 宽度每个 snapshot 只测量一次，resize 只重新执行整数布局；
 - 每次打开面板只读取一次固定 snapshot；
 - `/memory` 不形成 Turn，不调用模型，不修改任何历史；
 - memory 未配置、初始化失败和读取失败都有明确本地反馈；
