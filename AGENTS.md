@@ -42,7 +42,17 @@ boundaries so invalid state does not enter canonical history.
 
 ## Quality Gate
 
+While iterating, run `bun run check:fast`. It covers type checking, formatting,
+linting, and every test except the real-process end-to-end tier — the PTY TUI
+journeys and the Chrome native host, which hold most of the suite's wall-clock
+time. `bun run test:e2e` runs that tier alone.
+
 When a change includes source code, tests, executable scripts, dependencies, or
 build/runtime configuration, run `bun run check` before considering it complete.
 It must pass type checking, formatting, linting, tests, and the benchmark smoke
-check.
+check. It is the only gate, and `check:fast` never substitutes for it.
+
+`test:fast` excludes the end-to-end tier with one `--path-ignore-patterns` flag
+per pattern. Do not merge them into a comma-joined value — Bun reads that as a
+single literal pattern, silently filters nothing, and the fast tier degrades
+back into a full run.
