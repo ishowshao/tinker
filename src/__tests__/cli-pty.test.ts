@@ -598,20 +598,8 @@ async function submitPrompt(harness: PtyTuiHarness, prompt: string): Promise<voi
   await harness.press("enter");
 }
 
-async function waitForPromptReady(
-  harness: PtyTuiHarness,
-  timeoutMs = 5_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!harness.promptReady()) {
-    if (harness.tuiExit() !== undefined || harness.wrapperExit() !== undefined) {
-      throw new Error(harness.diagnosticText("editable Prompt input"));
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(harness.diagnosticText("editable Prompt input"));
-    }
-    await Bun.sleep(25);
-  }
+async function waitForPromptReady(harness: PtyTuiHarness): Promise<void> {
+  await harness.waitForPromptReady();
 }
 
 async function quitTui(harness: PtyTuiHarness): Promise<void> {

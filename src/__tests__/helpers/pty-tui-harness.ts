@@ -79,6 +79,7 @@ export interface PtyTuiHarness {
   transcriptSince(mark: number): string;
 
   waitForScreen(predicate: PtyPredicate, options?: PtyWaitOptions): Promise<void>;
+  waitForPromptReady(timeoutMs?: number): Promise<void>;
   waitForTranscript(
     predicate: PtyPredicate,
     options?: PtyTranscriptWaitOptions,
@@ -113,6 +114,7 @@ const KEY_SEQUENCES: Readonly<Record<PtyKey, string>> = Object.freeze({
 const DEFAULT_ROWS = 30;
 const DEFAULT_COLUMNS = 120;
 const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+const DEFAULT_PROMPT_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_EXIT_TIMEOUT_MS = 2_000;
 const CONTROL_TIMEOUT_MS = 2_000;
 const POLL_INTERVAL_MS = 25;
@@ -171,6 +173,7 @@ export async function startPtyTui(input: StartPtyTuiInput): Promise<PtyTuiHarnes
     });
     try {
       await harness.waitUntilHostReady();
+      await harness.waitForPromptReady();
       return harness;
     } catch (error) {
       try {
@@ -244,6 +247,7 @@ export async function createPtyTuiFixture(
       });
       try {
         await harness.waitUntilHostReady();
+        await harness.waitForPromptReady();
         return harness;
       } catch (error) {
         try {
@@ -505,6 +509,25 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
             `screen: ${expected}`,
             `condition was not met within ${timeoutMs}ms`,
           ),
+        );
+      }
+      await Bun.sleep(POLL_INTERVAL_MS);
+    }
+  }
+
+  async waitForPromptReady(timeoutMs = DEFAULT_PROMPT_READY_TIMEOUT_MS): Promise<void> {
+    const timeout = positiveInteger(timeoutMs, "timeoutMs");
+    const expected = "editable Prompt input";
+    const deadline = Date.now() + timeout;
+    while (true) {
+      await this.flushScreen(expected);
+      if (this.promptReady()) {
+        return;
+      }
+      this.throwIfUnavailable(expected);
+      if (Date.now() >= deadline) {
+        throw new Error(
+          this.diagnostic(expected, `condition was not met within ${timeout}ms`),
         );
       }
       await Bun.sleep(POLL_INTERVAL_MS);
