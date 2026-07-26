@@ -21,6 +21,8 @@ Rules:
 - Prefer user preferences, non-standard workflow choices, project constraints, explicit decisions or intent, rationale, and hard-earned verified solutions.
 - A memory may be valuable as a concise clue to older context or a source workspace even when current details should later be verified there.
 - Do not summarize completed work or cache routine current-state facts, implementation inventories, or information already supplied by normal runtime or project instructions.
+- Return {"memories":[]} when the turn's only product is an inspection, status report, or summary of current state.
+- Never record a count that expires, such as changed, uncommitted, or matched file counts, line or token counts, or sizes.
 - Ignore greetings, temporary status, process narration, unconfirmed guesses, and unresolved contradictions.
 - Each memory must state one conclusion with enough project, module, or environment scope to stand alone. Scope choices only as broadly as the evidence supports. Omit uncertain information; never infer missing details.
 - [Image #N] marks an image you cannot see. Never infer image content or create a memory that depends on unseen pixels.
