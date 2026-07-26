@@ -108,8 +108,10 @@ Global memory
 2026-07-25 09:18 · /Users/cyberoldman/htdocs/other-project
 另一条已经存储的原子记忆。
 
-1–8 / 42 lines · 2 / 17 memories
+1–8 / 42 lines · 17 memories
 ```
+
+页脚的行范围表示当前可见的物理行位置；memory 部分只显示数据库 snapshot 中的记忆总数。
 
 每条记录展示：
 
