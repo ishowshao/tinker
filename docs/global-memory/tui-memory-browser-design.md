@@ -47,6 +47,8 @@ SQLite 中已经存储的原子记忆”，不开始实现搜索、状态、编�
 - 按创建时间倒序读取全部已存原子记忆；
 - 记忆正文、来源 workspace 和创建时间；
 - 固定行缓冲滚动；
+- grapheme-safe 宽度测量和控制字符安全显示投影；
+- 与 FileViewer 共用的终端 mouse tracking hook；
 - 空库、未配置、初始化失败和运行时读取失败的本地反馈；
 - store、coordinator facade、TUI component、App 接线和真实 PTY 验证；
 - 对现有两份全局记忆文档中冲突契约的同步修订。
@@ -117,7 +119,7 @@ Global memory
 
 - 本地可读的创建时间；
 - 完整的绝对来源 workspace；
-- 完整记忆正文。
+- 可完整浏览的记忆正文安全显示投影。
 
 不展示：
 
@@ -134,71 +136,67 @@ Global memory
 记忆正文最多 512 UTF-8 bytes，但在窄终端中仍可能换成多行。面板不能同时维护“数据库页”、
 “视口页”和“选中条目”三套位置。
 
-组件把宽度测量和列宽布局分成两个阶段。收到记忆 snapshot 后，先生成只依赖
-`memories`、不依赖终端列宽的测量结果：
+布局使用一个只依赖当前 snapshot 和正文列宽的纯函数：
 
 ```ts
-type MeasuredMemoryText = {
+function layoutMemoryLines(
+  memories: readonly StoredMemorySummary[],
+  contentWidth: number,
+): readonly MemoryDisplayLine[];
+```
+
+该函数先把数据库中的原始正文投影为只用于 TUI 展示的安全文本：
+
+- `\r\n` 和单独的 `\r` 统一为 `\n` hard break；
+- `\t` 固定展开为 4 个空格，与 FileViewer 一致；
+- 除 `\n` 外的 C0、DEL 和 C1 控制字符替换为可见的 `U+FFFD`；
+- 不修改数据库正文、hash、embedding、提取日志或 `MemorySearch` 返回值。
+
+归一化顺序固定为：
+
+```ts
+function normalizeMemoryDisplayText(text: string): string {
+  return text
+    .replaceAll(/\r\n?/g, "\n")
+    .replaceAll("\t", "    ")
+    .replaceAll(
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g,
+      "\uFFFD",
+    );
+}
+```
+
+该归一化是显示边界，不是存储 migration。当前提取器和 Store 只校验 trim、byte limit 等
+合同，正文内部的 tab、CR、BEL、ESC 或其他控制字符可能已经存在，不能直接交给终端，也不能
+把它们当作 0 列字符参与布局。
+
+安全显示文本按 `\n` 拆成逻辑行，包括连续换行产生的空行。每个逻辑行再由
+`new Intl.Segmenter("und", { granularity: "grapheme" })` 遍历。一个 unit 固定是一整个
+grapheme cluster，不能是 Unicode code point。每个 grapheme 只调用一次
+`Bun.stringWidth()`，按 `contentWidth` 累加并直接生成物理正文行。这样 ZWJ emoji、肤色
+修饰符、regional indicator 和 combining mark 不会被重复计宽，也不会在 cluster 内部折行。
+
+```ts
+type MemoryDisplayLine = {
+  readonly kind: "metadata" | "text" | "separator";
+  readonly memoryIndex: number;
+  readonly memoryId: string;
   readonly text: string;
-  readonly unitEndOffsets: Uint32Array;
-  readonly unitColumns: Uint8Array;
-  readonly hardBreaks: Uint8Array;
-};
-
-type MeasuredMemory = {
-  readonly memory: StoredMemorySummary;
-  readonly measuredText: MeasuredMemoryText;
 };
 ```
 
-测量阶段按 Unicode code point 遍历正文，对每个 unit 调用一次 `Bun.stringWidth()`，并记录
-UTF-16 end offset、显示列宽和显式换行。结果使用紧凑数值数组，不能为每个字符创建常驻
-JavaScript object。
+每个 metadata、折好的正文行、原始空行和记录间 separator 都直接对应一个
+`MemoryDisplayLine`，不保留中间测量缓存。metadata 始终只占一行，workspace 使用
+`wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
 
-第二阶段根据当前正文列宽，只使用上述数值数组做整数累加和 hard break 判断，把所有记录
-铺平成固定物理行：
-
-```ts
-type MemoryDisplayLine =
-  | {
-      readonly kind: "metadata";
-      readonly memoryIndex: number;
-      readonly memoryId: string;
-      readonly createdAt: string;
-      readonly sourceWorkspace: string;
-    }
-  | {
-      readonly kind: "text";
-      readonly memoryIndex: number;
-      readonly memoryId: string;
-      readonly startOffset: number;
-      readonly endOffset: number;
-    }
-  | {
-      readonly kind: "separator";
-      readonly memoryIndex: number;
-      readonly memoryId: string;
-    };
-```
-
-`MemoryDisplayLine` 的正文行保存原文 slice 边界，不复制整条记忆正文。metadata 始终只占
-一行，workspace 使用 `wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
-
-两个阶段使用独立 memo：
+组件只使用一个 memo：
 
 ```ts
-const measuredMemories = useMemo(
-  () => measureMemories(props.memories),
-  [props.memories],
-);
 const displayLines = useMemo(
-  () => layoutMeasuredMemories(measuredMemories, contentWidth),
-  [measuredMemories, contentWidth],
+  () => layoutMemoryLines(props.memories, contentWidth),
+  [props.memories, contentWidth],
 );
 ```
-
-`layoutMeasuredMemories()` 禁止调用 `Bun.stringWidth()`。终端列宽变化只能触发第二阶段，不能
-重复 Unicode 宽度测量。
 
 组件只维护：
 
@@ -210,27 +208,7 @@ const [topLine, setTopLine] = useState(0);
 
 本次没有可执行的条目操作，因此不增加 selected memory 或条目 cursor。
 
-### 4.3 resize 计算边界
-
-本设计只复用 FileViewer 的按键、`topLine`、viewport slice 和 clamp 语义，不声称拥有
-FileViewer 相同的计算复杂度。FileViewer 的源文件已经是固定逻辑行，而 memory browser
-需要根据列宽生成物理行。
-
-每次终端列宽变化时，第二阶段仍会遍历全部预计算 unit 并重新建立行 descriptor，因此是
-O(total text units + physical lines)。本次接受该全量整数布局，但固定以下边界：
-
-- resize 路径不调用 `Bun.stringWidth()`；
-- resize 路径不重新读取 SQLite；
-- resize 路径不复制完整记忆正文；
-- 测量结果在整个面板 snapshot 生命周期内复用；
-- 不为 resize 增加数据库分页或记忆数量硬上限。
-
-如果真实规模下全量整数布局仍造成可感知卡顿，下一步应改成以
-`{ memoryIndex, lineOffset }` 表示的惰性 viewport anchor，只折行当前视口附近的条目。不能
-用只有 `topMemoryIndex` 的模型代替，因为单条 512-byte 记忆在窄或矮终端中可能高于整个
-视口，没有条目内 line offset 就无法查看完整正文。
-
-### 4.4 按键
+### 4.3 按键
 
 - `↑`、`k`：向上滚动一行；
 - `↓`、`j`：向下滚动一行；
@@ -241,10 +219,23 @@ O(total text units + physical lines)。本次接受该全量整数布局，但�
 - 鼠标滚轮：每次滚动 3 行；
 - `Esc`：关闭面板，恢复正常 TUI。
 
-复用 `file-viewer.tsx` 已导出的 `parseMouseWheelInput()`。不为本功能重构通用 viewer
-framework，也不支持水平滚动；正文通过折行展示，workspace 单行中间截断。
+鼠标滚轮不能只复用转义序列 parser。终端只有在应用显式开启 mouse tracking 和 SGR mouse
+mode 后才会发送该输入。实现时把 FileViewer 私有的 enable/disable effect 和
+`parseMouseWheelInput()` 抽到一个窄的共享 `terminal-mouse.ts`：
 
-### 4.5 snapshot 生命周期
+```ts
+useTerminalMouseTracking();
+parseMouseWheelInput(input);
+```
+
+共享 hook 在 TTY stdout 上挂载时写入 `?1000h` 和 `?1006h`，卸载时写入对应 disable
+sequence。FileViewer 和 MemoryBrowser 都调用该 hook。两个全屏 viewer 由 App 保证互斥，
+不需要引用计数或全局 mouse manager。
+
+本功能不重构通用 viewer framework，也不支持水平滚动；正文通过折行展示，workspace 单行
+中间截断。
+
+### 4.4 snapshot 生命周期
 
 每次打开 `/memory` 时同步读取一次数据库，形成该次面板的固定 snapshot。面板打开后不再
 读取或观察数据库变化。
@@ -253,7 +244,7 @@ completed Turn 的后台提取可能在主响应结束后仍在进行，因此�
 最新记忆可能尚未提交。这是允许的。用户关闭面板后再次执行 `/memory`，才会创建新的
 snapshot。
 
-### 4.6 空库
+### 4.5 空库
 
 数据库可用但没有记录时，面板显示：
 
@@ -329,9 +320,9 @@ ORDER BY created_at DESC, memory_id DESC;
 
 本次也不设置任意的“最近 2000 条”硬上限，因为 `/memory` 的合同是查看当前已存记忆，而不是
 只查看一个不可配置的最近子集。如果真实使用证明全量读取或行缓冲导致可感知卡顿，再根据
-实际数量和耗时调整 UI 布局策略，不能提前猜测数据库阈值。数据库全量读取和 resize
-全量布局是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者按 4.3 的两阶段模型
-避免重复 Unicode 宽度测量。
+实际数量和耗时调整 UI 布局策略，不能提前猜测数据库阈值或预建测量缓存。数据库全量读取和
+UI 折行是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者先使用 4.2 的直接布局，
+只在真实 benchmark 证明需要时再优化。
 
 ## 六、所有权和生命周期
 
@@ -490,13 +481,17 @@ src/cli/
 src/tui/
   slash-commands.ts
   app.tsx
+  terminal-mouse.ts
   components/
+    file-viewer.tsx
     memory-browser.tsx
 
 src/__tests__/
   memory-store.test.ts
   memory-coordinator.test.ts
   slash-commands.test.ts
+  terminal-mouse.test.tsx
+  file-viewer.test.tsx
   memory-browser.test.tsx
   tui-components.test.tsx
   cli-pty.test.ts
@@ -545,12 +540,16 @@ src/__tests__/
 ### 11.4 MemoryBrowser
 
 - 空库状态；
-- metadata 和完整正文；
+- metadata 和可完整浏览的正文安全显示投影；
 - 长正文按 terminal columns 折行；
-- 中文、宽字符和组合字符使用 `Bun.stringWidth()` 正确测量；
-- snapshot 不变时宽度测量结果保持引用稳定；
-- 连续改变列宽只执行整数布局，不再次调用 `Bun.stringWidth()`；
-- resize 布局不复制完整记忆正文；
+- tab 固定展开为 4 个空格；
+- CRLF 和单独 CR 都形成一个 hard break；
+- BEL、ESC、DEL 以及其他 C0/C1 控制字符显示为 `U+FFFD`，原始 memory text 保持不变；
+- ZWJ emoji `👩‍💻`、肤色修饰符 `👍🏽`、regional indicator `🇨🇳` 和 combining mark
+  都只在 grapheme cluster 边界测量和折行；
+- grapheme 宽度之和与对应完整逻辑行的 `Bun.stringWidth()` 一致；
+- 连续换行产生的空正文行保持可见；
+- 改变终端列宽后重新折行，显示内容不丢失且 grapheme 不被拆分；
 - 多次连续 resize 后仍能访问一条高于视口的完整 512-byte 记忆；
 - 绝对 workspace 路径在窄终端使用 `truncate-middle`；
 - 行滚动、PgUp/PgDn、Home/End；
@@ -558,7 +557,28 @@ src/__tests__/
 - `topLine` 在 resize 后 clamp；
 - Esc 关闭。
 
-### 11.5 App 非干扰
+### 11.5 终端鼠标
+
+- shared hook 在 TTY mount 时写入 mouse tracking 和 SGR enable sequence；
+- cleanup 写入对应 disable sequence；
+- 非 TTY stdout 不写控制序列；
+- FileViewer 改用 shared hook 后原有滚轮行为不变；
+- MemoryBrowser 打开时启用 mouse reporting，关闭时禁用；
+- parser 单元测试之外，真实 PTY 必须观察 enable sequence 并验证滚轮输入会移动视口。
+
+### 11.6 布局性能观察
+
+本功能是低频手动操作，不设置跨机器毫秒硬 SLA，也不在普通单元测试中断言绝对耗时。
+实现完成时用确定性的 1,000 条 mixed Chinese、English 和 emoji fixture 报告：
+
+- 首次 `layoutMemoryLines()` 的 p50/p95；
+- 改变 `contentWidth` 后重新布局的 p50/p95；
+- 本次布局的 heap delta。
+
+该结果用于判断是否已经出现需要缓存的真实证据，不作为当前实现预建缓存的理由，也不把
+绝对毫秒阈值加入 `bun run check`。
+
+### 11.7 App 非干扰
 
 执行 `/memory` 后验证：
 
@@ -573,18 +593,22 @@ src/__tests__/
 - 未配置和初始化失败使用约定 notice；
 - 首次读取失败不会留下半打开面板。
 
-### 11.6 真实 PTY
+### 11.8 真实 PTY
 
 1. 使用与当前配置 identity 一致的 store seed 多条跨 workspace 原子记忆；
 2. 启动真实 TUI；
 3. 输入 `/memory`；
 4. 验证面板按时间倒序展示正文、时间和 workspace；
-5. 验证窄终端路径不会破坏布局；
-6. 验证键盘滚动、鼠标滚轮和 Esc；
-7. 面板关闭后形成一个新的 completed Turn，并等待 memory 写入；
-8. 再次执行 `/memory`，确认新记忆出现；
-9. 确认 `/memory` 本身没有形成 Turn 或 provider request；
-10. 正常 `/quit`。
+5. seed 包含 ZWJ emoji、肤色修饰符、tab、CR 和 ESC 的正文，确认 grapheme 不被拆分且
+   控制字符只以安全显示投影出现；
+6. 验证窄终端路径不会破坏布局；
+7. 确认 TUI 输出 mouse tracking enable sequence，再发送真实 SGR wheel input 并验证视口
+   移动；
+8. 验证键盘滚动和 Esc，关闭后确认 mouse tracking disable sequence；
+9. 面板关闭后形成一个新的 completed Turn，并等待 memory 写入；
+10. 再次执行 `/memory`，确认新记忆出现；
+11. 确认 `/memory` 本身没有形成 Turn 或 provider request；
+12. 正常 `/quit`。
 
 ## 十二、实施顺序
 
@@ -593,11 +617,13 @@ src/__tests__/
 3. 增加 store 单元测试；
 4. 增加 coordinator facade；
 5. 注册并解析 `/memory`；
-6. 实现固定行缓冲 `MemoryBrowser`；
-7. 完成 `App` 的本地分发、互斥状态和全屏渲染接线；
-8. 补齐 component 和非干扰测试；
-9. 完成真实 PTY journey；
-10. 运行 `bun run check`。
+6. 抽出共享 terminal mouse tracking hook，并让 FileViewer 改用它；
+7. 实现控制字符安全投影、grapheme 测量和固定行缓冲 `MemoryBrowser`；
+8. 完成 `App` 的本地分发、互斥状态和全屏渲染接线；
+9. 补齐 component、mouse tracking 和非干扰测试；
+10. 报告 1,000 条 fixture 的布局性能观察；
+11. 完成真实 PTY journey；
+12. 运行 `bun run check`。
 
 ## 十三、完成定义
 
@@ -608,7 +634,10 @@ src/__tests__/
 - 浏览使用已有 coordinator 持有的唯一 store；
 - 不读取 embedding，不做数据库分页，不增加 schema；
 - 面板使用固定行缓冲，长正文和窄路径不会破坏布局；
-- Unicode 宽度每个 snapshot 只测量一次，resize 只重新执行整数布局；
+- 控制字符只在显示投影中安全归一化，不修改存储正文；
+- 宽度只在 grapheme cluster 边界测量，不会拆分组合字符；
+- 布局实现不预建 grapheme 测量缓存，resize 后仍保持正文完整和滚动边界正确；
+- 真实 TTY 打开和关闭面板时正确启用、禁用 mouse tracking；
 - 每次打开面板只读取一次固定 snapshot；
 - `/memory` 不形成 Turn，不调用模型，不修改任何历史；
 - memory 未配置、初始化失败和读取失败都有明确本地反馈；
