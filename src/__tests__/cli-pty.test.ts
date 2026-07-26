@@ -108,29 +108,24 @@ test(
       { fakeModel: "pty-cancel-then-echo", rows: 70, columns: 140 },
       async (harness) => {
         await waitForInitialFrame(harness);
-        const turnMark = harness.markTranscript();
         await submitPrompt(harness, "PTY_CANCEL_BLOCK");
-        await harness.waitForTranscript("Running", {
-          since: turnMark,
+        await harness.waitForScreen("• Running", {
           message: "blocked turn running state",
         });
 
         await harness.press("escape");
-        await harness.waitForTranscript("cancelled", {
-          since: turnMark,
-          message: "cancelled terminal state",
-        });
-        await harness.waitForScreen("model iteration 1 -> cancelled");
-        const cancellationTranscript = harness.transcriptSince(turnMark);
-        const runningIndex = cancellationTranscript.indexOf("Running");
-        const cancellingIndex = cancellationTranscript.indexOf("cancelling");
-        const cancelledIndex = cancellationTranscript.indexOf("cancelled");
-        expect(runningIndex).toBeGreaterThanOrEqual(0);
-        expect(cancelledIndex).toBeGreaterThan(runningIndex);
-        if (cancellingIndex >= 0) {
-          expect(cancellingIndex).toBeGreaterThan(runningIndex);
-          expect(cancelledIndex).toBeGreaterThan(cancellingIndex);
-        }
+        await harness.waitForScreen(
+          (screen) => screen.includes("cancelling") || screen.includes("-> cancelled"),
+          { message: "immediate feedback after Esc" },
+        );
+        await harness.waitForScreen(
+          (screen) =>
+            screen.includes("⊘ model iteration 1 -> cancelled") &&
+            !screen.includes("cancelling") &&
+            !screen.includes("• Running"),
+          { message: "settled cancelled screen" },
+        );
+        await harness.waitForPromptReady();
 
         await submitPrompt(harness, "PTY_AFTER_CANCEL");
         await harness.waitForScreen("PTY_AFTER_CANCEL_DONE");
