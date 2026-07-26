@@ -46,8 +46,8 @@ SQLite 中已经存储的原子记忆”，不开始实现搜索、状态、编�
 - 全屏只读记忆面板；
 - 按创建时间倒序读取全部已存原子记忆；
 - 记忆正文、来源 workspace 和创建时间；
-- 固定行缓冲滚动；
-- grapheme-safe 宽度测量和控制字符安全显示投影；
+- Ink 原生折行和物理行滚动；
+- 控制字符安全显示投影；
 - 与 FileViewer 共用的终端 mouse tracking hook；
 - 空库、未配置、初始化失败和运行时读取失败的本地反馈；
 - store、coordinator facade、TUI component、App 接线和真实 PTY 验证；
@@ -64,6 +64,7 @@ SQLite 中已经存储的原子记忆”，不开始实现搜索、状态、编�
 - 面板内手动刷新、自动刷新、SQLite polling 或文件监听；
 - 独立的只读数据库连接；
 - 数据库分页、cursor 或懒加载；
+- 自定义文本折行、字符宽度测量或布局缓存；
 - schema、table、index 或 migration 变更；
 - memory worker 状态和诊断指标面板；
 - 为未来管理功能提前展示内部 ID。
@@ -131,21 +132,13 @@ Global memory
 
 `memory_id` 只用于数据库确定性排序和 React key，不作为普通用户身份显示。
 
-### 4.2 固定行缓冲
+### 4.2 Ink 原生布局与滚动
 
 记忆正文最多 512 UTF-8 bytes，但在窄终端中仍可能换成多行。面板不能同时维护“数据库页”、
 “视口页”和“选中条目”三套位置。
 
-布局使用一个只依赖当前 snapshot 和正文列宽的纯函数：
-
-```ts
-function layoutMemoryLines(
-  memories: readonly StoredMemorySummary[],
-  contentWidth: number,
-): readonly MemoryDisplayLine[];
-```
-
-该函数先把数据库中的原始正文投影为只用于 TUI 展示的安全文本：
+MemoryBrowser 不自行计算物理折行。它先把数据库中的原始正文投影为只用于 TUI 展示的安全
+文本，再把文本直接交给 Ink 的 `Text`；Ink 根据父容器宽度完成折行和重新布局：
 
 - `\r\n` 和单独的 `\r` 统一为 `\n` hard break；
 - `\t` 固定展开为 4 个空格，与 FileViewer 一致；
@@ -168,43 +161,20 @@ function normalizeMemoryDisplayText(text: string): string {
 
 该归一化是显示边界，不是存储 migration。当前提取器和 Store 只校验 trim、byte limit 等
 合同，正文内部的 tab、CR、BEL、ESC 或其他控制字符可能已经存在，不能直接交给终端，也不能
-把它们当作 0 列字符参与布局。
+让它们改变终端状态。正文不进行自定义分词、宽度测量或预折行。
 
-安全显示文本按 `\n` 拆成逻辑行，包括连续换行产生的空行。每个逻辑行再由
-`new Intl.Segmenter("und", { granularity: "grapheme" })` 遍历。一个 unit 固定是一整个
-grapheme cluster，不能是 Unicode code point。每个 grapheme 只调用一次
-`Bun.stringWidth()`，按 `contentWidth` 累加并直接生成物理正文行。这样 ZWJ emoji、肤色
-修饰符、regional indicator 和 combining mark 不会被重复计宽，也不会在 cluster 内部折行。
+全部记录按自然高度渲染在固定高度、`overflow="hidden"` 的 Ink 容器内，通过纵向偏移内容实现
+滚动。内容容器必须禁止 flex shrink；记录间空白使用固定高度的 `Box`，不依赖空 `Text` 的
+测量行为。metadata 整行使用 `wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
 
-```ts
-type MemoryDisplayLine = {
-  readonly kind: "metadata" | "text" | "separator";
-  readonly memoryIndex: number;
-  readonly memoryId: string;
-  readonly text: string;
-};
-```
-
-每个 metadata、折好的正文行、原始空行和记录间 separator 都直接对应一个
-`MemoryDisplayLine`，不保留中间测量缓存。metadata 始终只占一行，workspace 使用
-`wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
-
-组件只使用一个 memo：
-
-```ts
-const displayLines = useMemo(
-  () => layoutMemoryLines(props.memories, contentWidth),
-  [props.memories, contentWidth],
-);
-```
-
-组件只维护：
+Ink 的布局结果提供内容物理行总数，供 `End`、页脚和滚动边界使用。组件只维护一个位置：
 
 ```ts
 const [topLine, setTopLine] = useState(0);
 ```
 
-终端尺寸变化后重新生成行缓冲，并把 `topLine` clamp 到新的合法范围。
+终端尺寸变化时由 Ink 重新布局；内容高度变化后把 `topLine` clamp 到新的合法范围。这里依赖
+的是 Ink 布局，不是终端在输出字节后自行换行；因此视口裁剪、页脚和 `End` 都有确定边界。
 
 本次没有可执行的条目操作，因此不增加 selected memory 或条目 cursor。
 
@@ -319,10 +289,9 @@ ORDER BY created_at DESC, memory_id DESC;
 - 当前没有实际数据证明需要限制只读文本 snapshot。
 
 本次也不设置任意的“最近 2000 条”硬上限，因为 `/memory` 的合同是查看当前已存记忆，而不是
-只查看一个不可配置的最近子集。如果真实使用证明全量读取或行缓冲导致可感知卡顿，再根据
-实际数量和耗时调整 UI 布局策略，不能提前猜测数据库阈值或预建测量缓存。数据库全量读取和
-UI 折行是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者先使用 4.2 的直接布局，
-只在真实 benchmark 证明需要时再优化。
+只查看一个不可配置的最近子集。如果真实使用证明全量读取或 Ink 布局导致可感知卡顿，再根据
+实际数量和耗时调整读取或展示策略，不能提前猜测数据库阈值或预建布局缓存。数据库全量读取
+和 UI 布局是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者本次直接交给 Ink。
 
 ## 六、所有权和生命周期
 
@@ -541,15 +510,12 @@ src/__tests__/
 
 - 空库状态；
 - metadata 和可完整浏览的正文安全显示投影；
-- 长正文按 terminal columns 折行；
+- 中英文长正文由 Ink 按可用宽度自动折行；
 - tab 固定展开为 4 个空格；
 - CRLF 和单独 CR 都形成一个 hard break；
 - BEL、ESC、DEL 以及其他 C0/C1 控制字符显示为 `U+FFFD`，原始 memory text 保持不变；
-- ZWJ emoji `👩‍💻`、肤色修饰符 `👍🏽`、regional indicator `🇨🇳` 和 combining mark
-  都只在 grapheme cluster 边界测量和折行；
-- grapheme 宽度之和与对应完整逻辑行的 `Bun.stringWidth()` 一致；
 - 连续换行产生的空正文行保持可见；
-- 改变终端列宽后重新折行，显示内容不丢失且 grapheme 不被拆分；
+- 改变终端列宽后由 Ink 重新布局，显示内容不丢失；
 - 多次连续 resize 后仍能访问一条高于视口的完整 512-byte 记忆；
 - 绝对 workspace 路径在窄终端使用 `truncate-middle`；
 - 行滚动、PgUp/PgDn、Home/End；
@@ -566,19 +532,7 @@ src/__tests__/
 - MemoryBrowser 打开时启用 mouse reporting，关闭时禁用；
 - parser 单元测试之外，真实 PTY 必须观察 enable sequence 并验证滚轮输入会移动视口。
 
-### 11.6 布局性能观察
-
-本功能是低频手动操作，不设置跨机器毫秒硬 SLA，也不在普通单元测试中断言绝对耗时。
-实现完成时用确定性的 1,000 条 mixed Chinese、English 和 emoji fixture 报告：
-
-- 首次 `layoutMemoryLines()` 的 p50/p95；
-- 改变 `contentWidth` 后重新布局的 p50/p95；
-- 本次布局的 heap delta。
-
-该结果用于判断是否已经出现需要缓存的真实证据，不作为当前实现预建缓存的理由，也不把
-绝对毫秒阈值加入 `bun run check`。
-
-### 11.7 App 非干扰
+### 11.6 App 非干扰
 
 执行 `/memory` 后验证：
 
@@ -593,14 +547,13 @@ src/__tests__/
 - 未配置和初始化失败使用约定 notice；
 - 首次读取失败不会留下半打开面板。
 
-### 11.8 真实 PTY
+### 11.7 真实 PTY
 
 1. 使用与当前配置 identity 一致的 store seed 多条跨 workspace 原子记忆；
 2. 启动真实 TUI；
 3. 输入 `/memory`；
 4. 验证面板按时间倒序展示正文、时间和 workspace；
-5. seed 包含 ZWJ emoji、肤色修饰符、tab、CR 和 ESC 的正文，确认 grapheme 不被拆分且
-   控制字符只以安全显示投影出现；
+5. seed 包含中英文、tab、CR 和 ESC 的正文，确认控制字符只以安全显示投影出现；
 6. 验证窄终端路径不会破坏布局；
 7. 确认 TUI 输出 mouse tracking enable sequence，再发送真实 SGR wheel input 并验证视口
    移动；
@@ -618,12 +571,11 @@ src/__tests__/
 4. 增加 coordinator facade；
 5. 注册并解析 `/memory`；
 6. 抽出共享 terminal mouse tracking hook，并让 FileViewer 改用它；
-7. 实现控制字符安全投影、grapheme 测量和固定行缓冲 `MemoryBrowser`；
+7. 实现控制字符安全投影和基于 Ink 原生布局的 `MemoryBrowser`；
 8. 完成 `App` 的本地分发、互斥状态和全屏渲染接线；
 9. 补齐 component、mouse tracking 和非干扰测试；
-10. 报告 1,000 条 fixture 的布局性能观察；
-11. 完成真实 PTY journey；
-12. 运行 `bun run check`。
+10. 完成真实 PTY journey；
+11. 运行 `bun run check`。
 
 ## 十三、完成定义
 
@@ -633,10 +585,9 @@ src/__tests__/
 - 数据只来自 `memory.sqlite`；
 - 浏览使用已有 coordinator 持有的唯一 store；
 - 不读取 embedding，不做数据库分页，不增加 schema；
-- 面板使用固定行缓冲，长正文和窄路径不会破坏布局；
+- 面板使用 Ink 原生折行和内容高度，长正文和窄路径不会破坏布局；
 - 控制字符只在显示投影中安全归一化，不修改存储正文；
-- 宽度只在 grapheme cluster 边界测量，不会拆分组合字符；
-- 布局实现不预建 grapheme 测量缓存，resize 后仍保持正文完整和滚动边界正确；
+- resize 后正文仍然完整，滚动边界正确；
 - 真实 TTY 打开和关闭面板时正确启用、禁用 mouse tracking；
 - 每次打开面板只读取一次固定 snapshot；
 - `/memory` 不形成 Turn，不调用模型，不修改任何历史；
