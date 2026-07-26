@@ -144,6 +144,29 @@ export type SessionImageInputCompatibility = {
   readonly tokenEstimator?: InputTokenEstimatorCompatibility;
 };
 
+export type CompletedTurnMessageSnapshot =
+  | {
+      readonly ordinal: number;
+      readonly role: "user";
+      readonly content: string;
+    }
+  | {
+      readonly ordinal: number;
+      readonly role: "assistant";
+      readonly content: string | null;
+      readonly reasoningContent?: string | null;
+    }
+  | {
+      readonly ordinal: number;
+      readonly role: "tool";
+      readonly name: string;
+      readonly content: string;
+    };
+
+export type CompletedTurnSnapshot = {
+  readonly messages: readonly CompletedTurnMessageSnapshot[];
+};
+
 export type SessionCompatibilityContract = {
   modelName: string;
   profileName?: string;
@@ -2080,6 +2103,105 @@ export class SessionStore implements SessionLedgerCommitter {
       sessionId: this.sessionId,
       requireOpen: () => this.requireOpen(),
     });
+  }
+
+  readCompletedTurnSnapshot(turnId: TurnId): CompletedTurnSnapshot {
+    this.requireOpen();
+    const turnRow = this.database
+      .query("SELECT status FROM turns WHERE turn_id = ?")
+      .get(turnId);
+    const status = enumFromSql(
+      recordFromSql(turnRow, "completed turn").status,
+      ["open", "completed", "failed", "cancelled", "interrupted"] as const,
+      "turn status",
+    );
+    if (status !== "completed") {
+      throw new Error(`Turn ${turnId} is not completed.`);
+    }
+
+    const rows = this.database
+      .query(
+        `SELECT ordinal, role, content, reasoning_content,
+                reasoning_content_present, name
+         FROM messages
+         WHERE turn_id = ?
+         ORDER BY ordinal`,
+      )
+      .all(turnId);
+    if (rows.length === 0) {
+      throw new Error(`Completed turn ${turnId} has no messages.`);
+    }
+
+    let previousOrdinal = 0;
+    const messages = rows.map((value): CompletedTurnMessageSnapshot => {
+      const row = recordFromSql(value, "completed turn message");
+      const ordinal = numberFromSql(row.ordinal, "completed turn ordinal");
+      if (ordinal < 1 || ordinal <= previousOrdinal) {
+        throw new Error("Completed turn message ordinals are invalid.");
+      }
+      previousOrdinal = ordinal;
+      const role = enumFromSql(
+        row.role,
+        ["user", "assistant", "tool"] as const,
+        "completed turn message role",
+      );
+      if (role === "user") {
+        if (
+          row.reasoning_content !== null ||
+          numberFromSql(row.reasoning_content_present, "reasoning_content_present") !==
+            0 ||
+          row.name !== null
+        ) {
+          throw new Error("Completed user message fields are invalid.");
+        }
+        return Object.freeze({
+          ordinal,
+          role,
+          content: stringFromSql(row.content, "completed user content"),
+        });
+      }
+      if (role === "assistant") {
+        if (row.name !== null) {
+          throw new Error("Completed assistant message name must be null.");
+        }
+        const reasoningPresent = numberFromSql(
+          row.reasoning_content_present,
+          "reasoning_content_present",
+        );
+        if (reasoningPresent !== 0 && reasoningPresent !== 1) {
+          throw new Error("reasoning_content_present must be 0 or 1.");
+        }
+        if (reasoningPresent === 0 && row.reasoning_content !== null) {
+          throw new Error("Absent assistant reasoning content must be null.");
+        }
+        return Object.freeze({
+          ordinal,
+          role,
+          content: nullableTextFromSql(row.content, "completed assistant content"),
+          ...(reasoningPresent === 0
+            ? {}
+            : {
+                reasoningContent: nullableTextFromSql(
+                  row.reasoning_content,
+                  "completed assistant reasoning content",
+                ),
+              }),
+        });
+      }
+      if (
+        row.reasoning_content !== null ||
+        numberFromSql(row.reasoning_content_present, "reasoning_content_present") !== 0
+      ) {
+        throw new Error("Completed tool message reasoning fields are invalid.");
+      }
+      return Object.freeze({
+        ordinal,
+        role,
+        name: stringFromSql(row.name, "completed tool name"),
+        content: stringFromSql(row.content, "completed tool content"),
+      });
+    });
+    return Object.freeze({ messages: Object.freeze(messages) });
   }
 
   loadProtocolView(): ProtocolContextView {
@@ -4725,6 +4847,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "web_search",
       "web_fetch",
       "recall",
+      "memory_search",
       "skill",
       "mcp",
       "generic",

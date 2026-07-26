@@ -697,8 +697,8 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "Grep") {
     return `Grep ${toolPattern(input.args) ?? ""}`.trim();
   }
-  if (input.name === "WebSearch") {
-    return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
+  if (input.name === "WebSearch" || input.name === "MemorySearch") {
+    return `${input.name} ${toolQuery(input.args) ?? ""}`.trim();
   }
   if (input.name === "WebFetch") {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
@@ -779,6 +779,11 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       return raw.mode === "search"
         ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}`
         : `${base} -> ${raw.page.returnedBytes} historical bytes`;
+    case "memory_search":
+      if (!raw.ok) {
+        return base;
+      }
+      return `${base} -> ${raw.matches.length} derived memor${raw.matches.length === 1 ? "y" : "ies"}`;
     case "skill":
       if (!raw.ok) {
         return `${base} failed -> ${boundedToolError(raw.error)}`;
@@ -846,6 +851,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "memory_search":
     case "skill":
     case "mcp":
     case "generic":
@@ -880,6 +886,7 @@ function toolRawResultDiff(
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "memory_search":
     case "skill":
     case "mcp":
     case "generic":

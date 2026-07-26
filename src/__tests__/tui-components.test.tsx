@@ -325,6 +325,30 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("shows an initial memory failure notice without creating a turn", () => {
+    const projectionStore = createProjectionStore();
+    const history = new PromptHistory();
+    let runCalls = 0;
+    const { lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionController(projectionStore, async () => {
+          runCalls += 1;
+          return completedResult();
+        })}
+        history={history}
+        initialNotice="memory disabled: global memory store is unavailable"
+      />,
+    );
+
+    expect(lastFrame()).toContain(
+      "memory disabled: global memory store is unavailable",
+    );
+    expect(runCalls).toBe(0);
+    expect(history.entries).toEqual([]);
+    expect(projectionStore.getSnapshot().recentTurns).toEqual([]);
+    cleanup();
+  });
+
   test("shows current runtime MCP tools locally without running the agent", async () => {
     let runCalls = 0;
     const snapshot: McpInventorySnapshot = {

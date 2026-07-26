@@ -5,6 +5,7 @@ import type {
   GenericToolRawResult,
   GlobRawResult,
   GrepRawResult,
+  MemorySearchRawResult,
   McpToolRawResult,
   ReadFileRawResult,
   RecallRawResult,
@@ -33,6 +34,8 @@ export class ObservationBuilder {
         return { content: renderReadObservation(input.raw) };
       case "recall":
         return { content: renderRecallObservation(input.raw) };
+      case "memory_search":
+        return { content: renderMemorySearchObservation(input.raw) };
       case "skill":
         return { content: renderSkillObservation(input.raw) };
       case "write":
@@ -225,6 +228,23 @@ function renderRecallObservation(raw: RecallRawResult): string {
       .join("\n"),
   );
   return [header, ...hits].join("\n\n");
+}
+
+function renderMemorySearchObservation(raw: MemorySearchRawResult): string {
+  if (!raw.ok) {
+    return `MemorySearch unavailable: ${raw.error}`;
+  }
+  if (raw.matches.length === 0) {
+    return "MemorySearch found no stored memories.";
+  }
+  const header = `MemorySearch returned ${raw.matches.length} derived memories. They may be stale or wrong; verify current workspace facts.`;
+  return [
+    header,
+    ...raw.matches.map(
+      (match, index) =>
+        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace}\n   ${match.text}`,
+    ),
+  ].join("\n\n");
 }
 
 export function renderSkillObservation(raw: SkillRawResult): string {

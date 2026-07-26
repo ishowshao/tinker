@@ -376,9 +376,91 @@ export type ModelTokenEstimatorMaxRetries = Extract<
   { readonly name: "maxRetries" }
 >["literalValue"];
 
+export type MemoryConfigField = {
+  readonly name: "profile" | "embedding";
+  readonly valueKind: "non-empty-string" | "embedding-profile";
+  readonly required: true;
+  readonly secret: boolean;
+  readonly description: string;
+};
+
+export const MEMORY_CONFIG_FIELDS = Object.freeze([
+  Object.freeze({
+    name: "profile",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: false,
+    description:
+      "Existing model profile used for completed-turn atomic-memory extraction.",
+  }),
+  Object.freeze({
+    name: "embedding",
+    valueKind: "embedding-profile",
+    required: true,
+    secret: true,
+    description: "Single embedding profile for the global memory database.",
+  }),
+] satisfies readonly MemoryConfigField[]);
+
+export type MemoryEmbeddingField = {
+  readonly name: "name" | "kind" | "model" | "apiBase" | "apiKey" | "dimensions";
+  readonly valueKind: "non-empty-string" | "positive-integer" | "literal-string";
+  readonly required: true;
+  readonly secret: boolean;
+  readonly literalValue?: "openai-compatible";
+  readonly description: string;
+};
+
+export const MEMORY_EMBEDDING_FIELDS = Object.freeze([
+  Object.freeze({
+    name: "name",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: false,
+    description: "Stable identity for the embedding space.",
+  }),
+  Object.freeze({
+    name: "kind",
+    valueKind: "literal-string",
+    required: true,
+    secret: false,
+    literalValue: "openai-compatible",
+    description: "Embedding transport kind.",
+  }),
+  Object.freeze({
+    name: "model",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: false,
+    description: "Embedding provider model name.",
+  }),
+  Object.freeze({
+    name: "apiBase",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: false,
+    description: "OpenAI-compatible API base URL.",
+  }),
+  Object.freeze({
+    name: "apiKey",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: true,
+    description: "Embedding provider credential.",
+  }),
+  Object.freeze({
+    name: "dimensions",
+    valueKind: "positive-integer",
+    required: true,
+    secret: false,
+    description: "Fixed vector dimensions for the global memory database.",
+  }),
+] satisfies readonly MemoryEmbeddingField[]);
+
 export const MODEL_PROFILES_DOCUMENT_FIELDS = Object.freeze([
   Object.freeze({ name: "default", valueKind: "non-empty-string" as const }),
   Object.freeze({ name: "profiles", valueKind: "profiles-map" as const }),
+  Object.freeze({ name: "memory", valueKind: "memory-config" as const }),
 ]);
 
 export type PublicToolingConfig = {

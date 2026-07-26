@@ -1,0 +1,133 @@
+import type { SessionId, TurnId } from "../ids/runtime-id";
+
+export const MEMORY_SEARCH_TOOL_NAME = "MemorySearch" as const;
+export const MEMORY_SCHEMA_VERSION = 1 as const;
+export const MAX_MEMORIES_PER_TURN = 4;
+export const MAX_MEMORY_TEXT_BYTES = 512;
+export const MAX_MEMORY_QUERY_BYTES = 1_024;
+export const MEMORY_SEARCH_LIMIT = 5;
+
+export type MemoryEmbeddingKind = "openai-compatible";
+
+export type MemoryEmbeddingConfig = {
+  readonly name: string;
+  readonly kind: MemoryEmbeddingKind;
+  readonly model: string;
+  readonly apiBase: string;
+  readonly apiKey: string;
+  readonly dimensions: number;
+};
+
+export type MemoryEmbeddingIdentity = Pick<
+  MemoryEmbeddingConfig,
+  "name" | "kind" | "model" | "dimensions"
+>;
+
+export type MemoryPaths = {
+  readonly directory: string;
+  readonly database: string;
+  readonly log: string;
+};
+
+export type MemoryWriteCandidate = {
+  readonly text: string;
+  readonly embedding: Float32Array;
+};
+
+export type MemoryWriteBatch = {
+  readonly workspaceRoot: string;
+  readonly sessionId: SessionId;
+  readonly turnId: TurnId;
+  readonly candidates: readonly MemoryWriteCandidate[];
+};
+
+export type MemoryWriteResult = {
+  readonly written: number;
+  readonly duplicate: number;
+};
+
+export type MemorySearchMatch = {
+  readonly memoryId: string;
+  readonly text: string;
+  readonly score: number;
+  readonly sourceWorkspace: string;
+  readonly createdAt: string;
+};
+
+export type MemoryExtractionRejectedCounts = {
+  readonly duplicate: number;
+  readonly secret: number;
+  readonly invalid: number;
+  readonly embedding: number;
+};
+
+export type MemoryExtractionDiagnostic = {
+  readonly at: string;
+  readonly kind: "extraction";
+  readonly outcome: "ok" | "failed" | "skipped";
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly turnId: string;
+  readonly inputTokens: number;
+  readonly returned: number;
+  readonly written: number;
+  readonly rejected: MemoryExtractionRejectedCounts;
+  readonly ms: number;
+};
+
+export type MemorySearchDiagnostic = {
+  readonly at: string;
+  readonly kind: "search";
+  readonly outcome: "ok" | "failed" | "skipped";
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly sessionId: string;
+  readonly queryBytes: number;
+  readonly returned: number;
+  readonly scores: readonly number[];
+  readonly ms: number;
+};
+
+export type MemoryInitDiagnostic = {
+  readonly at: string;
+  readonly kind: "init";
+  readonly outcome: "failed";
+  readonly reason: string;
+};
+
+export type MemoryDiagnostic =
+  | MemoryExtractionDiagnostic
+  | MemorySearchDiagnostic
+  | MemoryInitDiagnostic;
+
+export class MemoryError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "MemoryError";
+  }
+}
+
+export function memoryErrorCode(error: unknown, fallback: string): string {
+  return error instanceof MemoryError ? error.code : fallback;
+}
+
+export function boundedMemoryError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const singleLine = raw.replaceAll(/\s+/g, " ").trim() || "unknown memory error";
+  return truncateUtf8(singleLine, 400);
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  let end = Math.min(value.length, maxBytes);
+  while (end > 0 && Buffer.byteLength(`${value.slice(0, end)}…`, "utf8") > maxBytes) {
+    end -= 1;
+  }
+  return `${value.slice(0, end)}…`;
+}

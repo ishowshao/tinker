@@ -133,6 +133,7 @@ export function createDefaultTooling(options: {
   skillCatalog?: SkillCatalogSnapshot;
   skillCoordinator?: SkillActivationCoordinator;
   toolingConfig?: PublicToolingConfig;
+  memorySearch?: ToolExecutor;
 }): DefaultTooling {
   const snapshots: FileSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -170,6 +171,9 @@ export function createDefaultTooling(options: {
     }),
   );
   registry.register(createRecallToolExecutor({ historyReader: options.historyReader }));
+  if (options.memorySearch !== undefined) {
+    registry.register(options.memorySearch);
+  }
   if (options.skillCatalog !== undefined) {
     if (options.skillCatalog.skills.size === 0) {
       throw new Error("An empty Agent Skill catalog must not register tooling.");

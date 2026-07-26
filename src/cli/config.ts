@@ -16,6 +16,7 @@ import {
   type ModelTokenEstimatorProfile,
   unknownProfileError,
 } from "./model-profiles";
+import type { MemoryEmbeddingConfig } from "../memory/contracts";
 import {
   parsePublicEnvironment,
   type ParsedPublicEnvironment,
@@ -45,6 +46,12 @@ export type RunnerConfigSelection = {
 
 type RunnerConfigTemplate = Omit<RunnerConfig, "sessionId">;
 
+export type ResolvedMemoryConfig = {
+  readonly profile: ModelProfile;
+  readonly contextBudget: ModelContextBudget;
+  readonly embedding: MemoryEmbeddingConfig;
+};
+
 export type ResolvedPublicConfig =
   | {
       readonly mode: "env";
@@ -56,6 +63,7 @@ export type ResolvedPublicConfig =
       readonly tooling: PublicToolingConfig;
       readonly profiles: ModelProfiles;
       readonly templates: ReadonlyMap<string, RunnerConfigTemplate>;
+      readonly memory?: ResolvedMemoryConfig;
       readonly persistDefaultProfile: (profileName: string) => Promise<void>;
     };
 
@@ -85,11 +93,16 @@ export function createResolvedPublicConfig(
         runnerConfigTemplateFromProfile(environment, profile),
       ]),
     );
+    const memory =
+      profiles.memory === undefined
+        ? undefined
+        : resolveMemoryConfig(profiles, profiles.memory.profile);
     return Object.freeze({
       mode: "profile",
       tooling: environment.tooling,
       profiles,
       templates,
+      ...(memory === undefined ? {} : { memory }),
       persistDefaultProfile: (profileName: string) =>
         persistDefaultProfile(profileName, environment.modelsPath),
     });
@@ -102,6 +115,22 @@ export function createResolvedPublicConfig(
     mode: "env",
     tooling: environment.tooling,
     template: runnerConfigTemplateFromEnvironment(environment),
+  });
+}
+
+function resolveMemoryConfig(
+  profiles: ModelProfiles,
+  profileName: string,
+): ResolvedMemoryConfig {
+  const profile = profiles.profiles.get(profileName);
+  if (profile === undefined || profiles.memory === undefined) {
+    throw unknownProfileError(profileName, profiles);
+  }
+  const contextProfile = profileToContextProfile(profile);
+  return Object.freeze({
+    profile,
+    contextBudget: deriveModelContextBudget(contextProfile),
+    embedding: profiles.memory.embedding,
   });
 }
 

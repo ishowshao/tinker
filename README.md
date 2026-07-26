@@ -243,6 +243,59 @@ Image-capable profile example:
   }
 }
 ```
+
+The top-level `memory` object is optional. When present, every field below is required. It enables completed-turn extraction and `MemorySearch` only in the TUI; one-shot runs do not load memory.
+
+| Field | Required | Type / constraint | Secret | Description |
+| --- | --- | --- | --- | --- |
+| `profile` | Yes | Non-empty string | No | Existing model profile used for completed-turn atomic-memory extraction. |
+| `embedding` | Yes | Object | Yes | Single embedding profile for the global memory database. |
+
+`memory.embedding` fields:
+
+| Field | Required | Type / constraint | Secret | Description |
+| --- | --- | --- | --- | --- |
+| `name` | Yes | Non-empty string | No | Stable identity for the embedding space. |
+| `kind` | Yes | Literal `"openai-compatible"` | No | Embedding transport kind. |
+| `model` | Yes | Non-empty string | No | Embedding provider model name. |
+| `apiBase` | Yes | Non-empty string | No | OpenAI-compatible API base URL. |
+| `apiKey` | Yes | Non-empty string | Yes | Embedding provider credential. |
+| `dimensions` | Yes | Positive integer | No | Fixed vector dimensions for the global memory database. |
+
+Enabling memory sends completed-turn text (not image bytes) to `memory.profile`, and sends extracted candidates plus search queries to the embedding endpoint. Derived memories are stored in `~/.tinker/memory/memory.sqlite`.
+
+Atomic-memory profile example:
+
+```json
+{
+  "default": "text",
+  "profiles": {
+    "text": {
+      "model": "example-text-model",
+      "apiBase": "https://api.example.com/v1",
+      "apiKey": "your-model-api-key",
+      "contextWindowTokens": 128000,
+      "maxSupportedOutputTokens": 8192,
+      "includeReasoningContent": false,
+      "stream": true,
+      "inputModalities": [
+        "text"
+      ]
+    }
+  },
+  "memory": {
+    "profile": "text",
+    "embedding": {
+      "name": "example-embedding-space",
+      "kind": "openai-compatible",
+      "model": "example-embedding-model",
+      "apiBase": "https://embeddings.example.com/v1",
+      "apiKey": "your-embedding-api-key",
+      "dimensions": 1024
+    }
+  }
+}
+```
 <!-- END GENERATED: MODEL PROFILE FIELDS -->
 
 You can also select profiles explicitly for the TUI or one-shot command:

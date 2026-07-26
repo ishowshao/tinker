@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-25
-- 状态：提案
+- 状态：已实现并验证
 - 上位文档：
   [`high-level-decisions.md`](high-level-decisions.md)
 - 目标：以最少能力验证“Turn 可以形成跨 Session 记忆，模型以后可以主动找回”这条闭环

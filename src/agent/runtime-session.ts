@@ -13,6 +13,7 @@ import {
   runtimeIdFactory,
   type RuntimeIdFactory,
   type SessionId,
+  type TurnId,
 } from "../ids/runtime-id";
 import { loadMcpConfig } from "../mcp/mcp-config";
 import {
@@ -71,11 +72,13 @@ import {
   renderedMessageHash,
 } from "../context/compiled-context-hash";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
+import type { ToolExecutor } from "../tools/types";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import {
   SessionStore,
   createSessionCompatibilityContract,
+  type CompletedTurnSnapshot,
   type SessionRecoveryResult,
   type StoredSkillActivation,
 } from "../session/session-store";
@@ -212,6 +215,25 @@ export type SkillsUpdateSummary = {
   readonly addedOverrideCount: number;
 };
 
+export type CompletedTurnHookInput = {
+  readonly workspaceRoot: string;
+  readonly sessionId: SessionId;
+  readonly turnId: TurnId;
+  readonly snapshot: CompletedTurnSnapshot;
+};
+
+export type CompletedTurnHookFailure = {
+  readonly workspaceRoot: string;
+  readonly sessionId: SessionId;
+  readonly turnId: TurnId;
+  readonly reason: "completed_turn_snapshot_failed" | "completed_turn_enqueue_failed";
+};
+
+export type CompletedTurnHook = {
+  enqueue(input: CompletedTurnHookInput): void;
+  recordFailure(input: CompletedTurnHookFailure): void;
+};
+
 type CommonRuntimeSessionInput = {
   workspaceRoot: string;
   modelName: string;
@@ -233,6 +255,8 @@ type CommonRuntimeSessionInput = {
       };
   webFetchRefiner?: Refiner;
   toolingConfig?: PublicToolingConfig;
+  memorySearch?: ToolExecutor;
+  completedTurnHook?: CompletedTurnHook;
 };
 
 type CreateNewRuntimeSessionInput = CommonRuntimeSessionInput & {
@@ -534,6 +558,9 @@ class DefaultRuntimeSession implements RuntimeSession {
         historyReader: store.historyReader(),
         webFetchRefiner: input.webFetchRefiner,
         toolingConfig: input.toolingConfig,
+        ...(input.memorySearch === undefined
+          ? {}
+          : { memorySearch: input.memorySearch }),
         ...(session.skillCatalog.skills.size === 0
           ? {}
           : {
@@ -1717,6 +1744,9 @@ class DefaultRuntimeSession implements RuntimeSession {
       await this.appendTerminalEvent(turn, result, projectedMessageCount);
       pendingLedgerTurn.finish(result);
       settled = true;
+      if (result.status === "completed") {
+        this.notifyCompletedTurn(turn);
+      }
       await this.settleClosedTurnSkills();
       if (result.status === "completed") {
         await this.performAutomaticContextMaintenance();
@@ -1761,6 +1791,55 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (this.state === "maintaining_context") {
         this.state = "executing";
       }
+    }
+  }
+
+  private notifyCompletedTurn(turn: TurnIdentity): void {
+    const hook = this.input.completedTurnHook;
+    if (hook === undefined) {
+      return;
+    }
+    let snapshot: CompletedTurnSnapshot;
+    try {
+      snapshot = this.store.readCompletedTurnSnapshot(turn.turnId);
+    } catch {
+      this.recordCompletedTurnHookFailure(
+        hook,
+        turn.turnId,
+        "completed_turn_snapshot_failed",
+      );
+      return;
+    }
+    try {
+      hook.enqueue({
+        workspaceRoot: this.input.workspaceRoot,
+        sessionId: this.sessionId,
+        turnId: turn.turnId,
+        snapshot,
+      });
+    } catch {
+      this.recordCompletedTurnHookFailure(
+        hook,
+        turn.turnId,
+        "completed_turn_enqueue_failed",
+      );
+    }
+  }
+
+  private recordCompletedTurnHookFailure(
+    hook: CompletedTurnHook,
+    turnId: TurnId,
+    reason: CompletedTurnHookFailure["reason"],
+  ): void {
+    try {
+      hook.recordFailure({
+        workspaceRoot: this.input.workspaceRoot,
+        sessionId: this.sessionId,
+        turnId,
+        reason,
+      });
+    } catch {
+      // Optional completed-turn integrations never fault a committed turn.
     }
   }
 

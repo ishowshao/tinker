@@ -76,6 +76,47 @@ describe("ToolRegistry", () => {
       "Tool Duplicate from test-source-b conflicts with an existing registration from test-source-a",
     );
   });
+
+  test("registers MemorySearch only when composition supplies its executor", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-memory-tool-"));
+    const memorySearch = defineToolExecutor("memory_search", {
+      definition: {
+        name: "MemorySearch",
+        description: "test memory search",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+      },
+      async execute() {
+        return { ok: true, matches: [] };
+      },
+    });
+    try {
+      const withoutMemory = createDefaultTooling({ workspaceRoot: workspace });
+      expect(
+        withoutMemory.registry
+          .definitions()
+          .some((definition) => definition.name === "MemorySearch"),
+      ).toBe(false);
+      await withoutMemory.dispose();
+
+      const withMemory = createDefaultTooling({
+        workspaceRoot: workspace,
+        memorySearch,
+      });
+      expect(
+        withMemory.registry
+          .definitions()
+          .some((definition) => definition.name === "MemorySearch"),
+      ).toBe(true);
+      await withMemory.dispose();
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
 });
 
 describe("Read and Write tools", () => {

@@ -139,6 +139,9 @@ describe("runOneShot", () => {
       expect(code).toBe(0);
       expect(stderr.output).toBe("");
       const messages = model.inputs[0]?.messages ?? [];
+      expect(model.inputs[0]?.tools.some((tool) => tool.name === "MemorySearch")).toBe(
+        false,
+      );
       expect(messages.filter((message) => message.role === "system")).toHaveLength(1);
       expect(messages[0]).toMatchObject({ role: "system" });
       expect(messages[0]?.content).toContain(instructions.trim());

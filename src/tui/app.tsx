@@ -59,6 +59,7 @@ export type AppProps = {
   ) => Promise<string | undefined>;
   writeClipboard?: (markdown: string) => Promise<void>;
   onQuit?: () => void;
+  initialNotice?: string;
 };
 
 type ResumePickerState =
@@ -99,7 +100,7 @@ export function App(props: AppProps) {
   const [isSessionOperation, setIsSessionOperation] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const [notice, setNotice] = useState<string | undefined>(undefined);
+  const [notice, setNotice] = useState<string | undefined>(props.initialNotice);
   const [showStatus, setShowStatus] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [showMcp, setShowMcp] = useState(false);

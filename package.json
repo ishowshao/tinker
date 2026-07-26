@@ -20,6 +20,7 @@
     "src/image",
     "src/instructions",
     "src/mcp",
+    "src/memory",
     "src/model",
     "src/observation",
     "src/session",

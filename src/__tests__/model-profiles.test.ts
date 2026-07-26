@@ -60,6 +60,65 @@ describe("parseModelProfiles", () => {
     });
   });
 
+  test("strictly parses the optional atomic-memory configuration", () => {
+    const result = parseModelProfiles(memoryJson(), "/test/models.json");
+    expect(result.memory).toEqual({
+      profile: "deepseek",
+      embedding: {
+        name: "global-memory-v1",
+        kind: "openai-compatible",
+        model: "embedding-3",
+        apiBase: "https://embedding.example.test/v1",
+        apiKey: "embedding-key",
+        dimensions: 2_048,
+      },
+    });
+  });
+
+  test("rejects incomplete, unknown, and invalid memory configuration", () => {
+    for (const memory of [
+      null,
+      {},
+      { profile: "deepseek" },
+      { embedding: validMemoryEmbedding() },
+      {
+        profile: "missing",
+        embedding: validMemoryEmbedding(),
+      },
+      {
+        profile: "deepseek",
+        embedding: { ...validMemoryEmbedding(), kind: "custom" },
+      },
+      {
+        profile: "deepseek",
+        embedding: { ...validMemoryEmbedding(), apiBase: "not a URL" },
+      },
+      {
+        profile: "deepseek",
+        embedding: { ...validMemoryEmbedding(), dimensions: 0 },
+      },
+      {
+        profile: "deepseek",
+        embedding: { ...validMemoryEmbedding(), extra: true },
+      },
+      {
+        profile: "deepseek",
+        embedding: validMemoryEmbedding(),
+        extra: true,
+      },
+    ]) {
+      expect(() =>
+        parseModelProfiles(
+          JSON.stringify({
+            ...JSON.parse(VALID_JSON),
+            memory,
+          }),
+          "/test/models.json",
+        ),
+      ).toThrow();
+    }
+  });
+
   test("rejects invalid JSON", () => {
     expect(() => parseModelProfiles("{ not json", "/test/models.json")).toThrow(
       "Invalid JSON",
@@ -360,6 +419,27 @@ function profileJson(overrides: Record<string, unknown>): string {
   });
 }
 
+function memoryJson(): string {
+  return JSON.stringify({
+    ...JSON.parse(VALID_JSON),
+    memory: {
+      profile: "deepseek",
+      embedding: validMemoryEmbedding(),
+    },
+  });
+}
+
+function validMemoryEmbedding() {
+  return {
+    name: "global-memory-v1",
+    kind: "openai-compatible",
+    model: "embedding-3",
+    apiBase: "https://embedding.example.test/v1",
+    apiKey: "embedding-key",
+    dimensions: 2_048,
+  };
+}
+
 describe("resolveModelProfile", () => {
   const profiles: ModelProfiles = parseModelProfiles(VALID_JSON, "/test/models.json");
 
@@ -469,6 +549,26 @@ describe("model profiles file", () => {
         default: string;
       };
       expect(persisted.default).toBe("gpt-4o");
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  test("preserves memory configuration while changing the default profile", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "tinker-models-"));
+    const configPath = path.join(directory, "models.json");
+    try {
+      await writeFile(configPath, memoryJson(), { mode: 0o600 });
+      await persistDefaultProfile("gpt-4o", configPath);
+      const persisted = JSON.parse(await readFile(configPath, "utf8")) as {
+        default: string;
+        memory: unknown;
+      };
+      expect(persisted.default).toBe("gpt-4o");
+      expect(persisted.memory).toEqual({
+        profile: "deepseek",
+        embedding: validMemoryEmbedding(),
+      });
     } finally {
       await rm(directory, { recursive: true });
     }

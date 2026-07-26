@@ -12,6 +12,8 @@ import type { SessionId } from "../ids/runtime-id";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
   DEFAULT_PUBLIC_TOOLING_CONFIG,
+  MEMORY_CONFIG_FIELDS,
+  MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_TOKEN_ESTIMATOR_FIELDS,
   PUBLIC_CONFIG_FIELDS,
@@ -122,6 +124,21 @@ describe("public config contract", () => {
       "apiKey",
       "timeoutMs",
       "maxRetries",
+    ]);
+    expect(MEMORY_CONFIG_FIELDS.map((field) => field.name)).toEqual([
+      "profile",
+      "embedding",
+    ]);
+    expect(
+      MEMORY_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
+    ).toEqual(["embedding"]);
+    expect(MEMORY_EMBEDDING_FIELDS.map((field) => field.name)).toEqual([
+      "name",
+      "kind",
+      "model",
+      "apiBase",
+      "apiKey",
+      "dimensions",
     ]);
   });
 });
@@ -297,6 +314,47 @@ describe("profile resolution", () => {
       }),
     ).toMatchObject({ modelName: "glm-4.6", profileName: "glm" });
     expect(resolved).not.toHaveProperty("sessionId");
+  });
+
+  test("pre-resolves one fixed memory extraction profile and embedding profile", () => {
+    const profiles = parseModelProfiles(
+      JSON.stringify({
+        ...JSON.parse(TEST_PROFILES_JSON),
+        memory: {
+          profile: "glm",
+          embedding: {
+            name: "global-memory-v1",
+            kind: "openai-compatible",
+            model: "embedding-3",
+            apiBase: "https://embedding.example.test/v1",
+            apiKey: "embedding-key",
+            dimensions: 2_048,
+          },
+        },
+      }),
+      "/test/models.json",
+    );
+    const resolved = createResolvedPublicConfig(profileEnvironment(), profiles);
+    expect(resolved.mode).toBe("profile");
+    if (resolved.mode !== "profile") {
+      throw new Error("Expected profile mode.");
+    }
+    expect(resolved.memory).toMatchObject({
+      profile: {
+        name: "glm",
+        model: "glm-4.6",
+      },
+      embedding: {
+        name: "global-memory-v1",
+        dimensions: 2_048,
+      },
+    });
+    expect(resolved.memory?.contextBudget).toEqual(
+      deriveRunnerConfig(resolved, {
+        sessionId: TEST_SESSION_ID,
+        profileName: "glm",
+      }).contextBudget,
+    );
   });
 
   test("fast-fails invalid mode/profile combinations", () => {

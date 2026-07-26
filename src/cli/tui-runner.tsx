@@ -42,6 +42,7 @@ import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 import { clipboardWriterForEnvironment } from "../tui/clipboard";
+import { initializeTuiMemory } from "./tui-memory";
 
 export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
@@ -54,6 +55,13 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     options.publicConfig.mode === "profile" ? options.publicConfig.profiles : undefined;
   const config = options.initialRunnerConfig;
   const workspaceRoot = await realpath(config.workspaceRoot);
+  const memory = await initializeTuiMemory({
+    config:
+      options.publicConfig.mode === "profile" ? options.publicConfig.memory : undefined,
+    env: options.env,
+  });
+  const memoryCoordinator = memory.coordinator;
+  const memoryNotice = memory.notice;
   let controller: DefaultTuiSessionController | undefined;
   let instance: ReturnType<typeof render> | undefined;
   let disposeReason: SessionDisposeReason = { type: "tui_exit" };
@@ -94,6 +102,15 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
         toolingConfig: options.publicConfig.tooling,
+        ...(memoryCoordinator === undefined
+          ? {}
+          : {
+              memorySearch: memoryCoordinator.createSearchToolExecutor({
+                workspaceRoot,
+                sessionId,
+              }),
+              completedTurnHook: memoryCoordinator,
+            }),
       };
       if (mode === "resume") {
         return createRuntimeSession({
@@ -260,6 +277,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         onQuit={() => {
           quitRequested = true;
         }}
+        initialNotice={memoryNotice}
       />,
     );
     await instance.waitUntilExit();
@@ -269,6 +287,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
   } finally {
     instance?.unmount();
     restoreStdin();
+    memoryCoordinator?.dispose();
     if (controller !== undefined) {
       try {
         await controller.dispose(disposeReason);

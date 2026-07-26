@@ -245,6 +245,21 @@ export type RecallGetRawResult =
 
 export type RecallRawResult = RecallSearchRawResult | RecallGetRawResult;
 
+export type MemorySearchRawResult =
+  | {
+      ok: true;
+      matches: readonly {
+        text: string;
+        score: number;
+        sourceWorkspace: string;
+        createdAt: string;
+      }[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 export type SkillRawResult =
   | {
       ok: true;
@@ -307,6 +322,7 @@ export type ToolRawResultByKind = {
   web_search: WebSearchRawResult;
   web_fetch: WebFetchRawResult;
   recall: RecallRawResult;
+  memory_search: MemorySearchRawResult;
   skill: SkillRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;
