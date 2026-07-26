@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
@@ -11,7 +11,7 @@ import {
   normalizeEmbedding,
 } from "../memory/vector";
 import type { SessionId, TurnId } from "../ids/runtime-id";
-import { MemoryLog } from "../memory/memory-log";
+import { ExtractedMemoryLog, MemoryLog } from "../memory/memory-log";
 
 const EMBEDDING = Object.freeze({
   name: "test-space",
@@ -63,7 +63,16 @@ describe("MemoryStore", () => {
           },
         ],
       });
-      expect(first).toEqual({ written: 2, duplicate: 0 });
+      expect(first).toMatchObject({ written: 2, duplicate: 0 });
+      expect(first.inserted.map((memory) => memory.text)).toEqual([
+        "Tinker source changes require bun run check.",
+        "The user prefers strict fail-fast configuration.",
+      ]);
+      expect(
+        first.inserted.every(
+          (memory) => memory.createdAt === "2026-07-25T10:00:00.000Z",
+        ),
+      ).toBe(true);
 
       const duplicate = store.insertBatch({
         ...fixture.source,
@@ -74,7 +83,11 @@ describe("MemoryStore", () => {
           },
         ],
       });
-      expect(duplicate).toEqual({ written: 0, duplicate: 1 });
+      expect(duplicate).toEqual({
+        written: 0,
+        duplicate: 1,
+        inserted: [],
+      });
       expect(store.count()).toBe(2);
       expect(
         store.search(normalizeEmbedding([0.9, 0.1, 0], 3)).map((match) => match.text),
@@ -91,6 +104,7 @@ describe("MemoryStore", () => {
       expect(store.count()).toBe(2);
       expect((await stat(fixture.paths.directory)).mode & 0o777).toBe(0o700);
       expect((await stat(fixture.paths.database)).mode & 0o777).toBe(0o600);
+      expect((await stat(fixture.paths.extractedLog)).mode & 0o777).toBe(0o600);
       for (const suffix of ["-wal", "-shm"]) {
         const mode = await stat(`${fixture.paths.database}${suffix}`).then(
           (value) => value.mode & 0o777,
@@ -390,6 +404,43 @@ describe("MemoryStore", () => {
         () => false,
       );
       expect(exists).toBe(false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("writes extracted memories as compact private text blocks", async () => {
+    const fixture = await createFixture();
+    try {
+      const log = new ExtractedMemoryLog(fixture.paths.extractedLog);
+      await log.append({
+        at: "2026-07-25T10:00:00.000Z",
+        workspace: fixture.source.workspaceRoot,
+        turnId: fixture.source.turnId,
+        memories: [
+          {
+            memoryId: "00000000-0000-7000-8000-000000000001",
+            text: "First memory\nwith a second line.",
+            createdAt: "2026-07-25T10:00:00.000Z",
+          },
+          {
+            memoryId: "00000000-0000-7000-8000-000000000002",
+            text: "Second memory.",
+            createdAt: "2026-07-25T10:00:00.000Z",
+          },
+        ],
+      });
+
+      expect(await readFile(fixture.paths.extractedLog, "utf8")).toBe(
+        [
+          `[2026-07-25T10:00:00.000Z] workspace=${JSON.stringify(fixture.source.workspaceRoot)} turn=memory-test-turn written=2`,
+          '- 00000000-0000-7000-8000-000000000001 | "First memory\\nwith a second line."',
+          '- 00000000-0000-7000-8000-000000000002 | "Second memory."',
+          "",
+          "",
+        ].join("\n"),
+      );
+      expect((await stat(fixture.paths.extractedLog)).mode & 0o777).toBe(0o600);
     } finally {
       await fixture.cleanup();
     }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
@@ -235,6 +235,7 @@ describe("MemoryCoordinator", () => {
           return model;
         },
         createEmbeddingClient: () => embeddings,
+        clock: () => "2026-07-25T10:00:00.000Z",
       });
       coordinator.enqueue({
         workspaceRoot: fixture.workspaceRoot,
@@ -319,6 +320,16 @@ describe("MemoryCoordinator", () => {
         outcome: "failed",
         reason: "memory_search_args_invalid",
       });
+      const extractedText = await readFile(fixture.paths.extractedLog, "utf8");
+      expect(extractedText).toContain(
+        `[2026-07-25T10:00:00.000Z] workspace=${JSON.stringify(fixture.workspaceRoot)} turn=coordinator-turn-1 written=2`,
+      );
+      expect(extractedText).toContain('"Tinker source changes require bun run check."');
+      expect(extractedText).toContain(
+        '"The user prefers strict fail-fast configuration."',
+      );
+      expect(extractedText.match(/^- /gm)).toHaveLength(2);
+      expect((await stat(fixture.paths.extractedLog)).mode & 0o777).toBe(0o600);
 
       coordinator.dispose();
       const reopened = await MemoryStore.open({
@@ -362,6 +373,47 @@ describe("MemoryCoordinator", () => {
         written: 0,
         rejected: { secret: 1 },
       });
+      expect(await readOptionalFile(fixture.paths.extractedLog)).toBe("");
+      coordinator.dispose();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("logs only newly inserted memories when later extraction is a duplicate", async () => {
+    const fixture = await createFixture();
+    const memory = "Tinker uses bun run check as its source-change gate.";
+    try {
+      const coordinator = await MemoryCoordinator.create({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        extractionContextBudget: TEST_CONTEXT_BUDGET,
+        createExtractionClient: () =>
+          new QueueExtractionModel([
+            JSON.stringify({ memories: [memory] }),
+            JSON.stringify({ memories: [memory] }),
+          ]),
+        createEmbeddingClient: () => new RecordingEmbeddingClient(),
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+
+      coordinator.enqueue(completedHookInput(fixture, "first evidence", "first-turn"));
+      await waitForLogLines(fixture.paths.log, 1);
+      coordinator.enqueue(
+        completedHookInput(fixture, "duplicate evidence", "duplicate-turn"),
+      );
+      const diagnostics = await waitForLogLines(fixture.paths.log, 2);
+
+      expect(diagnostics[1]).toMatchObject({
+        outcome: "ok",
+        returned: 1,
+        written: 0,
+        rejected: { duplicate: 1 },
+      });
+      const extractedText = await readFile(fixture.paths.extractedLog, "utf8");
+      expect(extractedText).toContain("turn=first-turn written=1");
+      expect(extractedText).not.toContain("duplicate-turn");
+      expect(extractedText.match(/^- /gm)).toHaveLength(1);
       coordinator.dispose();
     } finally {
       await fixture.cleanup();
@@ -696,20 +748,22 @@ async function waitForLogLines(
 }
 
 async function readDiagnostics(filePath: string): Promise<Record<string, unknown>[]> {
-  const content = await readFile(filePath, "utf8").catch(
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") {
-        return "";
-      }
-      throw error;
-    },
-  );
+  const content = await readOptionalFile(filePath);
   return content.trim() === ""
     ? []
     : content
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function readOptionalFile(filePath: string): Promise<string> {
+  return readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
 }
 
 async function waitFor<T>(

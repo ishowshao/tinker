@@ -343,13 +343,15 @@ embedding 重试或补偿协议。
 ```text
 ~/.tinker/memory/memory.sqlite
 ~/.tinker/memory/memory-log.jsonl
+~/.tinker/memory/extracted-memories.log
 ```
 
 - `~/.tinker/memory` 权限为 `0700`；
-- `memory.sqlite`、WAL、SHM 和 `memory-log.jsonl` 文件权限为 `0600`；
+- `memory.sqlite`、WAL、SHM、`memory-log.jsonl` 和 `extracted-memories.log`
+  文件权限为 `0600`；
 - 数据库启用 WAL 和 5 秒 `busy_timeout`；
 - 每个进程持有自己的连接；
-- 日志用现有的 `appendPrivateFile` 追加写，不新增日志框架、轮转或配置项。
+- 两份日志都用现有的 `appendPrivateFile` 追加写，不新增日志框架、轮转或配置项。
 
 如果仓库在实现时已经有统一的用户级数据目录解析器，应复用该解析器；否则只新增一个明确的
 memory path helper，不引入通用路径框架。
@@ -773,6 +775,33 @@ MVP 要验证的三个假设需要证据，而记忆库本身只能回答“存�
 `extraction` 行数；top-5 命中率的判定阈值来自 `scores` 分布；错误率是 `outcome != "ok"`
 的比例。
 
+### 10.6 开发期记忆正文日志
+
+为了开发阶段能直接 `tail` 观察新记忆，每批 transaction 成功提交后，如果至少新增一条
+memory，再向 `~/.tinker/memory/extracted-memories.log` 追加一个文本区块：
+
+```text
+[2026-07-26T01:03:42.616Z] workspace="/path/to/project" turn=... written=2
+- 019f... | "One atomic memory."
+- 019f... | "Another atomic memory."
+
+```
+
+固定约束：
+
+- 只列出该 transaction 真正新增的 row；精确重复、secret 拒绝、embedding 失败或 transaction
+  失败都不写正文，`written = 0` 时不产生空区块；
+- 每条包含 `memory_id`，header 包含 `workspace`、`turn` 和新增数量，便于与
+  `memory-log.jsonl` 及 SQLite 互相定位；
+- workspace 和正文使用 JSON string 表示，换行及控制字符被转义为单行；数据库中的原文
+  不变；
+- memory store 初始化时先创建权限为 `0600` 的空文件，便于在首次新增记忆前启动
+  `tail -f`；
+- 每批只做一次 append；正文日志失败不回滚已经提交的 SQLite transaction，也不影响诊断
+  日志或主 Session；
+- 这是显式包含派生记忆正文的本地开发日志，不是指标数据源，不记录 prompt、tool observation、
+  embedding、query 或被 secret detector 拒绝的内容。
+
 ## 十一、安全最低线
 
 在生成 embedding 和写库之前，对完整记忆文本做确定性敏感信息检测。至少覆盖：
@@ -895,6 +924,8 @@ MVP 要验证的三个假设需要证据，而记忆库本身只能回答“存�
 - TUI tool surface 包含 `MemorySearch`；
 - one-shot tool surface 不包含 `MemorySearch`；
 - 成功提取、跳过提取和成功搜索各写一行诊断日志，且不含 query 原文或记忆正文；
+- 成功 transaction 只把真正新增的 memory ID 和正文写入 `extracted-memories.log`，重复、
+  secret 拒绝及失败候选不写，并保持文件权限 `0600`；
 - 写日志失败不影响提取、搜索和主 Turn；
 - memory 运行时失败不使主 Turn fault。
 
@@ -923,13 +954,15 @@ bun run check
 1. 在 workspace A 的 TUI 中完成一个包含明确长期偏好或项目决定的 Turn；
 2. tail `~/.tinker/memory/memory-log.jsonl`，等到该 Turn 的 `extraction` 行出现，并确认
    `outcome` 与 `written`；
-3. 退出并重新启动 Tinker；
-4. 在 workspace B 开启新 Session；
-5. 提出语义相关但措辞不同的问题；
-6. 确认模型可见并调用 `MemorySearch`；
-7. 确认返回正确记忆，且 observation 带来源与不可信提示；
-8. 临时使 embedding 请求失败，确认搜索明确失败但主 Turn 仍可继续；
-9. 检查数据库、WAL、SHM 和目录权限。
+3. tail `~/.tinker/memory/extracted-memories.log`，确认新增区块的 `turn`、`written`、
+   `memory_id` 和正文与数据库一致；
+4. 退出并重新启动 Tinker；
+5. 在 workspace B 开启新 Session；
+6. 提出语义相关但措辞不同的问题；
+7. 确认模型可见并调用 `MemorySearch`；
+8. 确认返回正确记忆，且 observation 带来源与不可信提示；
+9. 临时使 embedding 请求失败，确认搜索明确失败但主 Turn 仍可继续；
+10. 检查数据库、WAL、SHM、两份日志和目录权限。
 
 只通过 fake model、mock embedding 或直接查 SQLite，不能宣称 MVP 已完成。
 

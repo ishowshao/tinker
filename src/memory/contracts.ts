@@ -27,6 +27,7 @@ export type MemoryPaths = {
   readonly directory: string;
   readonly database: string;
   readonly log: string;
+  readonly extractedLog: string;
 };
 
 export type MemoryWriteCandidate = {
@@ -44,6 +45,13 @@ export type MemoryWriteBatch = {
 export type MemoryWriteResult = {
   readonly written: number;
   readonly duplicate: number;
+  readonly inserted: readonly MemoryInsertedRecord[];
+};
+
+export type MemoryInsertedRecord = {
+  readonly memoryId: string;
+  readonly text: string;
+  readonly createdAt: string;
 };
 
 export type MemorySearchMatch = {

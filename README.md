@@ -262,7 +262,7 @@ The top-level `memory` object is optional. When present, every field below is re
 | `apiKey` | Yes | Non-empty string | Yes | Embedding provider credential. |
 | `dimensions` | Yes | Positive integer | No | Fixed vector dimensions for the global memory database. |
 
-Enabling memory sends completed-turn text (not image bytes) to `memory.profile`, and sends extracted candidates plus search queries to the embedding endpoint. Derived memories are stored in `~/.tinker/memory/memory.sqlite`.
+Enabling memory sends completed-turn text (not image bytes) to `memory.profile`, and sends extracted candidates plus search queries to the embedding endpoint. Derived memories are stored in `~/.tinker/memory/memory.sqlite`; newly inserted memory text is appended to the private development log `~/.tinker/memory/extracted-memories.log`.
 
 Atomic-memory profile example:
 

@@ -64,6 +64,7 @@ export function resolveMemoryPaths(homeRoot = os.homedir()): MemoryPaths {
     directory,
     database: path.join(directory, "memory.sqlite"),
     log: path.join(directory, "memory-log.jsonl"),
+    extractedLog: path.join(directory, "extracted-memories.log"),
   });
 }
 
@@ -102,9 +103,10 @@ export class MemoryStore {
 
     await ensurePrivateDirectory(paths.directory);
     await validatePrivateOptionalFile(paths.log);
+    await validatePrivateOptionalFile(paths.extractedLog);
     await validatePrivateOptionalFile(`${paths.database}-wal`);
     await validatePrivateOptionalFile(`${paths.database}-shm`);
-    await ensurePrivateDatabaseFile(paths.database);
+    await ensurePrivateFile(paths.database);
 
     const walExisted = await pathExists(`${paths.database}-wal`);
     const shmExisted = await pathExists(`${paths.database}-shm`);
@@ -121,6 +123,7 @@ export class MemoryStore {
       await secureCreatedAuxiliaryFile(`${paths.database}-wal`, walExisted);
       await secureCreatedAuxiliaryFile(`${paths.database}-shm`, shmExisted);
       await validatePrivateFile(paths.database);
+      await ensurePrivateFile(paths.extractedLog);
       return new MemoryStore(database, {
         paths,
         embedding: Object.freeze({ ...input.embedding }),
@@ -146,12 +149,16 @@ export class MemoryStore {
     this.requireOpen();
     validateWriteBatch(input, this.dimensions);
     if (input.candidates.length === 0) {
-      return Object.freeze({ written: 0, duplicate: 0 });
+      return Object.freeze({
+        written: 0,
+        duplicate: 0,
+        inserted: Object.freeze([]),
+      });
     }
 
     const createdAt = this.clock();
     requireUtcTimestamp(createdAt, "Memory creation timestamp");
-    let written = 0;
+    const inserted: MemoryWriteResult["inserted"][number][] = [];
     runImmediateTransaction(this.database, () => {
       const insert = this.database.query(
         `INSERT INTO memories (
@@ -185,12 +192,21 @@ export class MemoryStore {
             `Memory insert changed ${changes} rows.`,
           );
         }
-        written += changes;
+        if (changes === 1) {
+          inserted.push(
+            Object.freeze({
+              memoryId,
+              text: candidate.text,
+              createdAt,
+            }),
+          );
+        }
       }
     });
     return Object.freeze({
-      written,
-      duplicate: input.candidates.length - written,
+      written: inserted.length,
+      duplicate: input.candidates.length - inserted.length,
+      inserted: Object.freeze(inserted),
     });
   }
 
@@ -516,7 +532,8 @@ function validateMemoryPaths(paths: MemoryPaths): void {
   if (
     !path.isAbsolute(paths.directory) ||
     paths.database !== path.join(paths.directory, "memory.sqlite") ||
-    paths.log !== path.join(paths.directory, "memory-log.jsonl")
+    paths.log !== path.join(paths.directory, "memory-log.jsonl") ||
+    paths.extractedLog !== path.join(paths.directory, "extracted-memories.log")
   ) {
     throw new MemoryError(
       "memory_store_config_invalid",
@@ -545,7 +562,7 @@ async function ensurePrivateDirectory(directory: string): Promise<void> {
   }
 }
 
-async function ensurePrivateDatabaseFile(filePath: string): Promise<void> {
+async function ensurePrivateFile(filePath: string): Promise<void> {
   try {
     const handle = await open(filePath, "wx", 0o600);
     await handle.close();

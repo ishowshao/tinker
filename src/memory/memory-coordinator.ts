@@ -31,7 +31,7 @@ import {
   MemoryExtractor,
   type MemoryExtractionResult,
 } from "./memory-extractor";
-import { MemoryLog } from "./memory-log";
+import { ExtractedMemoryLog, MemoryLog } from "./memory-log";
 import { createMemorySearchToolExecutor } from "./memory-search-tool";
 import { MemoryStore, resolveMemoryPaths } from "./memory-store";
 import { normalizeEmbedding } from "./vector";
@@ -68,6 +68,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
     private readonly extractor: MemoryExtractor,
     private readonly embeddingClient: MemoryEmbeddingClient,
     private readonly log: MemoryLog,
+    private readonly extractedLog: ExtractedMemoryLog,
     private readonly embeddingDimensions: number,
     private readonly clock: () => string,
   ) {}
@@ -75,6 +76,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
   static async create(input: CreateMemoryCoordinatorInput): Promise<MemoryCoordinator> {
     const paths = input.paths ?? resolveMemoryPaths();
     const log = new MemoryLog(paths.log);
+    const extractedLog = new ExtractedMemoryLog(paths.extractedLog);
     const store = await MemoryStore.open({
       paths,
       embedding: input.embedding,
@@ -90,6 +92,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
         new MemoryExtractor(extractionClient, input.extractionContextBudget),
         embeddingClient,
         log,
+        extractedLog,
         input.embedding.dimensions,
         input.clock ?? (() => new Date().toISOString()),
       );
@@ -316,6 +319,14 @@ export class MemoryCoordinator implements CompletedTurnHook {
         ...rejected,
         duplicate: result.duplicate,
       });
+      if (result.inserted.length > 0) {
+        await this.extractedLog.append({
+          at: result.inserted[0].createdAt,
+          workspace: task.workspaceRoot,
+          turnId: task.turnId,
+          memories: result.inserted,
+        });
+      }
       await this.log.append(
         extractionDiagnostic({
           clock: this.clock,
