@@ -123,6 +123,9 @@ export async function runTinkerChromeMcpServer(): Promise<void> {
   };
   process.once("SIGINT", handleSignal);
   process.once("SIGTERM", handleSignal);
+  // The SDK's StdioServerTransport never observes stdin EOF, so a client that
+  // closes our stdin would otherwise wait out its 2s kill timeout on every quit.
+  process.stdin.once("end", handleSignal);
 
   try {
     await server.connect(new StdioServerTransport());
