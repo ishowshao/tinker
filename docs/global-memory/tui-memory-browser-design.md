@@ -1,18 +1,19 @@
-# 全局记忆：TUI 只读浏览器设计
+# 全局记忆：TUI 只读浏览器收窄设计
 
 ## 文档状态
 
 - 日期：2026-07-26
 - 状态：待实现
+- 文档性质：独立重写的收窄实施方案
 - 上位文档：
   [`high-level-decisions.md`](high-level-decisions.md)
 - 前置实现：
   [`atomic-memory-mvp-design.md`](atomic-memory-mvp-design.md)
-- 目标：在已经落地的原子记忆 MVP 上增加一个纯 TUI、只读的 `/memory` 浏览入口
 
-本文定义 atomic memory MVP 完成后的一个窄 follow-up。它只解决“用户如何直接查看当前全局
-SQLite 中已经存储的原子记忆”，不开始实现搜索、状态、编辑、删除、clear、organize 或 CLI
-管理面。
+本文定义 atomic memory MVP 完成后的一个窄 follow-up：为 TUI 增加无参数 `/memory`
+命令，让用户直接浏览当前全局 SQLite 中已经存储的原子记忆。
+
+本功能只有读取和展示，不扩展模型工具、自动提取、数据库 schema 或用户管理能力。
 
 ## 一、结论
 
@@ -22,56 +23,59 @@ SQLite 中已经存储的原子记忆”，不开始实现搜索、状态、编�
 /memory
 ```
 
-该命令打开一个全屏只读面板，按创建时间从新到旧展示当前用户级全局数据库中的原子记忆。
+命令打开一个全屏只读面板，按创建时间从新到旧展示全部已存原子记忆。每次打开只读取一次
+数据库；面板显示的是该次读取形成的固定 snapshot。
 
-整个操作是纯 TUI 本地读取：
+该操作完全属于 TUI 本地行为：
 
 - 不形成 agent Turn；
-- 不调用模型；
-- 不生成 query embedding；
+- 不调用模型或 embedding provider；
 - 不调用 `MemorySearch`；
 - 不写 prompt history；
 - 不进入 canonical Session history；
-- 不产生 memory search 诊断日志；
-- 面板内容不自动提供给模型。
+- 不产生 memory search 诊断记录；
+- 不自动把面板内容提供给模型。
 
-数据只来自 `memory.sqlite`。`extracted-memories.log` 是开发期观察成功写入批次的日志，不是
-存储真相，不能作为浏览器的数据源。
+数据只来自 `memory.sqlite`。`extracted-memories.log` 只是开发期观察日志，不能作为浏览器的
+数据源。
 
 ## 二、范围
 
 ### 2.1 本次包含
 
 - 无参数 `/memory` slash command；
-- 全屏只读记忆面板；
-- 按创建时间倒序读取全部已存原子记忆；
-- 记忆正文、来源 workspace 和创建时间；
+- 全屏只读浏览面板；
+- 按创建时间倒序读取全部原子记忆；
+- 展示创建时间、来源 workspace 和完整记忆正文；
 - Ink 原生折行和物理行滚动；
 - 控制字符安全显示投影；
-- 与 FileViewer 共用的终端 mouse tracking hook；
-- 空库、未配置、初始化失败和运行时读取失败的本地反馈；
-- store、coordinator facade、TUI component、App 接线和真实 PTY 验证；
-- 对现有两份全局记忆文档中冲突契约的同步修订。
+- 键盘逐行、翻页、首尾跳转和退出；
+- 空库、未配置、初始化失败和读取失败的本地反馈；
+- store 读取、coordinator facade、TUI component 和 App 接线；
+- 一条覆盖真实公开路径的 PTY journey；
+- 对现有全局记忆文档中现行合同的最小同步。
 
-### 2.2 本次明确不包含
+### 2.2 本次不包含
 
-- `/memory` 的任何参数或子命令；
+- `/memory` 的参数或子命令；
 - `/memory search`、`status`、`delete`、`clear` 或 `organize`；
 - `tinker memory ...` CLI；
 - `tinker run` 的 memory surface；
-- 记忆编辑、选择、确认或批量操作；
-- FTS、关键词过滤、workspace filter 或语义排序；
-- 面板内手动刷新、自动刷新、SQLite polling 或文件监听；
+- 搜索、筛选、排序选项或 workspace filter；
+- 记忆选择、编辑、删除、确认或批量操作；
+- 手动刷新、自动刷新、SQLite polling 或文件监听；
+- 鼠标滚轮或 terminal mouse tracking；
 - 独立的只读数据库连接；
-- 数据库分页、cursor 或懒加载；
-- 自定义文本折行、字符宽度测量或布局缓存；
+- 数据库分页、cursor、懒加载或任意条数上限；
+- 自定义文本折行、字符宽度算法或布局缓存；
 - schema、table、index 或 migration 变更；
-- memory worker 状态和诊断指标面板；
-- 为未来管理功能提前展示内部 ID。
+- worker 状态、诊断指标或内部 ID 展示；
+- 通用 viewer framework 重构；
+- 对现有 `MemorySearchMatch` 合同的重构。
 
-## 三、命令契约
+## 三、命令合同
 
-slash command 声明固定为：
+内建 slash command 声明为：
 
 ```ts
 {
@@ -84,26 +88,26 @@ slash command 声明固定为：
 解析规则：
 
 - `/memory` 返回 `{ type: "memory" }`；
-- `/memory ` trim 后仍等价于 `/memory`；
-- `/memory` 后出现任何参数都返回 `Usage: /memory`；
-- 命令在 slash command autocomplete 中始终可见，即使当前进程没有启用 memory。
+- trailing whitespace 在 trim 后仍等价于 `/memory`；
+- 后面出现任何参数都返回 `Usage: /memory`；
+- autocomplete 始终显示该命令，即使当前进程没有启用 memory；
+- project slash command 不能覆盖内建 `/memory`。
 
-命令始终由 `App` 本地截获，不能经过 `submitAgentPrompt()`。这与 `/view`、`/skills` 和
-`/mcp` 的本地命令边界一致。
+`App` 必须在本地 slash command 分支中截获该命令，不能进入
+`submitAgentPrompt()`。
 
-## 四、展示与交互
+## 四、展示合同
 
 ### 4.1 全屏面板
 
-面板替换正常的 Header、Timeline、Footer 和 PromptInput。它必须加入 `App` 现有
-`fileView`、`resumePicker` 全屏分支链，使 PromptInput 在面板打开期间被卸载，避免多个
-`useInput` 同时接收按键。
+面板替换正常的 Header、Timeline、Footer 和 PromptInput，并加入 `App` 现有全屏分支。
+面板打开期间 PromptInput 必须卸载，避免多个 `useInput` 同时接收按键。
 
-布局固定为：
+布局形状为：
 
 ```text
 Global memory
-↑/↓ or j/k · PgUp/PgDn · Home/End · mouse wheel · Esc close
+↑/↓ or j/k · PgUp/PgDn · Home/End · Esc close
 
 2026-07-26 14:32 · /Users/cyberoldman/htdocs/tinker
 在 Tinker 仓库中，源代码变更完成前必须通过 bun run check。
@@ -114,15 +118,15 @@ Global memory
 1–8 / 42 lines · 17 memories
 ```
 
-页脚的行范围表示当前可见的物理行位置；memory 部分只显示数据库 snapshot 中的记忆总数。
-
 每条记录展示：
 
-- 本地可读的创建时间；
-- 完整的绝对来源 workspace；
-- 可完整浏览的记忆正文安全显示投影。
+- 转换为本地可读格式的创建时间；
+- 来源 workspace 的完整绝对路径作为 metadata 内容；
+- 记忆正文的安全显示投影。
 
-不展示：
+workspace metadata 在窄终端中可以中间截断，以免撑破布局。数据库中的完整路径不被修改。
+
+面板不展示：
 
 - `memory_id`；
 - `source_session_id`；
@@ -130,22 +134,14 @@ Global memory
 - embedding；
 - score。
 
-`memory_id` 只用于数据库确定性排序和 React key，不作为普通用户身份显示。
+`memory_id` 只用于数据库确定性排序和 React key，不作为用户可见身份。
 
-### 4.2 Ink 原生布局与滚动
+### 4.2 文本安全边界
 
-记忆正文最多 512 UTF-8 bytes，但在窄终端中仍可能换成多行。面板不能同时维护“数据库页”、
-“视口页”和“选中条目”三套位置。
+Memory Store 当前只约束正文非空和 byte limit；正文内部可能包含 tab、CR 或终端控制字符。
+这些内容不能未经处理直接写入终端。
 
-MemoryBrowser 不自行计算物理折行。它先把数据库中的原始正文投影为只用于 TUI 展示的安全
-文本，再把文本直接交给 Ink 的 `Text`；Ink 根据父容器宽度完成折行和重新布局：
-
-- `\r\n` 和单独的 `\r` 统一为 `\n` hard break；
-- `\t` 固定展开为 4 个空格，与 FileViewer 一致；
-- 除 `\n` 外的 C0、DEL 和 C1 控制字符替换为可见的 `U+FFFD`；
-- 不修改数据库正文、hash、embedding、提取日志或 `MemorySearch` 返回值。
-
-归一化顺序固定为：
+浏览器在展示边界进行以下投影：
 
 ```ts
 function normalizeMemoryDisplayText(text: string): string {
@@ -159,79 +155,65 @@ function normalizeMemoryDisplayText(text: string): string {
 }
 ```
 
-该归一化是显示边界，不是存储 migration。当前提取器和 Store 只校验 trim、byte limit 等
-合同，正文内部的 tab、CR、BEL、ESC 或其他控制字符可能已经存在，不能直接交给终端，也不能
-让它们改变终端状态。正文不进行自定义分词、宽度测量或预折行。
+规则固定为：
 
-全部记录按自然高度渲染在固定高度、`overflow="hidden"` 的 Ink 容器内，通过纵向偏移内容实现
-滚动。内容容器必须禁止 flex shrink；记录间空白使用固定高度的 `Box`，不依赖空 `Text` 的
-测量行为。metadata 整行使用 `wrap="truncate-middle"`，避免绝对路径在窄终端撑破布局。
+- CRLF 和单独 CR 都转成一个 `\n` hard break；
+- tab 展开为 4 个空格；
+- 除 `\n` 外的 C0、DEL 和 C1 控制字符显示为 `U+FFFD`；
+- 连续换行形成的空正文行必须保留；
+- 不修改数据库正文、hash、embedding、日志或 `MemorySearch` 返回值。
 
-Ink 的布局结果提供内容物理行总数，供 `End`、页脚和滚动边界使用。组件只维护一个位置：
+该函数只是显示投影，不是存储 migration。
 
-```ts
-const [topLine, setTopLine] = useState(0);
-```
+### 4.3 折行与滚动
 
-终端尺寸变化时由 Ink 重新布局；内容高度变化后把 `topLine` clamp 到新的合法范围。这里依赖
-的是 Ink 布局，不是终端在输出字节后自行换行；因此视口裁剪、页脚和 `End` 都有确定边界。
+正文直接交给 Ink `Text`，由 Ink 根据当前父容器宽度完成折行和重新布局。浏览器不自行分词、
+测量字符宽度或预先生成折行文本。
 
-本次没有可执行的条目操作，因此不增加 selected memory 或条目 cursor。
+滚动以 Ink 布局后的物理行为单位。实现必须满足以下可观察合同：
 
-### 4.3 按键
+- 所有记忆正文都可以完整浏览；
+- `↑`、`k` 向上滚动一行；
+- `↓`、`j` 向下滚动一行；
+- `PgUp`、`PgDn` 按当前正文视口高度翻页；
+- `Home` 跳到顶部；
+- `End` 跳到最后一个完整视口；
+- `Esc` 关闭面板；
+- footer 显示当前物理行范围、总物理行数和 snapshot 中的记忆数量；
+- terminal resize 后使用新的 Ink 布局结果，并把当前位置限制到新的合法范围；
+- 一条高于整个视口的记忆在 resize 和滚动后仍然完整可达。
 
-- `↑`、`k`：向上滚动一行；
-- `↓`、`j`：向下滚动一行；
-- `PgUp`：向上滚动 `bodyRows`；
-- `PgDn`：向下滚动 `bodyRows`；
-- `Home`：跳到第一行；
-- `End`：跳到最后一个完整视口；
-- 鼠标滚轮：每次滚动 3 行；
-- `Esc`：关闭面板，恢复正常 TUI。
+具体使用多少 React state、如何取得 Ink 布局高度、如何偏移内容以及记录间距的组件结构，
+属于实现细节，不构成长期方案合同。
 
-鼠标滚轮不能只复用转义序列 parser。终端只有在应用显式开启 mouse tracking 和 SGR mouse
-mode 后才会发送该输入。实现时把 FileViewer 私有的 enable/disable effect 和
-`parseMouseWheelInput()` 抽到一个窄的共享 `terminal-mouse.ts`：
+### 4.4 空库
 
-```ts
-useTerminalMouseTracking();
-parseMouseWheelInput(input);
-```
-
-共享 hook 在 TTY stdout 上挂载时写入 `?1000h` 和 `?1006h`，卸载时写入对应 disable
-sequence。FileViewer 和 MemoryBrowser 都调用该 hook。两个全屏 viewer 由 App 保证互斥，
-不需要引用计数或全局 mouse manager。
-
-本功能不重构通用 viewer framework，也不支持水平滚动；正文通过折行展示，workspace 单行
-中间截断。
-
-### 4.4 snapshot 生命周期
-
-每次打开 `/memory` 时同步读取一次数据库，形成该次面板的固定 snapshot。面板打开后不再
-读取或观察数据库变化。
-
-completed Turn 的后台提取可能在主响应结束后仍在进行，因此用户紧接着打开 `/memory` 时，
-最新记忆可能尚未提交。这是允许的。用户关闭面板后再次执行 `/memory`，才会创建新的
-snapshot。
-
-### 4.5 空库
-
-数据库可用但没有记录时，面板显示：
+数据库可用但没有记录时仍打开面板：
 
 ```text
 Global memory
-↑/↓ or j/k · PgUp/PgDn · Home/End · mouse wheel · Esc close
+↑/↓ or j/k · PgUp/PgDn · Home/End · Esc close
 
 No stored memories.
 
 0 memories
 ```
 
-## 五、数据读取
+## 五、Snapshot 生命周期
 
-### 5.1 共享类型
+每次执行 `/memory` 时同步读取一次数据库，并把结果保存为该次面板的固定 snapshot。面板
+打开后不再读取数据库，也不观察数据库文件变化。
 
-`StoredMemorySummary` 是存储层和 UI 共用的基础投影：
+completed Turn 的后台提取可能尚未提交，因此用户紧接着打开面板时不保证看到最新 Turn
+产生的记忆。这不是读取失败。关闭面板后再次执行 `/memory`，才会形成新的 snapshot。
+
+固定 snapshot 避免在浏览期间处理列表插入、排序变化、当前位置漂移或跨进程刷新。
+
+## 六、数据读取
+
+### 6.1 浏览投影
+
+在 `src/memory/contracts.ts` 中新增独立类型：
 
 ```ts
 export type StoredMemorySummary = {
@@ -240,15 +222,16 @@ export type StoredMemorySummary = {
   readonly sourceWorkspace: string;
   readonly createdAt: string;
 };
-
-export type MemorySearchMatch = StoredMemorySummary & {
-  readonly score: number;
-};
 ```
 
-这样列表和搜索不会重复声明相同字段，也不会让存储浏览类型反向依赖搜索结果类型。
+该类型是只读浏览所需的完整存储投影。它不继承 `MemorySearchMatch`，也不要求
+`MemorySearchMatch` 改为交叉类型。浏览和搜索暂时独立声明字段，避免一个本地 UI follow-up
+改变既有模型搜索合同。
 
-### 5.2 Store API
+返回值使用 TypeScript `readonly` 合同。本功能不额外要求或测试 runtime
+`Object.freeze()`。
+
+### 6.2 Store API
 
 `MemoryStore` 新增同步方法：
 
@@ -264,43 +247,38 @@ FROM memories
 ORDER BY created_at DESC, memory_id DESC;
 ```
 
-规则：
+读取规则：
 
 - 调用前执行现有 `requireOpen()`；
-- 使用现有 SQL row validation helper 校验每个字段；
-- `created_at` 继续使用现有 UTC timestamp validator；
-- 返回冻结的 records 和数组；
+- 使用现有 SQL row helper 验证所有返回字段；
+- `created_at` 使用现有 UTC timestamp validator；
 - 不选择、读取或解码 `embedding`；
-- 不执行第二次 `COUNT(*)`，总数就是结果数组长度；
+- 不执行第二次 `COUNT(*)`，总数使用结果数组长度；
 - 任一 row 非法时整次读取失败，不返回部分 snapshot。
 
-`created_at DESC` 表示最新批次优先。同一批 `insertBatch()` 共享一个 `created_at`，
-`memory_id DESC` 只提供稳定的次级顺序，不承诺额外业务语义。
+`created_at DESC` 使新批次优先。同一批 `insertBatch()` 共享创建时间，
+`memory_id DESC` 只提供确定性的次级顺序，不承诺业务含义。
 
-### 5.3 为什么不分页
+### 6.3 首版全量读取
 
-本次不使用 keyset 或 offset pagination：
+首版一次读取并渲染全部记忆，不引入数据库分页或任意硬上限：
 
-- 现有 `MemorySearch` 每次已经全表扫描并解码所有 embedding；
-- 浏览器只读取文本和少量元数据，单行成本更低；
-- 每条正文已有 512-byte 上限；
-- 浏览器是用户主动打开的低频本地界面；
-- 分页会引入 cursor、缓存和可变高度条目之间的额外状态；
-- 当前没有实际数据证明需要限制只读文本 snapshot。
+- 每条正文已有 512 UTF-8 bytes 上限；
+- 浏览是用户主动触发的低频本地操作；
+- 固定全量 snapshot 不需要 cursor、页缓存或可变高度条目的跨页状态；
+- 当前没有实际数量和耗时证明需要更复杂的读取策略。
 
-本次也不设置任意的“最近 2000 条”硬上限，因为 `/memory` 的合同是查看当前已存记忆，而不是
-只查看一个不可配置的最近子集。如果真实使用证明全量读取或 Ink 布局导致可感知卡顿，再根据
-实际数量和耗时调整读取或展示策略，不能提前猜测数据库阈值或预建布局缓存。数据库全量读取
-和 UI 布局是两个不同的成本；前者比现有 embedding 全表扫描更轻，后者本次直接交给 Ink。
+数据库读取成本和 Ink 布局成本不是同一件事。后续只有在真实数量和测量结果表明打开面板会
+产生可感知停顿时，才重新设计分页或虚拟化；本次不预建这些能力。
 
-## 六、所有权和生命周期
+## 七、所有权与并发
 
-### 6.1 单一 Store
+### 7.1 复用唯一 Store
 
-现有 `MemoryCoordinator` 创建并独占 `MemoryStore`，退出时由 coordinator 关闭。浏览器必须
-复用这一个 store，不能为了“只读”另开连接。
+现有 `MemoryCoordinator` 创建、独占并在退出时关闭 `MemoryStore`。浏览器复用这个 store，
+不能另开“只读”连接。
 
-`MemoryCoordinator` 增加同步 facade：
+`MemoryCoordinator` 增加窄 facade：
 
 ```ts
 listStoredMemories(): readonly StoredMemorySummary[] {
@@ -308,7 +286,7 @@ listStoredMemories(): readonly StoredMemorySummary[] {
 }
 ```
 
-完整调用链：
+调用链固定为：
 
 ```text
 App /memory
@@ -318,26 +296,26 @@ App /memory
   -> memory.sqlite
 ```
 
-`App` 不持有 coordinator，不直接导入 `MemoryStore`，也不知道 SQLite 路径。
+`App` 不持有 coordinator，不导入 `MemoryStore`，也不知道数据库路径。
 
-### 6.2 同步读取与写入
+### 7.2 同步读写
 
-`bun:sqlite` API 是同步的。当前提取 worker 和 TUI 读取运行在同一个 JavaScript 线程；
-`listStoredMemories()` 只能发生在 `insertBatch()` transaction 之前或之后，不会插入事务
-中间观察部分批次。
+`bun:sqlite` API 是同步的。当前提取 worker 和 TUI 读取运行在同一个 JavaScript 线程，
+因此 `listStoredMemories()` 只能发生在 `insertBatch()` transaction 之前或之后，不会在
+一个同步 transaction 中间观察到部分批次。
 
-因此本功能不增加读写 mutex、队列、retry 或并发集成测试。
+本功能不增加 mutex、读取队列、retry 或并发协议。
 
-### 6.3 退出
+### 7.3 退出
 
-面板不持有独立连接和异步读取任务。TUI 退出仍由既有 coordinator disposal 关闭 store，
+浏览器没有独立连接或异步读取任务。TUI 退出仍由既有 coordinator disposal 关闭 store，
 不增加 cleanup 顺序。
 
-## 七、Composition 与 App 状态
+## 八、Composition 与 App
 
-### 7.1 Runner 注入
+### 8.1 Runner 注入
 
-`runTui()` 只向 `App` 注入一个窄函数：
+`runTui()` 只向 `App` 注入浏览所需能力：
 
 ```tsx
 <App
@@ -351,11 +329,11 @@ App /memory
 />
 ```
 
-不能把 coordinator、store 或 database 暴露给 TUI component。
+不能把 coordinator、store 或 database 暴露给 TUI。
 
-### 7.2 App props 和 state
+### 8.2 App 状态
 
-新增：
+新增 props：
 
 ```ts
 type AppProps = {
@@ -363,34 +341,43 @@ type AppProps = {
   listStoredMemories?: () => readonly StoredMemorySummary[];
   memoryDisabledNotice?: string;
 };
-
-type MemoryViewState = {
-  readonly memories: readonly StoredMemorySummary[];
-};
 ```
 
-`openMemoryView()` 同步调用注入函数：
+面板 snapshot 可以直接存入可选 state，不增加只包装一个字段的状态类型：
 
-- 函数存在且读取成功：设置 `memoryView`；
-- 函数不存在且有 `memoryDisabledNotice`：原样再次显示该 notice；
-- 函数不存在且没有初始化错误：显示 `memory disabled: not configured`；
-- 读取抛错：不打开面板，显示 `memory unavailable: <bounded reason>`。
+```ts
+const [memoryView, setMemoryView] = useState<
+  readonly StoredMemorySummary[] | undefined
+>();
+```
 
-初始化失败的 bounded notice 已由 `initializeTuiMemory()` 生成并在 TUI 启动时展示过。
-`/memory` 不能为同一个失败重新发明另一套原因或绕过初始化校验读取数据库。
+打开流程：
 
-### 7.3 App 接线位置
+- `listStoredMemories` 存在且读取成功：保存 snapshot 并打开面板；
+- 函数不存在且有 `memoryDisabledNotice`：再次显示这个既有 bounded notice；
+- 函数不存在且没有初始化失败：显示
+  `memory disabled: not configured`；
+- 读取抛错：不打开面板，显示
+  `memory unavailable: <bounded reason>`。
 
-`App` 至少需要完成以下接线：
+初始化失败的 notice 由 `initializeTuiMemory()` 生成。`/memory` 不重新解释同一个初始化错误，
+也不绕过初始化结果直接读取数据库。
 
-1. 增加 `memoryView` state 和 open、close handlers；
-2. 在 `onSubmit()` 开头现有的本地面板 reset 区保持面板互斥；
-3. 在 slash command 分发中处理 `{ type: "memory" }`；
-4. 在全屏 `fileView` / `resumePicker` 条件链中加入 `MemoryBrowser`；
-5. 确保打开面板后 PromptInput 被卸载；
-6. 关闭面板后 PromptInput 重新挂载并获得输入权。
+### 8.3 本地分发与面板互斥
 
-## 八、失败语义
+`App` 完成以下接线：
+
+1. 注册并解析 `{ type: "memory" }`；
+2. 在本地 slash command 分支同步打开面板；
+3. 打开其他本地面板或提交新输入时保持现有互斥关系；
+4. 在 `fileView`、`resumePicker` 所在全屏分支中加入 `MemoryBrowser`；
+5. 面板打开时卸载 PromptInput；
+6. Esc 关闭后重新挂载 PromptInput。
+
+`/memory` 的成功返回只表示本地命令已经处理，不得调用 session controller 的 Turn admission
+路径。
+
+## 九、失败语义
 
 | 状态              | `/memory` 行为                                        |
 | ----------------- | ----------------------------------------------------- |
@@ -398,46 +385,55 @@ type MemoryViewState = {
 | memory 初始化失败 | 不打开面板，复用启动时的 bounded notice               |
 | store 可用且为空  | 打开面板并显示 `No stored memories.`                  |
 | 同步读取失败      | 不打开面板，显示 bounded local notice                 |
-| 后台提取尚未提交  | 显示当前 snapshot；关闭后重新打开才能读取新提交的记忆 |
-| TUI 正在退出      | 既有 coordinator disposal 负责关闭 store              |
+| 后台提取尚未提交  | 显示当前 snapshot；重新打开后才读取新的数据库状态     |
+| TUI 正在退出      | 由既有 coordinator disposal 关闭 store                |
 
-所有失败都只影响本次本地浏览，不使 RuntimeSession fault，不修改 memory 数据，也不写
-MemorySearch observation。
+所有失败都只影响本次本地浏览：
 
-## 九、文档一致性
+- 不使 RuntimeSession fault；
+- 不修改 memory 数据；
+- 不产生 MemorySearch observation 或诊断记录；
+- 不留下半打开的面板状态。
 
-实现本功能时必须同步修订现有两份文档。
+## 十、文档一致性
 
-### 9.1 `high-level-decisions.md`
+实现时只做两处最小同步。
 
-当前高层文档规定无参数 `/memory` 等价于 `/memory status`。实现前应改为：
+### 10.1 `high-level-decisions.md`
 
-- 无参数 `/memory` 打开当前已存原子记忆的只读浏览器；
-- `/memory status` 仍是未来完整管理面的独立子命令；
-- search、organize、delete、clear 的高层方向保持不变，但不属于本次范围。
+把现行合同：
 
-### 9.2 `atomic-memory-mvp-design.md`
+```text
+/memory 无参数时等价于 /memory status
+```
 
-atomic MVP 文档当前明确排除了 `/memory`、用户可见列表，并在组件边界中写明 Memory 不进入
-TUI slash command 和面板。
+改为：
 
-该文档记录的是 MVP 当时的真实范围，不能把历史改写成“原 MVP 已经包含浏览器”。应增加一段
-明确的 follow-up 注释，并修订容易被理解为当前永久边界的语句：
+```text
+/memory 无参数时打开当前已存原子记忆的只读浏览器
+```
 
-- 原 atomic MVP 确实不包含任何用户可见管理面；
-- MVP 完成后，新增了本文件定义的只读 `/memory` 浏览 follow-up；
-- status、search、delete、clear、organize 和 CLI 仍不属于该 follow-up；
-- `MemorySearch` 的模型工具合同、提取链路和 schema v1 均未因此改变。
+`/memory status`、search、organize、delete 和 clear 仍是未来完整管理面的方向，不属于本次
+实现。
 
-不需要新增或预留任何数据库字段。
+### 10.2 `atomic-memory-mvp-design.md`
 
-## 十、代码落点
+atomic MVP 文档记录的是当时已经实现并验证的范围，其中“不包含 `/memory` 和用户可见列表”
+仍然是历史事实，不应逐处改写。
+
+只需在文档状态附近增加一段 dated follow-up 注释：
+
+- atomic MVP 本身仍不包含用户管理面；
+- 2026-07-26 之后新增了本文件定义的只读 `/memory` follow-up；
+- 该 follow-up 不改变 `MemorySearch`、自动提取、schema v1 或 one-shot 边界。
+
+## 十一、代码落点
 
 ```text
 docs/global-memory/
   high-level-decisions.md
   atomic-memory-mvp-design.md
-  tui-memory-browser-design.md
+  tui-memory-browser-simplified-design.md
 
 src/memory/
   contracts.ts
@@ -450,24 +446,20 @@ src/cli/
 src/tui/
   slash-commands.ts
   app.tsx
-  terminal-mouse.ts
   components/
-    file-viewer.tsx
     memory-browser.tsx
 
 src/__tests__/
   memory-store.test.ts
-  memory-coordinator.test.ts
   slash-commands.test.ts
-  terminal-mouse.test.tsx
-  file-viewer.test.tsx
   memory-browser.test.tsx
   tui-components.test.tsx
   cli-pty.test.ts
 ```
 
-不修改：
+本功能不修改：
 
+- `src/tui/components/file-viewer.tsx`；
 - `src/agent`；
 - `src/context`；
 - `src/session`；
@@ -476,122 +468,100 @@ src/__tests__/
 - one-shot runner；
 - memory schema。
 
-## 十一、测试
+## 十二、验证
 
-### 11.1 Store
+测试只覆盖跨边界行为和无法从直线代码结构直接得到的风险，不为简单 facade 或不存在的同步
+交错构造额外测试。
 
-- 空库返回冻结空数组；
+### 12.1 Store
+
+- 空库返回空数组；
 - 多 workspace 记录按 `created_at DESC, memory_id DESC` 排序；
-- 同一 `created_at` 使用 `memory_id DESC` 稳定排序；
-- 返回正文、workspace 和时间，不返回 embedding；
+- 返回正文、workspace 和创建时间，不返回 embedding；
 - 关闭 store 后调用失败；
-- row 字段非法时整次失败；
-- stored embedding BLOB 损坏时列表仍可读取，证明列表不选择或解码 embedding；
-- `MemorySearch` 对损坏 BLOB 的原有失败合同保持不变。
+- 非法 row 使整次读取失败；
+- embedding BLOB 损坏时列表仍可读取，证明浏览路径不选择或解码 embedding。
 
-### 11.2 Coordinator
-
-- facade 返回 store snapshot；
-- facade 不创建新 store 或新连接；
-- dispose 后 facade 按 store closed 合同失败；
-- 浏览不影响 active/pending worker 状态。
-
-不增加“读取插入到 transaction 中间”的并发测试，因为同步单线程执行不存在该交错。
-
-### 11.3 Slash command
+### 12.2 Slash command
 
 - `/memory` 精确解析；
 - trailing whitespace 合法；
 - 任意参数返回 `Usage: /memory`；
-- autocomplete 中包含 `/memory`；
-- project slash command 不能覆盖内建 `/memory`。
+- autocomplete 包含 `/memory`；
+- project command 不能覆盖内建 `/memory`。
 
-### 11.4 MemoryBrowser
+### 12.3 MemoryBrowser
 
 - 空库状态；
-- metadata 和可完整浏览的正文安全显示投影；
-- 中英文长正文由 Ink 按可用宽度自动折行；
-- tab 固定展开为 4 个空格；
-- CRLF 和单独 CR 都形成一个 hard break；
-- BEL、ESC、DEL 以及其他 C0/C1 控制字符显示为 `U+FFFD`，原始 memory text 保持不变；
-- 连续换行产生的空正文行保持可见；
-- 改变终端列宽后由 Ink 重新布局，显示内容不丢失；
-- 多次连续 resize 后仍能访问一条高于视口的完整 512-byte 记忆；
-- 绝对 workspace 路径在窄终端使用 `truncate-middle`；
-- 行滚动、PgUp/PgDn、Home/End；
-- 鼠标滚轮；
-- `topLine` 在 resize 后 clamp；
-- Esc 关闭。
+- metadata 和正文正确展示；
+- tab、CRLF、CR、C0、DEL 和 C1 经过安全投影，原始对象不变；
+- 连续换行保持可见；
+- 中英文长正文由 Ink 折行并可完整滚动；
+- workspace 在窄终端不破坏布局；
+- `↑/↓`、`j/k`、PgUp/PgDn、Home/End 和 Esc；
+- resize 后重新布局并 clamp；
+- 高于视口的单条记忆在连续 resize 后仍完整可达。
 
-### 11.5 终端鼠标
+### 12.4 App
 
-- shared hook 在 TTY mount 时写入 mouse tracking 和 SGR enable sequence；
-- cleanup 写入对应 disable sequence；
-- 非 TTY stdout 不写控制序列；
-- FileViewer 改用 shared hook 后原有滚轮行为不变；
-- MemoryBrowser 打开时启用 mouse reporting，关闭时禁用；
-- parser 单元测试之外，真实 PTY 必须观察 enable sequence 并验证滚轮输入会移动视口。
+- `/memory` 成功读取后打开全屏面板；
+- 本地分发不调用 Turn admission；
+- 面板打开时 PromptInput 不接收输入，Esc 后恢复；
+- 未配置、初始化失败和读取失败显示约定 notice；
+- 读取失败不留下半打开面板。
 
-### 11.6 App 非干扰
+一个本地分发测试足以证明命令没有进入 agent Turn。无需分别重复断言 prompt history、
+projection、canonical history、provider、embedding 和 MemorySearch diagnostic 的每个内部
+结果。
 
-执行 `/memory` 后验证：
+### 12.5 真实 PTY
 
-- `admitTurn` 调用次数为 0；
-- prompt history 没有新增；
-- projection 中没有新增 Turn；
-- canonical history 没有新增；
-- 没有 provider 或 embedding 请求；
-- 没有 MemorySearch 诊断记录；
-- 面板打开时 PromptInput 不接收按键；
-- Esc 后 PromptInput 恢复；
-- 未配置和初始化失败使用约定 notice；
-- 首次读取失败不会留下半打开面板。
+保留一条生产路径 journey：
 
-### 11.7 真实 PTY
-
-1. 使用与当前配置 identity 一致的 store seed 多条跨 workspace 原子记忆；
+1. 使用与当前 memory identity 一致的 store seed 多条跨 workspace 记忆；
 2. 启动真实 TUI；
 3. 输入 `/memory`；
-4. 验证面板按时间倒序展示正文、时间和 workspace；
-5. seed 包含中英文、tab、CR 和 ESC 的正文，确认控制字符只以安全显示投影出现；
-6. 验证窄终端路径不会破坏布局；
-7. 确认 TUI 输出 mouse tracking enable sequence，再发送真实 SGR wheel input 并验证视口
-   移动；
-8. 验证键盘滚动和 Esc，关闭后确认 mouse tracking disable sequence；
-9. 面板关闭后形成一个新的 completed Turn，并等待 memory 写入；
-10. 再次执行 `/memory`，确认新记忆出现；
-11. 确认 `/memory` 本身没有形成 Turn 或 provider request；
-12. 正常 `/quit`。
+4. 验证正文、时间和 workspace 按倒序显示；
+5. 用键盘滚动到后续内容；
+6. 按 Esc 关闭；
+7. 输入普通 prompt，确认 PromptInput 和正常 Turn 路径恢复；
+8. 正常 `/quit`。
 
-## 十二、实施顺序
+控制字符全集、resize 边界和 snapshot 刷新由确定性的 component/App 测试覆盖，不塞入同一条
+PTY journey。
 
-1. 更新本文件涉及的两份既有文档契约；
-2. 增加 `StoredMemorySummary` 和同步 store 读取；
-3. 增加 store 单元测试；
+源代码实现完成后运行唯一完整质量门：
+
+```text
+bun run check
+```
+
+## 十三、实施顺序
+
+1. 最小同步两份既有设计文档；
+2. 新增独立 `StoredMemorySummary`；
+3. 实现 `MemoryStore.listStoredMemories()` 及 store 测试；
 4. 增加 coordinator facade；
 5. 注册并解析 `/memory`；
-6. 抽出共享 terminal mouse tracking hook，并让 FileViewer 改用它；
-7. 实现控制字符安全投影和基于 Ink 原生布局的 `MemoryBrowser`；
-8. 完成 `App` 的本地分发、互斥状态和全屏渲染接线；
-9. 补齐 component、mouse tracking 和非干扰测试；
-10. 完成真实 PTY journey；
-11. 运行 `bun run check`。
+6. 实现安全显示投影和 `MemoryBrowser`；
+7. 完成 runner 注入、App 本地分发和全屏互斥；
+8. 补齐 component、App 和真实 PTY 验证；
+9. 运行 `bun run check`。
 
-## 十三、完成定义
+## 十四、完成定义
 
 以下条件全部满足才算完成：
 
-- `/memory` 能查看当前全局 SQLite 中全部已存原子记忆；
+- `/memory` 能浏览当前全局 SQLite 中全部已存原子记忆；
 - 数据只来自 `memory.sqlite`；
-- 浏览使用已有 coordinator 持有的唯一 store；
-- 不读取 embedding，不做数据库分页，不增加 schema；
-- 面板使用 Ink 原生折行和内容高度，长正文和窄路径不会破坏布局；
-- 控制字符只在显示投影中安全归一化，不修改存储正文；
-- resize 后正文仍然完整，滚动边界正确；
-- 真实 TTY 打开和关闭面板时正确启用、禁用 mouse tracking；
-- 每次打开面板只读取一次固定 snapshot；
+- 浏览复用 coordinator 持有的唯一 store；
+- 不读取 embedding，不增加 schema、分页或独立连接；
+- 每次打开只读取一次固定 snapshot；
+- 正文经过安全显示投影，数据库内容不变；
+- Ink 原生折行，所有正文在键盘滚动和 resize 后完整可达；
 - `/memory` 不形成 Turn，不调用模型，不修改任何历史；
-- memory 未配置、初始化失败和读取失败都有明确本地反馈；
-- 两份既有全局记忆文档与新合同一致；
-- 自动测试和真实 PTY journey 通过；
-- `bun run check` 通过。
+- 面板打开时 PromptInput 卸载，Esc 后恢复；
+- 未配置、初始化失败和读取失败都有明确本地反馈；
+- 不修改 FileViewer，不引入 terminal mouse tracking；
+- 既有全局记忆文档完成最小一致性同步；
+- 自动测试、真实 PTY journey 和 `bun run check` 通过。
