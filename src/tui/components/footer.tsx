@@ -4,7 +4,6 @@ import { Text } from "ink";
 export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
   workedForMs?: number;
-  elapsedMs?: number;
 };
 
 export function Footer(props: FooterProps) {
@@ -25,11 +24,7 @@ export function Footer(props: FooterProps) {
   }
 
   if (props.status === "running") {
-    if (props.elapsedMs === undefined) {
-      return <Text color="yellow">• Running</Text>;
-    }
-
-    return <Text color="yellow">{`• Running ${formatDuration(props.elapsedMs)}`}</Text>;
+    return <Text color="yellow">• Running</Text>;
   }
 
   if (props.status === "cancelling") {

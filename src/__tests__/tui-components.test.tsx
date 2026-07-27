@@ -243,18 +243,11 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("renders the elapsed time next to the running footer status", () => {
-    const seconds = render(<Footer status="running" elapsedMs={12_000} />);
-    expect(seconds.lastFrame()).toContain("• Running 12s");
-    seconds.cleanup();
-
-    const minutes = render(<Footer status="running" elapsedMs={95_400} />);
-    expect(minutes.lastFrame()).toContain("• Running 1m 35s");
-    minutes.cleanup();
-
-    const hours = render(<Footer status="running" elapsedMs={3_723_000} />);
-    expect(hours.lastFrame()).toContain("• Running 1h 2m 3s");
-    hours.cleanup();
+  test("renders the running footer status without a ticking elapsed counter", () => {
+    const running = render(<Footer status="running" />);
+    expect(running.lastFrame()).toContain("• Running");
+    expect(running.lastFrame()).not.toMatch(/• Running \d/);
+    running.cleanup();
   });
 
   test("renders context usage in the prompt input status bar", () => {
@@ -339,7 +332,7 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("counts the elapsed seconds of the active turn and stops when it finishes", async () => {
+  test("shows a static running indicator during the turn and the worked duration when it finishes", async () => {
     const projectionStore = createProjectionStore();
     const startedAt = new Date(Date.now() - 5_000).toISOString();
     await projectionStore.append({
@@ -357,24 +350,16 @@ describe("tui components", () => {
       />,
     );
 
-    const elapsedPattern = /• Running (\d+)s/;
     await waitForFrame(
       lastFrame,
-      (frame) => elapsedPattern.test(frame),
-      "the running footer to show an elapsed counter",
+      (frame) => frame.includes("• Running"),
+      "the running footer",
     );
-    const firstSeconds = Number(elapsedPattern.exec(lastFrame() ?? "")?.[1]);
-    // The clock is quantized to whole seconds, so a 5s-old turn reads 4s or 5s.
-    expect(firstSeconds).toBeGreaterThanOrEqual(4);
-
-    await waitForFrame(
-      lastFrame,
-      (frame) => {
-        const match = elapsedPattern.exec(frame);
-        return match !== undefined && match !== null && Number(match[1]) > firstSeconds;
-      },
-      "the elapsed counter to tick",
-    );
+    // The running indicator is static: no per-second ticker re-renders the app.
+    expect(lastFrame()).not.toMatch(/• Running \d/);
+    const frameWhileRunning = lastFrame();
+    await Bun.sleep(1_100);
+    expect(lastFrame()).toBe(frameWhileRunning);
 
     await projectionStore.append({
       ...testRuntime.turn,
