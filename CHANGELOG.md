@@ -5,6 +5,27 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-27
+
+### Added
+
+- Add optional global Memory for the interactive TUI. When configured, Tinker
+  extracts durable facts from completed turns, stores them locally, and exposes
+  relevant memories to the agent through `MemorySearch`.
+- Add a read-only `/memory` browser for reviewing the memories stored in the
+  current global Memory database.
+- Show live elapsed time in the TUI footer while a turn is running.
+
+### Changed
+
+- Compact and retire context toward 30% input utilization instead of 60%, leaving
+  more headroom for continued work after automatic or manual maintenance.
+
+### Fixed
+
+- Let the Tinker Chrome MCP server exit promptly when its client closes stdin,
+  avoiding the shutdown timeout during ordinary CLI exit.
+
 ## [1.4.0] - 2026-07-24
 
 ### Added
@@ -63,7 +84,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/ishowshao/tinker/releases/tag/v1.5.0
 [1.4.0]: https://github.com/ishowshao/tinker/releases/tag/v1.4.0
 [1.3.0]: https://github.com/ishowshao/tinker/releases/tag/v1.3.0
 [1.2.1]: https://github.com/ishowshao/tinker/releases/tag/v1.2.1
