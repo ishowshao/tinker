@@ -229,6 +229,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-static-history") {
       return this.ptyStaticHistory(input, prepared, options);
     }
+    if (this.mode === "pty-resume-layout") {
+      return this.ptyResumeLayout(input, prepared, options);
+    }
     if (this.mode === "pty-cancel-then-echo") {
       return this.ptyCancelThenEcho(input, prepared, options);
     }
@@ -356,6 +359,49 @@ export class FakeModelClient implements ModelClient {
       throw new Error("PTY static-history Bash output was incomplete.");
     }
     return textOutput(prepared, "PTY_STATIC_LIVE_DONE");
+  }
+
+  private ptyResumeLayout(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    const prompt = lastUserMessage(input.messages);
+    if (/^PTY_RESUME_LAYOUT_PAD_\d+$/u.test(prompt)) {
+      return textOutput(prepared, `${prompt}_DONE`);
+    }
+    const match = /^PTY_RESUME_LAYOUT_([1-3])$/u.exec(prompt);
+    if (match === null) {
+      throw new Error(
+        `Unexpected pty-resume-layout prompt: ${JSON.stringify(prompt)}.`,
+      );
+    }
+
+    requireTools(input, ["Read"]);
+    const turn = Number(match[1]);
+    const targetToolCount = [8, 17, 4][turn - 1];
+    const finalLineCount = [31, 47, 8][turn - 1];
+    if (targetToolCount === undefined || finalLineCount === undefined) {
+      throw new Error(`Invalid pty-resume-layout turn: ${turn}.`);
+    }
+
+    const completedReads = toolMessagesAfterLastUser(input.messages).filter(
+      (message) => message.name === "Read",
+    ).length;
+    if (completedReads < targetToolCount) {
+      return toolCallOutput(prepared, options, "Read", {
+        file_path: "resume-layout.txt",
+      });
+    }
+
+    return textOutput(
+      prepared,
+      Array.from(
+        { length: finalLineCount },
+        (_, index) =>
+          `PTY_RESUME_LAYOUT_${turn}_FINAL_${String(index + 1).padStart(2, "0")}`,
+      ).join("\n"),
+    );
   }
 
   private ptyCancelThenEcho(

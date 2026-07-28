@@ -78,6 +78,82 @@ test(
 );
 
 test(
+  "PTY-113: resumes long static history at the visible viewport tail",
+  async () => {
+    const fixture = await createPtyTuiFixture({
+      workspaceFiles: longResumeWorkspaceFiles(),
+    });
+    let first: PtyTuiHarness | undefined;
+    let second: PtyTuiHarness | undefined;
+    try {
+      first = await fixture.start({
+        fakeModel: "pty-resume-layout",
+        rows: 48,
+        columns: 162,
+      });
+      await waitForInitialFrame(first);
+      const sourceId = currentSessionId(first.screenText());
+      let activeSessionId = sourceId;
+      for (let turn = 1; turn <= 3; turn += 1) {
+        await submitPrompt(first, `PTY_RESUME_LAYOUT_${turn}`);
+        await first.waitForScreen(`PTY_RESUME_LAYOUT_${turn}_FINAL_08`);
+      }
+      for (let index = 1; index <= 15; index += 1) {
+        await submitPrompt(first, "/clear");
+        await first.waitForScreen(
+          (screen) => {
+            const visibleSessionId = screen.match(/\bsession=([0-9a-f-]{36})\b/u)?.[1];
+            return (
+              screen.includes("Started new session") &&
+              visibleSessionId !== undefined &&
+              visibleSessionId !== activeSessionId
+            );
+          },
+          { message: `fresh picker-padding session ${index}` },
+        );
+        activeSessionId = currentSessionId(first.screenText());
+        const prompt = `PTY_RESUME_LAYOUT_PAD_${index}`;
+        await submitPrompt(first, prompt);
+        await first.waitForScreen(`${prompt}_DONE`);
+      }
+      await quitTui(first);
+      await first.dispose();
+
+      second = await fixture.start({
+        fakeModel: "pty-resume-layout",
+        rows: 48,
+        columns: 162,
+      });
+      await waitForInitialFrame(second);
+      await submitPrompt(second, "/resume");
+      await second.waitForScreen("Showing 1–14 / 16");
+      for (let index = 0; index < 15; index += 1) {
+        await second.press("down");
+      }
+      await second.waitForScreen("PTY_RESUME_LAYOUT_1", {
+        message: "the long source session selected in the picker",
+      });
+      await second.press("enter");
+      await second.waitForScreen(`Resumed session ${sourceId}.`, {
+        timeoutMs: 10_000,
+      });
+      await second.waitForScreen("mcp fixture connected -> 1 tool");
+      await second.waitForScreen("PTY_RESUME_LAYOUT_3_FINAL_08", {
+        timeoutMs: 1_000,
+        message: "the resumed history tail in the current viewport",
+      });
+      expect(second.screenText().split("\n")).toHaveLength(47);
+      await quitTui(second);
+    } finally {
+      await second?.dispose();
+      await first?.dispose();
+      await fixture.dispose();
+    }
+  },
+  { timeout: 30_000 },
+);
+
+test(
   "PTY-105: forks shared tool history into two independent branches",
   async () => {
     await withPtyTui(
@@ -356,6 +432,20 @@ function modelProfilesJson(): string {
       beta: profile("beta-model"),
     },
   })}\n`;
+}
+
+function longResumeWorkspaceFiles(): Readonly<Record<string, string>> {
+  return {
+    "resume-layout.txt": "fixture\n",
+    ".mcp.json": JSON.stringify({
+      mcpServers: {
+        fixture: {
+          command: process.execPath,
+          args: [path.join(import.meta.dir, "fixtures/fake-mcp-server.ts")],
+        },
+      },
+    }),
+  };
 }
 
 async function defaultProfile(workspaceRoot: string): Promise<string> {

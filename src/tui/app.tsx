@@ -76,9 +76,10 @@ export type AppProps = {
 };
 
 type ResumePickerState =
-  | { status: "loading" }
+  | { status: "loading"; ownerSessionId: SessionId }
   | {
       status: "ready";
+      ownerSessionId: SessionId;
       sessions: readonly SessionSummary[];
       isResuming: boolean;
       error?: string;
@@ -160,6 +161,8 @@ export function App(props: AppProps) {
     state.activeTurn === undefined &&
     props.profiles !== undefined &&
     props.profiles.profiles.size > 1;
+  const activeResumePicker =
+    resumePicker?.ownerSessionId === binding.sessionId ? resumePicker : undefined;
 
   const builtInCommands = canSwitchModel
     ? SLASH_COMMANDS
@@ -220,9 +223,10 @@ export function App(props: AppProps) {
 
   const openResumePicker = () => {
     const requestId = resumePickerRequest.current + 1;
+    const ownerSessionId = binding.sessionId;
     resumePickerRequest.current = requestId;
     setNotice(undefined);
-    setResumePicker({ status: "loading" });
+    setResumePicker({ status: "loading", ownerSessionId });
     setIsSessionOperation(true);
     void props.sessionController
       .listSessions()
@@ -235,7 +239,12 @@ export function App(props: AppProps) {
           setNotice("No stored sessions found for this workspace.");
           return;
         }
-        setResumePicker({ status: "ready", sessions, isResuming: false });
+        setResumePicker({
+          status: "ready",
+          ownerSessionId,
+          sessions,
+          isResuming: false,
+        });
       })
       .catch((error: unknown) => {
         if (resumePickerRequest.current === requestId) {
@@ -657,13 +666,13 @@ export function App(props: AppProps) {
             memories={memoryView}
             onClose={() => setMemoryView(undefined)}
           />
-        ) : resumePicker?.status === "loading" ? (
+        ) : activeResumePicker?.status === "loading" ? (
           <ResumeSessionPickerLoading onCancel={closeResumePicker} />
-        ) : resumePicker?.status === "ready" ? (
+        ) : activeResumePicker?.status === "ready" ? (
           <ResumeSessionPicker
-            sessions={resumePicker.sessions}
-            isResuming={resumePicker.isResuming}
-            error={resumePicker.error}
+            sessions={activeResumePicker.sessions}
+            isResuming={activeResumePicker.isResuming}
+            error={activeResumePicker.error}
             onCancel={closeResumePicker}
             onSelect={resumeSelectedSession}
           />
