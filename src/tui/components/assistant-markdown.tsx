@@ -1,48 +1,24 @@
 import { createContext, memo, useContext, type ReactNode } from "react";
+import { MarkdownText, type RenderOptions } from "@assistant-ui/react-ink-markdown";
 import {
-  MarkdownText,
-  type RenderOptions,
-  useShikiHighlighter,
-} from "@assistant-ui/react-ink-markdown";
+  getPreparedShikiHighlighter,
+  type TuiShikiHighlighter,
+} from "../shiki-highlighter";
 
 export type AssistantMarkdownProps = {
   text: string;
 };
 
-const highlightedLanguages = [
-  "typescript",
-  "javascript",
-  "tsx",
-  "jsx",
-  "json",
-  "bash",
-  "shellscript",
-  "python",
-  "markdown",
-  "html",
-  "css",
-  "yaml",
-  "diff",
-];
-
 const tableOptions = {
   tableTruncate: false,
 } satisfies Pick<RenderOptions, "tableTruncate">;
 
-type SharedHighlighter = ReturnType<typeof useShikiHighlighter>;
+const HighlighterContext = createContext<TuiShikiHighlighter | undefined>(undefined);
 
-const HighlighterContext = createContext<SharedHighlighter>(undefined);
-
-// Mounts the Shiki highlighter once per App instead of once per assistant
-// message. Creating a highlighter costs ~64ms per instance, so per-message
-// instances dominated frame time in long sessions. While the shared instance
-// loads, consumers render plain text and re-render once when it resolves —
-// the same fallback timing the per-instance hook already had.
+// The runner resolves Shiki initialization before mounting App, so immutable
+// messages can safely move into Ink Static on their first rendered frame.
 export function AssistantMarkdownProvider(props: { children: ReactNode }) {
-  const highlighter = useShikiHighlighter({
-    theme: "github-dark",
-    langs: highlightedLanguages,
-  });
+  const highlighter = getPreparedShikiHighlighter();
   return (
     <HighlighterContext.Provider value={highlighter}>
       {props.children}

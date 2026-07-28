@@ -20,7 +20,7 @@ export type MemoryBrowserProps = {
 
 export function MemoryBrowser(props: MemoryBrowserProps) {
   const windowSize = useWindowSize();
-  const rows = Math.max(4, props.viewportRows ?? windowSize.rows);
+  const rows = Math.max(4, props.viewportRows ?? windowSize.rows - 1);
   const columns = Math.max(20, props.viewportColumns ?? windowSize.columns);
   const bodyRows = Math.max(1, rows - BROWSER_CHROME_ROWS);
   const contentRef = useRef<DOMElement>(null);

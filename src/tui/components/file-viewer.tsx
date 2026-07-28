@@ -18,7 +18,7 @@ export type FileViewerProps = {
 export function FileViewer(props: FileViewerProps) {
   const windowSize = useWindowSize();
   const { stdout } = useStdout();
-  const rows = Math.max(4, props.viewportRows ?? windowSize.rows);
+  const rows = Math.max(4, props.viewportRows ?? windowSize.rows - 1);
   const columns = Math.max(20, props.viewportColumns ?? windowSize.columns);
   const bodyRows = Math.max(1, rows - VIEWER_CHROME_ROWS);
   const normalizedLines = useMemo(
@@ -141,7 +141,7 @@ export function FileViewerLoading(props: {
   viewportColumns?: number;
 }) {
   const windowSize = useWindowSize();
-  const rows = Math.max(4, props.viewportRows ?? windowSize.rows);
+  const rows = Math.max(4, props.viewportRows ?? windowSize.rows - 1);
   const columns = Math.max(20, props.viewportColumns ?? windowSize.columns);
 
   useInput((_input, key) => {

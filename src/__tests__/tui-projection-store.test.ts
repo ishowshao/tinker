@@ -18,6 +18,139 @@ const smallPolicy: TuiProjectionPolicy = {
 };
 
 describe("TuiProjectionStore", () => {
+  test("keeps running items live and atomically commits their final form once", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    const call = toolCall(1, 1, 1, "Bash", {
+      command: "printf 'done\\n'",
+    });
+
+    await store.append(turnStarted(1, turn, "run it"));
+    expect(store.getLogSnapshot()).toMatchObject({
+      committed: [{ label: "prompt", text: "run it", status: "text" }],
+      live: [],
+    });
+
+    await store.append(modelStarted(2, iteration));
+    const runningModel = store.getLogSnapshot();
+    expect(runningModel.committed.map((item) => item.label)).toEqual(["prompt"]);
+    expect(runningModel.live).toMatchObject([
+      { text: "model iteration 1", status: "running" },
+    ]);
+
+    await store.append(modelFinished(3, iteration));
+    expect(store.getLogSnapshot().committed.map((item) => item.text)).toEqual([
+      "run it",
+      "model iteration 1 -> assistant response",
+    ]);
+    expect(store.getLogSnapshot().live).toEqual([]);
+
+    await store.append({
+      type: "tool.started",
+      ...call,
+      eventSequence: 4,
+      timestamp: timestamp(4),
+      data: { call },
+    });
+    await store.append({
+      type: "tool.raw_result",
+      ...call,
+      eventSequence: 5,
+      timestamp: timestamp(5),
+      data: {
+        call,
+        raw: {
+          kind: "bash",
+          ok: true,
+          status: "completed",
+          taskId: "task-1",
+          sessionId,
+          command: "printf 'done\\n'",
+          cwd: "/tmp",
+          exitCode: 0,
+          signal: undefined,
+          preview: "done\n",
+          truncated: false,
+          outputFilePath: "/tmp/task-1.log",
+          outputBytes: 5,
+          outputLines: 1,
+        },
+      },
+    });
+    expect(store.getLogSnapshot().live).toMatchObject([
+      {
+        status: "running",
+        bash: { outputPreview: ["done", ""] },
+      },
+    ]);
+    expect(
+      store
+        .getLogSnapshot()
+        .committed.some((item) => item.id === `tool-${call.toolCallId}`),
+    ).toBe(false);
+
+    await store.append({
+      type: "tool.finished",
+      ...call,
+      eventSequence: 6,
+      timestamp: timestamp(6),
+      data: {
+        call,
+        ok: true,
+      },
+    });
+    const settled = store.getLogSnapshot();
+    expect(settled.live).toEqual([]);
+    expect(settled.committed.at(-1)).toMatchObject({
+      id: `tool-${call.toolCallId}`,
+      status: "ok",
+      bash: { outputPreview: ["done", ""] },
+    });
+    expect(
+      settled.committed.filter((item) => item.id === `tool-${call.toolCallId}`),
+    ).toHaveLength(1);
+  });
+
+  test("hydrates visible history once, including its existing omission marker", async () => {
+    const source = createStore(smallPolicy);
+    let sequence = 0;
+    for (let turnNumber = 1; turnNumber <= 5; turnNumber += 1) {
+      const turn = turnIdentity(turnNumber);
+      const iteration = iterationIdentity(turnNumber, 1);
+      sequence += 1;
+      await source.append(turnStarted(sequence, turn, `prompt ${turnNumber}`));
+      sequence += 1;
+      await source.append(
+        turnFinished(sequence, turn, iteration, `answer ${turnNumber}`),
+      );
+    }
+    const snapshot = source.getSnapshot();
+    const resumed = createStore(smallPolicy);
+
+    resumed.hydrate(snapshot);
+    expect(resumed.getLogSnapshot().committed).toEqual(visibleTimelineItems(snapshot));
+    expect(
+      resumed
+        .getLogSnapshot()
+        .committed.filter((item) => item.id === "projection-omitted-turns"),
+    ).toHaveLength(1);
+
+    await resumed.append({
+      type: "context.usage.updated",
+      sessionId,
+      eventSequence: sequence + 1,
+      timestamp: timestamp(sequence + 1),
+      data: { phase: "initial", snapshot: contextUsage(100) },
+    });
+    expect(
+      resumed
+        .getLogSnapshot()
+        .committed.filter((item) => item.id === "projection-omitted-turns"),
+    ).toHaveLength(1);
+    expect(resumed.getLogSnapshot().live).toEqual([]);
+  });
+
   test("keeps a stable snapshot and lets late subscribers read current state", async () => {
     const store = createStore();
     const initial = store.getSnapshot();

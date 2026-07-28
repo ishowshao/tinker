@@ -6,27 +6,25 @@ import { BashResultView } from "./bash-result-view";
 import { DiffView } from "./diff-view";
 
 export type TimelineProps = {
-  items: TimelineItem[];
+  items: readonly TimelineItem[];
 };
 
 export function Timeline(props: TimelineProps) {
   return (
     <Box flexDirection="column">
-      <Text bold>Timeline</Text>
-      {props.items.length === 0 ? (
-        <Text color="gray">idle</Text>
-      ) : (
-        props.items.map((item) => renderTimelineItem(item))
-      )}
+      {props.items.map((item) => (
+        <TimelineRow key={item.id} item={item} />
+      ))}
     </Box>
   );
 }
 
-function renderTimelineItem(item: TimelineItem) {
+export function TimelineRow(props: { item: TimelineItem }) {
+  const { item } = props;
   if (item.label !== undefined) {
     if (item.label === "assistant") {
       return (
-        <Fragment key={item.id}>
+        <Fragment>
           <Text color="gray">- {item.label}</Text>
           <AssistantMarkdown text={item.text} />
         </Fragment>
@@ -34,7 +32,7 @@ function renderTimelineItem(item: TimelineItem) {
     }
 
     return (
-      <Fragment key={item.id}>
+      <Fragment>
         <Text color="gray">- {item.label}</Text>
         {item.userPrompt === undefined ? (
           <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
@@ -48,7 +46,7 @@ function renderTimelineItem(item: TimelineItem) {
   }
 
   return (
-    <Fragment key={item.id}>
+    <Fragment>
       <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
       {renderItemBash(item)}
       {renderItemDiff(item)}

@@ -37,6 +37,7 @@ describe("DefaultTuiSessionController", () => {
     const current = fakeRuntime("current-session" as SessionId);
     const target = fakeRuntime("target-session" as SessionId);
     let notifications = 0;
+    const commits: SessionId[] = [];
     const controller = new DefaultTuiSessionController(
       binding(current.runtime),
       emptyCatalog(),
@@ -51,11 +52,14 @@ describe("DefaultTuiSessionController", () => {
     controller.subscribe(() => {
       notifications += 1;
     });
-    await controller.resume(target.runtime.sessionId);
+    await controller.resume(target.runtime.sessionId, () => {
+      commits.push(controller.getBinding().sessionId);
+    });
     expect(current.disposals).toEqual([{ type: "session_switch" }]);
     expect(target.disposals).toEqual([]);
     expect(controller.getBinding().sessionId).toBe(target.runtime.sessionId);
     expect(notifications).toBe(1);
+    expect(commits).toEqual([current.runtime.sessionId]);
   });
 
   test("clones before opening the target and switches through the resume binding", async () => {
@@ -131,12 +135,18 @@ describe("DefaultTuiSessionController", () => {
       },
     );
 
-    expect(controller.fork()).rejects.toThrow("source dispose failed");
+    let committed = false;
+    expect(
+      controller.fork(() => {
+        committed = true;
+      }),
+    ).rejects.toThrow("source dispose failed");
     expect(controller.getBinding().sessionId).toBe(current.runtime.sessionId);
     expect(current.disposals).toEqual([{ type: "session_switch" }]);
     expect(target?.disposals).toEqual([
       { type: "runner_failed", error: "source dispose failed" },
     ]);
+    expect(committed).toBe(false);
   });
 
   test("clears into a fresh session while preserving the current profile", async () => {

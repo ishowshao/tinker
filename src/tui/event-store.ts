@@ -393,6 +393,19 @@ function formatSurfaceComponent(component: string): string {
 
 export const applyAgentEvent = reduceTuiProjection;
 
+export function timelineStreamItems(state: TuiProjectionState): TimelineItem[] {
+  return [
+    ...state.notices,
+    ...state.recentTurns.flatMap((turn) => turn.items),
+    ...(state.activeTurn?.items ?? []),
+  ];
+}
+
+export function firstRunningIndex(items: readonly TimelineItem[]): number {
+  const index = items.findIndex((item) => item.status === "running");
+  return index === -1 ? items.length : index;
+}
+
 export function visibleTimelineItems(state: TuiProjectionState): TimelineItem[] {
   const items = [...state.notices];
 

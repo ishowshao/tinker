@@ -1,5 +1,4 @@
-import { StatusMessage } from "@inkjs/ui";
-import { Text } from "ink";
+import { Spinner, StatusMessage } from "@inkjs/ui";
 
 export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
@@ -24,7 +23,7 @@ export function Footer(props: FooterProps) {
   }
 
   if (props.status === "running") {
-    return <Text color="yellow">• Running</Text>;
+    return <Spinner label="Running" />;
   }
 
   if (props.status === "cancelling") {

@@ -240,7 +240,7 @@ test(
 );
 
 test(
-  "PTY-107: navigates a full-screen UTF-8 file viewer and restores the TUI",
+  "PTY-107: navigates a viewport-bounded UTF-8 file viewer and restores the TUI",
   async () => {
     const viewedFile = Array.from({ length: 80 }, (_, index) => {
       const line = index + 1;
@@ -262,7 +262,7 @@ test(
         await harness.waitForScreen("PTY_VIEW_SEED_DONE");
 
         await submitPrompt(harness, "/view long-view.txt");
-        await harness.waitForScreen("1–27 / 80");
+        await harness.waitForScreen("1–26 / 80");
         let screen = harness.screenText();
         expect(screen).toContain("View: long-view.txt");
         expect(screen).not.toContain("Tinker");
@@ -273,24 +273,27 @@ test(
         expect(harness.screenText()).not.toContain("LINE_001:");
         await harness.press("left");
         await harness.waitForScreen(
-          (current) => current.includes("1–27 / 80") && !current.includes("column"),
+          (current) => current.includes("1–26 / 80") && !current.includes("column"),
         );
         await harness.press("down");
-        await harness.waitForScreen("2–28 / 80");
+        await harness.waitForScreen("2–27 / 80");
         await harness.press("up");
-        await harness.waitForScreen("1–27 / 80");
+        await harness.waitForScreen("1–26 / 80");
         await harness.press("page_down");
-        await harness.waitForScreen("28–54 / 80");
+        await harness.waitForScreen("27–52 / 80");
         await harness.press("end");
-        await harness.waitForScreen("54–80 / 80");
+        await harness.waitForScreen("55–80 / 80");
         await harness.press("home");
-        await harness.waitForScreen("1–27 / 80");
+        await harness.waitForScreen("1–26 / 80");
 
+        const closeMark = harness.markTranscript();
         await harness.press("escape");
-        await harness.waitForScreen("PTY_VIEW_SEED_DONE");
+        await harness.waitForPromptReady();
         screen = harness.screenText();
-        expect(screen).toContain("Tinker");
-        expect(screen).toContain("PTY_VIEW_SEED");
+        expect(screen).not.toContain("View: long-view.txt");
+        expect(screen).toContain('Enter a coding request, or "/" for commands');
+        expect(harness.transcriptText()).toContain("PTY_VIEW_SEED_DONE");
+        expect(harness.transcriptSince(closeMark)).not.toContain("PTY_VIEW_SEED_DONE");
         await submitPrompt(harness, "PTY_VIEW_CONTINUE");
         await harness.waitForScreen("PTY_VIEW_CONTINUED");
 

@@ -236,17 +236,20 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("renders a static active symbol for the running footer status", () => {
-    const { lastFrame, cleanup } = render(<Footer status="running" />);
+  test("renders an animated spinner for the running footer status", async () => {
+    const running = render(<Footer status="running" />);
+    const firstFrame = running.lastFrame();
 
-    expect(lastFrame()).toContain("• Running");
-    cleanup();
+    expect(firstFrame).toContain("Running");
+    await Bun.sleep(120);
+    expect(running.lastFrame()).not.toBe(firstFrame);
+    running.cleanup();
   });
 
   test("renders the running footer status without a ticking elapsed counter", () => {
     const running = render(<Footer status="running" />);
-    expect(running.lastFrame()).toContain("• Running");
-    expect(running.lastFrame()).not.toMatch(/• Running \d/);
+    expect(running.lastFrame()).toContain("Running");
+    expect(running.lastFrame()).not.toMatch(/Running \d/);
     running.cleanup();
   });
 
@@ -332,7 +335,7 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("shows a static running indicator during the turn and the worked duration when it finishes", async () => {
+  test("shows a running spinner during the turn and the worked duration when it finishes", async () => {
     const projectionStore = createProjectionStore();
     const startedAt = new Date(Date.now() - 5_000).toISOString();
     await projectionStore.append({
@@ -352,14 +355,10 @@ describe("tui components", () => {
 
     await waitForFrame(
       lastFrame,
-      (frame) => frame.includes("• Running"),
+      (frame) => frame.includes("Running"),
       "the running footer",
     );
-    // The running indicator is static: no per-second ticker re-renders the app.
-    expect(lastFrame()).not.toMatch(/• Running \d/);
-    const frameWhileRunning = lastFrame();
-    await Bun.sleep(1_100);
-    expect(lastFrame()).toBe(frameWhileRunning);
+    expect(lastFrame()).not.toMatch(/Running \d/);
 
     await projectionStore.append({
       ...testRuntime.turn,
@@ -378,7 +377,7 @@ describe("tui components", () => {
       (frame) => frame.includes("Worked for 9s"),
       "the finished footer",
     );
-    expect(lastFrame()).not.toContain("• Running");
+    expect(lastFrame()).not.toContain("Running");
     cleanup();
   });
 
@@ -1001,6 +1000,36 @@ describe("tui components", () => {
     expect(frame).toContain(
       "id=task-019f · started=2026-07-10T10:00:00.000Z · ended=2026-07-10T10:01:00.000Z",
     );
+    cleanup();
+  });
+
+  test("shows only five background tasks and summarizes the remainder", () => {
+    const tasks = Array.from({ length: 7 }, (_, index) => ({
+      taskId: `task-${index + 1}`,
+      origin: testRuntime.toolCall({
+        providerToolCallId: `background-${index + 1}`,
+        name: "Bash",
+        args: {},
+      }),
+      command: `task ${index + 1}`,
+      description: `Task ${index + 1}`,
+      status: "running" as const,
+      startedAt: `2026-07-10T10:00:0${index}.000Z`,
+      backgroundedAt: `2026-07-10T10:00:0${index}.010Z`,
+      backgroundReason: "requested" as const,
+      outputFilePath: `/tmp/task-${index + 1}.log`,
+      outputBytes: 0,
+      outputLines: 0,
+      cwd: "/tmp/workspace",
+    }));
+    const { lastFrame, cleanup } = render(<BackgroundTasks tasks={tasks} />);
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Task 1");
+    expect(frame).toContain("Task 5");
+    expect(frame).not.toContain("Task 6");
+    expect(frame).not.toContain("Task 7");
+    expect(frame).toContain("+2 more");
     cleanup();
   });
 

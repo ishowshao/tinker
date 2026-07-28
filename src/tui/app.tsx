@@ -1,5 +1,13 @@
-import { Box, Text, useApp, useInput } from "ink";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Box, Static, Text, useApp, useInput, useStdout, useWindowSize } from "ink";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { clearTerminal } from "ansi-escapes";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import { boundedMemoryError, type StoredMemorySummary } from "../memory/contracts";
 import {
@@ -11,7 +19,7 @@ import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { ModelRequestMediaAggregateError } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
 import { readLastAssistantResponse } from "../session/session-last-response-reader";
-import { visibleTimelineItems } from "./event-store";
+import type { TimelineItem } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
 import { AssistantMarkdownProvider } from "./components/assistant-markdown";
@@ -34,7 +42,7 @@ import {
   ResumeSessionPicker,
   ResumeSessionPickerLoading,
 } from "./components/resume-session-picker";
-import { Timeline } from "./components/timeline";
+import { Timeline, TimelineRow } from "./components/timeline";
 import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands";
 import {
   resolveProjectSlashCommand,
@@ -85,8 +93,15 @@ type FileViewState =
   | { status: "loading"; filePath: string }
   | { status: "ready"; file: ViewFile };
 
+const STATIC_HEADER = Symbol("tui-static-header");
+const LIVE_TIMELINE_MAX_ROWS = 8;
+const LIVE_TIMELINE_WITH_TASKS_MAX_ROWS = 3;
+const BACKGROUND_TASKS_MAX_ROWS = 12;
+
 export function App(props: AppProps) {
   const { exit } = useApp();
+  const { write } = useStdout();
+  const windowSize = useWindowSize();
   const binding = useSyncExternalStore(
     props.sessionController.subscribe,
     props.sessionController.getBinding,
@@ -100,6 +115,11 @@ export function App(props: AppProps) {
     binding.projectionStore.subscribe,
     binding.projectionStore.getSnapshot,
     binding.projectionStore.getSnapshot,
+  );
+  const log = useSyncExternalStore(
+    binding.projectionStore.subscribe,
+    binding.projectionStore.getLogSnapshot,
+    binding.projectionStore.getLogSnapshot,
   );
   const [isRunning, setIsRunning] = useState(false);
   const [isSessionOperation, setIsSessionOperation] = useState(false);
@@ -127,6 +147,13 @@ export function App(props: AppProps) {
   const activeController = useRef<AbortController | undefined>(undefined);
   const resumePickerRequest = useRef(0);
   const fileViewRequest = useRef(0);
+  const beforeSessionCommit = useCallback(() => {
+    write(clearTerminal);
+  }, [write]);
+  const staticItems = useMemo<Array<typeof STATIC_HEADER | TimelineItem>>(
+    () => [STATIC_HEADER, ...log.committed],
+    [log.committed],
+  );
 
   const canSwitchModel =
     state.recentTurns.length === 0 &&
@@ -231,7 +258,7 @@ export function App(props: AppProps) {
     );
     setIsSessionOperation(true);
     void props.sessionController
-      .resume(session.sessionId)
+      .resume(session.sessionId, beforeSessionCommit)
       .then(() => {
         setResumePicker(undefined);
         setNotice(`Resumed session ${session.sessionId}.`);
@@ -262,7 +289,7 @@ export function App(props: AppProps) {
     setNotice(undefined);
     setIsSessionOperation(true);
     void props.sessionController
-      .switchModel(profile)
+      .switchModel(profile, beforeSessionCommit)
       .then(async () => {
         setGitBranchRefresh((current) => current + 1);
         try {
@@ -431,7 +458,7 @@ export function App(props: AppProps) {
         setNotice(formatContextRetirementNotice(result));
         return;
       }
-      await props.sessionController.clear();
+      await props.sessionController.clear(beforeSessionCommit);
       signal.throwIfAborted();
       const sessionId = props.sessionController.getBinding().sessionId;
       setGitBranchRefresh((current) => current + 1);
@@ -522,7 +549,7 @@ export function App(props: AppProps) {
         if (command.type === "clear") {
           setIsSessionOperation(true);
           void props.sessionController
-            .clear()
+            .clear(beforeSessionCommit)
             .then(() => {
               const sessionId = props.sessionController.getBinding().sessionId;
               setGitBranchRefresh((current) => current + 1);
@@ -539,7 +566,7 @@ export function App(props: AppProps) {
         if (command.type === "fork") {
           setIsSessionOperation(true);
           void props.sessionController
-            .fork()
+            .fork(beforeSessionCommit)
             .then((sessionId) => {
               setGitBranchRefresh((current) => current + 1);
               setNotice(
@@ -585,7 +612,7 @@ export function App(props: AppProps) {
         const operation =
           command.type === "resume"
             ? props.sessionController
-                .resume(command.sessionId)
+                .resume(command.sessionId, beforeSessionCommit)
                 .then(() => setNotice(`Resumed session ${command.sessionId}.`))
             : props.sessionController
                 .delete(command.sessionId)
@@ -607,6 +634,20 @@ export function App(props: AppProps) {
   return (
     <AssistantMarkdownProvider>
       <Box flexDirection="column">
+        <Static key={binding.sessionId} items={staticItems}>
+          {(item) =>
+            item === STATIC_HEADER ? (
+              <Header
+                key={`header-${binding.sessionId}`}
+                modelName={binding.modelName}
+                workspaceRoot={binding.workspaceRoot}
+                sessionId={binding.sessionId}
+              />
+            ) : (
+              <TimelineRow key={item.id} item={item} />
+            )
+          }
+        </Static>
         {fileView?.status === "loading" ? (
           <FileViewerLoading filePath={fileView.filePath} onCancel={closeFileView} />
         ) : fileView?.status === "ready" ? (
@@ -627,18 +668,31 @@ export function App(props: AppProps) {
             onSelect={resumeSelectedSession}
           />
         ) : (
-          <>
-            <Header
-              key={binding.sessionId}
-              modelName={binding.modelName}
-              workspaceRoot={binding.workspaceRoot}
-              sessionId={binding.sessionId}
-            />
+          <Box
+            flexDirection="column"
+            maxHeight={
+              state.status === "running" ? Math.max(1, windowSize.rows - 1) : undefined
+            }
+            overflow={state.status === "running" ? "hidden" : "visible"}
+          >
             <Box marginTop={1} flexDirection="column">
-              <Timeline items={visibleTimelineItems(state)} />
+              <Box
+                maxHeight={
+                  state.backgroundTasks.length === 0
+                    ? LIVE_TIMELINE_MAX_ROWS
+                    : LIVE_TIMELINE_WITH_TASKS_MAX_ROWS
+                }
+                overflow="hidden"
+              >
+                <Timeline items={log.live} />
+              </Box>
             </Box>
             {state.backgroundTasks.length === 0 ? null : (
-              <Box marginTop={1}>
+              <Box
+                marginTop={1}
+                maxHeight={BACKGROUND_TASKS_MAX_ROWS}
+                overflow="hidden"
+              >
                 <BackgroundTasks tasks={state.backgroundTasks} />
               </Box>
             )}
@@ -693,7 +747,7 @@ export function App(props: AppProps) {
               {viewError === undefined ? null : <Text color="red">{viewError}</Text>}
               {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
             </Box>
-          </>
+          </Box>
         )}
       </Box>
     </AssistantMarkdownProvider>

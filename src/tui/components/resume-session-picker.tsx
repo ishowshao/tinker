@@ -10,6 +10,7 @@ export type ResumeSessionPickerProps = {
   isResuming?: boolean;
   error?: string;
   now?: Date;
+  viewportRows?: number;
   visibleItemCount?: number;
   onCancel: () => void;
   onSelect: (session: SessionSummary) => void;
@@ -29,7 +30,8 @@ export function ResumeSessionPicker(props: ResumeSessionPickerProps) {
 }
 
 function ResumeSessionPickerContent(props: ResumeSessionPickerProps) {
-  const { rows } = useWindowSize();
+  const windowSize = useWindowSize();
+  const rows = props.viewportRows ?? windowSize.rows - 1;
   const visibleItemCount = Math.min(
     props.sessions.length,
     Math.max(

@@ -226,6 +226,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-echo-history") {
       return this.ptyEchoHistory(input, prepared);
     }
+    if (this.mode === "pty-static-history") {
+      return this.ptyStaticHistory(input, prepared, options);
+    }
     if (this.mode === "pty-cancel-then-echo") {
       return this.ptyCancelThenEcho(input, prepared, options);
     }
@@ -305,6 +308,54 @@ export class FakeModelClient implements ModelClient {
       return textOutput(prepared, "PTY_TURN_TWO_DONE");
     }
     throw new Error(`Unexpected pty-echo-history prompt: ${JSON.stringify(prompt)}.`);
+  }
+
+  private async ptyStaticHistory(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    const prompt = lastUserMessage(input.messages);
+    const historyMatch = /^PTY_STATIC_HISTORY_([1-4])$/u.exec(prompt);
+    if (historyMatch !== null) {
+      const turn = historyMatch[1];
+      return textOutput(
+        prepared,
+        [
+          turn === "1"
+            ? "PTY_STATIC_HISTORY_EARLY_SENTINEL"
+            : `PTY_STATIC_HISTORY_${turn}`,
+          ...Array.from(
+            { length: 8 },
+            (_, index) => `- settled PTY history ${turn}.${index + 1}`,
+          ),
+          `PTY_STATIC_HISTORY_${turn}_DONE`,
+        ].join("\n"),
+      );
+    }
+    if (prompt !== "PTY_STATIC_LIVE") {
+      throw new Error(
+        `Unexpected pty-static-history prompt: ${JSON.stringify(prompt)}.`,
+      );
+    }
+
+    requireTools(input, ["Bash"]);
+    const bash = toolMessagesAfterLastUser(input.messages).find(
+      (message) => message.name === "Bash",
+    );
+    await Bun.sleep(200);
+    options.signal.throwIfAborted();
+    if (bash === undefined) {
+      return toolCallOutput(prepared, options, "Bash", {
+        command:
+          'index=1; while [ "$index" -le 20 ]; do printf \'PTY_STATIC_LIVE_LINE_%s\\n\' "$index"; index=$((index + 1)); done; sleep 0.2',
+        description: "Exercise static history live tail",
+      });
+    }
+    if (!bash.content.includes("PTY_STATIC_LIVE_LINE_20")) {
+      throw new Error("PTY static-history Bash output was incomplete.");
+    }
+    return textOutput(prepared, "PTY_STATIC_LIVE_DONE");
   }
 
   private ptyCancelThenEcho(

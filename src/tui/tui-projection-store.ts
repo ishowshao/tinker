@@ -2,7 +2,11 @@ import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import {
   createInitialTuiProjectionState,
+  firstRunningIndex,
   reduceTuiProjection,
+  timelineStreamItems,
+  visibleTimelineItems,
+  type TimelineItem,
   type TuiProjectionState,
 } from "./event-store";
 import {
@@ -19,11 +23,18 @@ export type TuiProjectionStoreInput = {
   initialSnapshot?: TuiProjectionState;
 };
 
+export type TuiTimelineLog = Readonly<{
+  committed: readonly TimelineItem[];
+  live: readonly TimelineItem[];
+}>;
+
 export class TuiProjectionStore implements EventSink {
   readonly name = "tui-projection-store";
   private readonly listeners = new Set<() => void>();
   private readonly policy: TuiProjectionPolicy;
+  private readonly printed = new Set<string>();
   private snapshot: TuiProjectionState;
+  private log: TuiTimelineLog = { committed: [], live: [] };
 
   constructor(input: TuiProjectionStoreInput) {
     this.policy = validateTuiProjectionPolicy(
@@ -33,9 +44,14 @@ export class TuiProjectionStore implements EventSink {
       input.initialSnapshot === undefined
         ? createInitialTuiProjectionState(input)
         : validateInitialSnapshot(input, input.initialSnapshot, this.policy);
+    if (input.initialSnapshot !== undefined) {
+      this.refreshLog(visibleTimelineItems(this.snapshot));
+    }
   }
 
   readonly getSnapshot = (): TuiProjectionState => this.snapshot;
+
+  readonly getLogSnapshot = (): TuiTimelineLog => this.log;
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -51,6 +67,7 @@ export class TuiProjectionStore implements EventSink {
     }
 
     this.snapshot = next;
+    this.refreshLog();
     for (const listener of this.listeners) {
       listener();
     }
@@ -73,9 +90,25 @@ export class TuiProjectionStore implements EventSink {
       snapshot,
       this.policy,
     );
+    this.refreshLog(visibleTimelineItems(this.snapshot));
     for (const listener of this.listeners) {
       listener();
     }
+  }
+
+  private refreshLog(stream = timelineStreamItems(this.snapshot)): void {
+    const settledEnd = firstRunningIndex(stream);
+    const pending = stream
+      .slice(0, settledEnd)
+      .filter((item) => !this.printed.has(item.id));
+    for (const item of pending) {
+      this.printed.add(item.id);
+    }
+    this.log = {
+      committed:
+        pending.length === 0 ? this.log.committed : [...this.log.committed, ...pending],
+      live: stream.slice(settledEnd),
+    };
   }
 }
 

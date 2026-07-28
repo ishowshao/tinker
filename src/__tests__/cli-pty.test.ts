@@ -105,6 +105,41 @@ test(
 );
 
 test(
+  "PTY-010: live updates do not clear or replay long static history",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-static-history", rows: 24, columns: 120 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        for (let turn = 1; turn <= 4; turn += 1) {
+          await submitPrompt(harness, `PTY_STATIC_HISTORY_${turn}`);
+          await harness.waitForScreen(`PTY_STATIC_HISTORY_${turn}_DONE`);
+        }
+
+        await submitPrompt(harness, "PTY_STATIC_LIVE");
+        await harness.waitForScreen("Running");
+        const liveMark = harness.markTranscript();
+        await harness.waitForTranscript("Exercise static history live tail", {
+          since: liveMark,
+          message: "the live Bash row after static history settled",
+        });
+        await harness.waitForTranscript("PTY_STATIC_LIVE_DONE", {
+          since: liveMark,
+          message: "the final live-tail response",
+        });
+
+        const liveWrites = harness.transcriptSince(liveMark);
+        expect(liveWrites).toContain("PTY_STATIC_LIVE_LINE_20");
+        expect(liveWrites).not.toContain("\u001b[3J");
+        expect(liveWrites).not.toContain("PTY_STATIC_HISTORY_EARLY_SENTINEL");
+        await quitTui(harness);
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
   "PTY-003: cancels a blocked turn with Esc and completes the next turn",
   async () => {
     await withPtyTui(
@@ -112,7 +147,7 @@ test(
       async (harness) => {
         await waitForInitialFrame(harness);
         await submitPrompt(harness, "PTY_CANCEL_BLOCK");
-        await harness.waitForScreen("• Running", {
+        await harness.waitForScreen("Running", {
           message: "blocked turn running state",
         });
 
@@ -125,7 +160,7 @@ test(
           (screen) =>
             screen.includes("⊘ model iteration 1 -> cancelled") &&
             !screen.includes("cancelling") &&
-            !screen.includes("• Running"),
+            !screen.includes("Running"),
           { message: "settled cancelled screen" },
         );
         await harness.waitForPromptReady();

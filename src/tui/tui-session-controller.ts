@@ -47,11 +47,11 @@ export type TuiSessionController = {
   listSessions: () => Promise<readonly SessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
-  fork: () => Promise<SessionId>;
-  clear: () => Promise<void>;
-  resume: (sessionId: SessionId) => Promise<void>;
+  fork: (beforeCommit?: () => void) => Promise<SessionId>;
+  clear: (beforeCommit?: () => void) => Promise<void>;
+  resume: (sessionId: SessionId, beforeCommit?: () => void) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
-  switchModel: (profile: ModelProfile) => Promise<void>;
+  switchModel: (profile: ModelProfile, beforeCommit?: () => void) => Promise<void>;
 };
 
 export type ManagedTuiSessionBinding = TuiSessionBinding & {
@@ -100,7 +100,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
     return this.serialize(() => this.binding.runtimeSession.retireContext());
   }
 
-  fork(): Promise<SessionId> {
+  fork(beforeCommit?: () => void): Promise<SessionId> {
     return this.serialize(async () => {
       const targetSessionId = createUuidV7() as SessionId;
       await this.replaceSession(
@@ -109,21 +109,23 @@ export class DefaultTuiSessionController implements TuiSessionController {
           await current.runtimeSession.cloneSession(targetSessionId);
           return this.openSession(targetSessionId);
         },
+        beforeCommit,
       );
       return targetSessionId;
     });
   }
 
-  clear(): Promise<void> {
+  clear(beforeCommit?: () => void): Promise<void> {
     return this.serialize(() =>
       this.replaceSession(
         "Cannot clear the session while a turn, context operation, or background task is active.",
         (current) => this.createFreshSession(current),
+        beforeCommit,
       ),
     );
   }
 
-  resume(sessionId: SessionId): Promise<void> {
+  resume(sessionId: SessionId, beforeCommit?: () => void): Promise<void> {
     return this.serialize(async () => {
       if (sessionId === this.binding.sessionId) {
         throw new Error(`Session ${sessionId} is already current.`);
@@ -131,6 +133,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
       await this.replaceSession(
         "Cannot switch sessions while a turn or background task is active.",
         () => this.openSession(sessionId),
+        beforeCommit,
       );
     });
   }
@@ -139,11 +142,12 @@ export class DefaultTuiSessionController implements TuiSessionController {
     return this.serialize(() => this.catalog.delete(sessionId, this.binding.sessionId));
   }
 
-  switchModel(profile: ModelProfile): Promise<void> {
+  switchModel(profile: ModelProfile, beforeCommit?: () => void): Promise<void> {
     return this.serialize(() =>
       this.replaceSession(
         "Cannot switch models while a turn or background task is active.",
         () => this.createSessionWithProfile(profile),
+        beforeCommit,
       ),
     );
   }
@@ -157,6 +161,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
     createTarget: (
       current: ManagedTuiSessionBinding,
     ) => Promise<ManagedTuiSessionBinding>,
+    beforeCommit?: () => void,
   ): Promise<void> {
     const current = this.binding;
     if (!current.runtimeSession.canSwitchSession()) {
@@ -172,6 +177,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
         .catch(() => undefined);
       throw error;
     }
+    beforeCommit?.();
     this.binding = target;
     for (const listener of this.listeners) {
       listener();

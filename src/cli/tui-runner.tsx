@@ -43,6 +43,7 @@ import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 import { clipboardWriterForEnvironment } from "../tui/clipboard";
 import { initializeTuiMemory } from "./tui-memory";
+import { prepareShikiHighlighter } from "../tui/shiki-highlighter";
 
 export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
@@ -51,6 +52,7 @@ export type RunTuiOptions = {
 };
 
 export async function runTui(options: RunTuiOptions): Promise<void> {
+  const shikiPreparation = prepareShikiHighlighter();
   const profiles =
     options.publicConfig.mode === "profile" ? options.publicConfig.profiles : undefined;
   const config = options.initialRunnerConfig;
@@ -256,6 +258,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       createFreshSession,
     );
 
+    await shikiPreparation;
     instance = render(
       <App
         sessionController={controller}
@@ -285,6 +288,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
             : () => memoryCoordinator.listStoredMemories()
         }
       />,
+      { incrementalRendering: true },
     );
     await instance.waitUntilExit();
   } catch (error) {
