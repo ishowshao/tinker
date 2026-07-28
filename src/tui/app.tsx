@@ -14,6 +14,7 @@ import { readLastAssistantResponse } from "../session/session-last-response-read
 import { visibleTimelineItems } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
+import { AssistantMarkdownProvider } from "./components/assistant-markdown";
 import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
 import { Header } from "./components/header";
@@ -604,93 +605,98 @@ export function App(props: AppProps) {
   };
 
   return (
-    <Box flexDirection="column">
-      {fileView?.status === "loading" ? (
-        <FileViewerLoading filePath={fileView.filePath} onCancel={closeFileView} />
-      ) : fileView?.status === "ready" ? (
-        <FileViewer file={fileView.file} onClose={closeFileView} />
-      ) : memoryView !== undefined ? (
-        <MemoryBrowser memories={memoryView} onClose={() => setMemoryView(undefined)} />
-      ) : resumePicker?.status === "loading" ? (
-        <ResumeSessionPickerLoading onCancel={closeResumePicker} />
-      ) : resumePicker?.status === "ready" ? (
-        <ResumeSessionPicker
-          sessions={resumePicker.sessions}
-          isResuming={resumePicker.isResuming}
-          error={resumePicker.error}
-          onCancel={closeResumePicker}
-          onSelect={resumeSelectedSession}
-        />
-      ) : (
-        <>
-          <Header
-            key={binding.sessionId}
-            modelName={binding.modelName}
-            workspaceRoot={binding.workspaceRoot}
-            sessionId={binding.sessionId}
+    <AssistantMarkdownProvider>
+      <Box flexDirection="column">
+        {fileView?.status === "loading" ? (
+          <FileViewerLoading filePath={fileView.filePath} onCancel={closeFileView} />
+        ) : fileView?.status === "ready" ? (
+          <FileViewer file={fileView.file} onClose={closeFileView} />
+        ) : memoryView !== undefined ? (
+          <MemoryBrowser
+            memories={memoryView}
+            onClose={() => setMemoryView(undefined)}
           />
-          <Box marginTop={1} flexDirection="column">
-            <Timeline items={visibleTimelineItems(state)} />
-          </Box>
-          {state.backgroundTasks.length === 0 ? null : (
-            <Box marginTop={1}>
-              <BackgroundTasks tasks={state.backgroundTasks} />
-            </Box>
-          )}
-          {showStatus ? (
-            <Box marginTop={1}>
-              <ContextStatus state={state} />
-            </Box>
-          ) : null}
-          {showSkills ? (
-            <Box marginTop={1}>
-              <SkillsPanel snapshot={binding.skills()} />
-            </Box>
-          ) : null}
-          {showMcp ? (
-            <Box marginTop={1}>
-              <McpPanel snapshot={binding.mcp()} />
-            </Box>
-          ) : null}
-          <Box marginTop={1}>
-            <Footer
-              status={isCancelling ? "cancelling" : state.status}
-              workedForMs={state.workedForMs}
+        ) : resumePicker?.status === "loading" ? (
+          <ResumeSessionPickerLoading onCancel={closeResumePicker} />
+        ) : resumePicker?.status === "ready" ? (
+          <ResumeSessionPicker
+            sessions={resumePicker.sessions}
+            isResuming={resumePicker.isResuming}
+            error={resumePicker.error}
+            onCancel={closeResumePicker}
+            onSelect={resumeSelectedSession}
+          />
+        ) : (
+          <>
+            <Header
+              key={binding.sessionId}
+              modelName={binding.modelName}
+              workspaceRoot={binding.workspaceRoot}
+              sessionId={binding.sessionId}
             />
-          </Box>
-          <Box marginTop={1} flexDirection="column">
-            {showModelPicker ? (
-              <ModelPicker
-                profiles={profileList}
-                currentProfileName={binding.profileName}
-                isSwitching={modelPickerState?.isSwitching}
-                error={modelPickerState?.error}
-                onCancel={closeModelPicker}
-                onSelect={doSwitchModel}
-              />
-            ) : (
-              <PromptInput
-                modelName={binding.modelName}
-                workspaceRoot={binding.workspaceRoot}
-                gitBranch={gitBranch}
-                contextUsage={state.contextUsage}
-                isDisabled={isRunning || isSessionOperation || isCopying}
-                history={props.history}
-                commands={availableCommands}
-                fileLister={props.fileLister}
-                importImage={binding.importImage}
-                verifyImageAssets={binding.verifyImageAssets}
-                onSubmit={onSubmit}
-                onMaintenance={onMaintenance}
-                placeholder='Enter a coding request, or "/" for commands'
-              />
+            <Box marginTop={1} flexDirection="column">
+              <Timeline items={visibleTimelineItems(state)} />
+            </Box>
+            {state.backgroundTasks.length === 0 ? null : (
+              <Box marginTop={1}>
+                <BackgroundTasks tasks={state.backgroundTasks} />
+              </Box>
             )}
-            {viewError === undefined ? null : <Text color="red">{viewError}</Text>}
-            {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
-          </Box>
-        </>
-      )}
-    </Box>
+            {showStatus ? (
+              <Box marginTop={1}>
+                <ContextStatus state={state} />
+              </Box>
+            ) : null}
+            {showSkills ? (
+              <Box marginTop={1}>
+                <SkillsPanel snapshot={binding.skills()} />
+              </Box>
+            ) : null}
+            {showMcp ? (
+              <Box marginTop={1}>
+                <McpPanel snapshot={binding.mcp()} />
+              </Box>
+            ) : null}
+            <Box marginTop={1}>
+              <Footer
+                status={isCancelling ? "cancelling" : state.status}
+                workedForMs={state.workedForMs}
+              />
+            </Box>
+            <Box marginTop={1} flexDirection="column">
+              {showModelPicker ? (
+                <ModelPicker
+                  profiles={profileList}
+                  currentProfileName={binding.profileName}
+                  isSwitching={modelPickerState?.isSwitching}
+                  error={modelPickerState?.error}
+                  onCancel={closeModelPicker}
+                  onSelect={doSwitchModel}
+                />
+              ) : (
+                <PromptInput
+                  modelName={binding.modelName}
+                  workspaceRoot={binding.workspaceRoot}
+                  gitBranch={gitBranch}
+                  contextUsage={state.contextUsage}
+                  isDisabled={isRunning || isSessionOperation || isCopying}
+                  history={props.history}
+                  commands={availableCommands}
+                  fileLister={props.fileLister}
+                  importImage={binding.importImage}
+                  verifyImageAssets={binding.verifyImageAssets}
+                  onSubmit={onSubmit}
+                  onMaintenance={onMaintenance}
+                  placeholder='Enter a coding request, or "/" for commands'
+                />
+              )}
+              {viewError === undefined ? null : <Text color="red">{viewError}</Text>}
+              {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
+            </Box>
+          </>
+        )}
+      </Box>
+    </AssistantMarkdownProvider>
   );
 }
 
