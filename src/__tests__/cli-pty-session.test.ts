@@ -154,6 +154,124 @@ test(
 );
 
 test(
+  "PTY-114: restores the long-history viewport after closing transient surfaces",
+  async () => {
+    const fixture = await createPtyTuiFixture({
+      workspaceFiles: transientSurfaceWorkspaceFiles(),
+    });
+    let harness: PtyTuiHarness | undefined;
+    try {
+      harness = await fixture.start({
+        fakeModel: "pty-resume-layout",
+        rows: 24,
+        columns: 100,
+        environment: { TINKER_MODELS: "models.json" },
+      });
+      const activeHarness = harness;
+      await waitForInitialFrame(harness);
+      let activeSessionId = currentSessionId(harness.screenText());
+      for (let index = 1; index <= 7; index += 1) {
+        const prompt = `PTY_RESUME_LAYOUT_PAD_${index}`;
+        await submitPrompt(harness, prompt);
+        await harness.waitForScreen(`${prompt}_DONE`);
+        await submitPrompt(harness, "/clear");
+        await harness.waitForScreen(
+          (screen) => {
+            const visibleSessionId = screen.match(/\bsession=([0-9a-f-]{36})\b/u)?.[1];
+            return (
+              screen.includes("Started new session") &&
+              visibleSessionId !== undefined &&
+              visibleSessionId !== activeSessionId
+            );
+          },
+          { message: `fresh transient-surface session ${index}` },
+        );
+        activeSessionId = currentSessionId(harness.screenText());
+      }
+
+      await submitPrompt(harness, "PTY_RESUME_LAYOUT_1");
+      await harness.waitForPromptReady(10_000);
+      const tailSentinel = "PTY_RESUME_LAYOUT_1_FINAL_31";
+      expect(harness.screenText()).toContain(tailSentinel);
+
+      const observations: Array<{
+        clearCount: number;
+        surface: string;
+        tailVisible: boolean;
+        visibleRows: number;
+      }> = [];
+      const observeRestoredViewport = (surface: string, transcriptMark: number) => {
+        const screen = activeHarness.screenText();
+        observations.push({
+          clearCount:
+            activeHarness.transcriptSince(transcriptMark).split("\u001b[3J").length - 1,
+          surface,
+          tailVisible: screen.includes(tailSentinel),
+          visibleRows: screen.split("\n").length,
+        });
+      };
+
+      await submitPrompt(harness, "/view long-view.txt");
+      await harness.waitForScreen("1–20 / 80");
+      const viewCloseMark = harness.markTranscript();
+      await harness.press("escape");
+      await harness.waitForPromptReady();
+      observeRestoredViewport("view", viewCloseMark);
+
+      await submitPrompt(harness, "/memory");
+      await harness.waitForScreen("No stored memories.");
+      const memoryCloseMark = harness.markTranscript();
+      await harness.press("escape");
+      await harness.waitForPromptReady();
+      observeRestoredViewport("memory", memoryCloseMark);
+
+      await submitPrompt(harness, "/resume");
+      await harness.waitForScreen("Showing 1–6 / 8");
+      const resumeCloseMark = harness.markTranscript();
+      await harness.press("escape");
+      await harness.waitForPromptReady();
+      observeRestoredViewport("resume", resumeCloseMark);
+
+      await harness.resize(48, 100);
+      await harness.waitForPromptReady();
+      await submitPrompt(harness, "/status");
+      await harness.waitForScreen("Measurement");
+      const statusCloseMark = harness.markTranscript();
+      await submitPrompt(harness, "/skills");
+      await harness.waitForScreen("no skills available");
+      observeRestoredViewport("status", statusCloseMark);
+
+      const skillsCloseMark = harness.markTranscript();
+      await submitPrompt(harness, "/mcp");
+      await harness.waitForScreen("no MCP servers configured");
+      observeRestoredViewport("skills", skillsCloseMark);
+
+      const mcpCloseMark = harness.markTranscript();
+      await submitPrompt(harness, "/not-a-command");
+      await harness.waitForScreen("Unknown command: /not-a-command");
+      observeRestoredViewport("mcp", mcpCloseMark);
+      await harness.press("ctrl_u");
+
+      expect(observations.slice(0, 3)).toEqual([
+        { clearCount: 1, surface: "view", tailVisible: true, visibleRows: 23 },
+        { clearCount: 1, surface: "memory", tailVisible: true, visibleRows: 23 },
+        { clearCount: 1, surface: "resume", tailVisible: true, visibleRows: 23 },
+      ]);
+      for (const observation of observations.slice(3)) {
+        expect(observation.clearCount).toBe(1);
+        expect(observation.tailVisible).toBe(true);
+        expect(observation.visibleRows).toBeGreaterThanOrEqual(44);
+      }
+      await quitTui(harness);
+    } finally {
+      await harness?.dispose();
+      await fixture.dispose();
+    }
+  },
+  { timeout: 30_000 },
+);
+
+test(
   "PTY-105: forks shared tool history into two independent branches",
   async () => {
     await withPtyTui(
@@ -445,6 +563,40 @@ function longResumeWorkspaceFiles(): Readonly<Record<string, string>> {
         },
       },
     }),
+  };
+}
+
+function transientSurfaceWorkspaceFiles(): Readonly<Record<string, string>> {
+  const lines = Array.from(
+    { length: 80 },
+    (_, index) => `VIEW_LINE_${String(index + 1).padStart(3, "0")}`,
+  );
+  return {
+    "resume-layout.txt": "fixture\n",
+    "long-view.txt": `${lines.join("\n")}\n`,
+    "models.json": `${JSON.stringify({
+      default: "work",
+      profiles: {
+        work: {
+          model: "pty-test-model",
+          apiBase: "https://api.example.test/v1",
+          apiKey: "pty-placeholder-key",
+          contextWindowTokens: 128 * 1_024,
+          maxSupportedOutputTokens: 16 * 1_024,
+        },
+      },
+      memory: {
+        profile: "work",
+        embedding: {
+          name: "pty-memory-space",
+          kind: "openai-compatible",
+          model: "pty-embedding",
+          apiBase: "https://embedding.example.test/v1",
+          apiKey: "pty-embedding-key",
+          dimensions: 3,
+        },
+      },
+    })}\n`,
   };
 }
 

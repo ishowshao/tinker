@@ -409,7 +409,7 @@ describe("tui components", () => {
     let runCalls = 0;
     let listCalls = 0;
     const history = new PromptHistory();
-    const { stdin, lastFrame, cleanup } = render(
+    const { stdin, lastFrame, frames, cleanup } = render(
       <App
         sessionController={createSessionController(
           createProjectionStore(),
@@ -447,6 +447,7 @@ describe("tui components", () => {
 
     await Bun.sleep(25);
     expect(listCalls).toBe(1);
+    const closeFrameMark = frames.length;
     await writeInputUntilFrame(
       stdin,
       "\u001b",
@@ -455,6 +456,9 @@ describe("tui components", () => {
       "the memory browser to close",
     );
     expect(lastFrame()).toContain('Enter a coding request, or "/" for commands');
+    expect(
+      frames.slice(closeFrameMark).filter((frame) => frame.includes("\u001b[3J")),
+    ).toHaveLength(1);
 
     await submitInput(stdin, "normal prompt");
     await Bun.sleep(25);
@@ -1414,7 +1418,7 @@ describe("tui components", () => {
       lines: ["export const viewed = true;"],
       sizeBytes: 27,
     };
-    const { stdin, lastFrame, cleanup } = render(
+    const { stdin, lastFrame, frames, cleanup } = render(
       <App
         sessionController={createSessionController(
           createProjectionStore(),
@@ -1444,6 +1448,7 @@ describe("tui components", () => {
     expect(lastFrame()).not.toContain('Enter a coding request, or "/" for commands');
     expect(runCount).toBe(0);
 
+    const closeFrameMark = frames.length;
     await writeInputUntilFrame(
       stdin,
       "\u001b",
@@ -1453,12 +1458,19 @@ describe("tui components", () => {
     );
     expect(lastFrame()).not.toContain("View: docs/design notes.ts");
     expect(lastFrame()).toContain("model · /tmp/tinker");
+    expect(
+      frames.slice(closeFrameMark).filter((frame) => frame.includes("\u001b[3J")),
+    ).toHaveLength(1);
 
+    const failureFrameMark = frames.length;
     await submitInput(stdin, "/view missing.ts");
     await Bun.sleep(25);
     expect(lastFrame()).toContain(
       "View failed: File does not exist: /tmp/tinker/missing.ts",
     );
+    expect(
+      frames.slice(failureFrameMark).filter((frame) => frame.includes("\u001b[3J")),
+    ).toHaveLength(1);
     expect(runCount).toBe(0);
     cleanup();
   });

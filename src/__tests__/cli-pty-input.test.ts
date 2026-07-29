@@ -293,7 +293,9 @@ test(
         expect(screen).not.toContain("View: long-view.txt");
         expect(screen).toContain('Enter a coding request, or "/" for commands');
         expect(harness.transcriptText()).toContain("PTY_VIEW_SEED_DONE");
-        expect(harness.transcriptSince(closeMark)).not.toContain("PTY_VIEW_SEED_DONE");
+        const closeWrites = harness.transcriptSince(closeMark);
+        expect(closeWrites).toContain("\u001b[3J");
+        expect(occurrences(closeWrites, "PTY_VIEW_SEED_DONE")).toBe(1);
         await submitPrompt(harness, "PTY_VIEW_CONTINUE");
         await harness.waitForScreen("PTY_VIEW_CONTINUED");
 

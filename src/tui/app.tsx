@@ -142,6 +142,7 @@ export function App(props: AppProps) {
     readonly StoredMemorySummary[] | undefined
   >(undefined);
   const [viewError, setViewError] = useState<string | undefined>(undefined);
+  const [staticRenderEpoch, setStaticRenderEpoch] = useState(0);
   const [gitBranch, setGitBranch] = useState<string | undefined>(undefined);
   const [gitBranchRefresh, setGitBranchRefresh] = useState(0);
   const gitBranchReadQueue = useRef<Promise<void>>(Promise.resolve());
@@ -150,6 +151,10 @@ export function App(props: AppProps) {
   const fileViewRequest = useRef(0);
   const beforeSessionCommit = useCallback(() => {
     write(clearTerminal);
+  }, [write]);
+  const restoreStaticViewport = useCallback(() => {
+    write(clearTerminal);
+    setStaticRenderEpoch((current) => current + 1);
   }, [write]);
   const staticItems = useMemo<Array<typeof STATIC_HEADER | TimelineItem>>(
     () => [STATIC_HEADER, ...log.committed],
@@ -215,10 +220,14 @@ export function App(props: AppProps) {
   );
 
   const closeResumePicker = () => {
+    const shouldRestoreViewport = activeResumePicker !== undefined;
     resumePickerRequest.current += 1;
     setResumePicker(undefined);
     setIsSessionOperation(false);
     setNotice(undefined);
+    if (shouldRestoreViewport) {
+      restoreStaticViewport();
+    }
   };
 
   const openResumePicker = () => {
@@ -237,6 +246,7 @@ export function App(props: AppProps) {
         if (sessions.length === 0) {
           setResumePicker(undefined);
           setNotice("No stored sessions found for this workspace.");
+          restoreStaticViewport();
           return;
         }
         setResumePicker({
@@ -250,6 +260,7 @@ export function App(props: AppProps) {
         if (resumePickerRequest.current === requestId) {
           setResumePicker(undefined);
           setNotice(`Session operation failed: ${errorMessage(error)}`);
+          restoreStaticViewport();
         }
       })
       .finally(() => {
@@ -290,6 +301,7 @@ export function App(props: AppProps) {
     setShowModelPicker(false);
     setModelPickerState(undefined);
     setNotice(undefined);
+    restoreStaticViewport();
   };
 
   const doSwitchModel = (profile: ModelProfile) => {
@@ -311,6 +323,7 @@ export function App(props: AppProps) {
         }
       })
       .catch((error: unknown) => {
+        restoreStaticViewport();
         setNotice(`Model switch failed: ${errorMessage(error)}`);
       })
       .finally(() => setIsSessionOperation(false));
@@ -319,6 +332,12 @@ export function App(props: AppProps) {
   const closeFileView = () => {
     fileViewRequest.current += 1;
     setFileView(undefined);
+    restoreStaticViewport();
+  };
+
+  const closeMemoryView = () => {
+    setMemoryView(undefined);
+    restoreStaticViewport();
   };
 
   const openMemoryView = () => {
@@ -353,6 +372,7 @@ export function App(props: AppProps) {
         if (fileViewRequest.current === requestId) {
           setFileView(undefined);
           setViewError(`View failed: ${errorMessage(error)}`);
+          restoreStaticViewport();
         }
       });
   };
@@ -485,10 +505,14 @@ export function App(props: AppProps) {
   ): PromptSubmissionOutcome | Promise<PromptSubmissionOutcome> => {
     const { userMessage } = submission;
     const trimmed = userMessage.content.trim();
+    const shouldRestoreViewport = showStatus || showSkills || showMcp;
     setShowStatus(false);
     setShowSkills(false);
     setShowMcp(false);
     setViewError(undefined);
+    if (shouldRestoreViewport) {
+      restoreStaticViewport();
+    }
 
     if (userMessage.attachments === undefined && trimmed.startsWith("/")) {
       try {
@@ -643,7 +667,7 @@ export function App(props: AppProps) {
   return (
     <AssistantMarkdownProvider>
       <Box flexDirection="column">
-        <Static key={binding.sessionId} items={staticItems}>
+        <Static key={`${binding.sessionId}:${staticRenderEpoch}`} items={staticItems}>
           {(item) =>
             item === STATIC_HEADER ? (
               <Header
@@ -662,10 +686,7 @@ export function App(props: AppProps) {
         ) : fileView?.status === "ready" ? (
           <FileViewer file={fileView.file} onClose={closeFileView} />
         ) : memoryView !== undefined ? (
-          <MemoryBrowser
-            memories={memoryView}
-            onClose={() => setMemoryView(undefined)}
-          />
+          <MemoryBrowser memories={memoryView} onClose={closeMemoryView} />
         ) : activeResumePicker?.status === "loading" ? (
           <ResumeSessionPickerLoading onCancel={closeResumePicker} />
         ) : activeResumePicker?.status === "ready" ? (

@@ -48,9 +48,10 @@ ESC[2J  ESC[3J  ESC[H
 
 这不是"所有 TUI 状态永不溢出"的全局承诺。多行 Prompt 在编辑和 admission 期间仍可随输入
 增高；Prompt 输入交互会在后续方案单独处理。本方案只约束成功接纳 Prompt 之后、未来会承载
-周期性动画的运行区域。`fullStaticOutput` 仍只在切会话时重置（见 5.4）。
+周期性动画的运行区域。正常运行更新不会重置 `fullStaticOutput`；只有切会话和关闭会挤占视口
+的临时界面时会做一次受控重置与重放（见 5.4）。
 
-### 2.2 现有浮层正好把帧钉在 `rows`，关闭时必然触发一次全屏清屏
+### 2.2 浮层保持非全屏，但关闭时必须主动恢复历史尾部
 
 `shouldClearTerminalForFrame`（`ink.js:89-112`）里 `isLeavingFullscreen = wasFullscreen &&
 next < viewportRows`，而 `wasFullscreen` 的判定是 `>=`。
@@ -60,9 +61,19 @@ next < viewportRows`，而 `wasFullscreen` 的判定是 `>=`。
 - `ResumeSessionPicker`：`(rows - PICKER_CHROME_ROWS) / SESSION_ROWS` 向下取整，通常略小于
   `rows`，但边界值会踩到。
 
-也就是说**今天**每次关闭 `/view`、`/memory` 就已经在打一次 `clearTerminal`。Static 之后
-浮层滚动或关闭时可能重放静态历史。这里采用一个不改变交互模型的兼容修正：把这三处的视口
-预算从 `rows` 改成 `rows - 1`。
+把三处视口预算从 `rows` 改成 `rows - 1` 后，浮层内部导航不会进入 Ink 的全屏清屏路径。
+但 Static 历史已经从 React 树卸载：23/47 行浮层写在历史之后时，会把历史尾部推入
+scrollback；关闭后 Ink 只能擦掉浮层，不能把已经滚上去的历史拉回当前 viewport，结果就是
+Footer 留在屏幕上方、下方出现大块空白。
+
+因此这里采用两段式约束：
+
+1. 浮层存活期间继续使用 `rows - 1`，避免导航按键或动画更新反复清屏；
+2. 浮层真正关闭时，App 只执行一次 `clearTerminal`，同时递增 Static epoch 让当前 session 的
+   committed 历史重新打印。`status`、`skills`、`mcp` 面板在下一次提交时消失，也走同一个
+   viewport restore。
+
+这次一次性重放是恢复终端视口所必需的，不属于 2.1 禁止的周期性运行态重放。
 
 ### 2.3 Prompt 编辑态仍可能顶穿视口（已知、但不纳入本方案）
 
@@ -236,7 +247,7 @@ listener 之前，React 每次只会看到原子完成的 `{ committed, live }`�
 ### 5.4 `src/tui/app.tsx` + `src/tui/tui-session-controller.ts`（约 55 行）
 
 ```tsx
-<Static key={binding.sessionId} items={log.committed}>
+<Static key={`${binding.sessionId}:${staticRenderEpoch}`} items={log.committed}>
   {(item) => <TimelineRow key={item.id} item={item} />}
 </Static>
 <Box marginTop={1} flexDirection="column">
@@ -244,13 +255,14 @@ listener 之前，React 每次只会看到原子完成的 `{ committed, live }`�
 </Box>
 ```
 
-四个配套动作：
+五个配套动作：
 
 1. **`Header` 一并进 Static**。它每会话恒定，打印一次当横幅，活动帧再省 2 行。
    （`<Header key={binding.sessionId}>` 已经是按会话 keyed 的，语义天然吻合。）
-2. **`<Static key={binding.sessionId}>`**。切会话时 React 重挂 Static，reconciler 触发
+2. **Static key 由 `sessionId` 与 `staticRenderEpoch` 组成**。切会话或受控恢复 viewport
+   时 React 重挂 Static，reconciler 触发
    `onStaticChange` → `fullStaticOutput = ''`（`ink.js:324`、`reconciler.js:98-104`），
-   既防止旧会话在兜底路径里被重放，也防止内存无界增长。
+   既防止旧会话在兜底路径里被重放，也让同一 session 可以在临时界面关闭后重印历史尾部。
 3. **切会话时在提交点显式清屏**。`/clear` 今天会把旧会话从屏幕上抹掉
    （`cli-pty-session.test.ts:39` 的 `not.toContain("PTY_CLEAR_SEED")` 就是这条语义），
    Static 之后旧输出会留在屏上。清屏不能放在命令发起时：若目标会话创建、旧会话 dispose
@@ -265,6 +277,10 @@ listener 之前，React 每次只会看到原子完成的 `{ committed, live }`�
 4. **浮层不再替换整棵树**。今天 FileViewer 等浮层通过三元表达式吃掉整个布局；Static 之后
    历史仍然留在屏幕上方，浮层在下方的活动帧里渲染。这是可接受的（更像 `less`），但要求
    浮层遵守 5.6 的行数预算。
+5. **临时界面关闭时恢复 viewport**。`restoreStaticViewport()` 通过 `useStdout().write`
+   写一次 `clearTerminal`，再递增 `staticRenderEpoch`。`/view`、`/memory`、`/resume` picker
+   的关闭/失败路径，以及 `status`、`skills`、`mcp` 面板被下一次提交收回时都复用它。成功
+   切换 session 仍只走第 3 条，不额外重放来源 session。
 
 ### 5.5 `src/cli/tui-runner.tsx`（约 10 行）
 
@@ -285,6 +301,7 @@ notice；ModelPicker 和三种浮层也不会与 agent turn 同时活动。因�
 | 运行态总上限 | Static 之外的运行态根容器使用 `<Box maxHeight={rows - 1} overflow="hidden">` 作为最后兜底；只在 turn 运行期间启用，不影响编辑态 draft |
 | 可变区域 | live 区和 BackgroundTasks 分别设 `maxHeight`；BackgroundTasks 超过 5 条折叠并显示 `+N more` |
 | 浮层预算 | FileViewer / MemoryBrowser / ResumeSessionPicker 的 `rows` 改成 `rows - 1`（2.2）。写成 `props.viewportRows ?? windowSize.rows - 1`，显式传参的既有测试不受影响 |
+| 关闭恢复 | 临时界面消失时清屏并重挂当前 Static 一次；存活期间的导航更新不得触发该恢复 |
 
 live 区本身按 3.1 通常只有 0~1 个 item；上限只兜住偶尔渲染出来的 `tool.raw_result` 大 diff /
 bash 预览。Prompt draft、slash 建议和 ModelPicker 的高度不在本方案中调整。
@@ -309,8 +326,9 @@ MCP 等启动工作，在 Ink `render()` 前 `await` 同一个 Promise。实测�
 | 省略标记只在 hydrate 时出现一次 | 连续会话中内容仍在 scrollback，不再打印失真的递增标记；resume/fork 对快照缺失的旧内容保留准确说明 | 语义完整 |
 | resize 不再回流历史 | 已打印行保持旧折行 | 与终端里其他工具一致 |
 | 历史失去可回溯修改能力 | 压缩后置灰旧行、重新编号 turn 之类今后只能表达为"追加一行说明" | 本方案真正的代价 |
-| `fullStaticOutput` 内存 | 整场会话的 ANSI 文本累积在 Ink 内部（`ink.js:415`），长会话数 MB | 不能主动清（2.1），只在切会话时重置 |
+| `fullStaticOutput` 内存 | 整场会话的 ANSI 文本累积在 Ink 内部（`ink.js:415`），长会话数 MB | 正常运行不主动清（2.1）；切会话或临时界面关闭恢复时重置 |
 | 浮层不再遮住历史 | 见 5.4 第 4 点 | 可接受 |
+| 临时界面关闭会一次性重放历史 | 见 2.2、5.4 第 5 点；不发生在浮层导航或运行态 tick | 为恢复正确 viewport 接受 |
 
 ## 七、测试影响
 
@@ -322,7 +340,7 @@ MCP 等启动工作，在 Ink `render()` 前 `await` 同一个 Promise。实测�
 | `tui-components.test.tsx` | 绝大部分零改动（2.5）；`Timeline` 标题相关无断言，安全 |
 | PTY journeys | 需要逐条复核。历史滚出视口后 `screenText()` 读不到（`PtyTerminalScreen` 的 `scrollback: 0`），受影响的断言改用已有的 `transcriptText()` / `transcriptSince(mark)`。默认视口 30×120，多轮会话的早期内容会滚出去 |
 
-建议新增两条守卫测试，直接盯"运行态周期性更新不重放历史"这个目标：
+建议新增三条守卫测试，同时盯住"运行态不周期性重放"和"临时界面关闭后回到历史尾部"：
 
 1. **单元**：用假 TTY（`isTTY: true`, `rows: 24`）先打印一段带唯一 sentinel 的长
    committed 历史，再进入包含 running tool、大 diff/bash 中间态和多个 BackgroundTasks 的
@@ -332,6 +350,9 @@ MCP 等启动工作，在 Ink `render()` 前 `await` 同一个 Promise。实测�
 2. **PTY journey**：跑一段多轮会话，在最后一个 Prompt 被接纳、Static 输出稳定后标记原始
    transcript，让 fake model 继续产生至少两个真实 live 更新；断言 mark 之后不出现
    `ESC[3J`，也不重复早期历史 sentinel。会话切换主动清屏不在这段采样窗口内。
+3. **临时界面 PTY journey**：在长历史 session 里依次关闭 `/view`、`/memory`、
+   `/resume` picker，并收回 `status`、`skills`、`mcp` 面板；每条路径断言当前 viewport
+   重新包含历史尾 sentinel、屏幕不留下大块空白，而且关闭窗口内只出现一次 `ESC[3J`。
 
 第 2 条直接验证用户目标：历史长度不会重新进入周期性运行帧的写出成本。
 
@@ -342,7 +363,8 @@ MCP 等启动工作，在 Ink `render()` 前 `await` 同一个 Promise。实测�
 1. **highlighter 生命周期确定化**（5.7）。模块级单例、尽早启动、Ink render 前 await。
    这是 Static 正确打印 assistant 代码块的前置条件，可独立测试初始化成功与降级路径。
 2. **Static 架构改造**（5.1~5.6）：store 切分、hydrate 一次性省略标记、会话切换提交点清屏、
-   活动帧布局、浮层 `rows - 1`、`incrementalRendering`，以及第七节两条守卫测试一起落地。
+   活动帧布局、浮层 `rows - 1`、关闭时受控恢复、`incrementalRendering`，以及第七节三条
+   守卫测试一起落地。
 
 不再把"全局活动帧硬防线"拆成一个前置提交：Static 落地前，现有多轮 Timeline 本来就会超过
 视口；单独提交全局守卫没有成立的运行条件。Prompt 编辑交互不在这两次提交中调整。
