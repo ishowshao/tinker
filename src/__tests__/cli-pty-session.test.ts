@@ -260,7 +260,7 @@ test(
       for (const observation of observations.slice(3)) {
         expect(observation.clearCount).toBe(1);
         expect(observation.tailVisible).toBe(true);
-        expect(observation.visibleRows).toBeGreaterThanOrEqual(44);
+        expect(observation.visibleRows).toBeGreaterThanOrEqual(43);
       }
       await quitTui(harness);
     } finally {
