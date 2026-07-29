@@ -1,4 +1,16 @@
 import type { ContextUsageSnapshot } from "../agent/context-meter";
+import type { ModelUsage } from "../model/model-client";
+
+export function formatLatestProviderCacheRate(
+  usage: ModelUsage | undefined,
+): string | undefined {
+  const hit = usage?.promptCacheHitTokens;
+  const miss = usage?.promptCacheMissTokens;
+  if (hit === undefined || miss === undefined || hit + miss === 0) {
+    return undefined;
+  }
+  return `cache ${Math.round((hit / (hit + miss)) * 100)}%`;
+}
 
 export function formatContextUsageLine(
   usage: Pick<

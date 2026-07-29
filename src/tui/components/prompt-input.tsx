@@ -9,7 +9,10 @@ import { ImageNotRecognizedError } from "../../image/image-probe";
 import type { ImportedImageAsset } from "../../image/image-asset-store";
 import type { ImageAssetRef } from "../../image/image-types";
 import { runtimeIdFactory, type RuntimeIdFactory } from "../../ids/runtime-id";
-import { formatContextUsageLine } from "../context-format";
+import {
+  formatContextUsageLine,
+  formatLatestProviderCacheRate,
+} from "../context-format";
 import {
   type FileMentionMatch,
   findFileMention,
@@ -722,6 +725,9 @@ export function PromptInput(props: PromptInputProps) {
   const showFileSuggestions = filePopupActive;
   const showSlashSuggestions = suggestions.length > 0 && !locked;
   const showSuggestions = showFileSuggestions || showSlashSuggestions;
+  const cacheRate = formatLatestProviderCacheRate(
+    props.contextUsage?.lastProviderUsage,
+  );
   return (
     <Box flexDirection="column">
       <Box width="100%" borderStyle="single" borderLeft={false} borderRight={false}>
@@ -743,6 +749,12 @@ export function PromptInput(props: PromptInputProps) {
               >
                 {formatContextUsageLine(props.contextUsage)}
               </Text>
+            </>
+          )}
+          {cacheRate === undefined ? null : (
+            <>
+              <Text dimColor> · </Text>
+              <Text dimColor>{cacheRate}</Text>
             </>
           )}
         </Box>

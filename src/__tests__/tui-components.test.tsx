@@ -16,6 +16,7 @@ import type { ProjectSlashCommand } from "../tui/project-slash-commands";
 import type { SessionId } from "../ids/runtime-id";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
+import type { ModelUsage } from "../model/model-client";
 import {
   ContextManagerError,
   type ContextCompactionResult,
@@ -286,6 +287,142 @@ describe("tui components", () => {
     );
     expect(blocked.lastFrame()).toContain("context 930K / 896K (104% used, blocked)");
     blocked.cleanup();
+  });
+
+  function providerUsage(overrides: Partial<ModelUsage> = {}): ModelUsage {
+    return {
+      promptTokens: 10_000,
+      completionTokens: 500,
+      totalTokens: 10_500,
+      ...overrides,
+    };
+  }
+
+  function renderPromptWithUsage(usage: ModelUsage | undefined) {
+    return render(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        contextUsage={contextSnapshot(
+          usage === undefined ? {} : { lastProviderUsage: usage },
+        )}
+        onSubmit={() => true}
+      />,
+    );
+  }
+
+  test("hides the cache segment without provider usage", () => {
+    const noContextUsage = render(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        onSubmit={() => true}
+      />,
+    );
+    expect(noContextUsage.lastFrame()).not.toContain("cache");
+    noContextUsage.cleanup();
+
+    const noLastUsage = renderPromptWithUsage(undefined);
+    expect(noLastUsage.lastFrame()).not.toContain("cache");
+    noLastUsage.cleanup();
+
+    const noCacheFields = renderPromptWithUsage(providerUsage());
+    expect(noCacheFields.lastFrame()).not.toContain("cache");
+    noCacheFields.cleanup();
+
+    const zeroTotal = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 0, promptCacheMissTokens: 0 }),
+    );
+    expect(zeroTotal.lastFrame()).not.toContain("cache");
+    zeroTotal.cleanup();
+  });
+
+  test("renders the latest provider cache hit rate", () => {
+    const missOnly = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 0, promptCacheMissTokens: 10_000 }),
+    );
+    expect(missOnly.lastFrame()).toContain("cache 0%");
+    missOnly.cleanup();
+
+    const partial = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 7_200, promptCacheMissTokens: 2_800 }),
+    );
+    expect(partial.lastFrame()).toContain("cache 72%");
+    partial.cleanup();
+
+    const hitOnly = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 10_000, promptCacheMissTokens: 0 }),
+    );
+    expect(hitOnly.lastFrame()).toContain("cache 100%");
+    hitOnly.cleanup();
+
+    const rounded = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 2, promptCacheMissTokens: 3 }),
+    );
+    expect(rounded.lastFrame()).toContain("cache 40%");
+    rounded.cleanup();
+  });
+
+  test("replaces and clears the cache segment on rerender", () => {
+    const view = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 9_400, promptCacheMissTokens: 600 }),
+    );
+    expect(view.lastFrame()).toContain("cache 94%");
+
+    view.rerender(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        contextUsage={contextSnapshot({
+          lastProviderUsage: providerUsage({
+            promptCacheHitTokens: 1_000,
+            promptCacheMissTokens: 1_000,
+          }),
+        })}
+        onSubmit={() => true}
+      />,
+    );
+    expect(view.lastFrame()).toContain("cache 50%");
+    expect(view.lastFrame()).not.toContain("cache 94%");
+
+    view.rerender(
+      <PromptInput
+        modelName="deepseek-v4-flash"
+        workspaceRoot="/tmp/tinker"
+        gitBranch="main"
+        contextUsage={contextSnapshot({
+          lastProviderUsage: providerUsage(),
+        })}
+        onSubmit={() => true}
+      />,
+    );
+    expect(view.lastFrame()).not.toContain("cache");
+    view.cleanup();
+  });
+
+  test("keeps the cache segment across context pressure states", () => {
+    for (const pressure of ["normal", "triggered", "blocked"] as const) {
+      const view = render(
+        <PromptInput
+          modelName="deepseek-v4-flash"
+          workspaceRoot="/tmp/tinker"
+          gitBranch="main"
+          contextUsage={contextSnapshot({
+            pressure,
+            lastProviderUsage: providerUsage({
+              promptCacheHitTokens: 500,
+              promptCacheMissTokens: 500,
+            }),
+          })}
+          onSubmit={() => true}
+        />,
+      );
+      expect(view.lastFrame()).toContain("cache 50%");
+      view.cleanup();
+    }
   });
 
   test("shows /status locally without running the agent", async () => {
