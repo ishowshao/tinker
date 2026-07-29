@@ -150,6 +150,9 @@ test(
         await harness.waitForScreen("Running", {
           message: "blocked turn running state",
         });
+        await harness.waitForScreen("model iteration 1", {
+          message: "blocked model request in flight",
+        });
 
         await harness.press("escape");
         await harness.waitForScreen(
