@@ -5,6 +5,22 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-07-29
+
+### Changed
+
+- Keep settled TUI history outside recurring live renders and reuse prepared
+  Markdown highlighting, reducing redraw work during long interactive sessions.
+- Stop repainting the TUI once per second solely to update a running elapsed-time
+  counter; completed turns still show their final duration.
+
+### Fixed
+
+- Restore the visible history tail after closing `/view`, `/memory`, `/resume`,
+  and other temporary TUI panels instead of leaving a mostly blank viewport.
+- Keep the `/resume` picker bound to the session that opened it, preventing stale
+  picker state from affecting a newly activated session.
+
 ## [1.5.0] - 2026-07-27
 
 ### Added
@@ -84,7 +100,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/ishowshao/tinker/releases/tag/v1.5.1
 [1.5.0]: https://github.com/ishowshao/tinker/releases/tag/v1.5.0
 [1.4.0]: https://github.com/ishowshao/tinker/releases/tag/v1.4.0
 [1.3.0]: https://github.com/ishowshao/tinker/releases/tag/v1.3.0
