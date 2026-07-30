@@ -719,55 +719,58 @@ export function App(props: AppProps) {
         ) : (
           <Box
             flexDirection="column"
-            maxHeight={
-              state.status === "running" ? Math.max(1, windowSize.rows - 1) : undefined
-            }
-            overflow={state.status === "running" ? "hidden" : "visible"}
+            maxHeight={Math.max(1, windowSize.rows - 1)}
+            overflow="hidden"
           >
-            <Box marginTop={1} flexDirection="column">
-              <Box
-                maxHeight={
-                  state.backgroundTasks.length === 0
-                    ? LIVE_TIMELINE_MAX_ROWS
-                    : LIVE_TIMELINE_WITH_TASKS_MAX_ROWS
-                }
-                overflow="hidden"
-              >
-                <Timeline items={log.live} />
+            <Box flexDirection="column" flexShrink={1} minHeight={0} overflow="hidden">
+              <Box flexDirection="column" flexShrink={0}>
+                <Box marginTop={1} flexDirection="column" flexShrink={0}>
+                  <Box
+                    maxHeight={
+                      state.backgroundTasks.length === 0
+                        ? LIVE_TIMELINE_MAX_ROWS
+                        : LIVE_TIMELINE_WITH_TASKS_MAX_ROWS
+                    }
+                    overflow="hidden"
+                  >
+                    <Timeline items={log.live} />
+                  </Box>
+                </Box>
+                {state.backgroundTasks.length === 0 ? null : (
+                  <Box
+                    marginTop={1}
+                    maxHeight={BACKGROUND_TASKS_MAX_ROWS}
+                    overflow="hidden"
+                    flexShrink={0}
+                  >
+                    <BackgroundTasks tasks={state.backgroundTasks} />
+                  </Box>
+                )}
+                {showStatus ? (
+                  <Box marginTop={1} flexShrink={0}>
+                    <ContextStatus state={state} bashGuard={bashGuard} />
+                  </Box>
+                ) : null}
+                {showSkills ? (
+                  <Box marginTop={1} flexShrink={0}>
+                    <SkillsPanel snapshot={binding.skills()} />
+                  </Box>
+                ) : null}
+                {showMcp ? (
+                  <Box marginTop={1} flexShrink={0}>
+                    <McpPanel snapshot={binding.mcp()} />
+                  </Box>
+                ) : null}
               </Box>
             </Box>
-            {state.backgroundTasks.length === 0 ? null : (
-              <Box
-                marginTop={1}
-                maxHeight={BACKGROUND_TASKS_MAX_ROWS}
-                overflow="hidden"
-              >
-                <BackgroundTasks tasks={state.backgroundTasks} />
-              </Box>
-            )}
-            {showStatus ? (
-              <Box marginTop={1}>
-                <ContextStatus state={state} bashGuard={bashGuard} />
-              </Box>
-            ) : null}
-            {showSkills ? (
-              <Box marginTop={1}>
-                <SkillsPanel snapshot={binding.skills()} />
-              </Box>
-            ) : null}
-            {showMcp ? (
-              <Box marginTop={1}>
-                <McpPanel snapshot={binding.mcp()} />
-              </Box>
-            ) : null}
-            <Box marginTop={1}>
+            <Box marginTop={1} flexShrink={0}>
               <Footer
                 status={isCancelling ? "cancelling" : state.status}
                 workedForMs={state.workedForMs}
                 yolo={bashGuard.mode === "yolo"}
               />
             </Box>
-            <Box marginTop={1} flexDirection="column">
+            <Box marginTop={1} flexDirection="column" flexShrink={0}>
               {bashGuard.pending !== undefined ? (
                 <BashConfirmation
                   command={bashGuard.pending.command}

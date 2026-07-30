@@ -312,6 +312,68 @@ test(
   { timeout: 30_000 },
 );
 
+test(
+  "PTY-115: keeps the prompt frame intact when slash suggestions open over a tall panel",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-local-panels", rows: 24, columns: 120 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        await waitForPromptReady(harness);
+
+        await harness.type("/status");
+        await harness.waitForScreen("❯ /status");
+        await harness.press("tab");
+        await harness.waitForScreen(
+          (screen) =>
+            screen.includes("/status") &&
+            !screen.includes("Show session and context details"),
+          { message: "Tab-completed /status input" },
+        );
+        await harness.press("enter");
+        await harness.waitForScreen("Bash guard");
+
+        await waitForPromptReady(harness);
+        await harness.type("/");
+        await harness.waitForScreen("❯ /status");
+        await harness.waitForScreen("/quit Exit the TUI");
+        expectPromptFrameIntact(harness.screenText());
+
+        await harness.type("yo");
+        await harness.waitForScreen("❯ /yolo");
+        await Bun.sleep(200);
+        const screen = harness.screenText();
+        expectPromptFrameIntact(screen);
+        expect(occurrences(screen, "❯ /yolo")).toBe(1);
+        expect(screen).toContain("Session");
+        expect(screen).toContain("Bash guard");
+        for (const line of screen.split("\n")) {
+          expect(line.trim()).not.toBe("/y");
+          expect(line.trim()).not.toBe("/yolo");
+          expect(line).not.toMatch(/model: pty-test-model\S/);
+        }
+
+        await harness.press("escape");
+        await harness.waitForScreen(
+          (current) =>
+            !current.includes("❯ /yolo") && current.includes("pty-test-model"),
+          { message: "slash suggestions dismissed" },
+        );
+        expectPromptFrameIntact(harness.screenText());
+
+        await harness.press("ctrl_u");
+        await quitTui(harness);
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+function expectPromptFrameIntact(screen: string): void {
+  const borderRows = screen.split("\n").filter((line) => line.trim().match(/^─+$/));
+  expect(borderRows.length).toBeGreaterThanOrEqual(2);
+}
+
 async function pressAndWaitForRedraw(
   harness: PtyTuiHarness,
   key: PtyKey,

@@ -10,6 +10,8 @@ import { BashConfirmation } from "../tui/components/bash-confirmation";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
 import { McpPanel } from "../tui/components/mcp-panel";
+import { ContextStatus } from "../tui/components/context-status";
+import { createInitialTuiState } from "../tui/event-store";
 import { PromptHistory } from "../tui/prompt-history";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import type { SlashCommand } from "../tui/slash-commands";
@@ -495,15 +497,41 @@ describe("tui components", () => {
 
     await submitInput(stdin, "/status");
     await Bun.sleep(25);
+    expect(lastFrame()).toContain("Bash guard");
     expect(lastFrame()).toContain("model window: 256K");
     expect(lastFrame()).toContain("request max output: 64K");
-    expect(lastFrame()).toContain("Estimator");
     expect(runCalls).toBe(0);
 
     await submitInput(stdin, "/nope");
     await Bun.sleep(25);
-    expect(lastFrame()).not.toContain("Estimator");
+    expect(lastFrame()).not.toContain("Bash guard");
     cleanup();
+  });
+
+  test("renders the full ContextStatus panel sections without viewport clipping", () => {
+    const view = render(
+      <ContextStatus
+        state={{
+          ...createInitialTuiState({
+            sessionId: "session-1",
+            modelName: "model",
+            workspaceRoot: "/tmp/tinker",
+          }),
+          contextUsage: contextSnapshot(),
+          contextProfile: TEST_CONTEXT_PROFILE,
+          contextBudget: TEST_CONTEXT_BUDGET,
+        }}
+        bashGuard={{ mode: "guard", source: "default" }}
+      />,
+    );
+    const frame = view.lastFrame();
+    expect(frame).toContain("Session");
+    expect(frame).toContain("Bash guard");
+    expect(frame).toContain("mode: guard (source: default)");
+    expect(frame).toContain("Context");
+    expect(frame).toContain("Measurement");
+    expect(frame).toContain("Estimator");
+    view.cleanup();
   });
 
   test("shows a running spinner during the turn and the worked duration when it finishes", async () => {
