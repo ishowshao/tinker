@@ -13,6 +13,7 @@ describe("public CLI documentation contract", () => {
     expect(rendered).toContain(
       PUBLIC_CLI_CONTRACT.tui.profileOption.flags.split(", ")[1],
     );
+    expect(rendered).toContain(PUBLIC_CLI_CONTRACT.run.yoloOption.flags);
     for (const source of PUBLIC_CLI_CONTRACT.run.promptSources) {
       expect(rendered).toContain(source.syntax);
       expect(rendered).toContain(source.description);

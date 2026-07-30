@@ -62,7 +62,17 @@ export class ToolRegistry {
 }
 
 export class ToolRuntime {
-  constructor(private readonly registry: ToolRegistry) {}
+  constructor(
+    private readonly registry: ToolRegistry,
+    private readonly bashGuard?: {
+      readonly surface: "tui" | "one-shot";
+      confirm(
+        call: ToolCall,
+        request: { command: string; reason: string },
+        signal: AbortSignal,
+      ): Promise<"allow" | "deny">;
+    },
+  ) {}
 
   async execute(call: ToolCall, context: ToolExecutionContext): Promise<ToolRawResult> {
     throwIfTurnCancelled(context.signal);
@@ -88,7 +98,16 @@ export class ToolRuntime {
     }
 
     try {
-      return await tool.execute(call.args, call, context);
+      return await tool.execute(call.args, call, {
+        ...context,
+        ...(this.bashGuard === undefined
+          ? {}
+          : {
+              bashGuardSurface: this.bashGuard.surface,
+              confirmBashCommand: (request: { command: string; reason: string }) =>
+                this.bashGuard!.confirm(call, request, context.signal),
+            }),
+      });
     } catch (error) {
       if (context.signal.aborted) {
         throw cancellationError(context.signal, error);
@@ -134,6 +153,14 @@ export function createDefaultTooling(options: {
   skillCoordinator?: SkillActivationCoordinator;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
+  bashGuard?: {
+    readonly surface: "tui" | "one-shot";
+    confirm(
+      call: ToolCall,
+      request: { command: string; reason: string },
+      signal: AbortSignal,
+    ): Promise<"allow" | "deny">;
+  };
 }): DefaultTooling {
   const snapshots: FileSnapshotStore = new Map();
   const registry = new ToolRegistry();
@@ -232,7 +259,7 @@ export function createDefaultTooling(options: {
 
   return {
     registry,
-    runtime: new ToolRuntime(registry),
+    runtime: new ToolRuntime(registry, options.bashGuard),
     snapshots,
     taskManager,
     bashState: {

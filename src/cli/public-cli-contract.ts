@@ -60,6 +60,10 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
       description: "Read the prompt from a UTF-8 text file.",
       valueName: "path",
     } satisfies PublicCliOption),
+    yoloOption: Object.freeze({
+      flags: "--yolo",
+      description: "Skip destructive Bash command confirmation; use at your own risk.",
+    } satisfies PublicCliOption),
     promptSources: RUN_PROMPT_SOURCES,
     helpAfter:
       "Use exactly one prompt source. For complex or sensitive prompts, prefer --stdin or --file.",

@@ -144,6 +144,7 @@ export async function main(
         ...(parsed.command.profileName === undefined
           ? {}
           : { profileName: parsed.command.profileName }),
+        ...(parsed.command.type === "run" && parsed.command.yolo ? { yolo: true } : {}),
       });
     } catch (error) {
       await writeCliOutput(

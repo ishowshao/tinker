@@ -12,6 +12,7 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import type { ShellTaskManager, ShellTaskSnapshot } from "../tools/bash-task";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
+import { TurnCancelledError } from "../agent/turn-cancellation";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -46,6 +47,120 @@ function createDefaultTooling(
 }
 
 describe("Bash tool", () => {
+  test("denies a dangerous command before spawning it", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+    const marker = path.join(workspace, "spawned");
+
+    try {
+      const tooling = createDefaultTooling({
+        workspaceRoot: workspace,
+        bashGuard: {
+          surface: "one-shot",
+          confirm: async () => "deny",
+        },
+      });
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_guard_deny",
+          name: "Bash",
+          args: { command: `shutdown; touch ${marker}` },
+        }),
+      );
+
+      expect(raw.ok).toBe(false);
+      expect(raw.taskId).toBe("");
+      expect(raw.outputFilePath).toBe("");
+      expect(raw.error).toContain("Non-interactive mode cannot confirm");
+      expect(await Bun.file(marker).exists()).toBe(false);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("allows a confirmed dangerous command and guards background execution", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+    const requests: string[] = [];
+
+    try {
+      const tooling = createDefaultTooling({
+        workspaceRoot: workspace,
+        bashGuard: {
+          surface: "tui",
+          confirm: async (_call, request) => {
+            requests.push(request.command);
+            return "allow";
+          },
+        },
+      });
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_guard_allow",
+          name: "Bash",
+          args: {
+            command: "dd if=/dev/null of=/dev/null count=0",
+            run_in_background: true,
+          },
+        }),
+      );
+
+      expect(requests).toEqual(["dd if=/dev/null of=/dev/null count=0"]);
+      expect(raw.ok).toBe(true);
+      expect(raw.backgrounded).toBe(true);
+      await tooling.dispose();
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("does not spawn while confirmation is pending and respects cancellation", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+    const controller = new AbortController();
+    let confirmationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      confirmationStarted = resolve;
+    });
+
+    try {
+      const tooling = createDefaultTooling({
+        workspaceRoot: workspace,
+        bashGuard: {
+          surface: "tui",
+          confirm: async (_call, _request, signal) => {
+            confirmationStarted?.();
+            return new Promise<"allow" | "deny">((_resolve, reject) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  reject(
+                    signal.reason instanceof Error
+                      ? signal.reason
+                      : new Error("cancelled"),
+                  );
+                },
+                { once: true },
+              );
+            });
+          },
+        },
+      });
+      const execution = tooling.runtime.execute(
+        {
+          providerToolCallId: "call_guard_cancel",
+          name: "Bash",
+          args: { command: "reboot" },
+        },
+        { signal: controller.signal },
+      );
+      await started;
+      controller.abort(new TurnCancelledError("user"));
+
+      expect(execution).rejects.toBeInstanceOf(TurnCancelledError);
+      expect(tooling.taskManager.listBackgroundTasks()).toEqual([]);
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("publishes the expected tool schema and rejects invalid arguments", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
 

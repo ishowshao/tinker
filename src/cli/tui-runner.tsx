@@ -104,6 +104,11 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
         toolingConfig: options.publicConfig.tooling,
+        bashGuard: {
+          mode: sessionConfig.bashGuardMode,
+          source: sessionConfig.bashGuardSource,
+          surface: "tui" as const,
+        },
         ...(memoryCoordinator === undefined
           ? {}
           : {

@@ -12,6 +12,7 @@ import { defineToolExecutor } from "./types";
 import type { TaskOutputSnapshot } from "./task-output";
 import type { BashRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
+import { classifyBashRisk } from "./bash-guard";
 
 type BashArgs = {
   command: string;
@@ -91,6 +92,36 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
       }
 
       const input = parsed.value;
+      const risk = classifyBashRisk(input.command, {
+        workspaceRoot: options.workspaceRoot,
+      });
+      if (risk.dangerous && context.confirmBashCommand !== undefined) {
+        const decision = await context.confirmBashCommand({
+          command: input.command,
+          reason: risk.reason,
+        });
+        throwIfTurnCancelled(context.signal);
+        if (decision === "deny") {
+          const suffix =
+            context.bashGuardSurface === "one-shot"
+              ? "Non-interactive mode cannot confirm; rerun with --yolo."
+              : "The user declined this command.";
+          return {
+            ok: false,
+            command: input.command,
+            taskId: "",
+            sessionId: call.sessionId,
+            status: "failed",
+            cwd: options.cwdState.cwd,
+            outputFilePath: "",
+            outputBytes: 0,
+            outputLines: 0,
+            preview: "",
+            truncated: false,
+            error: `Command denied: ${risk.reason}. ${suffix}`,
+          };
+        }
+      }
       const foregroundTimeoutMs = input.timeout ?? defaultTimeoutMs;
       throwIfTurnCancelled(context.signal);
       const task = await options.taskManager.start({

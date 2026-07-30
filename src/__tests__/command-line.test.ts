@@ -49,6 +49,15 @@ describe("CLI command line", () => {
     });
   });
 
+  test("accepts --yolo only on the one-shot run command", async () => {
+    expect(await parseCommand(["run", "--yolo", "hello"])).toEqual({
+      type: "run",
+      yolo: true,
+      promptSource: { kind: "argument", value: "hello" },
+    });
+    await expectUsage(["--yolo"], "unknown option", "root");
+  });
+
   test("accepts attached leading-dash values and -- protected prompts", async () => {
     expect(await parseCommand(["run", "--file=-prompt.md"])).toEqual({
       type: "run",
@@ -116,6 +125,7 @@ describe("CLI command line", () => {
     expectTerminal(runHelp, "Usage: tinker run [options] [prompt]");
     expect(runHelp.type === "terminal" && runHelp.stdout).toContain("--stdin");
     expect(runHelp.type === "terminal" && runHelp.stdout).toContain("--file <path>");
+    expect(runHelp.type === "terminal" && runHelp.stdout).toContain("--yolo");
     expect(runHelp.type === "terminal" && runHelp.stdout).toContain(
       "complex or sensitive prompts",
     );

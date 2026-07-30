@@ -25,6 +25,11 @@ export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
     description: "Show MCP servers and runtime tools",
   },
   {
+    name: "yolo",
+    usage: "/yolo [on|off]",
+    description: "Show or change destructive Bash confirmation",
+  },
+  {
     name: "memory",
     usage: "/memory",
     description: "Browse stored global memories",
@@ -70,6 +75,8 @@ export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
 
 export type ParsedSlashCommand =
   | { type: "status" }
+  | { type: "yolo_status" }
+  | { type: "yolo"; enabled: boolean }
   | { type: "skills" }
   | { type: "mcp" }
   | { type: "memory" }
@@ -110,6 +117,15 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
   const command = tokens[0];
   if (command === "/status" && tokens.length === 1) {
     return { type: "status" };
+  }
+  if (command === "/yolo") {
+    if (tokens.length === 1) {
+      return { type: "yolo_status" };
+    }
+    if (tokens.length === 2 && (tokens[1] === "on" || tokens[1] === "off")) {
+      return { type: "yolo", enabled: tokens[1] === "on" };
+    }
+    throw slashCommandUsageError("yolo");
   }
   if (command === "/skills" && tokens.length === 1) {
     return { type: "skills" };

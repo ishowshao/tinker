@@ -111,6 +111,8 @@ describe("public environment parser", () => {
       includeReasoningContent: false,
       stream: true,
       tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
+      bashGuardMode: "guard",
+      bashGuardSource: "default",
     });
     const config = deriveRunnerConfig(createResolvedPublicConfig(environment), {
       sessionId: TEST_SESSION_ID,
@@ -143,6 +145,42 @@ describe("public environment parser", () => {
     expect(() =>
       parsePublicEnvironment(envMode({ TINKER_STREAM: "maybe" }), TEST_CWD),
     ).toThrow("TINKER_STREAM must be one of");
+  });
+
+  test("resolves TINKER_YOLO and lets the one-shot flag take priority", () => {
+    const environment = parsePublicEnvironment(
+      envMode({ TINKER_YOLO: "on" }),
+      TEST_CWD,
+    );
+    expect(environment).toMatchObject({
+      bashGuardMode: "yolo",
+      bashGuardSource: "environment",
+    });
+    const resolved = createResolvedPublicConfig(environment);
+    expect(
+      deriveRunnerConfig(resolved, {
+        sessionId: TEST_SESSION_ID,
+      }),
+    ).toMatchObject({
+      bashGuardMode: "yolo",
+      bashGuardSource: "environment",
+    });
+
+    const guarded = createResolvedPublicConfig(
+      parsePublicEnvironment(envMode({ TINKER_YOLO: "off" }), TEST_CWD),
+    );
+    expect(
+      deriveRunnerConfig(guarded, {
+        sessionId: TEST_SESSION_ID,
+        yolo: true,
+      }),
+    ).toMatchObject({
+      bashGuardMode: "yolo",
+      bashGuardSource: "cli",
+    });
+    expect(() =>
+      parsePublicEnvironment(envMode({ TINKER_YOLO: "sometimes" }), TEST_CWD),
+    ).toThrow("TINKER_YOLO");
   });
 
   test("fast-fails every invalid public positive integer", () => {

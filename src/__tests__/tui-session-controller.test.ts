@@ -275,6 +275,10 @@ function fakeRuntime(
       clones.push(targetSessionId);
     },
     canSwitchSession: () => canSwitchSession,
+    bashGuard: () => ({ mode: "guard", source: "default" }),
+    subscribeBashGuard: () => () => undefined,
+    setYoloMode: () => undefined,
+    resolveBashConfirmation: async () => undefined,
     dispose: async (reason) => {
       disposals.push(reason);
     },

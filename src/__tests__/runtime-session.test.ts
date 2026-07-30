@@ -113,6 +113,40 @@ class BackgroundTaskModel extends TestModelClient {
   }
 }
 
+class DangerousConfirmationModel extends TestModelClient {
+  private requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected runtime identity for Bash confirmation.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "provider-dangerous",
+            name: "Bash",
+            args: { command: "reboot" },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "used a safer approach",
+    });
+  }
+}
+
 class FailingToolCallModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
 
@@ -310,6 +344,70 @@ class HugeObservationModel extends TestModelClient {
 }
 
 describe("RuntimeSession lifecycle", () => {
+  test("pauses TUI Bash execution for a decision and audits the denial", async () => {
+    const sink = collectingEventSink();
+    const input = {
+      ...createInput(new DangerousConfirmationModel(), sink, "bash-confirm"),
+      bashGuard: {
+        mode: "guard" as const,
+        source: "default" as const,
+        surface: "tui" as const,
+      },
+    };
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("bash-confirm"),
+      loadMcpConfig: async () => undefined,
+    });
+    let markPending: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      markPending = resolve;
+    });
+    const unsubscribe = session.subscribeBashGuard(() => {
+      if (session.bashGuard().pending !== undefined) {
+        markPending?.();
+      }
+    });
+
+    try {
+      const completion = session.executeTurn({
+        userMessage: { role: "user", content: "do it" },
+        signal: new AbortController().signal,
+      });
+      await pending;
+      expect(session.bashGuard()).toMatchObject({
+        mode: "guard",
+        pending: {
+          command: "reboot",
+          reason: "system power command reboot",
+        },
+      });
+
+      await session.resolveBashConfirmation("deny");
+      expect(await completion).toMatchObject({
+        status: "completed",
+        finalText: "used a safer approach",
+      });
+      expect(
+        sink.events
+          .filter((event) => event.type.startsWith("tool.confirmation."))
+          .map((event) => ({
+            type: event.type,
+            decision:
+              event.type === "tool.confirmation.resolved"
+                ? event.data.decision
+                : undefined,
+          })),
+      ).toEqual([
+        { type: "tool.confirmation.requested", decision: undefined },
+        { type: "tool.confirmation.resolved", decision: "deny" },
+      ]);
+    } finally {
+      unsubscribe();
+      await session.dispose({ type: "oneshot_complete" });
+      await rm(input.workspaceRoot, { recursive: true });
+    }
+  });
+
   test("passes resolved tooling config to built-in and MCP composition", async () => {
     const toolingConfig = Object.freeze({
       ...DEFAULT_PUBLIC_TOOLING_CONFIG,

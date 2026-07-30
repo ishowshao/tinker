@@ -214,6 +214,37 @@ export function reduceTuiProjection(
           status: event.data.ok ? "ok" : "failed",
         })),
       );
+    case "tool.confirmation.requested":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(
+          turn,
+          toolCallRef(
+            requireEventString(
+              event.toolCallId,
+              "tool.confirmation.requested toolCallId",
+            ),
+          ),
+          (item) => ({
+            ...item,
+            text: `Bash confirmation requested · ${event.data.reason}`,
+            status: "running",
+          }),
+        ),
+      );
+    case "tool.confirmation.resolved":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `confirmation-${event.toolCallId}-${event.eventSequence}`,
+          label: "bash guard",
+          text: `${event.data.decision} · ${event.data.reason}`,
+          status:
+            event.data.decision === "allow"
+              ? "ok"
+              : event.data.decision === "cancelled"
+                ? "cancelled"
+                : "failed",
+        }),
+      );
     case "bash.task.backgrounded":
     case "bash.task.stopping":
     case "bash.task.finished":

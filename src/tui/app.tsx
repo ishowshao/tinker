@@ -25,6 +25,7 @@ import { Footer } from "./components/footer";
 import { AssistantMarkdownProvider } from "./components/assistant-markdown";
 import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
+import { BashConfirmation } from "./components/bash-confirmation";
 import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
 import { FileViewer, FileViewerLoading } from "./components/file-viewer";
@@ -121,6 +122,11 @@ export function App(props: AppProps) {
     binding.projectionStore.subscribe,
     binding.projectionStore.getLogSnapshot,
     binding.projectionStore.getLogSnapshot,
+  );
+  const bashGuard = useSyncExternalStore(
+    (listener) => binding.subscribeBashGuard(listener),
+    () => binding.bashGuard(),
+    () => binding.bashGuard(),
   );
   const [isRunning, setIsRunning] = useState(false);
   const [isSessionOperation, setIsSessionOperation] = useState(false);
@@ -549,6 +555,19 @@ export function App(props: AppProps) {
           setShowStatus(true);
           return true;
         }
+        if (command.type === "yolo_status") {
+          setNotice(`Bash guard: ${bashGuard.mode} (source: ${bashGuard.source}).`);
+          return true;
+        }
+        if (command.type === "yolo") {
+          binding.setYoloMode(command.enabled);
+          setNotice(
+            command.enabled
+              ? "YOLO enabled for this session; dangerous Bash commands will run without confirmation."
+              : "YOLO disabled; dangerous Bash commands require confirmation.",
+          );
+          return true;
+        }
         if (command.type === "skills") {
           setShowSkills(true);
           return true;
@@ -728,7 +747,7 @@ export function App(props: AppProps) {
             )}
             {showStatus ? (
               <Box marginTop={1}>
-                <ContextStatus state={state} />
+                <ContextStatus state={state} bashGuard={bashGuard} />
               </Box>
             ) : null}
             {showSkills ? (
@@ -745,10 +764,23 @@ export function App(props: AppProps) {
               <Footer
                 status={isCancelling ? "cancelling" : state.status}
                 workedForMs={state.workedForMs}
+                yolo={bashGuard.mode === "yolo"}
               />
             </Box>
             <Box marginTop={1} flexDirection="column">
-              {showModelPicker ? (
+              {bashGuard.pending !== undefined ? (
+                <BashConfirmation
+                  command={bashGuard.pending.command}
+                  reason={bashGuard.pending.reason}
+                  onDecision={(decision) => {
+                    void binding
+                      .resolveBashConfirmation(decision)
+                      .catch((error: unknown) =>
+                        setNotice(`Bash confirmation failed: ${errorMessage(error)}`),
+                      );
+                  }}
+                />
+              ) : showModelPicker ? (
                 <ModelPicker
                   profiles={profileList}
                   currentProfileName={binding.profileName}
@@ -763,7 +795,12 @@ export function App(props: AppProps) {
                   workspaceRoot={binding.workspaceRoot}
                   gitBranch={gitBranch}
                   contextUsage={state.contextUsage}
-                  isDisabled={isRunning || isSessionOperation || isCopying}
+                  isDisabled={
+                    isRunning ||
+                    isSessionOperation ||
+                    isCopying ||
+                    bashGuard.pending !== undefined
+                  }
                   history={props.history}
                   commands={availableCommands}
                   fileLister={props.fileLister}

@@ -37,11 +37,14 @@ export type RunnerConfig = {
   readonly profileName?: string;
   readonly inputModalities: readonly ModelInputModality[];
   readonly tokenEstimator?: ModelTokenEstimatorProfile;
+  readonly bashGuardMode: "guard" | "yolo";
+  readonly bashGuardSource: "default" | "environment" | "cli";
 };
 
 export type RunnerConfigSelection = {
   readonly sessionId: SessionId;
   readonly profileName?: string;
+  readonly yolo?: boolean;
 };
 
 type RunnerConfigTemplate = Omit<RunnerConfig, "sessionId">;
@@ -144,7 +147,7 @@ export function deriveRunnerConfig(
     if (template === undefined) {
       throw unknownProfileError(profileName, snapshot.profiles);
     }
-    return runnerConfigFromTemplate(template, selection.sessionId);
+    return runnerConfigFromTemplate(template, selection);
   }
 
   if (selection.profileName !== undefined) {
@@ -152,7 +155,7 @@ export function deriveRunnerConfig(
       `Cannot select model profile ${JSON.stringify(selection.profileName)} because TINKER_MODELS is not configured.`,
     );
   }
-  return runnerConfigFromTemplate(snapshot.template, selection.sessionId);
+  return runnerConfigFromTemplate(snapshot.template, selection);
 }
 
 function runnerConfigTemplateFromProfile(
@@ -172,6 +175,8 @@ function runnerConfigTemplateFromProfile(
     contextBudget: deriveModelContextBudget(contextProfile),
     profileName: profile.name,
     inputModalities: profile.inputModalities,
+    bashGuardMode: environment.bashGuardMode,
+    bashGuardSource: environment.bashGuardSource,
     ...(profile.tokenEstimator === undefined
       ? {}
       : { tokenEstimator: profile.tokenEstimator }),
@@ -196,14 +201,22 @@ function runnerConfigTemplateFromEnvironment(
     contextProfile,
     contextBudget: deriveModelContextBudget(contextProfile),
     inputModalities: Object.freeze(["text"] as const),
+    bashGuardMode: environment.bashGuardMode,
+    bashGuardSource: environment.bashGuardSource,
   });
 }
 
 function runnerConfigFromTemplate(
   template: RunnerConfigTemplate,
-  sessionId: SessionId,
+  selection: RunnerConfigSelection,
 ): RunnerConfig {
-  return Object.freeze({ ...template, sessionId });
+  return Object.freeze({
+    ...template,
+    sessionId: selection.sessionId,
+    ...(selection.yolo === true
+      ? { bashGuardMode: "yolo" as const, bashGuardSource: "cli" as const }
+      : {}),
+  });
 }
 
 export function eventLogPath(workspaceRoot: string, sessionId: SessionId): string {

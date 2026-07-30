@@ -15,6 +15,10 @@ import { createTestRuntime } from "./test-runtime";
 
 const sessionId = "static-history-session" as SessionId;
 const historySentinel = "STATIC_HISTORY_EARLY_SENTINEL";
+const testBashGuard = Object.freeze({
+  mode: "guard" as const,
+  source: "default" as const,
+});
 
 test("running interactive frames do not clear or replay committed history", async () => {
   const store = new TuiProjectionStore({
@@ -189,6 +193,10 @@ function controller(store: TuiProjectionStore): TuiSessionController {
     projectionStore: store,
     skills: () => ({ skills: [], shadowedNames: [] }),
     mcp: () => ({ servers: [] }),
+    bashGuard: () => testBashGuard,
+    subscribeBashGuard: () => () => undefined,
+    setYoloMode: () => undefined,
+    resolveBashConfirmation: async () => undefined,
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

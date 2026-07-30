@@ -6,6 +6,7 @@ import { BackgroundTasks } from "../tui/components/background-tasks";
 import { DiffView } from "../tui/components/diff-view";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
+import { BashConfirmation } from "../tui/components/bash-confirmation";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
 import { McpPanel } from "../tui/components/mcp-panel";
@@ -40,6 +41,10 @@ import {
 } from "./test-runtime";
 
 const testRuntime = createTestRuntime();
+const testBashGuard = Object.freeze({
+  mode: "guard" as const,
+  source: "default" as const,
+});
 
 function completedResult() {
   return {
@@ -79,6 +84,10 @@ function createSessionController(
     projectionStore,
     skills: () => ({ skills: [], shadowedNames: [] }),
     mcp: () => mcp,
+    bashGuard: () => testBashGuard,
+    subscribeBashGuard: () => () => undefined,
+    setYoloMode: () => undefined,
+    resolveBashConfirmation: async () => undefined,
     admitTurn: async (userMessage, signal) => ({
       turnId: testRuntime.turn.turnId,
       userMessage,
@@ -235,6 +244,31 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("✔ Worked for 3m 27s");
     expect(lastFrame()).not.toContain("done");
     cleanup();
+  });
+
+  test("renders and resolves the dangerous Bash confirmation panel", async () => {
+    const decisions: string[] = [];
+    const panel = render(
+      <BashConfirmation
+        command="rm -rf /"
+        reason="recursive forced removal targets a protected root"
+        onDecision={(decision) => decisions.push(decision)}
+      />,
+    );
+
+    expect(panel.lastFrame()).toContain("Dangerous Bash command");
+    expect(panel.lastFrame()).toContain("rm -rf /");
+    expect(panel.lastFrame()).toContain("y allow / n deny / Esc cancel turn");
+    panel.stdin.write("n");
+    await Bun.sleep(10);
+    expect(decisions).toEqual(["deny"]);
+    panel.cleanup();
+  });
+
+  test("marks the footer while yolo mode is enabled", () => {
+    const footer = render(<Footer status="idle" yolo />);
+    expect(footer.lastFrame()).toContain("idle · yolo");
+    footer.cleanup();
   });
 
   test("renders an animated spinner for the running footer status", async () => {

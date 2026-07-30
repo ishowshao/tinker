@@ -8,6 +8,7 @@ export type CliCommand =
   | {
       readonly type: "run";
       readonly profileName?: string;
+      readonly yolo?: boolean;
       readonly promptSource: PromptSource;
     };
 
@@ -72,6 +73,7 @@ export async function parseCommandLine(
     .option(contract.run.profileOption.flags, contract.run.profileOption.description)
     .option(contract.run.stdinOption.flags, contract.run.stdinOption.description)
     .option(contract.run.fileOption.flags, contract.run.fileOption.description)
+    .option(contract.run.yoloOption.flags, contract.run.yoloOption.description)
     .addHelpText("after", `\n${contract.run.helpAfter}\n`)
     .showHelpAfterError('Run "tinker run --help" for usage.')
     .showSuggestionAfterError(false)
@@ -80,7 +82,12 @@ export async function parseCommandLine(
     .action(
       (
         prompt: string | undefined,
-        options: { profile?: string; stdin?: boolean; file?: string },
+        options: {
+          profile?: string;
+          stdin?: boolean;
+          file?: string;
+          yolo?: boolean;
+        },
       ) => {
         const sources: PromptSource[] = [];
         if (prompt !== undefined) {
@@ -116,6 +123,7 @@ export async function parseCommandLine(
           ...(options.profile === undefined
             ? {}
             : { profileName: validateProfile(options.profile, "run") }),
+          ...(options.yolo === true ? { yolo: true } : {}),
           promptSource,
         });
       },

@@ -76,9 +76,9 @@ The installed package exposes this public CLI:
 | --- | --- |
 | `tinker` | Start the interactive terminal interface. |
 | `tinker --profile <profile-name>` | Start the TUI with a selected model profile. |
-| `tinker run [--profile <profile-name>] <prompt>` | Submit one shell-quoted prompt argument. |
-| `tinker run [--profile <profile-name>] --stdin` | Read the prompt from standard input until EOF. |
-| `tinker run [--profile <profile-name>] --file <path>` | Read the prompt from a UTF-8 text file. |
+| `tinker run [--profile <profile-name>] [--yolo] <prompt>` | Submit one shell-quoted prompt argument. |
+| `tinker run [--profile <profile-name>] [--yolo] --stdin` | Read the prompt from standard input until EOF. |
+| `tinker run [--profile <profile-name>] [--yolo] --file <path>` | Read the prompt from a UTF-8 text file. |
 | `tinker --help` | Show top-level CLI help. |
 | `tinker help run` | Show one-shot command help. |
 | `tinker --version` | Print the installed package version. |
@@ -146,6 +146,7 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 | `TINKER_MCP_MAX_OBSERVATION_CHARS` | Tooling | All modes | No | Positive integer | `40000` | No | Maximum model-visible characters in one MCP result. |
 | `TINKER_BASH_DEFAULT_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `5000` | No | Default Bash foreground timeout in milliseconds. |
 | `TINKER_BASH_MAX_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `600000` | No | Maximum Bash foreground timeout in milliseconds. |
+| `TINKER_YOLO` | Tooling | All modes | No | Boolean | `false` | No | Allow high-confidence destructive Bash commands without confirmation. |
 | `TINKER_GREP_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `20000` | No | Bundled ripgrep invocation timeout in milliseconds. |
 | `TINKER_GREP_MAX_BUFFER_BYTES` | Tooling | All modes | No | Positive integer | `20000000` | No | Maximum buffered output from one ripgrep invocation. |
 | `TINKER_WEBFETCH_REFINE_THRESHOLD` | Tooling | All modes | No | Positive integer | `2000` | No | Content-length threshold that enables WebFetch refinement. |
@@ -335,6 +336,7 @@ complete fixed policy and persistence contract.
 | `/status` | Show session and context details |
 | `/skills` | Show available and active Agent Skills |
 | `/mcp` | Show MCP servers and runtime tools |
+| `/yolo [on\|off]` | Show or change destructive Bash confirmation |
 | `/memory` | Browse stored global memories |
 | `/compact [retire]` | Swap tool output or retire a cold history prefix |
 | `/clear` | Start a new session and clear conversation |

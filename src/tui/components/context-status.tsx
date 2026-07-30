@@ -1,8 +1,12 @@
 import { Box, Text } from "ink";
+import type { BashGuardSnapshot } from "../../agent/runtime-session";
 import type { TuiProjectionState } from "../event-store";
 import { formatContextUsageLine, formatTokenCount } from "../context-format";
 
-export function ContextStatus(props: { state: TuiProjectionState }) {
+export function ContextStatus(props: {
+  state: TuiProjectionState;
+  bashGuard: BashGuardSnapshot;
+}) {
   const usage = props.state.contextUsage;
   const profile = props.state.contextProfile;
   const budget = props.state.contextBudget;
@@ -13,6 +17,12 @@ export function ContextStatus(props: { state: TuiProjectionState }) {
       <Text> id: {props.state.sessionId}</Text>
       <Text> model: {props.state.modelName}</Text>
       <Text> workspace: {props.state.workspaceRoot}</Text>
+      <Text> </Text>
+      <Text bold>Bash guard</Text>
+      <Text>
+        {" mode: "}
+        {props.bashGuard.mode} (source: {props.bashGuard.source})
+      </Text>
       <Text> </Text>
       <Text bold>Context</Text>
       {usage === undefined || profile === undefined || budget === undefined ? (

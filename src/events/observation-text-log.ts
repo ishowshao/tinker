@@ -39,6 +39,27 @@ export function renderObservationLogEvent(event: AgentEvent): string | undefined
       return renderAssistantProgress(event);
     case "tool.observation":
       return renderToolObservation(event);
+    case "tool.confirmation.requested":
+      return [
+        "## Bash confirmation requested",
+        "",
+        `Reason: ${event.data.reason}`,
+        "",
+        event.data.command,
+        "",
+        "---",
+        "",
+      ].join("\n");
+    case "tool.confirmation.resolved":
+      return [
+        "## Bash confirmation resolved",
+        "",
+        `Decision: ${event.data.decision}`,
+        `Duration: ${event.data.durationMs} ms`,
+        "",
+        "---",
+        "",
+      ].join("\n");
     case "turn.finished":
       return renderTurnFinished(event.data);
     case "turn.cancelled":

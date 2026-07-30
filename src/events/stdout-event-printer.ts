@@ -117,6 +117,16 @@ export class StdoutEventPrinter implements EventSink {
           `${formatToolLine("tool.finished", event.data.call).trimEnd()} ok=${event.data.ok}\n`,
         );
         break;
+      case "tool.confirmation.requested":
+        this.stdout.write(
+          `tool.confirmation.requested toolCallId=${event.toolCallId} reason=${JSON.stringify(event.data.reason)} command=${JSON.stringify(event.data.command)}\n`,
+        );
+        break;
+      case "tool.confirmation.resolved":
+        this.stdout.write(
+          `tool.confirmation.resolved toolCallId=${event.toolCallId} decision=${event.data.decision} durationMs=${event.data.durationMs}\n`,
+        );
+        break;
       case "mcp.server.connected":
         this.stdout.write(
           `mcp.server.connected name=${event.data.serverName} tools=${event.data.toolCount}\n`,

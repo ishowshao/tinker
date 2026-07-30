@@ -3,9 +3,11 @@ import { Spinner, StatusMessage } from "@inkjs/ui";
 export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
   workedForMs?: number;
+  yolo?: boolean;
 };
 
 export function Footer(props: FooterProps) {
+  const suffix = props.yolo ? " · yolo" : "";
   if (props.status === "done") {
     if (props.workedForMs === undefined) {
       throw new Error("Done footer requires workedForMs");
@@ -14,27 +16,28 @@ export function Footer(props: FooterProps) {
     return (
       <StatusMessage variant="success">
         Worked for {formatDuration(props.workedForMs)}
+        {suffix}
       </StatusMessage>
     );
   }
 
   if (props.status === "failed") {
-    return <StatusMessage variant="error">failed</StatusMessage>;
+    return <StatusMessage variant="error">failed{suffix}</StatusMessage>;
   }
 
   if (props.status === "running") {
-    return <Spinner label="Running" />;
+    return <Spinner label={`Running${suffix}`} />;
   }
 
   if (props.status === "cancelling") {
-    return <StatusMessage variant="info">cancelling</StatusMessage>;
+    return <StatusMessage variant="info">cancelling{suffix}</StatusMessage>;
   }
 
   if (props.status === "cancelled") {
-    return <StatusMessage variant="info">cancelled</StatusMessage>;
+    return <StatusMessage variant="info">cancelled{suffix}</StatusMessage>;
   }
 
-  return <StatusMessage variant="info">idle</StatusMessage>;
+  return <StatusMessage variant="info">idle{suffix}</StatusMessage>;
 }
 
 function formatDuration(durationMs: number): string {

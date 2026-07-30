@@ -367,6 +367,11 @@ export function defineToolExecutor<TKind extends ToolRawResultKind>(
 
 export type ToolExecutionContext = {
   signal: AbortSignal;
+  confirmBashCommand?: (request: {
+    command: string;
+    reason: string;
+  }) => Promise<"allow" | "deny">;
+  bashGuardSurface?: "tui" | "one-shot";
 };
 
 export class ToolExecutionFatalError extends Error {

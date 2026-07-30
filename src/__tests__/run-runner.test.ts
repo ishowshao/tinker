@@ -49,6 +49,8 @@ function testRunnerConfig(input: {
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
     inputModalities: Object.freeze(["text"] as const),
+    bashGuardMode: "guard",
+    bashGuardSource: "default",
   };
 }
 
@@ -115,7 +117,126 @@ class ProjectInstructionModel extends TestModelClient {
   }
 }
 
+class DangerousBashModel extends TestModelClient {
+  private calls = 0;
+
+  constructor(private readonly command: string) {
+    super();
+  }
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "call_dangerous",
+            name: "Bash",
+            args: { command: this.command },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "done",
+    });
+  }
+}
+
 describe("runOneShot", () => {
+  test("fails closed for dangerous Bash and records the policy decision", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-guard-"));
+    const stdout = new MemoryWriter();
+    const config = testRunnerConfig({
+      sessionId: "guard-session" as SessionId,
+      workspaceRoot: workspace,
+      modelName: "test-model",
+    });
+
+    try {
+      const code = await runOneShot("run it", {
+        config,
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
+        modelClient: new DangerousBashModel("reboot"),
+        stdout,
+        stderr: new MemoryWriter(),
+      });
+
+      expect(code).toBe(0);
+      expect(stdout.output).toContain("tool.confirmation.requested");
+      expect(stdout.output).toContain("tool.confirmation.resolved toolCallId=");
+      expect(stdout.output).toContain("decision=deny");
+      const events = (
+        await readFile(
+          path.join(workspace, ".tinker", "sessions", config.sessionId, "events.jsonl"),
+          "utf8",
+        )
+      )
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; data: unknown });
+      expect(
+        events
+          .filter((event) => event.type.startsWith("tool.confirmation."))
+          .map((event) => event.type),
+      ).toEqual(["tool.confirmation.requested", "tool.confirmation.resolved"]);
+      expect(
+        events.find((event) => event.type === "tool.confirmation.resolved")?.data,
+      ).toMatchObject({ decision: "deny" });
+      const rawResultData = events.find((event) => event.type === "tool.raw_result")
+        ?.data as { raw?: { error?: unknown } } | undefined;
+      expect(rawResultData?.raw?.error).toContain(
+        "Non-interactive mode cannot confirm; rerun with --yolo.",
+      );
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("lets explicit yolo policy execute while retaining the audit trail", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-yolo-"));
+    const stdout = new MemoryWriter();
+    const config = {
+      ...testRunnerConfig({
+        sessionId: "yolo-session" as SessionId,
+        workspaceRoot: workspace,
+        modelName: "test-model",
+      }),
+      bashGuardMode: "yolo" as const,
+      bashGuardSource: "cli" as const,
+    };
+
+    try {
+      const code = await runOneShot("run it", {
+        config,
+        tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
+        modelClient: new DangerousBashModel("dd if=/dev/null of=/dev/null count=0"),
+        stdout,
+        stderr: new MemoryWriter(),
+      });
+
+      expect(code).toBe(0);
+      expect(stdout.output).toContain("decision=allow");
+      expect(stdout.output).toContain(
+        "tool.finished name=Bash desc=dd if=/dev/null of=/dev/null count=0 ok=true",
+      );
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("loads project instructions before session creation and logs only metadata", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-run-rules-"));
     const stdout = new MemoryWriter();

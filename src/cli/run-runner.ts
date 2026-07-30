@@ -74,6 +74,11 @@ export async function runOneShot(
         options.eventLogPath === false ? false : { eventLogPath: options.eventLogPath },
       webFetchRefiner: createWebFetchRefiner(config, options.env),
       toolingConfig: options.tooling,
+      bashGuard: {
+        mode: config.bashGuardMode,
+        source: config.bashGuardSource,
+        surface: "one-shot",
+      },
     });
 
     const result = await session.executeTurn({

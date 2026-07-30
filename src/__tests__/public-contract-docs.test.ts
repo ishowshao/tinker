@@ -72,7 +72,7 @@ describe("public contract documentation rendering", () => {
     const rendered = renderBuiltInSlashCommands();
     let previous = -1;
     for (const command of SLASH_COMMANDS) {
-      const offset = rendered.indexOf(`\`${command.usage}\``);
+      const offset = rendered.indexOf(`\`${command.usage.replaceAll("|", "\\|")}\``);
       expect(offset).toBeGreaterThan(previous);
       expect(rendered).toContain(command.description);
       previous = offset;

@@ -83,6 +83,7 @@ export function renderPublicCliCommands(): string {
   const contract = PUBLIC_CLI_CONTRACT;
   const profile = longFlags(contract.tui.profileOption.flags);
   const runProfile = longFlags(contract.run.profileOption.flags);
+  const runYolo = longFlags(contract.run.yoloOption.flags);
   const help = longFlags(contract.helpFlags);
   const version = longFlags(contract.versionFlags);
   const runCommand = firstCommandWord(contract.run.command);
@@ -91,15 +92,15 @@ export function renderPublicCliCommands(): string {
     ["`tinker`", contract.tui.description],
     [`\`tinker ${profile}\``, "Start the TUI with a selected model profile."],
     [
-      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[0].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] [${runYolo}] ${contract.run.promptSources[0].syntax}\``,
       contract.run.promptSources[0].description,
     ],
     [
-      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[1].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] [${runYolo}] ${contract.run.promptSources[1].syntax}\``,
       contract.run.promptSources[1].description,
     ],
     [
-      `\`tinker ${runCommand} [${runProfile}] ${contract.run.promptSources[2].syntax}\``,
+      `\`tinker ${runCommand} [${runProfile}] [${runYolo}] ${contract.run.promptSources[2].syntax}\``,
       contract.run.promptSources[2].description,
     ],
     [`\`tinker ${help}\``, "Show top-level CLI help."],

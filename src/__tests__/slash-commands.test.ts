@@ -65,6 +65,19 @@ describe("findSlashCommand", () => {
 });
 
 describe("parseSlashCommand", () => {
+  test("parses the session-local yolo controls", () => {
+    expect(parseSlashCommand("/yolo")).toEqual({ type: "yolo_status" });
+    expect(parseSlashCommand("/yolo on")).toEqual({
+      type: "yolo",
+      enabled: true,
+    });
+    expect(parseSlashCommand("/yolo off")).toEqual({
+      type: "yolo",
+      enabled: false,
+    });
+    expect(() => parseSlashCommand("/yolo maybe")).toThrow("Usage: /yolo [on|off]");
+  });
+
   test("parses the read-only skills panel command", () => {
     expect(parseSlashCommand("/skills")).toEqual({ type: "skills" });
     expect(() => parseSlashCommand("/skills activate")).toThrow("Unknown command");

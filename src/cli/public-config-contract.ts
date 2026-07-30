@@ -175,6 +175,17 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     description: "Maximum Bash foreground timeout in milliseconds.",
   }),
   publicField({
+    name: "TINKER_YOLO",
+    valueKind: "boolean",
+    requiredIn: "never",
+    appliesIn: "always",
+    defaultValue: false,
+    secret: false,
+    section: "tooling",
+    description:
+      "Allow high-confidence destructive Bash commands without confirmation.",
+  }),
+  publicField({
     name: "TINKER_GREP_TIMEOUT_MS",
     valueKind: "positive-integer",
     requiredIn: "never",
@@ -479,6 +490,8 @@ type ParsedCommonEnvironment = {
   readonly workspaceRoot: string;
   readonly maxIterations: number;
   readonly tooling: PublicToolingConfig;
+  readonly bashGuardMode: "guard" | "yolo";
+  readonly bashGuardSource: "default" | "environment";
 };
 
 export type ParsedPublicEnvironment =
@@ -562,7 +575,18 @@ export function parsePublicEnvironment(
     );
   }
 
-  const common = { workspaceRoot, maxIterations, tooling };
+  const common = {
+    workspaceRoot,
+    maxIterations,
+    tooling,
+    bashGuardMode: requiredBooleanValue(values, "TINKER_YOLO")
+      ? ("yolo" as const)
+      : ("guard" as const),
+    bashGuardSource:
+      optionalRawString(env.TINKER_YOLO) === undefined
+        ? ("default" as const)
+        : ("environment" as const),
+  };
   if (mode === "profile") {
     if (configuredModelsPath === undefined) {
       throw new Error("Profile mode requires TINKER_MODELS.");

@@ -328,6 +328,16 @@ export type AgentEventDataMap = {
   "tool.raw_result": { call: ToolCall; raw: ToolRawResult };
   "tool.finished": { call: ToolCall; ok: boolean };
   "tool.observation": { call: ToolCall; observation: ToolObservation };
+  "tool.confirmation.requested": {
+    command: string;
+    reason: string;
+  };
+  "tool.confirmation.resolved": {
+    command: string;
+    reason: string;
+    decision: "allow" | "deny" | "cancelled";
+    durationMs: number;
+  };
   "agent.iteration.finished": {
     outcome: "continue" | "completed";
     toolCallCount: number;
@@ -419,6 +429,7 @@ export type AgentEventInput =
   | ToolEventInput<
       "tool.started" | "tool.raw_result" | "tool.finished" | "tool.observation"
     >
+  | ToolEventInput<"tool.confirmation.requested" | "tool.confirmation.resolved">
   | ToolEventInput<
       "bash.task.backgrounded" | "bash.task.stopping" | "bash.task.finished"
     >;
