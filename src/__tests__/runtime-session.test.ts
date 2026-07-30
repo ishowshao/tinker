@@ -796,7 +796,7 @@ describe("RuntimeSession lifecycle", () => {
         | undefined;
       expect(failed?.data).toMatchObject({
         attemptNumber: 1,
-        maxAttempts: 2,
+        maxAttempts: 6,
         code: "reasoning_only_assistant",
         retryDisposition: "scheduled",
         diagnostics: {

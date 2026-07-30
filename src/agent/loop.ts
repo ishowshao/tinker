@@ -73,6 +73,7 @@ export type RunAgentInput = {
     prepared: MaterializedModelRequest;
     usage: ContextUsageSnapshot;
   };
+  transientRetryDelaysMs?: readonly number[];
 };
 
 export class FatalAgentTurnError extends Error {
@@ -85,7 +86,10 @@ export class FatalAgentTurnError extends Error {
   }
 }
 
-const MODEL_REQUEST_MAX_ATTEMPTS = 2 as const;
+const REASONING_ONLY_RETRY_LIMIT = 1 as const;
+const TRANSIENT_RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000] as const;
+const MODEL_REQUEST_MAX_ATTEMPTS =
+  1 + REASONING_ONLY_RETRY_LIMIT + TRANSIENT_RETRY_DELAYS_MS.length;
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastIteration: IterationIdentity | undefined;
@@ -233,16 +237,22 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
         runtimeSession: input.runtimeSession,
       },
     };
+    const transientRetryDelaysMs =
+      input.transientRetryDelaysMs ?? TRANSIENT_RETRY_DELAYS_MS;
     let modelOutput: ModelRequestOutput | undefined;
-    let successfulAttempt: 1 | 2 | undefined;
-    for (const attemptNumber of [1, 2] as const) {
+    let successfulAttempt: number | undefined;
+    let attemptNumber = 0;
+    let reasoningOnlyRetries = 0;
+    let transientRetries = 0;
+    while (true) {
       if (input.signal.aborted) {
         return cancelledResult(
           cancellation(input.signal, iteration, "model_request"),
           iteration,
         );
       }
-      if (attemptNumber === 2) {
+      attemptNumber += 1;
+      if (attemptNumber > 1) {
         await input.runtimeSession.append({
           type: "model.request.started",
           ...iteration,
@@ -267,12 +277,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           );
         }
 
-        const reasoningOnly = isReasoningOnlyProviderError(error);
-        const retryDisposition = reasoningOnly
-          ? attemptNumber === 1
-            ? "scheduled"
-            : "exhausted"
-          : "not_retryable";
+        const decision = modelRequestRetryDecision(error, {
+          reasoningOnlyRetries,
+          transientRetries,
+          transientRetryDelaysMs,
+        });
         await input.runtimeSession.append({
           type: "model.request.failed",
           ...iteration,
@@ -280,14 +289,26 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             error,
             request,
             attemptNumber,
-            retryDisposition,
+            retryDisposition: decision.disposition,
+            ...(decision.disposition === "scheduled" && decision.delayMs > 0
+              ? { retryDelayMs: decision.delayMs }
+              : {}),
           }),
         });
 
-        if (retryDisposition === "scheduled") {
+        if (decision.disposition === "scheduled") {
+          if (decision.kind === "reasoning_only") {
+            reasoningOnlyRetries += 1;
+          } else {
+            transientRetries += 1;
+            await waitForRetryDelay(decision.delayMs, input.signal);
+          }
           continue;
         }
-        if (retryDisposition === "exhausted") {
+        if (
+          decision.disposition === "exhausted" &&
+          decision.kind === "reasoning_only"
+        ) {
           return failedResult(
             new Error(
               `Provider returned reasoning without final text or tool calls in both attempts (provider=${request.provider}, model=${request.model}).`,
@@ -701,11 +722,65 @@ function isReasoningOnlyProviderError(error: unknown): error is ProviderResponse
   );
 }
 
+function isTransientProviderError(error: unknown): error is ProviderResponseError {
+  return (
+    error instanceof ProviderResponseError &&
+    (error.code === "provider_rate_limited" || error.code === "provider_unavailable")
+  );
+}
+
+type ModelRequestRetryDecision =
+  | {
+      disposition: "scheduled";
+      kind: "reasoning_only" | "transient";
+      delayMs: number;
+    }
+  | { disposition: "exhausted"; kind: "reasoning_only" | "transient" }
+  | { disposition: "not_retryable" };
+
+function modelRequestRetryDecision(
+  error: unknown,
+  state: {
+    reasoningOnlyRetries: number;
+    transientRetries: number;
+    transientRetryDelaysMs: readonly number[];
+  },
+): ModelRequestRetryDecision {
+  if (isReasoningOnlyProviderError(error)) {
+    return state.reasoningOnlyRetries < REASONING_ONLY_RETRY_LIMIT
+      ? { disposition: "scheduled", kind: "reasoning_only", delayMs: 0 }
+      : { disposition: "exhausted", kind: "reasoning_only" };
+  }
+  if (isTransientProviderError(error)) {
+    const delayMs = state.transientRetryDelaysMs[state.transientRetries];
+    return delayMs === undefined
+      ? { disposition: "exhausted", kind: "transient" }
+      : { disposition: "scheduled", kind: "transient", delayMs };
+  }
+  return { disposition: "not_retryable" };
+}
+
+async function waitForRetryDelay(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0 || signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(cleanup, delayMs);
+    signal.addEventListener("abort", cleanup, { once: true });
+    function cleanup() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", cleanup);
+      resolve();
+    }
+  });
+}
+
 function modelRequestFailureData(input: {
   error: unknown;
   request: PreparedModelRequest;
-  attemptNumber: 1 | 2;
+  attemptNumber: number;
   retryDisposition: "scheduled" | "not_retryable" | "exhausted";
+  retryDelayMs?: number;
 }) {
   const providerError =
     input.error instanceof ProviderResponseError ? input.error : undefined;
@@ -714,6 +789,7 @@ function modelRequestFailureData(input: {
     maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
     code: providerError?.code ?? ("provider_request_error" as const),
     retryDisposition: input.retryDisposition,
+    ...(input.retryDelayMs === undefined ? {} : { retryDelayMs: input.retryDelayMs }),
     provider: input.request.provider,
     model: input.request.model,
     error: errorMessage(input.error),

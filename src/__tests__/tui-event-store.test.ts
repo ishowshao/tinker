@@ -7,6 +7,7 @@ import {
 } from "../tui/event-store";
 import type { AgentEvent } from "../events/types";
 import type { ToolCall } from "../agent/types";
+import type { ProviderResponseErrorCode } from "../model/model-client";
 import {
   createTestRuntime,
   TEST_CONTEXT_BUDGET,
@@ -84,8 +85,8 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...testRuntime.iteration,
       type: "model.request.started",
       data: {
-        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
-        maxAttempts: 2,
+        attemptNumber: numberValue(input.attemptNumber) ?? 1,
+        maxAttempts: numberValue(input.maxAttempts) ?? 2,
       },
     };
   }
@@ -95,28 +96,31 @@ function testEvent(input: TestEventInput): AgentEvent {
       ...testRuntime.iteration,
       type: "model.request.finished",
       data: {
-        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
-        maxAttempts: 2,
+        attemptNumber: numberValue(input.attemptNumber) ?? 1,
+        maxAttempts: numberValue(input.maxAttempts) ?? 2,
         output: input.output,
       },
     } as unknown as AgentEvent;
   }
   if (input.type === "model.request.failed") {
+    const retryDelayMs = numberValue(input.retryDelayMs);
     return {
       ...base,
       ...testRuntime.iteration,
       type: "model.request.failed",
       data: {
-        attemptNumber: numberValue(input.attemptNumber) === 2 ? 2 : 1,
-        maxAttempts: 2,
-        code: "reasoning_only_assistant",
+        attemptNumber: numberValue(input.attemptNumber) ?? 1,
+        maxAttempts: numberValue(input.maxAttempts) ?? 2,
+        code: (stringValue(input.code) ??
+          "reasoning_only_assistant") as ProviderResponseErrorCode,
         retryDisposition:
           stringValue(input.retryDisposition) === "exhausted"
             ? "exhausted"
             : "scheduled",
+        ...(retryDelayMs === undefined ? {} : { retryDelayMs }),
         provider: "test-provider",
         model: "test-model",
-        error: "reasoning-only",
+        error: stringValue(input.error) ?? "reasoning-only",
       },
     };
   }
@@ -635,7 +639,12 @@ describe("tui event store", () => {
       attemptNumber: 1,
       retryDisposition: "scheduled",
     });
-    expect(visibleTimelineItems(state)[1]).toBe(initialModelItem);
+    expect(visibleTimelineItems(state)[1]).toMatchObject({
+      id: initialModelItem?.id,
+      ref: initialModelItem?.ref,
+      text: "model iteration 1 · retrying (attempt 2/2)",
+      status: "running",
+    });
 
     state = applyAgentEvent(state, {
       type: "model.request.started",
@@ -646,7 +655,7 @@ describe("tui event store", () => {
     expect(visibleTimelineItems(state)[1]).toMatchObject({
       id: initialModelItem?.id,
       ref: initialModelItem?.ref,
-      text: "model iteration 1 · retrying",
+      text: "model iteration 1 · retrying (attempt 2/2)",
       status: "running",
     });
 
@@ -700,13 +709,54 @@ describe("tui event store", () => {
     const modelItems = items.filter((item) => item.ref?.startsWith("model-request-"));
     expect(modelItems).toHaveLength(1);
     expect(modelItems[0]).toMatchObject({
-      text: "model iteration 1 · retrying",
+      text: "model iteration 1 · retrying (attempt 2/2)",
       status: "failed",
     });
     expect(items.at(-1)).toMatchObject({
       label: "error",
       text: "reasoning retry exhausted",
       status: "failed",
+    });
+  });
+
+  test("shows the backoff wait while a transient retry is scheduled", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      iterationNumber: 1,
+      attemptNumber: 1,
+      maxAttempts: 6,
+    });
+    state = applyAgentEvent(state, {
+      type: "model.request.failed",
+      iterationNumber: 1,
+      attemptNumber: 1,
+      maxAttempts: 6,
+      code: "provider_rate_limited",
+      retryDisposition: "scheduled",
+      retryDelayMs: 2_000,
+      error: "429 The engine is currently overloaded",
+    });
+
+    expect(visibleTimelineItems(state)[1]).toMatchObject({
+      text: "model iteration 1 · rate limited · retrying in 2s (attempt 2/6)",
+      status: "running",
+    });
+
+    state = applyAgentEvent(state, {
+      type: "model.request.started",
+      iterationNumber: 1,
+      attemptNumber: 2,
+      maxAttempts: 6,
+    });
+    expect(visibleTimelineItems(state)[1]).toMatchObject({
+      text: "model iteration 1 · retrying (attempt 2/6)",
+      status: "running",
     });
   });
 

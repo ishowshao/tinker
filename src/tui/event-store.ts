@@ -3,7 +3,7 @@ import {
   bashResultDetail,
   type BashDisplayDetail,
 } from "../events/bash-result-detail";
-import type { AgentEvent } from "../events/types";
+import type { AgentEvent, ModelRequestFailedData } from "../events/types";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type {
   ModelContextBudget,
@@ -162,12 +162,21 @@ export function reduceTuiProjection(
             })
           : updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
               ...item,
-              text: `model iteration ${event.iterationNumber} · retrying`,
+              text: `model iteration ${event.iterationNumber} · retrying (attempt ${event.data.attemptNumber}/${event.data.maxAttempts})`,
               status: "running",
             })),
       );
     case "model.request.failed":
-      return state;
+      if (event.data.retryDisposition !== "scheduled") {
+        return state;
+      }
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
+          ...item,
+          text: `model iteration ${requireEventNumber(event.iterationNumber, "model.request.failed iterationNumber")} · ${modelRequestRetryText(event.data)}`,
+          status: "running",
+        })),
+      );
     case "model.request.finished":
       return updateActiveTurn(state, event, policy, (turn) =>
         updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
@@ -708,6 +717,21 @@ export function completedModelRequestText(
     return `model iteration ${iterationNumber} -> ${toolCallCount} tool call${toolCallCount === 1 ? "" : "s"}`;
   }
   return `model iteration ${iterationNumber} -> assistant response`;
+}
+
+function modelRequestRetryText(data: ModelRequestFailedData): string {
+  const attempt = `attempt ${data.attemptNumber + 1}/${data.maxAttempts}`;
+  if (data.retryDelayMs !== undefined && data.retryDelayMs > 0) {
+    const seconds = Math.max(1, Math.round(data.retryDelayMs / 1000));
+    const reason =
+      data.code === "provider_rate_limited"
+        ? "rate limited"
+        : data.code === "provider_unavailable"
+          ? "provider unavailable"
+          : data.code;
+    return `${reason} · retrying in ${seconds}s (${attempt})`;
+  }
+  return `retrying (${attempt})`;
 }
 
 export function toolCallStartedProjection(input: {

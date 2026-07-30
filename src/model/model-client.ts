@@ -127,6 +127,8 @@ export type ProviderResponseErrorCode =
   | "reasoning_only_assistant"
   | "invalid_provider_response"
   | "invalid_provider_stream"
+  | "provider_rate_limited"
+  | "provider_unavailable"
   | "provider_request_error";
 
 export type ProviderResponseDiagnostics = {

@@ -285,8 +285,8 @@ export type TurnFinishedData = {
 };
 
 export type ModelRequestAttemptData = {
-  attemptNumber: 1 | 2;
-  maxAttempts: 2;
+  attemptNumber: number;
+  maxAttempts: number;
 };
 
 export type ModelRequestFailureCode = ProviderResponseErrorCode;
@@ -294,6 +294,7 @@ export type ModelRequestFailureCode = ProviderResponseErrorCode;
 export type ModelRequestFailedData = ModelRequestAttemptData & {
   code: ModelRequestFailureCode;
   retryDisposition: "scheduled" | "not_retryable" | "exhausted";
+  retryDelayMs?: number;
   provider: string;
   model: string;
   error: string;

@@ -436,10 +436,10 @@ describe("runAgent", () => {
       "model.request.finished",
     ]);
     expect(requestEvents.map((event) => event.data)).toMatchObject([
-      { attemptNumber: 1, maxAttempts: 2 },
+      { attemptNumber: 1, maxAttempts: 6 },
       {
         attemptNumber: 1,
-        maxAttempts: 2,
+        maxAttempts: 6,
         code: "reasoning_only_assistant",
         retryDisposition: "scheduled",
         provider: "test",
@@ -452,8 +452,8 @@ describe("runAgent", () => {
           usage: { promptTokens: 7, completionTokens: 3, totalTokens: 10 },
         },
       },
-      { attemptNumber: 2, maxAttempts: 2 },
-      { attemptNumber: 2, maxAttempts: 2 },
+      { attemptNumber: 2, maxAttempts: 6 },
+      { attemptNumber: 2, maxAttempts: 6 },
     ]);
     expect(JSON.stringify(requestEvents)).not.toContain("hidden reasoning");
     expect(
@@ -623,6 +623,225 @@ describe("runAgent", () => {
         retryDisposition: "not_retryable",
       },
     });
+  });
+
+  test("retries a transient rate-limit failure after a backoff delay", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("transient-retry"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([rateLimitedError(), "success"]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+      transientRetryDelaysMs: [5, 10, 20, 40],
+    });
+
+    expect(result).toMatchObject({ status: "completed", finalText: "retry succeeded" });
+    expect(model.preparedRequests).toHaveLength(2);
+
+    const requestEvents = events.events.filter((event) =>
+      event.type.startsWith("model.request."),
+    );
+    expect(requestEvents.map((event) => event.type)).toEqual([
+      "model.request.started",
+      "model.request.failed",
+      "model.request.started",
+      "model.request.finished",
+    ]);
+    expect(requestEvents.map((event) => event.data)).toMatchObject([
+      { attemptNumber: 1, maxAttempts: 6 },
+      {
+        attemptNumber: 1,
+        maxAttempts: 6,
+        code: "provider_rate_limited",
+        retryDisposition: "scheduled",
+        retryDelayMs: 5,
+        provider: "test",
+        model: "test-model",
+      },
+      { attemptNumber: 2, maxAttempts: 6 },
+      { attemptNumber: 2, maxAttempts: 6 },
+    ]);
+  });
+
+  test("exhausts transient retries and fails with the provider error", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("transient-exhausted"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([
+      rateLimitedError(),
+      rateLimitedError(),
+      rateLimitedError(),
+      rateLimitedError(),
+      rateLimitedError(),
+    ]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+      transientRetryDelaysMs: [1, 1, 1, 1],
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error: "429 The engine is currently overloaded, please try again later",
+    });
+    expect(model.preparedRequests).toHaveLength(5);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.started")
+        .map((event) => event.data.attemptNumber),
+    ).toEqual([1, 2, 3, 4, 5]);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.failed")
+        .map((event) => [event.data.retryDisposition, event.data.retryDelayMs]),
+    ).toEqual([
+      ["scheduled", 1],
+      ["scheduled", 1],
+      ["scheduled", 1],
+      ["scheduled", 1],
+      ["exhausted", undefined],
+    ]);
+    expect(pending.projectedMessageCount()).toBe(2);
+  });
+
+  test("tracks reasoning-only and transient retry budgets independently", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("mixed-retry-budgets"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([
+      "reasoning_only",
+      rateLimitedError(),
+      "reasoning_only",
+      "success",
+    ]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+      transientRetryDelaysMs: [1, 1, 1, 1],
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      error:
+        "Provider returned reasoning without final text or tool calls in both attempts (provider=test, model=test-model).",
+    });
+    expect(model.preparedRequests).toHaveLength(3);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.failed")
+        .map((event) => [event.data.code, event.data.retryDisposition]),
+    ).toEqual([
+      ["reasoning_only_assistant", "scheduled"],
+      ["provider_rate_limited", "scheduled"],
+      ["reasoning_only_assistant", "exhausted"],
+    ]);
+  });
+
+  test("cancels the turn during a transient backoff wait", async () => {
+    const controller = new AbortController();
+    const events = new ArrayEventSink();
+    const cancellingSink: EventSink = {
+      async append(event) {
+        await events.append(event);
+        if (
+          event.type === "model.request.failed" &&
+          event.data.retryDisposition === "scheduled"
+        ) {
+          controller.abort(new TurnCancelledError("user"));
+        }
+      },
+    };
+    const identity = createTestRuntime(cancellingSink);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("transient-cancel"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([rateLimitedError(), "success"]);
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: controller.signal,
+      transientRetryDelaysMs: [60_000, 60_000, 60_000, 60_000],
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(model.preparedRequests).toHaveLength(1);
+    expect(
+      events.events.filter((event) => event.type === "model.request.started"),
+    ).toHaveLength(1);
   });
 
   test("honors cancellation scheduled between reasoning-only attempts", async () => {
@@ -888,6 +1107,14 @@ function testTool(name: string, execute: () => void): ToolExecutor {
       };
     },
   };
+}
+
+function rateLimitedError(): ProviderResponseError {
+  return new ProviderResponseError(
+    "provider_rate_limited",
+    "429 The engine is currently overloaded, please try again later",
+    { provider: "test", model: "test-model" },
+  );
 }
 
 function reasoningOnlyError(prepared: PreparedModelRequest): ProviderResponseError {

@@ -198,4 +198,73 @@ describe("OpenAIChatModelClient streaming", () => {
     expect((error as Error).message).not.toContain("super-secret");
     expect((error as Error).message).not.toContain("QUJD");
   });
+
+  test("classifies HTTP 429 as a retryable rate-limit error", async () => {
+    const fetchImpl: typeof fetch = Object.assign(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "The engine is currently overloaded, please try again later",
+            },
+          }),
+          { status: 429, headers: { "content-type": "application/json" } },
+        ),
+      { preconnect() {} },
+    );
+    const streaming = client({ fetch: fetchImpl });
+    const prepared = streaming.prepare(INPUT);
+
+    const error = await streaming
+      .request(prepared, { signal: new AbortController().signal })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("provider_rate_limited");
+    expect((error as Error).message).toContain("The engine is currently overloaded");
+  });
+
+  test.each([
+    500, 502, 503, 504,
+  ])("classifies HTTP %i as a retryable unavailable error", async (status) => {
+    let dispatches = 0;
+    const fetchImpl: typeof fetch = Object.assign(
+      async () => {
+        dispatches += 1;
+        return new Response(JSON.stringify({ error: { message: "boom" } }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      },
+      { preconnect() {} },
+    );
+    const streaming = client({ fetch: fetchImpl });
+    const prepared = streaming.prepare(INPUT);
+
+    const error = await streaming
+      .request(prepared, { signal: new AbortController().signal })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("provider_unavailable");
+    expect(dispatches).toBe(1);
+  });
+
+  test("classifies connection failures as a retryable unavailable error", async () => {
+    const fetchImpl: typeof fetch = Object.assign(
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      { preconnect() {} },
+    );
+    const streaming = client({ fetch: fetchImpl });
+    const prepared = streaming.prepare(INPUT);
+
+    const error = await streaming
+      .request(prepared, { signal: new AbortController().signal })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect((error as ProviderResponseError).code).toBe("provider_unavailable");
+  });
 });

@@ -11,7 +11,11 @@ import {
 import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
 import type { ModelContextBudget } from "./model-context-profile";
 import type { InputTokenEstimator } from "./input-token-estimator";
-import { ModelRequestMediaAggregateError, ProviderResponseError } from "./model-client";
+import {
+  ModelRequestMediaAggregateError,
+  ProviderResponseError,
+  type ProviderResponseErrorCode,
+} from "./model-client";
 import type {
   MaterializedModelRequest,
   ModelClient,
@@ -86,7 +90,9 @@ export class OpenAIChatModelClient implements ModelClient {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
       timeout: options.timeoutMs ?? OPENAI_CHAT_TIMEOUT_MS,
-      ...(supportsImages ? { maxRetries: 0 } : {}),
+      // Retries are orchestrated by the agent loop so they surface as
+      // cancellable, observable runtime events instead of hidden SDK waits.
+      maxRetries: 0,
       fetch: options.fetch,
     });
     if (options.tokenEstimator !== undefined) {
@@ -531,9 +537,36 @@ function sanitizedProviderError(
     )
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/giu, "Bearer [redacted]");
   return new ProviderResponseError(
-    "provider_request_error",
+    providerErrorCode(error),
     sanitized,
     { provider, model },
     { cause: error },
   );
+}
+
+function providerErrorCode(error: unknown): ProviderResponseErrorCode {
+  const status = providerErrorStatus(error);
+  if (status === 429) {
+    return "provider_rate_limited";
+  }
+  if (status === 500 || status === 502 || status === 503 || status === 504) {
+    return "provider_unavailable";
+  }
+  if (status === undefined && isProviderConnectionError(error)) {
+    return "provider_unavailable";
+  }
+  return "provider_request_error";
+}
+
+function providerErrorStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return undefined;
+  }
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function isProviderConnectionError(error: unknown): boolean {
+  // APIConnectionTimeoutError extends APIConnectionError in the SDK.
+  return error instanceof OpenAI.APIConnectionError;
 }
