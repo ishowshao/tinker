@@ -401,6 +401,24 @@ describe("tui components", () => {
     rounded.cleanup();
   });
 
+  test("floors near-total cache hit rates to 99% instead of rounding to 100%", () => {
+    // 99.95% hit rate: an append turn into a large cached prompt must not
+    // display as a misleading 100%.
+    const nearFull = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 19_990, promptCacheMissTokens: 10 }),
+    );
+    expect(nearFull.lastFrame()).toContain("cache 99%");
+    expect(nearFull.lastFrame()).not.toContain("cache 100%");
+    nearFull.cleanup();
+
+    // Exactly at the old Math.round boundary (99.5%) still floors to 99%.
+    const boundary = renderPromptWithUsage(
+      providerUsage({ promptCacheHitTokens: 199, promptCacheMissTokens: 1 }),
+    );
+    expect(boundary.lastFrame()).toContain("cache 99%");
+    boundary.cleanup();
+  });
+
   test("replaces and clears the cache segment on rerender", () => {
     const view = renderPromptWithUsage(
       providerUsage({ promptCacheHitTokens: 9_400, promptCacheMissTokens: 600 }),

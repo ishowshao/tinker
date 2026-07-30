@@ -9,7 +9,12 @@ export function formatLatestProviderCacheRate(
   if (hit === undefined || miss === undefined || hit + miss === 0) {
     return undefined;
   }
-  return `cache ${Math.round((hit / (hit + miss)) * 100)}%`;
+  // Floor instead of round: an append turn is never a true 100% hit, and
+  // rounding would display 99.5%+ as a misleading "cache 100%". A genuine
+  // full hit (miss === 0, e.g. an identical resent request) still floors to
+  // exactly 100. The min() guards against float rounding when miss > 0.
+  const percent = Math.min(99, Math.floor((hit / (hit + miss)) * 100));
+  return `cache ${miss === 0 ? 100 : percent}%`;
 }
 
 export function formatContextUsageLine(
