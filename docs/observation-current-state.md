@@ -38,6 +38,7 @@ tool call，运行时会按顺序执行并逐个提交 tool message；全部闭�
 | `Recall` | `recall` | 是 | 搜索或读取当前 session 的历史模型可见内容 |
 | `Write` | `write` | 是 | 写入完整文件 |
 | `Edit` | `edit` | 是 | 精确字符串替换 |
+| `Delete` | `delete` | 是 | 删除一个现有普通文件 |
 | `Bash` | `bash` | 是 | 前台或后台执行 shell 命令 |
 | `TaskList` | `task_list` | 是 | 列出后台 Bash 任务 |
 | `TaskOutput` | `task_output` | 是 | 查看后台任务当前输出 |
@@ -77,7 +78,7 @@ Read failed: Invalid tool arguments JSON: Unexpected token } in JSON
 ```
 
 ```text
-Delete failed: Unknown tool: Delete
+Move failed: Unknown tool: Move
 ```
 
 工具自己校验参数、路径或外部响应失败时，通常返回自己的 `kind` 和 `ok: false`，
@@ -287,7 +288,34 @@ Edit 不依赖 Read 返回的正文快照，而是在执行时重新读取磁盘
 状态，没有快照时仍要求 Read。旧字符串找不到、不唯一但未启用 `replace_all`、参数错误
 或路径错误，也使用 `Edit failed for <path>: <error>`，但不附加固定 Read 指引。
 
-### 4.6 Bash
+### 4.6 Delete
+
+成功时只确认路径已经删除，不返回旧内容、字节数、哈希或 diff：
+
+```text
+Delete succeeded for src/obsolete.ts.
+```
+
+Delete 按路径删除调用执行时存在的普通文件，不要求预先 Read，也不使用文件快照授权。
+删除成功后会清除当前 runtime 中该绝对路径的旧快照；删除失败则保留快照。目录、符号
+链接及 FIFO、socket、设备文件等其他非普通文件会在 `rm` 前失败。典型失败为：
+
+```text
+Delete failed for src/obsolete.ts: File does not exist.
+```
+
+```text
+Delete failed for scripts: Path is not a regular file.
+```
+
+```text
+Delete failed for current-config: Symbolic links are not supported.
+```
+
+workspace-relative 路径必须留在 workspace 内，绝对路径沿用其他文件工具的范围。Delete
+一次只接收一个 `file_path`，不提供递归、force、glob、批量删除或用户确认。
+
+### 4.7 Bash
 
 Bash 的 `ok` 不简单等同于 exit code 是否为 0。部分命令的非零返回码是有效业务
 结果，例如 `grep` 的 1 可解释为 `No matches found.`，`diff` 的 1 可解释为
@@ -360,7 +388,7 @@ Use Read on outputFilePath to inspect current output.
 Bash failed: Bash.command must be a non-empty string.
 ```
 
-### 4.7 TaskList
+### 4.8 TaskList
 
 无任务：
 
@@ -385,7 +413,7 @@ outputFilePath=/workspace/.tinker/bash/task-.../output.log
 已结束任务还会按实际存在的字段显示 `endedAt`、`exitCode`、`signal` 或 `error`。
 失败格式为 `TaskList failed: <error>`。
 
-### 4.8 TaskOutput
+### 4.9 TaskOutput
 
 成功：
 
@@ -410,7 +438,7 @@ server ready
 TaskOutput failed for missing-task: Unknown task ID: missing-task
 ```
 
-### 4.9 TaskStop
+### 4.10 TaskStop
 
 成功：
 
@@ -431,7 +459,7 @@ outputFilePath=/workspace/.tinker/bash/task-.../output.log
 TaskStop failed for missing-task: Unknown task ID: missing-task
 ```
 
-### 4.10 WebSearch
+### 4.11 WebSearch
 
 WebSearch 只有配置了 Exa API key 才会出现在模型工具定义中。成功结果按序号展示；
 highlight 会折叠多余空白：
@@ -461,7 +489,7 @@ WebSearch failed for query="no hits": Exa /search returned HTTP 429
 
 raw 中的 request ID、费用、耗时、domain filters 等不会进入模型 Observation。
 
-### 4.11 WebFetch
+### 4.12 WebFetch
 
 成功内容：
 
@@ -500,7 +528,7 @@ WebFetch failed for https://bun.sh/gone: Exa could not fetch the page: CRAWL_NOT
 raw 中的最终 URL、cache hit、HTTP status、费用、耗时和 error tag 不会单独展示给
 模型，除非它们已经被写进 `error` 文本。
 
-### 4.12 Recall
+### 4.13 Recall
 
 Recall 的内容是当前 session 的历史快照，不代表当前工作区状态。Observation 会反复
 标记这一点。
@@ -553,7 +581,7 @@ error code 包括 `RECALL_ARGS_INVALID`、`RECALL_SOURCE_INVALID`、
 `RECALL_SOURCE_NOT_FOUND`、`RECALL_PAGE_INVALID`、`RECALL_SNAPSHOT_INVALID`。
 底层 session 存储失败则是 fatal failure，不走上述普通失败模板。
 
-### 4.13 MCP 工具
+### 4.14 MCP 工具
 
 MCP 成功时尽量原样把 server 返回的 text 交给模型：
 

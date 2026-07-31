@@ -829,6 +829,8 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         ? base
         : `${base} -> ${raw.bytesWritten} bytes`;
     }
+    case "delete":
+      return `${base} -> deleted`;
     case "web_search":
       return raw.resultCount === undefined
         ? base
@@ -912,6 +914,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "read":
     case "write":
     case "edit":
+    case "delete":
     case "glob":
     case "grep":
     case "task_list":
@@ -945,6 +948,7 @@ function toolRawResultDiff(
             diffTruncated: raw.patchTruncated === true,
           };
     case "read":
+    case "delete":
     case "glob":
     case "grep":
     case "bash":

@@ -1142,3 +1142,69 @@ describe("edit diff in timeline", () => {
     expect(visibleTimelineItems(state).at(-1)?.diff).toHaveLength(1);
   });
 });
+
+describe("delete summaries in timeline", () => {
+  test("shows deleted on success without attaching a diff", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Delete",
+      args: { file_path: "obsolete.ts" },
+    };
+
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call,
+      raw: {
+        kind: "delete",
+        ok: true,
+        filePath: "obsolete.ts",
+        absolutePath: "/tmp/workspace/obsolete.ts",
+      },
+    });
+
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Delete obsolete.ts -> deleted",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.diff).toBeUndefined();
+  });
+
+  test("shows the Delete failure reason", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      providerToolCallId: "call_1",
+      name: "Delete",
+      args: { file_path: "missing.ts" },
+    };
+
+    state = applyAgentEvent(state, { type: "tool.started", iterationNumber: 1, call });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call,
+      raw: {
+        kind: "delete",
+        ok: false,
+        filePath: "missing.ts",
+        error: "File does not exist.",
+      },
+    });
+
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Delete missing.ts -> File does not exist.",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.diff).toBeUndefined();
+  });
+});

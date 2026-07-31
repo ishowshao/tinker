@@ -1,6 +1,7 @@
 import { createBashToolExecutor } from "./bash";
 import { ShellTaskManager } from "./bash-task";
 import { createCwdState } from "./cwd-state";
+import { createDeleteToolExecutor } from "./delete";
 import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
@@ -225,6 +226,12 @@ export function createDefaultTooling(options: {
   );
   registry.register(
     createEditToolExecutor({
+      workspaceRoot: options.workspaceRoot,
+      snapshots,
+    }),
+  );
+  registry.register(
+    createDeleteToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
     }),

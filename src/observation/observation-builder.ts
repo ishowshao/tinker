@@ -1,6 +1,7 @@
 import type { ToolCall } from "../agent/types";
 import type {
   BashRawResult,
+  DeleteFileRawResult,
   EditFileRawResult,
   GenericToolRawResult,
   GlobRawResult,
@@ -42,6 +43,8 @@ export class ObservationBuilder {
         return { content: renderWriteObservation(input.raw) };
       case "edit":
         return { content: renderEditObservation(input.raw) };
+      case "delete":
+        return { content: renderDeleteObservation(input.raw) };
       case "bash":
         return { content: renderBashObservation(input.raw) };
       case "task_list":
@@ -306,6 +309,14 @@ function renderEditObservation(raw: EditFileRawResult): string {
     `oldSha256=${raw.oldSha256 ?? "null"}`,
     `newSha256=${raw.newSha256}`,
   ].join("\n");
+}
+
+function renderDeleteObservation(raw: DeleteFileRawResult): string {
+  if (!raw.ok) {
+    return `Delete failed for ${raw.filePath || "(unknown path)"}: ${raw.error ?? "Unknown error."}`;
+  }
+
+  return `Delete succeeded for ${raw.filePath}.`;
 }
 
 function renderBashObservation(raw: BashRawResult): string {

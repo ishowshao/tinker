@@ -11,6 +11,7 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
 - **Built-in tools**:
   - `Glob` / `Grep` — Find and search files by pattern or content
   - `Read` / `Write` / `Edit` — File I/O with content hashing and concurrent-modification protection
+  - `Delete` — Delete one existing regular file without directory or symlink support
   - `Bash` — Run shell commands (foreground and background) with per-task working directories
   - `TaskList` / `TaskOutput` / `TaskStop` — Manage long-running background shell tasks
   - `WebSearch` — Search the web via Exa API
@@ -396,6 +397,10 @@ call always returns the complete requested line range. Use `offset` and `limit`
 to page through larger files; oversized requests fail instead of returning
 truncated content.
 
+`Delete` removes one existing regular file by workspace-relative or absolute path.
+It rejects directories and symbolic links, and clears any in-memory file snapshot
+only after the removal succeeds.
+
 ## Project Structure
 
 ```
@@ -403,7 +408,7 @@ tinker/
 ├── src/
 │   ├── cli/           # Entry points (tui, run), config
 │   ├── agent/         # Agent loop, session ledger, turn cancellation, context metering
-│   ├── tools/         # Tool executors (bash, glob, grep, read, write, edit, recall, etc.)
+│   ├── tools/         # Tool executors (bash, glob, grep, read, write, edit, delete, recall, etc.)
 │   ├── model/         # Model clients (OpenAI-compatible, fake), chat mapping, preflight
 │   ├── mcp/           # MCP server management, tool executor adapter
 │   ├── observation/   # Tool result → model-visible text

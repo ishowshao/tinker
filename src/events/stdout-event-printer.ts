@@ -209,6 +209,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "skill":
       return [formatSkillResult(raw)];
     case "read":
+    case "delete":
     case "glob":
     case "grep":
     case "web_search":

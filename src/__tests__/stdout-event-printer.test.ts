@@ -257,6 +257,51 @@ describe("stdout event printer", () => {
     expect(stdout).toEqual([]);
   });
 
+  test("prints Delete lifecycle lines without raw-result or diff output", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: (chunk: string) => stderr.push(chunk) },
+    );
+
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-1",
+      name: "Delete",
+      args: { file_path: "obsolete.ts" },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.started",
+      ...call,
+      data: { call },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...call,
+      data: {
+        call,
+        raw: {
+          kind: "delete",
+          ok: true,
+          filePath: "obsolete.ts",
+          absolutePath: "/tmp/workspace/obsolete.ts",
+        },
+      },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.finished",
+      ...call,
+      data: { call, ok: true },
+    });
+
+    expect(stdout).toEqual([
+      "tool.started name=Delete path=obsolete.ts\n",
+      "tool.finished name=Delete path=obsolete.ts ok=true\n",
+    ]);
+    expect(stderr).toEqual([]);
+  });
+
   test("prints task tool results and background lifecycle events", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

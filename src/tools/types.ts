@@ -72,6 +72,13 @@ export type EditFileRawResult = {
   error?: string;
 };
 
+export type DeleteFileRawResult = {
+  ok: boolean;
+  filePath: string;
+  absolutePath?: string;
+  error?: string;
+};
+
 export type GlobRawResult = {
   ok: boolean;
   pattern: string;
@@ -313,6 +320,7 @@ export type ToolRawResultByKind = {
   read: ReadFileRawResult;
   write: WriteFileRawResult;
   edit: EditFileRawResult;
+  delete: DeleteFileRawResult;
   glob: GlobRawResult;
   grep: GrepRawResult;
   bash: BashRawResult;

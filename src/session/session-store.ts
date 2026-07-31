@@ -4838,6 +4838,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "read",
       "write",
       "edit",
+      "delete",
       "glob",
       "grep",
       "bash",

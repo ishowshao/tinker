@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文定义 `Delete` 工具第一版的确定性契约和实施范围。当前仅冻结方案，不包含实现。
+本文定义 `Delete` 工具第一版的确定性契约和实施范围。第一版已按本文契约实施。
 
 ## 背景
 
@@ -288,6 +288,7 @@ printer 只需在穷尽分支中识别 `delete`，第一版不增加专用 raw-r
 - `src/observation/observation-builder.ts`
 - `src/tui/event-store.ts`
 - `src/events/stdout-event-printer.ts`
+- `src/session/session-store.ts`（允许恢复时解码 `delete` raw result；不修改 schema）
 - `src/__tests__/tools.test.ts`
 - 对应的 TUI 和 stdout 测试
 - `README.md`
