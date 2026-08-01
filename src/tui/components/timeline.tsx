@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import { Fragment } from "react";
 import type { TimelineItem } from "../event-store";
+import type { AssistantStreamSectionItem } from "../tui-projection-store";
 import { AssistantMarkdown } from "./assistant-markdown";
 import { BashResultView } from "./bash-result-view";
 import { DiffView } from "./diff-view";
@@ -50,6 +51,15 @@ export function TimelineRow(props: { item: TimelineItem }) {
       <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
       {renderItemBash(item)}
       {renderItemDiff(item)}
+    </Fragment>
+  );
+}
+
+export function AssistantStreamSectionRow(props: { item: AssistantStreamSectionItem }) {
+  return (
+    <Fragment>
+      {props.item.showAssistantLabel ? <Text color="gray">- assistant</Text> : null}
+      <AssistantMarkdown text={props.item.markdown} />
     </Fragment>
   );
 }

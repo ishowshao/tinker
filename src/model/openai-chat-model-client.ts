@@ -34,7 +34,7 @@ import {
   toOpenAIChatMessages,
   toOpenAIChatTools,
 } from "./openai-chat-mapping";
-import { accumulateOpenAIChatCompletionChunks } from "./openai-chat-stream";
+import { OpenAIChatCompletionStreamAccumulator } from "./openai-chat-stream";
 import { MoonshotInputTokenEstimator } from "./moonshot-input-token-estimator";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
@@ -241,10 +241,7 @@ export class OpenAIChatModelClient implements ModelClient {
     }
 
     const response = this.stream
-      ? accumulateOpenAIChatCompletionChunks(
-          await this.collectStreamingChunks(prepared, options.signal),
-          { provider: this.provider, model: this.options.model },
-        )
+      ? await this.requestStreaming(prepared, options)
       : await this.requestNonStreaming(prepared, options.signal);
 
     return fromOpenAIChatCompletion(response, {
@@ -254,21 +251,30 @@ export class OpenAIChatModelClient implements ModelClient {
     });
   }
 
-  private async collectStreamingChunks(
+  private async requestStreaming(
     prepared: PreparedModelRequest,
-    signal: AbortSignal,
-  ): Promise<unknown[]> {
+    options: ModelRequestOptions,
+  ): Promise<Record<string, unknown>> {
+    const accumulator = new OpenAIChatCompletionStreamAccumulator({
+      provider: this.provider,
+      model: this.options.model,
+    });
     try {
       const stream = await this.client.chat.completions.create(
         prepared.payload as ChatCompletionCreateParamsStreaming,
-        { signal },
+        { signal: options.signal },
       );
-      const chunks: unknown[] = [];
       for await (const chunk of stream) {
-        chunks.push(chunk);
+        const content = accumulator.push(chunk);
+        if (content !== undefined && content !== "") {
+          options.onTextDelta?.(content);
+        }
       }
-      return chunks;
+      return accumulator.finish();
     } catch (error) {
+      if (error instanceof ProviderResponseError) {
+        throw error;
+      }
       throw sanitizedProviderError(error, this.provider, this.options.model);
     }
   }

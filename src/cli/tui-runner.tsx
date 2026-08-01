@@ -7,6 +7,10 @@ import {
 } from "../agent/runtime-session";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
+import type {
+  AssistantTextDeltaSink,
+  AssistantTextDeltaUpdate,
+} from "../agent/assistant-text-delta";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
 import {
@@ -76,7 +80,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       sessionConfig: RunnerConfig,
       mode: "new" | "resume",
       sessionId: SessionId,
-      sink: EventSink,
+      sink: EventSink & AssistantTextDeltaSink,
     ): Promise<RuntimeSession> => {
       const modelClient = createRunnerModelClient(
         sessionConfig,
@@ -102,6 +106,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         projectInstruction: projectInstructionManifest(projectInstructions),
         skillCatalog,
         presentationSinks: [sink],
+        assistantTextDeltaSink: sink,
         webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
         toolingConfig: options.publicConfig.tooling,
         enableTurnUndo: true,
@@ -327,7 +332,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
   }
 }
 
-class DeferredProjectionSink implements EventSink {
+class DeferredProjectionSink implements EventSink, AssistantTextDeltaSink {
   readonly name = "deferred-tui-projection";
   private target?: TuiProjectionStore;
   private readonly buffered: AgentEvent[] = [];
@@ -338,6 +343,10 @@ class DeferredProjectionSink implements EventSink {
       return;
     }
     await this.target.append(event);
+  }
+
+  updateAssistantTextDelta(update: AssistantTextDeltaUpdate): void {
+    this.target?.updateAssistantTextDelta(update);
   }
 
   async attach(target: TuiProjectionStore): Promise<void> {

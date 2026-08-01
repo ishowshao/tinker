@@ -54,6 +54,23 @@ class CapturingModel extends TestModelClient {
   }
 }
 
+class DeltaEmittingModel extends TestModelClient {
+  sawDeltaCallback = false;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.sawDeltaCallback = options.onTextDelta !== undefined;
+    options.onTextDelta?.("## First\nbody\n\n## Second\n");
+    options.onTextDelta?.("tail");
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "## First\nbody\n\n## Second\ntail",
+    });
+  }
+}
+
 class WaitingModel extends TestModelClient {
   readonly started: Promise<void>;
   private markStarted!: () => void;
@@ -1361,6 +1378,55 @@ describe("RuntimeSession lifecycle", () => {
       error: "render failed",
     });
     expect(healthySink.events.at(-1)?.type).toBe("session.finished");
+  });
+
+  test("isolates and disables a failed assistant text delta sink", async () => {
+    const events = collectingEventSink();
+    const model = new DeltaEmittingModel();
+    let updateCount = 0;
+    const input = createInput(model, events, "assistant-delta-failure");
+    input.assistantTextDeltaSink = {
+      updateAssistantTextDelta() {
+        updateCount += 1;
+        throw new Error("render failed");
+      },
+    };
+    const session = await createRuntimeSession(input, {
+      idFactory: deterministicIdFactory("assistant-delta-failure"),
+      loadMcpConfig: async () => undefined,
+    });
+
+    const result = await session.executeTurn({
+      userMessage: { role: "user", content: "continue" },
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      finalText: "## First\nbody\n\n## Second\ntail",
+    });
+    expect(model.sawDeltaCallback).toBe(true);
+    expect(updateCount).toBe(1);
+    expect(events.events.every((event) => !event.type.includes("delta"))).toBe(true);
+  });
+
+  test("does not install a text delta callback without a presentation sink", async () => {
+    const model = new DeltaEmittingModel();
+    const session = await createTestSession(
+      model,
+      collectingEventSink(),
+      "assistant-delta-absent",
+    );
+
+    const result = await session.executeTurn({
+      userMessage: { role: "user", content: "continue" },
+      signal: new AbortController().signal,
+    });
+    await session.dispose({ type: "oneshot_complete" });
+
+    expect(result.status).toBe("completed");
+    expect(model.sawDeltaCallback).toBe(false);
   });
 
   test("fast-fails an unusable persistence path before requesting the model", async () => {

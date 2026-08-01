@@ -230,13 +230,6 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       return failedResult(error, iteration);
     }
 
-    const requestOptions = {
-      signal: input.signal,
-      identity: {
-        iteration,
-        runtimeSession: input.runtimeSession,
-      },
-    };
     const transientRetryDelaysMs =
       input.transientRetryDelaysMs ?? TRANSIENT_RETRY_DELAYS_MS;
     let modelOutput: ModelRequestOutput | undefined;
@@ -265,7 +258,32 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
 
       try {
         throwIfTurnCancelled(input.signal);
-        modelOutput = await input.model.request(request, requestOptions);
+        let acceptingTextDeltas = true;
+        const onTextDelta =
+          input.runtimeSession.updateAssistantTextDelta === undefined
+            ? undefined
+            : (content: string) => {
+                if (!acceptingTextDeltas || input.signal.aborted) {
+                  return;
+                }
+                input.runtimeSession.updateAssistantTextDelta?.({
+                  ...iteration,
+                  attemptNumber,
+                  content,
+                });
+              };
+        try {
+          modelOutput = await input.model.request(request, {
+            signal: input.signal,
+            identity: {
+              iteration,
+              runtimeSession: input.runtimeSession,
+            },
+            ...(onTextDelta === undefined ? {} : { onTextDelta }),
+          });
+        } finally {
+          acceptingTextDeltas = false;
+        }
         throwIfTurnCancelled(input.signal);
         successfulAttempt = attemptNumber;
         break;

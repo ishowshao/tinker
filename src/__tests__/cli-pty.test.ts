@@ -140,6 +140,79 @@ test(
 );
 
 test(
+  "PTY-011: prints sealed assistant sections before request settlement without duplicates",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-incremental-output", rows: 40, columns: 120 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        const mark = harness.markTranscript();
+        await submitPrompt(harness, "PTY_INCREMENTAL_OUTPUT");
+
+        await harness.waitForTranscript("PTY_INCREMENTAL_EARLY_SENTINEL", {
+          since: mark,
+          timeoutMs: 2_000,
+          message: "the first sealed assistant section before request settlement",
+        });
+        expect(harness.transcriptSince(mark)).not.toContain(
+          "PTY_INCREMENTAL_FINAL_SENTINEL",
+        );
+        expect(harness.screenText()).toContain("Running");
+
+        await harness.waitForTranscript("PTY_INCREMENTAL_FINAL_SENTINEL", {
+          since: mark,
+          timeoutMs: 3_000,
+          message: "the final assistant section after request settlement",
+        });
+        await harness.waitForPromptReady();
+        const writes = harness.transcriptSince(mark);
+        expect(occurrences(writes, "PTY_INCREMENTAL_EARLY_SENTINEL")).toBe(1);
+        expect(occurrences(writes, "PTY_INCREMENTAL_SECOND_BODY")).toBe(1);
+        expect(occurrences(writes, "PTY_INCREMENTAL_FINAL_SENTINEL")).toBe(1);
+        expect(writes).not.toContain("\u001b[3J");
+
+        await quitTui(harness);
+        const session = await onlyStoredSession(harness.workspaceRoot);
+        withSessionDatabase(harness.workspaceRoot, session, (database) => {
+          expect(
+            database
+              .query(
+                "SELECT content FROM messages WHERE role = 'assistant' ORDER BY ordinal",
+              )
+              .all(),
+          ).toEqual([
+            {
+              content: [
+                "## PTY incremental first",
+                "PTY_INCREMENTAL_EARLY_SENTINEL",
+                "",
+                "## PTY incremental second",
+                "PTY_INCREMENTAL_SECOND_BODY",
+                "",
+                "## PTY incremental final",
+                "PTY_INCREMENTAL_FINAL_SENTINEL",
+              ].join("\n"),
+            },
+          ]);
+        });
+        const events = await readFile(
+          path.join(
+            harness.workspaceRoot,
+            ".tinker",
+            "sessions",
+            session.sessionId,
+            "events.jsonl",
+          ),
+          "utf8",
+        );
+        expect(events).not.toContain('"type":"assistant.delta"');
+      },
+    );
+  },
+  { timeout: 20_000 },
+);
+
+test(
   "PTY-003: cancels a blocked turn with Esc and completes the next turn",
   async () => {
     await withPtyTui(
@@ -789,6 +862,10 @@ async function waitForInitialFrame(harness: PtyTuiHarness): Promise<void> {
     timeoutMs: 10_000,
     message: "initial Tinker frame",
   });
+}
+
+function occurrences(text: string, value: string): number {
+  return text.split(value).length - 1;
 }
 
 function memoryBrowserModelProfilesJson(): string {

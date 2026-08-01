@@ -229,6 +229,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-static-history") {
       return this.ptyStaticHistory(input, prepared, options);
     }
+    if (this.mode === "pty-incremental-output") {
+      return this.ptyIncrementalOutput(input, prepared, options);
+    }
     if (this.mode === "pty-resume-layout") {
       return this.ptyResumeLayout(input, prepared, options);
     }
@@ -362,6 +365,39 @@ export class FakeModelClient implements ModelClient {
       throw new Error("PTY static-history Bash output was incomplete.");
     }
     return textOutput(prepared, "PTY_STATIC_LIVE_DONE");
+  }
+
+  private async ptyIncrementalOutput(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_INCREMENTAL_OUTPUT") {
+      throw new Error(
+        `Unexpected pty-incremental-output prompt: ${JSON.stringify(prompt)}.`,
+      );
+    }
+
+    const chunks = [
+      "## PTY incremental first\nPTY_INCREMENTAL_EARLY_SENTINEL\n\n## PTY incre",
+      "mental second\n",
+      "PTY_INCREMENTAL_SECOND_BODY\n\n## PTY incremental final\n",
+      "PTY_INCREMENTAL_FINAL_SENTINEL",
+    ] as const;
+    options.onTextDelta?.(chunks[0]);
+    await Bun.sleep(50);
+    options.signal.throwIfAborted();
+    options.onTextDelta?.(chunks[1]);
+    await Bun.sleep(700);
+    options.signal.throwIfAborted();
+    options.onTextDelta?.(chunks[2]);
+    await Bun.sleep(100);
+    options.signal.throwIfAborted();
+    options.onTextDelta?.(chunks[3]);
+    await Bun.sleep(100);
+    options.signal.throwIfAborted();
+    return textOutput(prepared, chunks.join(""));
   }
 
   private ptyResumeLayout(

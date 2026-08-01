@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { FatalAgentTurnError, runAgent } from "../agent/loop";
+import type { AssistantTextDeltaUpdate } from "../agent/assistant-text-delta";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import { TurnCancelledError } from "../agent/turn-cancellation";
@@ -177,6 +178,7 @@ class RetryScriptModel extends TestModelClient {
   ): Promise<ModelRequestOutput> {
     this.preparedRequests.push(prepared);
     this.identities.push(options.identity);
+    options.onTextDelta?.(`attempt-${this.preparedRequests.length}`);
     const step = this.steps[this.preparedRequests.length - 1];
     if (step === undefined) {
       throw new Error("Unexpected provider dispatch.");
@@ -223,6 +225,33 @@ class RetryThenWaitingModel extends TestModelClient {
         return;
       }
       options.signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+}
+
+class LateDeltaModel extends TestModelClient {
+  readonly lateDelivered: Promise<void>;
+  private markLateDelivered!: () => void;
+
+  constructor() {
+    super();
+    this.lateDelivered = new Promise((resolve) => {
+      this.markLateDelivered = resolve;
+    });
+  }
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    options.onTextDelta?.("before-settle");
+    setTimeout(() => {
+      options.onTextDelta?.("after-settle");
+      this.markLateDelivered();
+    }, 0);
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "before-settle",
     });
   }
 }
@@ -385,8 +414,12 @@ describe("runAgent", () => {
     const events = new ArrayEventSink();
     const identity = createTestRuntime(events);
     let prepareDispatchCalls = 0;
+    const textDeltas: AssistantTextDeltaUpdate[] = [];
     const runtimeSession: RuntimeSessionContext = {
       ...identity.runtimeSession,
+      updateAssistantTextDelta(update) {
+        textDeltas.push(update);
+      },
       prepareModelDispatch() {
         prepareDispatchCalls += 1;
       },
@@ -425,6 +458,24 @@ describe("runAgent", () => {
       model.identities[0]?.runtimeSession,
     );
     expect(prepareDispatchCalls).toBe(1);
+    expect(
+      textDeltas.map((update) => ({
+        attemptNumber: update.attemptNumber,
+        content: update.content,
+        iterationId: update.iterationId,
+      })),
+    ).toEqual([
+      {
+        attemptNumber: 1,
+        content: "attempt-1",
+        iterationId: identity.iteration.iterationId,
+      },
+      {
+        attemptNumber: 2,
+        content: "attempt-2",
+        iterationId: identity.iteration.iterationId,
+      },
+    ]);
 
     const requestEvents = events.events.filter((event) =>
       event.type.startsWith("model.request."),
@@ -470,6 +521,48 @@ describe("runAgent", () => {
       { role: "user", content: "hello" },
       { role: "assistant", content: "retry succeeded" },
     ]);
+  });
+
+  test("ignores text deltas delivered after an attempt settles", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const textDeltas: AssistantTextDeltaUpdate[] = [];
+    const runtimeSession: RuntimeSessionContext = {
+      ...identity.runtimeSession,
+      updateAssistantTextDelta(update) {
+        textDeltas.push(update);
+      },
+    };
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("late-text-delta"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new LateDeltaModel();
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+    await model.lateDelivered;
+
+    expect(result.status).toBe("completed");
+    expect(textDeltas.map((update) => update.content)).toEqual(["before-settle"]);
+    pending.finish(result);
   });
 
   test("exhausts two reasoning-only attempts without committing an assistant", async () => {

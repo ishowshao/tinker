@@ -14,62 +14,61 @@ type ToolCallAccumulator = {
  * chat.completion-shaped object so the result can be validated and mapped by
  * fromOpenAIChatCompletion exactly like a non-streaming response.
  */
-export function accumulateOpenAIChatCompletionChunks(
-  chunks: readonly unknown[],
-  options: ProviderContext,
-): Record<string, unknown> {
-  if (chunks.length === 0) {
-    throw providerStreamError(options, "chunks", "must not be empty");
-  }
+export class OpenAIChatCompletionStreamAccumulator {
+  private chunkCount = 0;
+  private role: "assistant" | undefined;
+  private content: string | undefined;
+  private reasoningContent: string | undefined;
+  private finishReason: string | undefined;
+  private resolvedModel: string | undefined;
+  private usage: Record<string, unknown> | undefined;
+  private readonly toolCalls: ToolCallAccumulator[] = [];
 
-  let role: "assistant" | undefined;
-  let content: string | undefined;
-  let reasoningContent: string | undefined;
-  let finishReason: string | undefined;
-  let resolvedModel: string | undefined;
-  let usage: Record<string, unknown> | undefined;
-  const toolCalls: ToolCallAccumulator[] = [];
+  constructor(private readonly options: ProviderContext) {}
 
-  chunks.forEach((chunk, chunkIndex) => {
+  push(chunk: unknown): string | undefined {
+    const chunkIndex = this.chunkCount;
+    this.chunkCount += 1;
     const path = `chunk[${chunkIndex}]`;
-    const record = requireRecord(chunk, path, options);
+    const record = requireRecord(chunk, path, this.options);
+    let chunkContent: string | undefined;
 
     if (record.model !== undefined && record.model !== null) {
       if (typeof record.model !== "string" || record.model.trim() === "") {
-        throw providerStreamError(options, `${path}.model`, "must be a string");
+        throw providerStreamError(this.options, `${path}.model`, "must be a string");
       }
-      if (resolvedModel !== undefined && resolvedModel !== record.model) {
+      if (this.resolvedModel !== undefined && this.resolvedModel !== record.model) {
         throw providerStreamError(
-          options,
+          this.options,
           `${path}.model`,
-          `conflicts with previously streamed model ${JSON.stringify(resolvedModel)}`,
+          `conflicts with previously streamed model ${JSON.stringify(this.resolvedModel)}`,
         );
       }
-      resolvedModel = record.model;
+      this.resolvedModel = record.model;
     }
 
     if (record.usage !== undefined && record.usage !== null) {
-      usage = requireRecord(record.usage, `${path}.usage`, options);
+      this.usage = requireRecord(record.usage, `${path}.usage`, this.options);
     }
 
     if (record.choices === undefined || record.choices === null) {
-      return;
+      return chunkContent;
     }
     if (!Array.isArray(record.choices)) {
-      throw providerStreamError(options, `${path}.choices`, "must be an array");
+      throw providerStreamError(this.options, `${path}.choices`, "must be an array");
     }
     // The usage-only final chunk from stream_options.include_usage has empty choices.
     for (const [choiceIndex, rawChoice] of record.choices.entries()) {
       const choicePath = `${path}.choices[${choiceIndex}]`;
-      const choice = requireRecord(rawChoice, choicePath, options);
+      const choice = requireRecord(rawChoice, choicePath, this.options);
       if (choice.index !== 0) {
-        throw providerStreamError(options, `${choicePath}.index`, "must be 0");
+        throw providerStreamError(this.options, `${choicePath}.index`, "must be 0");
       }
       if (typeof choice.finish_reason === "string") {
-        finishReason = choice.finish_reason;
+        this.finishReason = choice.finish_reason;
       } else if (choice.finish_reason !== undefined && choice.finish_reason !== null) {
         throw providerStreamError(
-          options,
+          this.options,
           `${choicePath}.finish_reason`,
           "must be a string or null",
         );
@@ -79,82 +78,106 @@ export function accumulateOpenAIChatCompletionChunks(
         continue;
       }
       const deltaPath = `${choicePath}.delta`;
-      const delta = asRecord(choice.delta, deltaPath, options);
+      const delta = asRecord(choice.delta, deltaPath, this.options);
       if (delta.role !== undefined && delta.role !== null) {
         if (delta.role !== "assistant") {
           throw providerStreamError(
-            options,
+            this.options,
             `${deltaPath}.role`,
             'must be "assistant"',
           );
         }
-        role = delta.role;
+        this.role = delta.role;
       }
-      content = appendOptionalText(
-        content,
+      const contentDelta = appendOptionalText(
+        undefined,
         delta.content,
         `${deltaPath}.content`,
-        options,
+        this.options,
       );
-      reasoningContent = appendOptionalText(
-        reasoningContent,
+      if (contentDelta !== undefined) {
+        this.content = (this.content ?? "") + contentDelta;
+        chunkContent = (chunkContent ?? "") + contentDelta;
+      }
+      this.reasoningContent = appendOptionalText(
+        this.reasoningContent,
         delta.reasoning_content,
         `${deltaPath}.reasoning_content`,
-        options,
+        this.options,
       );
       if (delta.tool_calls === undefined || delta.tool_calls === null) {
         continue;
       }
       if (!Array.isArray(delta.tool_calls)) {
         throw providerStreamError(
-          options,
+          this.options,
           `${deltaPath}.tool_calls`,
           "must be an array",
         );
       }
       for (const [fragmentIndex, rawFragment] of delta.tool_calls.entries()) {
         mergeToolCallFragment(
-          toolCalls,
+          this.toolCalls,
           rawFragment,
           `${deltaPath}.tool_calls[${fragmentIndex}]`,
-          options,
+          this.options,
         );
       }
     }
-  });
+    return chunkContent;
+  }
 
-  // Only fields the provider actually streamed are emitted; the strict
-  // non-streaming mapper rejects a missing role, id, type, or name.
-  const message: Record<string, unknown> = {
-    ...(role === undefined ? {} : { role }),
-    content: content ?? null,
-    ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
-    ...(toolCalls.length === 0
-      ? {}
-      : {
-          tool_calls: toolCalls.map((call) => ({
-            ...(call.id === undefined ? {} : { id: call.id }),
-            ...(call.type === undefined ? {} : { type: call.type }),
-            function: {
-              ...(call.name === undefined ? {} : { name: call.name }),
-              arguments: call.arguments,
-            },
-          })),
-        }),
-  };
+  finish(): Record<string, unknown> {
+    if (this.chunkCount === 0) {
+      throw providerStreamError(this.options, "chunks", "must not be empty");
+    }
 
-  return {
-    object: "chat.completion",
-    choices: [
-      {
-        index: 0,
-        message,
-        finish_reason: finishReason ?? null,
-      },
-    ],
-    ...(usage === undefined ? {} : { usage }),
-    ...(resolvedModel === undefined ? {} : { model: resolvedModel }),
-  };
+    // Only fields the provider actually streamed are emitted; the strict
+    // non-streaming mapper rejects a missing role, id, type, or name.
+    const message: Record<string, unknown> = {
+      ...(this.role === undefined ? {} : { role: this.role }),
+      content: this.content ?? null,
+      ...(this.reasoningContent === undefined
+        ? {}
+        : { reasoning_content: this.reasoningContent }),
+      ...(this.toolCalls.length === 0
+        ? {}
+        : {
+            tool_calls: this.toolCalls.map((call) => ({
+              ...(call.id === undefined ? {} : { id: call.id }),
+              ...(call.type === undefined ? {} : { type: call.type }),
+              function: {
+                ...(call.name === undefined ? {} : { name: call.name }),
+                arguments: call.arguments,
+              },
+            })),
+          }),
+    };
+
+    return {
+      object: "chat.completion",
+      choices: [
+        {
+          index: 0,
+          message,
+          finish_reason: this.finishReason ?? null,
+        },
+      ],
+      ...(this.usage === undefined ? {} : { usage: this.usage }),
+      ...(this.resolvedModel === undefined ? {} : { model: this.resolvedModel }),
+    };
+  }
+}
+
+export function accumulateOpenAIChatCompletionChunks(
+  chunks: readonly unknown[],
+  options: ProviderContext,
+): Record<string, unknown> {
+  const accumulator = new OpenAIChatCompletionStreamAccumulator(options);
+  for (const chunk of chunks) {
+    accumulator.push(chunk);
+  }
+  return accumulator.finish();
 }
 
 function mergeToolCallFragment(

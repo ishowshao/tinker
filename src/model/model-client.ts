@@ -36,6 +36,7 @@ export type ModelMessageProtocol = {
 
 export type ModelRequestOptions = {
   signal: AbortSignal;
+  onTextDelta?: (content: string) => void;
   identity?: {
     iteration: IterationIdentity;
     runtimeSession: RuntimeSessionContext;

@@ -5,7 +5,10 @@ import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-
 import type { ShellTaskSnapshot, ShellTaskStatus } from "../tools/bash-task";
 import { visibleTimelineItems } from "../tui/event-store";
 import type { TuiProjectionPolicy } from "../tui/tui-projection-policy";
-import { TuiProjectionStore } from "../tui/tui-projection-store";
+import {
+  isAssistantStreamSectionItem,
+  TuiProjectionStore,
+} from "../tui/tui-projection-store";
 import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
 
@@ -34,16 +37,19 @@ describe("TuiProjectionStore", () => {
 
     await store.append(modelStarted(2, iteration));
     const runningModel = store.getLogSnapshot();
-    expect(runningModel.committed.map((item) => item.label)).toEqual(["prompt"]);
+    expect(
+      runningModel.committed.map((item) => ("label" in item ? item.label : undefined)),
+    ).toEqual(["prompt"]);
     expect(runningModel.live).toMatchObject([
       { text: "model iteration 1", status: "running" },
     ]);
 
     await store.append(modelFinished(3, iteration));
-    expect(store.getLogSnapshot().committed.map((item) => item.text)).toEqual([
-      "run it",
-      "model iteration 1 -> assistant response",
-    ]);
+    expect(
+      store
+        .getLogSnapshot()
+        .committed.map((item) => ("text" in item ? item.text : undefined)),
+    ).toEqual(["run it", "model iteration 1 -> assistant response"]);
     expect(store.getLogSnapshot().live).toEqual([]);
 
     await store.append({
@@ -410,6 +416,256 @@ describe("TuiProjectionStore", () => {
       },
     ]);
   });
+
+  test("buffers unsealed deltas without notifying and commits only at the next heading", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    await store.append(turnStarted(1, turn, "stream it"));
+    await store.append(modelStarted(2, iteration));
+    let notifications = 0;
+    const unsubscribe = store.subscribe(() => {
+      notifications += 1;
+    });
+
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content: "## First\nbody\n\n## Sec",
+    });
+    expect(notifications).toBe(0);
+    expect(store.getLogSnapshot().committed).toHaveLength(1);
+
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content: "ond\n",
+    });
+    expect(notifications).toBe(1);
+    const sections = store
+      .getLogSnapshot()
+      .committed.filter(isAssistantStreamSectionItem);
+    expect(sections).toEqual([
+      {
+        kind: "assistant-stream-section",
+        id: `assistant-stream-${iteration.iterationId}-1-1`,
+        iterationId: iteration.iterationId,
+        attemptNumber: 1,
+        sectionNumber: 1,
+        markdown: "## First\nbody\n\n",
+        showAssistantLabel: true,
+      },
+    ]);
+    unsubscribe();
+  });
+
+  test("flushes the successful tail and physically adopts canonical assistant items", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    const content = "## First\nbody\n\n## Second\ntail";
+    await store.append(turnStarted(1, turn, "stream it"));
+    await store.append(modelStarted(2, iteration));
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content,
+    });
+
+    await store.append(modelFinished(3, iteration, content));
+    await store.append(turnFinished(4, turn, iteration, content));
+
+    const committed = store.getLogSnapshot().committed;
+    const sections = committed.filter(isAssistantStreamSectionItem);
+    expect(sections.map((section) => section.markdown)).toEqual([
+      "## First\nbody\n\n",
+      "## Second\ntail",
+    ]);
+    expect(sections.map((section) => section.showAssistantLabel)).toEqual([
+      true,
+      false,
+    ]);
+    expect(
+      committed.filter(
+        (item) => !isAssistantStreamSectionItem(item) && item.label === "assistant",
+      ),
+    ).toEqual([]);
+    expect(
+      committed.some(
+        (item) =>
+          !isAssistantStreamSectionItem(item) &&
+          item.text === "model iteration 1 -> assistant response",
+      ),
+    ).toBe(false);
+    expect(store.getSnapshot().recentTurns[0]?.items).toMatchObject([
+      { label: "prompt" },
+      { status: "ok" },
+      { label: "assistant", text: content },
+    ]);
+
+    const resumed = createStore();
+    resumed.hydrate(store.getSnapshot());
+    expect(
+      resumed
+        .getLogSnapshot()
+        .committed.some((item) => isAssistantStreamSectionItem(item)),
+    ).toBe(false);
+    expect(
+      resumed
+        .getLogSnapshot()
+        .committed.filter(
+          (item) =>
+            !isAssistantStreamSectionItem(item) &&
+            item.label === "assistant" &&
+            item.text === content,
+        ),
+    ).toHaveLength(1);
+  });
+
+  test("adopts formal assistant progress after streamed tool-call text", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    const content = "## Plan\nbody\n\n## Action\ntail";
+    await store.append(turnStarted(1, turn, "stream progress"));
+    await store.append(modelStarted(2, iteration));
+    store.updateAssistantTextDelta({ ...iteration, attemptNumber: 1, content });
+    await store.append(modelFinished(3, iteration, content));
+    await store.append({
+      type: "assistant.progress",
+      ...iteration,
+      eventSequence: 4,
+      timestamp: timestamp(4),
+      data: { content },
+    });
+
+    expect(
+      store
+        .getLogSnapshot()
+        .committed.filter(
+          (item) => !isAssistantStreamSectionItem(item) && item.label === "assistant",
+        ),
+    ).toEqual([]);
+    expect(store.getSnapshot().activeTurn?.items.at(-1)).toMatchObject({
+      label: "assistant",
+      text: content,
+    });
+  });
+
+  test("keeps the complete canonical Markdown path when nothing was sealed", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    const content = "## Only\nbody";
+    await store.append(turnStarted(1, turn, "short response"));
+    await store.append(modelStarted(2, iteration));
+    store.updateAssistantTextDelta({ ...iteration, attemptNumber: 1, content });
+    await store.append(modelFinished(3, iteration, content));
+    await store.append(turnFinished(4, turn, iteration, content));
+
+    expect(
+      store
+        .getLogSnapshot()
+        .committed.map((item) =>
+          isAssistantStreamSectionItem(item) ? item.kind : item.text,
+        ),
+    ).toEqual(["short response", "model iteration 1 -> assistant response", content]);
+  });
+
+  test("preserves sealed retry output, drops its tail, and labels the new attempt", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    await store.append(turnStarted(1, turn, "retry"));
+    await store.append(modelStarted(2, iteration));
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content: "## Old one\nsealed\n\n## Old tail\ndiscard me",
+    });
+    await store.append({
+      type: "model.request.failed",
+      ...iteration,
+      eventSequence: 3,
+      timestamp: timestamp(3),
+      data: {
+        attemptNumber: 1,
+        maxAttempts: 2,
+        code: "provider_unavailable",
+        retryDisposition: "scheduled",
+        provider: "test",
+        model: "test-model",
+        error: "retry",
+      },
+    });
+    await store.append(modelStarted(4, iteration, 2));
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content: "## stale\nignored\n\n## stale two\n",
+    });
+    const replacement = "## New one\nsealed\n\n## New tail\nkept";
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 2,
+      content: replacement,
+    });
+    await store.append(modelFinished(5, iteration, replacement, 2));
+
+    const committed = store.getLogSnapshot().committed;
+    const sections = committed.filter(isAssistantStreamSectionItem);
+    expect(sections.map((section) => section.markdown)).toEqual([
+      "## Old one\nsealed\n\n",
+      "## New one\nsealed\n\n",
+      "## New tail\nkept",
+    ]);
+    expect(sections.map((section) => section.showAssistantLabel)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    expect(JSON.stringify(committed)).not.toContain("discard me");
+    expect(JSON.stringify(committed)).not.toContain("stale");
+    expect(
+      committed.some(
+        (item) =>
+          !isAssistantStreamSectionItem(item) &&
+          item.text === "assistant response interrupted · retrying",
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps sealed output but never flushes the open tail on cancellation", async () => {
+    const store = createStore();
+    const turn = turnIdentity(1);
+    const iteration = iterationIdentity(1, 1);
+    await store.append(turnStarted(1, turn, "cancel"));
+    await store.append(modelStarted(2, iteration));
+    store.updateAssistantTextDelta({
+      ...iteration,
+      attemptNumber: 1,
+      content: "## Kept\nsealed\n\n## Open tail\nnever print",
+    });
+    await store.append({
+      type: "turn.cancelled",
+      ...iteration,
+      eventSequence: 3,
+      timestamp: timestamp(3),
+      data: {
+        cancellation: {
+          source: "user",
+          phase: "model_request",
+          iterationId: iteration.iterationId,
+          iterationNumber: iteration.iterationNumber,
+        },
+      },
+    });
+
+    const serialized = JSON.stringify(store.getLogSnapshot().committed);
+    expect(serialized).toContain("## Kept\\nsealed");
+    expect(serialized).not.toContain("never print");
+    expect(serialized).toContain("cancelled");
+  });
 });
 
 function createStore(policy?: TuiProjectionPolicy): TuiProjectionStore {
@@ -497,19 +753,22 @@ function turnStarted(
 function modelStarted(
   eventSequence: number,
   iteration: ReturnType<typeof iterationIdentity>,
+  attemptNumber = 1,
 ): AgentEvent {
   return {
     type: "model.request.started",
     ...iteration,
     eventSequence,
     timestamp: timestamp(eventSequence),
-    data: { attemptNumber: 1, maxAttempts: 2 },
+    data: { attemptNumber, maxAttempts: 2 },
   };
 }
 
 function modelFinished(
   eventSequence: number,
   iteration: ReturnType<typeof iterationIdentity>,
+  content = "response",
+  attemptNumber = 1,
 ): AgentEvent {
   return {
     type: "model.request.finished",
@@ -517,10 +776,10 @@ function modelFinished(
     eventSequence,
     timestamp: timestamp(eventSequence),
     data: {
-      attemptNumber: 1,
+      attemptNumber,
       maxAttempts: 2,
       output: {
-        message: { role: "assistant", content: "response" },
+        message: { role: "assistant", content },
         usage: testUsage(),
       },
     },

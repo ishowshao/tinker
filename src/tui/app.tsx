@@ -19,7 +19,6 @@ import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { ModelRequestMediaAggregateError } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
 import { readLastAssistantResponse } from "../session/session-last-response-reader";
-import type { TimelineItem } from "./event-store";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
 import { AssistantMarkdownProvider } from "./components/assistant-markdown";
@@ -43,7 +42,11 @@ import {
   ResumeSessionPicker,
   ResumeSessionPickerLoading,
 } from "./components/resume-session-picker";
-import { Timeline, TimelineRow } from "./components/timeline";
+import {
+  AssistantStreamSectionRow,
+  Timeline,
+  TimelineRow,
+} from "./components/timeline";
 import { parseSlashCommand, SLASH_COMMANDS } from "./slash-commands";
 import {
   resolveProjectSlashCommand,
@@ -56,6 +59,10 @@ import { loadViewFile, type ViewFile } from "./view-file";
 import { writeClipboardText } from "./clipboard";
 import type { WorkspaceFileLister } from "./workspace-file-search";
 import type { TurnUndoBarrierReason, TurnUndoResult } from "../tools/turn-undo-manager";
+import {
+  isAssistantStreamSectionItem,
+  type TuiCommittedItem,
+} from "./tui-projection-store";
 
 export type AppProps = {
   sessionController: TuiSessionController;
@@ -163,7 +170,7 @@ export function App(props: AppProps) {
     write(clearTerminal);
     setStaticRenderEpoch((current) => current + 1);
   }, [write]);
-  const staticItems = useMemo<Array<typeof STATIC_HEADER | TimelineItem>>(
+  const staticItems = useMemo<Array<typeof STATIC_HEADER | TuiCommittedItem>>(
     () => [STATIC_HEADER, ...log.committed],
     [log.committed],
   );
@@ -712,6 +719,8 @@ export function App(props: AppProps) {
                 workspaceRoot={binding.workspaceRoot}
                 sessionId={binding.sessionId}
               />
+            ) : isAssistantStreamSectionItem(item) ? (
+              <AssistantStreamSectionRow key={item.id} item={item} />
             ) : (
               <TimelineRow key={item.id} item={item} />
             )

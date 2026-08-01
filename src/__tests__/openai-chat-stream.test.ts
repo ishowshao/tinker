@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { fromOpenAIChatCompletion } from "../model/openai-chat-mapping";
-import { accumulateOpenAIChatCompletionChunks } from "../model/openai-chat-stream";
+import {
+  accumulateOpenAIChatCompletionChunks,
+  OpenAIChatCompletionStreamAccumulator,
+} from "../model/openai-chat-stream";
 import { ProviderResponseError } from "../model/model-client";
 
 const PROVIDER = { provider: "test-provider", model: "test-model" };
@@ -25,6 +28,20 @@ const USAGE_ONLY_CHUNK = {
 };
 
 describe("accumulateOpenAIChatCompletionChunks", () => {
+  test("validates and returns each raw content delta before finish", () => {
+    const accumulator = new OpenAIChatCompletionStreamAccumulator(PROVIDER);
+
+    expect(accumulator.push(chunk({ role: "assistant", content: "Hel" }))).toBe("Hel");
+    expect(accumulator.push(chunk({ reasoning_content: "hidden" }))).toBeUndefined();
+    expect(accumulator.push(USAGE_ONLY_CHUNK)).toBeUndefined();
+    expect(accumulator.push(chunk({ content: "lo" }))).toBe("lo");
+
+    expect(accumulator.finish()).toMatchObject({
+      choices: [{ message: { content: "Hello", reasoning_content: "hidden" } }],
+      usage: USAGE,
+    });
+  });
+
   test("assembles text deltas and trailing usage into a completion", () => {
     const completion = accumulateOpenAIChatCompletionChunks(
       [

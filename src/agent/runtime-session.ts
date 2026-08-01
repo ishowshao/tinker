@@ -76,6 +76,10 @@ import type { ToolExecutor } from "../tools/types";
 import type { TurnUndoResult } from "../tools/turn-undo-manager";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
+import type {
+  AssistantTextDeltaSink,
+  AssistantTextDeltaUpdate,
+} from "./assistant-text-delta";
 import {
   SessionStore,
   createSessionCompatibilityContract,
@@ -204,6 +208,7 @@ export type RuntimeSessionContext = {
   ): ToolCallIdentity;
   finishIterationForContinuation(iteration: IterationIdentity): void;
   append(input: AgentEventInput): Promise<void>;
+  updateAssistantTextDelta?(update: AssistantTextDeltaUpdate): void;
   onToolCompletionsCommitted?(input: {
     completions: readonly ToolCompletionInput[];
     committed: readonly CommittedToolCompletion[];
@@ -264,6 +269,7 @@ type CommonRuntimeSessionInput = {
   projectInstruction?: ProjectInstructionManifest;
   skillCatalog?: SkillCatalogSnapshot;
   presentationSinks?: EventSink[];
+  assistantTextDeltaSink?: AssistantTextDeltaSink;
   persistence?:
     | false
     | {
@@ -416,6 +422,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private bashGuardSource: BashGuardSource;
   private bashGuardSnapshot: BashGuardSnapshot;
   private readonly bashGuardListeners = new Set<() => void>();
+  private assistantTextDeltaSinkDisabled = false;
   private pendingBashConfirmation?: {
     readonly command: string;
     readonly reason: string;
@@ -466,6 +473,12 @@ class DefaultRuntimeSession implements RuntimeSession {
       finishIterationForContinuation: (iteration) =>
         this.finishIterationForContinuation(iteration),
       append: (event) => this.append(event),
+      ...(input.assistantTextDeltaSink === undefined
+        ? {}
+        : {
+            updateAssistantTextDelta: (update: AssistantTextDeltaUpdate) =>
+              this.updateAssistantTextDelta(update),
+          }),
       onToolCompletionsCommitted: (completion) =>
         this.onToolCompletionsCommitted(completion),
       prepareModelDispatch: (dispatch) => this.prepareModelDispatch(dispatch),
@@ -2362,6 +2375,32 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.nextIterationNumberByTurn.set(turn.turnId, iterationNumber + 1);
     this.nextToolCallNumberByIteration.set(identity.iterationId, 1);
     return identity;
+  }
+
+  private updateAssistantTextDelta(update: AssistantTextDeltaUpdate): void {
+    const sink = this.input.assistantTextDeltaSink;
+    const iteration = this.iterations.get(update.iterationId);
+    if (
+      sink === undefined ||
+      this.assistantTextDeltaSinkDisabled ||
+      this.state !== "executing" ||
+      update.content === "" ||
+      !Number.isSafeInteger(update.attemptNumber) ||
+      update.attemptNumber < 1 ||
+      iteration === undefined ||
+      iteration.sessionId !== update.sessionId ||
+      iteration.turnId !== update.turnId ||
+      iteration.turnNumber !== update.turnNumber ||
+      iteration.iterationNumber !== update.iterationNumber
+    ) {
+      return;
+    }
+
+    try {
+      sink.updateAssistantTextDelta(update);
+    } catch {
+      this.assistantTextDeltaSinkDisabled = true;
+    }
   }
 
   private createToolCall(
