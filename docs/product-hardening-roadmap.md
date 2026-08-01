@@ -45,6 +45,8 @@ structured checkpoint、跨 session 记忆、多 agent 或云同步。
 
 ## 阶段三：TUI 增量输出
 
+独立实施方案：[`tui-incremental-output-design.md`](tui-incremental-output-design.md)。
+
 ### 目标
 
 把已经默认启用的流式传输转换成用户可见的增量反馈，同时保持 canonical history、事件和
@@ -52,7 +54,10 @@ resume 语义不变。
 
 ### 验收重点
 
-- 文本和 reasoning delta 只进入临时 presentation state，完整响应通过校验后才写入 canonical history。
+- `content` delta 只进入临时 presentation state，完整响应通过校验后才写入 canonical history。
+- TUI live 区以当前已流出的完整正文前缀渲染 Markdown，并跟随最新内容；流结束后正式正文只
+  进入 `<Static>` 一次。
+- `reasoning_content` 不进入可见增量通道；现有完整响应组装和 reasoning-only 判定保持不变。
 - 未完整组装的 tool call 不进入执行链，参数和 provider tool-call ID 继续严格校验。
 - 取消、provider 失败或 TUI 退出不会留下半截 assistant message，也不会在恢复后重复内容。
 - 完成态继续使用当前 timeline renderer；`/resume` 只重建最终 canonical 内容。
