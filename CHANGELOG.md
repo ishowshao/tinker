@@ -5,6 +5,26 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-01
+
+### Added
+
+- Run interactive terminal programs through PTY-backed Bash tasks, send exact
+  keystrokes with `TaskInput`, and inspect their current terminal screen with
+  `TaskOutput`.
+- Search all resumable sessions from the `/resume` picker by text from their
+  first user prompt, including older sessions beyond the 20 most recent.
+
+### Changed
+
+- Keep the live background-task panel compact by showing at most two tasks and
+  label PTY-backed tasks explicitly.
+
+### Fixed
+
+- Complete PTY tasks reliably after subprocess exit on Linux, including the EIO
+  signal reported when the terminal closes.
+
 ## [1.6.0] - 2026-08-01
 
 ### Added
@@ -129,7 +149,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/ishowshao/tinker/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ishowshao/tinker/releases/tag/v1.6.0
 [1.5.1]: https://github.com/ishowshao/tinker/releases/tag/v1.5.1
 [1.5.0]: https://github.com/ishowshao/tinker/releases/tag/v1.5.0
