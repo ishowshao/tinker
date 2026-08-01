@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-07-31
-- 状态：待实施
+- 状态：已实施
 - 定位：原持久化 checkpoint 方案的精简替代方案
 - 前置能力：Write/Edit 快照与 drift 校验、Delete 普通文件删除契约、turn identity、
   turn cancellation、RuntimeSession、TUI session controller
