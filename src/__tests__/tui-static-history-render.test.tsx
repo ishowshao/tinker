@@ -158,6 +158,7 @@ test("running interactive frames do not clear or replay committed history", asyn
           outputLines: 30,
           preview,
           truncated: false,
+          tty: false,
         },
       },
     });
@@ -324,6 +325,7 @@ function backgroundTask(
     outputBytes: 0,
     outputLines: 0,
     cwd: "/tmp/tinker",
+    tty: false,
   };
 }
 

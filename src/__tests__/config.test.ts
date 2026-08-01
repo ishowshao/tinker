@@ -460,6 +460,13 @@ describe("system prompt", () => {
       "Successful Write and Edit operations establish the current version",
     );
     expect(prompt).toContain("Use Bash to run tests");
+    expect(prompt).toContain("Use Bash with tty=true");
+    expect(prompt).toContain("include \\n explicitly");
+    expect(prompt).toContain("use \\u0003 for Ctrl-C");
+    expect(prompt).not.toContain("\u0003");
+    expect(prompt).toContain(
+      "Do not send passwords, tokens, or other secrets through TaskInput",
+    );
     expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v1");
     expect(prompt).toContain(renderRecallRetirementContract());
     expect(prompt).toContain("use Recall search and then Recall get");

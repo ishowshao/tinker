@@ -771,7 +771,11 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "WebFetch") {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
   }
-  if (input.name === "TaskOutput" || input.name === "TaskStop") {
+  if (
+    input.name === "TaskOutput" ||
+    input.name === "TaskInput" ||
+    input.name === "TaskStop"
+  ) {
     return `${input.name} ${toolTaskId(input.args) ?? ""}`.trim();
   }
   if (input.name === "TaskList") {
@@ -866,6 +870,10 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         return `${base} -> ${raw.status}, ${raw.outputLines} line${raw.outputLines === 1 ? "" : "s"}`;
       }
       return base;
+    case "task_input":
+      return raw.ok
+        ? `${base} -> ${raw.status}, wrote ${raw.writtenBytes} byte${raw.writtenBytes === 1 ? "" : "s"}, ${raw.screenColumns}x${raw.screenRows}`
+        : base;
     case "task_stop": {
       if (raw.status === undefined) {
         return base;
@@ -908,6 +916,10 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
   switch (raw.kind) {
     case "bash":
     case "task_output": {
+      const detail = bashResultDetail(raw);
+      return detail === undefined ? {} : { bash: detail };
+    }
+    case "task_input": {
       const detail = bashResultDetail(raw);
       return detail === undefined ? {} : { bash: detail };
     }
@@ -954,6 +966,7 @@ function toolRawResultDiff(
     case "bash":
     case "task_list":
     case "task_output":
+    case "task_input":
     case "task_stop":
     case "web_search":
     case "web_fetch":

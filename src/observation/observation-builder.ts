@@ -11,6 +11,7 @@ import type {
   ReadFileRawResult,
   RecallRawResult,
   SkillRawResult,
+  TaskInputRawResult,
   TaskListRawResult,
   TaskOutputRawResult,
   TaskStopRawResult,
@@ -51,6 +52,8 @@ export class ObservationBuilder {
         return { content: renderTaskListObservation(input.raw) };
       case "task_output":
         return { content: renderTaskOutputObservation(input.raw) };
+      case "task_input":
+        return { content: renderTaskInputObservation(input.raw) };
       case "task_stop":
         return { content: renderTaskStopObservation(input.raw) };
       case "web_search":
@@ -331,8 +334,11 @@ function renderBashObservation(raw: BashRawResult): string {
       `timeoutMs=${raw.timeoutMs ?? 0}`,
       `command=${raw.command}`,
       `cwd=${raw.cwd}`,
+      `tty=${raw.tty}`,
       `outputFilePath=${raw.outputFilePath}`,
-      "Use Read on outputFilePath to inspect current output.",
+      raw.tty
+        ? "Use TaskOutput to inspect the current terminal screen and TaskInput to interact."
+        : "Use TaskOutput to inspect current output.",
     ].join("\n");
   }
 
@@ -342,8 +348,11 @@ function renderBashObservation(raw: BashRawResult): string {
       `taskId=${raw.taskId}`,
       `command=${raw.command}`,
       `cwd=${raw.cwd}`,
+      `tty=${raw.tty}`,
       `outputFilePath=${raw.outputFilePath}`,
-      "Use Read on outputFilePath to inspect current output.",
+      raw.tty
+        ? "Use TaskOutput to inspect the current terminal screen and TaskInput to interact."
+        : "Use TaskOutput to inspect current output.",
     ].join("\n");
   }
 
@@ -353,6 +362,7 @@ function renderBashObservation(raw: BashRawResult): string {
     `exitCode=${raw.exitCode ?? "null"}`,
     `status=${raw.status}`,
     `cwd=${raw.cwd}`,
+    `tty=${raw.tty}`,
     `outputFilePath=${raw.outputFilePath}`,
     `outputBytes=${raw.outputBytes}`,
     `outputLines=${raw.outputLines}`,
@@ -362,8 +372,9 @@ function renderBashObservation(raw: BashRawResult): string {
       ? undefined
       : `returnCodeInterpretation=${raw.returnCodeInterpretation}`,
     raw.error === undefined ? undefined : `error=${raw.error}`,
-    "preview:",
-    raw.preview,
+    raw.tty ? `screen=${raw.screenColumns ?? 80}x${raw.screenRows ?? 24}` : undefined,
+    raw.tty ? "current screen:" : "preview:",
+    raw.tty ? (raw.screen ?? "") : raw.preview,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
@@ -387,21 +398,46 @@ function renderTaskOutputObservation(raw: TaskOutputRawResult): string {
     return `TaskOutput failed for ${raw.taskId || "(unknown task ID)"}: ${raw.error ?? "Unknown error."}`;
   }
 
+  const terminalScreen = raw.task.tty;
   return [
     "Task output retrieved.",
     `taskId=${raw.taskId}`,
     `status=${raw.task.status}`,
     `command=${raw.task.command}`,
+    `tty=${terminalScreen}`,
     `outputFilePath=${raw.outputFilePath}`,
     `outputBytes=${raw.outputBytes ?? 0}`,
     `outputLines=${raw.outputLines ?? 0}`,
     `truncated=${raw.truncated ?? false}`,
     raw.omittedLines === undefined ? undefined : `omittedLines=${raw.omittedLines}`,
-    "preview:",
-    raw.preview ?? "",
+    terminalScreen
+      ? `screen=${raw.screenColumns ?? 80}x${raw.screenRows ?? 24}`
+      : undefined,
+    terminalScreen ? "current screen:" : "preview:",
+    terminalScreen ? (raw.screen ?? "") : (raw.preview ?? ""),
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function renderTaskInputObservation(raw: TaskInputRawResult): string {
+  if (!raw.ok) {
+    return `TaskInput failed for ${raw.taskId || "(unknown task ID)"}: ${raw.error}`;
+  }
+
+  return [
+    "Terminal input sent.",
+    `taskId=${raw.taskId}`,
+    `status=${raw.status}`,
+    `writtenBytes=${raw.writtenBytes}`,
+    `waitedMs=${raw.waitedMs}`,
+    `screen=${raw.screenColumns}x${raw.screenRows}`,
+    `outputFilePath=${raw.outputFilePath}`,
+    `outputBytes=${raw.outputBytes}`,
+    `outputLines=${raw.outputLines}`,
+    "current screen:",
+    raw.screen,
+  ].join("\n");
 }
 
 function renderTaskStopObservation(raw: TaskStopRawResult): string {
@@ -428,6 +464,7 @@ function renderTaskSummary(task: TaskListRawResult["tasks"][number]): string {
     `taskId=${task.taskId}`,
     `description=${task.description}`,
     `status=${task.status}`,
+    `tty=${task.tty}`,
     `startedAt=${task.startedAt}`,
     task.endedAt === undefined ? undefined : `endedAt=${task.endedAt}`,
     task.exitCode === undefined ? undefined : `exitCode=${task.exitCode}`,

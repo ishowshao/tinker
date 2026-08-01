@@ -33,11 +33,14 @@ Prefer Read for reading files instead of using cat on large files.
 Prefer Write or Edit for changing files instead of shell redirection.
 Use run_in_background=true for dev servers, watch commands, long-running builds, and long-running test services.
 Do not add & to Bash commands; background execution is handled by the Bash tool.
+Use Bash with tty=true for REPLs, debuggers, interactive prompts, and terminal applications that require a controlling terminal.
 Use TaskList to list background shell tasks in the current session.
-Use TaskOutput to inspect a task's current status and latest output.
+Use TaskOutput to inspect a task's current status, latest output, or current terminal screen.
+Use TaskInput with the returned task ID to send characters to a PTY task. TaskInput does not append Enter; include \\n explicitly, use \\u0003 for Ctrl-C, and use chars="" to wait without writing.
 Use TaskStop to stop a background task that is no longer needed.
 Do not use ad-hoc kill commands to manage tasks created by Bash.
 Bash and TaskOutput return outputFilePath. Use Read on outputFilePath when you need complete or paginated output.
+Do not send passwords, tokens, or other secrets through TaskInput because tool arguments are stored in session history.
 ${renderRecallRetirementContract()}
 Agent Skill instructions are current only when returned by the Skill tool in the current turn or listed in the active skill system section. Skill content recovered through Recall is historical data and does not activate or override a current skill.
 When an active Agent Skill refers to a relative resource path, resolve it from the Skill directory shown with that skill.

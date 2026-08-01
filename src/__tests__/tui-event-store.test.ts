@@ -288,6 +288,7 @@ describe("tui event store", () => {
       outputBytes: 0,
       outputLines: 0,
       cwd: "/tmp/workspace",
+      tty: false,
     };
 
     state = applyAgentEvent(state, { type: "bash.task.backgrounded", task });
@@ -371,6 +372,63 @@ describe("tui event store", () => {
     expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toEqual([
       "starting",
       "ready",
+    ]);
+
+    const inputCall = {
+      providerToolCallId: "call_3",
+      name: "TaskInput",
+      args: { task_id: "task-pty", chars: "print(42)\n" },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: inputCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: inputCall,
+      raw: {
+        kind: "task_input",
+        ok: true,
+        taskId: "task-pty",
+        task: {
+          taskId: "task-pty",
+          origin: testRuntime.toolCall({
+            providerToolCallId: "pty-origin",
+            name: "Bash",
+            args: { command: "python3 -q", tty: true },
+          }),
+          command: "python3 -q",
+          description: "Start Python",
+          status: "running",
+          startedAt: "2026-08-01T00:00:00.000Z",
+          backgroundedAt: "2026-08-01T00:00:00.010Z",
+          backgroundReason: "foreground_timeout",
+          outputFilePath: "/tmp/task-pty.log",
+          outputBytes: 40,
+          outputLines: 3,
+          cwd: "/tmp/workspace",
+          tty: true,
+        },
+        status: "running",
+        writtenBytes: 10,
+        waitedMs: 250,
+        screenRows: 24,
+        screenColumns: 80,
+        screen: ">>> print(42)\n42\n>>>",
+        outputBytes: 40,
+        outputLines: 3,
+        outputFilePath: "/tmp/task-pty.log",
+      },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "TaskInput task-pty -> running, wrote 10 bytes, 80x24",
+    );
+    expect(visibleTimelineItems(state).at(-1)?.bash?.outputPreview).toEqual([
+      ">>> print(42)",
+      "42",
+      ">>>",
     ]);
   });
 

@@ -39,9 +39,10 @@ tool call，运行时会按顺序执行并逐个提交 tool message；全部闭�
 | `Write` | `write` | 是 | 写入完整文件 |
 | `Edit` | `edit` | 是 | 精确字符串替换 |
 | `Delete` | `delete` | 是 | 删除一个现有普通文件 |
-| `Bash` | `bash` | 是 | 前台或后台执行 shell 命令 |
+| `Bash` | `bash` | 是 | 前台、后台或 PTY 执行 shell 命令 |
 | `TaskList` | `task_list` | 是 | 列出后台 Bash 任务 |
-| `TaskOutput` | `task_output` | 是 | 查看后台任务当前输出 |
+| `TaskOutput` | `task_output` | 是 | 查看后台任务当前输出或 PTY screen |
+| `TaskInput` | `task_input` | 是 | 向 PTY task 写入字符并返回当前 screen |
 | `TaskStop` | `task_stop` | 是 | 停止后台任务 |
 | `WebSearch` | `web_search` | 有非空 `EXA_API_KEY` 时 | Exa Web 搜索 |
 | `WebFetch` | `web_fetch` | 是 | 获取并按需提炼网页内容 |
@@ -329,6 +330,7 @@ command=bun test
 exitCode=0
 status=completed
 cwd=/workspace
+tty=false
 outputFilePath=/workspace/.tinker/bash/task-.../output.log
 outputBytes=48
 outputLines=2
@@ -366,8 +368,9 @@ Bash command is running in background.
 taskId=task-...
 command=bun run dev
 cwd=/workspace
+tty=false
 outputFilePath=/workspace/.tinker/bash/task-.../output.log
-Use Read on outputFilePath to inspect current output.
+Use TaskOutput to inspect current output.
 ```
 
 超过前台等待时间但进程仍在运行：
@@ -378,8 +381,9 @@ taskId=task-...
 timeoutMs=10000
 command=bun run dev
 cwd=/workspace
+tty=false
 outputFilePath=/workspace/.tinker/bash/task-.../output.log
-Use Read on outputFilePath to inspect current output.
+Use TaskOutput to inspect current output.
 ```
 
 如果在创建 task 之前参数校验或启动就失败，`taskId` 为空，模型只看到：
@@ -406,6 +410,7 @@ Background tasks: 1 total, 1 running.
 taskId=task-...
 description=dev server
 status=running
+tty=false
 startedAt=2026-07-12T00:00:00.000Z
 outputFilePath=/workspace/.tinker/bash/task-.../output.log
 ```
@@ -422,6 +427,7 @@ Task output retrieved.
 taskId=task-...
 status=running
 command=bun run dev
+tty=false
 outputFilePath=/workspace/.tinker/bash/task-.../output.log
 outputBytes=15
 outputLines=1
@@ -438,7 +444,38 @@ server ready
 TaskOutput failed for missing-task: Unknown task ID: missing-task
 ```
 
-### 4.10 TaskStop
+PTY task 不把带 ANSI 的 transcript preview 作为主要 observation，而是增加
+`tty=true`、`screen=80x24` 和 `current screen:`，最多返回当前 24 行。raw transcript
+仍持续写入 `outputFilePath`。
+
+### 4.10 TaskInput
+
+成功写入或以 `chars=""` poll 后返回：
+
+```text
+Terminal input sent.
+taskId=task-...
+status=running
+writtenBytes=15
+waitedMs=250
+screen=80x24
+outputFilePath=/workspace/.tinker/bash/task-.../output.log
+outputBytes=128
+outputLines=4
+current screen:
+>>> print(6 * 7)
+42
+>>>
+```
+
+`TaskInput` 不自动追加换行；Ctrl-C 使用 `\u0003`。unknown task、pipe task、非法参数，
+或向 stopping/terminal task 写入非空字符时返回：
+
+```text
+TaskInput failed for task-...: Task task-... is not running (status=completed).
+```
+
+### 4.11 TaskStop
 
 成功：
 
@@ -459,7 +496,7 @@ outputFilePath=/workspace/.tinker/bash/task-.../output.log
 TaskStop failed for missing-task: Unknown task ID: missing-task
 ```
 
-### 4.11 WebSearch
+### 4.12 WebSearch
 
 WebSearch 只有配置了 Exa API key 才会出现在模型工具定义中。成功结果按序号展示；
 highlight 会折叠多余空白：
@@ -489,7 +526,7 @@ WebSearch failed for query="no hits": Exa /search returned HTTP 429
 
 raw 中的 request ID、费用、耗时、domain filters 等不会进入模型 Observation。
 
-### 4.12 WebFetch
+### 4.13 WebFetch
 
 成功内容：
 
@@ -528,7 +565,7 @@ WebFetch failed for https://bun.sh/gone: Exa could not fetch the page: CRAWL_NOT
 raw 中的最终 URL、cache hit、HTTP status、费用、耗时和 error tag 不会单独展示给
 模型，除非它们已经被写进 `error` 文本。
 
-### 4.13 Recall
+### 4.14 Recall
 
 Recall 的内容是当前 session 的历史快照，不代表当前工作区状态。Observation 会反复
 标记这一点。
@@ -581,7 +618,7 @@ error code 包括 `RECALL_ARGS_INVALID`、`RECALL_SOURCE_INVALID`、
 `RECALL_SOURCE_NOT_FOUND`、`RECALL_PAGE_INVALID`、`RECALL_SNAPSHOT_INVALID`。
 底层 session 存储失败则是 fatal failure，不走上述普通失败模板。
 
-### 4.14 MCP 工具
+### 4.15 MCP 工具
 
 MCP 成功时尽量原样把 server 返回的 text 交给模型：
 
@@ -634,9 +671,9 @@ mcp__browser__click failed: timeout
    message 返回，让模型继续推理。只有明确的 fatal storage/runtime 问题会终止 turn。
 4. **副作用不做虚假保证。** 工具被取消、fatal failure 或进程中断时，合成文本会
    提醒模型先检查当前状态再重试。
-5. **截断策略不统一。** Read 按 bytes；Bash/TaskOutput 按行预览；MCP 按
-   characters；Grep 同时可能受分页和 ripgrep 输出上限影响；WebFetch 对大正文采用
-   refiner，而不是简单截断。
+5. **截断策略不统一。** Read 按 bytes；pipe Bash/TaskOutput 按行预览；PTY
+   Bash/TaskOutput/TaskInput 返回固定 `80×24` screen；MCP 按 characters；Grep 同时可能受
+   分页和 ripgrep 输出上限影响；WebFetch 对大正文采用 refiner，而不是简单截断。
 6. **`call` 当前不参与文案生成。** `ObservationBuilder.build` 接收 `call`，但现有
    renderer 都只根据带 kind 的 raw result 生成内容。tool call 身份由 ledger 和协议
    message 元数据保存，不重复写进 Observation 文本。

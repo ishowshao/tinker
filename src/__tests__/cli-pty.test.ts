@@ -501,6 +501,109 @@ test(
 );
 
 test(
+  "PTY-117: drives an interactive child terminal and preserves canonical tool order",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-interactive-terminal", rows: 90, columns: 140 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        await submitPrompt(harness, "PTY_INTERACTIVE_TERMINAL");
+        await harness.waitForScreen("PTY_INTERACTIVE_DONE", { timeoutMs: 10_000 });
+
+        const screen = harness.screenText();
+        expect(screen).toContain("Bash");
+        expect(screen).toContain("TaskOutput");
+        expect(screen).toContain("TaskInput");
+        expect(screen).toContain("42");
+        expect(screen).not.toContain("\x1b");
+
+        await submitPrompt(harness, "PTY_INTERACTIVE_FOLLOWUP");
+        await harness.waitForScreen("PTY_INTERACTIVE_FOLLOWUP_DONE");
+        await quitTui(harness);
+
+        const session = await onlyStoredSession(harness.workspaceRoot);
+        expect(session.turnCount).toBe(2);
+        withSessionDatabase(harness.workspaceRoot, session, (database) => {
+          const names = database
+            .query(
+              `SELECT messages.name
+               FROM tool_results
+               JOIN messages ON messages.message_id = tool_results.tool_message_id
+               ORDER BY messages.ordinal`,
+            )
+            .all() as Array<{ name: string }>;
+          expect(names[0]?.name).toBe("Bash");
+          expect(names).toContainEqual({ name: "TaskOutput" });
+          expect(names.filter((entry) => entry.name === "TaskInput")).toHaveLength(2);
+
+          const inputs = database
+            .query(
+              `SELECT json_extract(tool_results.raw_json, '$.kind') AS kind,
+                      json_extract(tool_results.raw_json, '$.status') AS status,
+                      json_extract(tool_results.raw_json, '$.screen') AS screen
+               FROM tool_results
+               JOIN messages ON messages.message_id = tool_results.tool_message_id
+               WHERE messages.name = 'TaskInput'
+               ORDER BY messages.ordinal`,
+            )
+            .all() as Array<{ kind: string; status: string; screen: string }>;
+          expect(inputs.map((entry) => entry.kind)).toEqual([
+            "task_input",
+            "task_input",
+          ]);
+          expect(inputs[0]?.screen).toContain("42");
+          expect(inputs.at(-1)?.status).toBe("completed");
+          expect(inputs.every((entry) => !entry.screen.includes("\x1b"))).toBe(true);
+        });
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
+  "PTY-118: cleans up a still-running child terminal during /quit",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-interactive-terminal", rows: 80, columns: 140 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        await submitPrompt(harness, "PTY_INTERACTIVE_QUIT");
+        await harness.waitForScreen("PTY_INTERACTIVE_RUNNING", {
+          timeoutMs: 10_000,
+        });
+
+        const log = await readOnlyBackgroundLog(harness.workspaceRoot);
+        const pidMatch = log.match(/PTY_INTERACTIVE_PID=(\d+)/);
+        expect(pidMatch).not.toBeNull();
+        const pid = Number(pidMatch?.[1]);
+        expect(Number.isSafeInteger(pid)).toBe(true);
+        expect(isProcessAlive(pid)).toBe(true);
+
+        await quitTui(harness);
+        await waitForProcessExit(pid);
+
+        const session = await onlyStoredSession(harness.workspaceRoot);
+        withSessionDatabase(harness.workspaceRoot, session, (database) => {
+          expect(
+            database
+              .query(
+                `SELECT json_extract(tool_results.raw_json, '$.status') AS status
+                 FROM tool_results
+                 JOIN messages ON messages.message_id = tool_results.tool_message_id
+                 WHERE messages.name = 'TaskInput'
+                 ORDER BY messages.ordinal DESC LIMIT 1`,
+              )
+              .get(),
+          ).toEqual({ status: "running" });
+        });
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
   "PTY-006: resumes a completed tool session through the keyboard picker",
   async () => {
     const fixture = await createPtyTuiFixture();

@@ -1,4 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -8,7 +7,19 @@ import type {
 import type { ToolCallIdentity } from "../agent/types";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
+import {
+  type ProcessExitResult,
+  type ShellProcessHandle,
+  type ShellProcessMode,
+  spawnShellProcess,
+} from "./shell-process";
 import { TaskOutput, type TaskOutputSnapshot } from "./task-output";
+import {
+  createTerminalScreen,
+  TERMINAL_SCREEN_COLUMNS,
+  TERMINAL_SCREEN_ROWS,
+  type TerminalScreen,
+} from "./terminal-screen";
 
 export type ShellTaskStatus =
   | "running"
@@ -38,11 +49,15 @@ export type ShellTaskSnapshot = {
   outputBytes: number;
   outputLines: number;
   cwd: string;
+  tty: boolean;
 };
 
 export type ShellTaskInspection = {
   task: ShellTaskSnapshot;
   output: TaskOutputSnapshot;
+  screenRows?: number;
+  screenColumns?: number;
+  screen?: string;
 };
 
 export type ShellTaskHandle = {
@@ -81,9 +96,12 @@ type ManagedShellTask = {
   outputFilePath: string;
   cwdFilePath: string;
   cwd: string;
-  process: ChildProcessWithoutNullStreams;
+  mode: ShellProcessMode;
+  process: ShellProcessHandle;
   processGroupId: number;
   output: TaskOutput;
+  terminalScreen?: TerminalScreen;
+  finalScreen?: string;
   completion: Promise<ShellTaskSnapshot>;
   stopPromise?: Promise<StopTaskResult>;
   terminalEventEmitted: boolean;
@@ -115,6 +133,7 @@ export class ShellTaskManager {
     command: string;
     description: string;
     origin: ShellTaskOrigin;
+    tty: boolean;
   }): Promise<ShellTaskHandle> {
     if (!this.acceptingTasks) {
       throw new Error("Cannot start a Bash task after task manager shutdown.");
@@ -142,22 +161,26 @@ export class ShellTaskManager {
       throw new Error("Cannot start a Bash task after task manager shutdown.");
     }
 
-    const child = spawn("bash", ["-lc", bashWrapperScript], {
-      cwd: this.options.cwdState.cwd,
-      detached: true,
-      env: {
-        ...process.env,
-        NO_COLOR: "1",
-        TINKER_BASH_COMMAND: input.command,
-        TINKER_BASH_CWD_FILE: cwdFilePath,
-      },
-    });
-
-    if (child.pid === undefined) {
-      const spawnError = await waitForProcessError(child);
+    const terminalScreen = input.tty ? createTerminalScreen() : undefined;
+    let shellProcess: ShellProcessHandle;
+    try {
+      shellProcess = await spawnShellProcess({
+        mode: input.tty ? "pty" : "pipe",
+        command: input.command,
+        cwd: this.options.cwdState.cwd,
+        cwdFilePath,
+        onOutput(bytes) {
+          output.write(Buffer.from(bytes));
+          if (terminalScreen !== undefined) {
+            void terminalScreen.write(bytes).catch(() => undefined);
+          }
+        },
+      });
+    } catch (error) {
+      terminalScreen?.dispose();
       await output.end();
       await unlinkIfExists(cwdFilePath);
-      throw spawnError;
+      throw error;
     }
 
     const task: ManagedShellTask = {
@@ -170,15 +193,15 @@ export class ShellTaskManager {
       outputFilePath,
       cwdFilePath,
       cwd: this.options.cwdState.cwd,
-      process: child,
-      processGroupId: child.pid,
+      mode: shellProcess.mode,
+      process: shellProcess,
+      processGroupId: shellProcess.pid,
       output,
+      terminalScreen,
       completion: Promise.resolve(undefined as never),
       terminalEventEmitted: false,
     };
 
-    pipeTaskOutput(task.process.stdout, task.output);
-    pipeTaskOutput(task.process.stderr, task.output);
     task.completion = this.monitorTaskSafely(task);
     this.tasks.set(id, task);
 
@@ -231,10 +254,45 @@ export class ShellTaskManager {
     }
 
     this.synchronizeTerminalState(task);
-    return {
-      task: this.snapshot(task),
-      output: task.output.snapshot(),
-    };
+    return this.inspection(task);
+  }
+
+  async inspectTaskOutput(taskId: string): Promise<ShellTaskInspection | undefined> {
+    const task = this.tasks.get(taskId);
+    if (task === undefined) {
+      return undefined;
+    }
+
+    this.synchronizeTerminalState(task);
+    if (
+      task.mode === "pty" &&
+      isTerminalStatus(task.status) &&
+      task.finalScreen === undefined
+    ) {
+      await task.completion;
+    } else {
+      await task.terminalScreen?.flush();
+    }
+    return this.inspection(task);
+  }
+
+  taskCompletion(taskId: string): Promise<ShellTaskSnapshot> {
+    return this.requireTask(taskId).completion;
+  }
+
+  async writeTaskInput(taskId: string, chars: string): Promise<number> {
+    const task = this.requireTask(taskId);
+    this.synchronizeTerminalState(task);
+    if (task.mode !== "pty" || task.process.write === undefined) {
+      throw new Error(
+        `Task ${taskId} does not accept terminal input; start it with Bash tty=true.`,
+      );
+    }
+    if (task.status !== "running") {
+      throw new Error(`Task ${taskId} is not running (status=${task.status}).`);
+    }
+
+    return task.process.write(chars);
   }
 
   async stopTask(taskId: string, reason: StopTaskReason): Promise<StopTaskResult> {
@@ -372,20 +430,43 @@ export class ShellTaskManager {
           outputError instanceof Error ? outputError.message : String(outputError)
         }`;
       }
+      if (task.terminalScreen !== undefined) {
+        try {
+          await task.terminalScreen.flush();
+          task.finalScreen = task.terminalScreen.text();
+        } catch {
+          // The original monitor error remains the primary task failure.
+        }
+        task.terminalScreen.dispose();
+      }
+      task.process.close();
       await unlinkIfExists(task.cwdFilePath);
 
-      return this.snapshot(task);
+      const snapshot = this.snapshot(task);
+      if (task.backgroundedAt !== undefined && !task.terminalEventEmitted) {
+        task.terminalEventEmitted = true;
+        await this.options.runtimeSession.append({
+          type: "bash.task.finished",
+          ...task.origin,
+          data: { task: snapshot },
+        });
+      }
+      return snapshot;
     }
   }
 
   private async monitorTask(task: ManagedShellTask): Promise<ShellTaskSnapshot> {
-    const exit = waitForProcessExit(task.process);
-    const close = waitForProcessClose(task.process);
-    const result = await exit;
+    const result = await task.process.wait();
 
     this.applyTermination(task, result);
-    await close;
+    await task.process.waitForOutputClose();
     await task.output.end();
+    if (task.terminalScreen !== undefined) {
+      await task.terminalScreen.flush();
+      task.finalScreen = task.terminalScreen.text();
+      task.terminalScreen.dispose();
+    }
+    task.process.close();
     await this.updateCwdFromFile(task);
     await unlinkIfExists(task.cwdFilePath);
 
@@ -464,6 +545,25 @@ export class ShellTaskManager {
       outputBytes: output.outputBytes,
       outputLines: output.outputLines,
       cwd: task.cwd,
+      tty: task.mode === "pty",
+    };
+  }
+
+  private inspection(task: ManagedShellTask): ShellTaskInspection {
+    const screen =
+      task.mode === "pty"
+        ? (task.finalScreen ?? task.terminalScreen?.text() ?? "")
+        : undefined;
+    return {
+      task: this.snapshot(task),
+      output: task.output.snapshot(),
+      ...(screen === undefined
+        ? {}
+        : {
+            screenRows: TERMINAL_SCREEN_ROWS,
+            screenColumns: TERMINAL_SCREEN_COLUMNS,
+            screen,
+          }),
     };
   }
 
@@ -486,54 +586,6 @@ export class ShellTaskManager {
       return;
     }
   }
-}
-
-type ProcessExitResult = {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  error?: string;
-};
-
-function waitForProcessExit(
-  process: ChildProcessWithoutNullStreams,
-): Promise<ProcessExitResult> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (result: ProcessExitResult) => {
-      if (!settled) {
-        settled = true;
-        resolve(result);
-      }
-    };
-
-    process.once("error", (error) => {
-      finish({ code: null, signal: null, error: error.message });
-    });
-    process.once("exit", (code, signal) => {
-      finish({ code, signal });
-    });
-  });
-}
-
-function waitForProcessError(process: ChildProcessWithoutNullStreams): Promise<Error> {
-  return new Promise((resolve) => {
-    process.once("error", resolve);
-  });
-}
-
-function waitForProcessClose(process: ChildProcessWithoutNullStreams): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (!settled) {
-        settled = true;
-        resolve();
-      }
-    };
-
-    process.once("error", finish);
-    process.once("close", finish);
-  });
 }
 
 function signalProcessGroup(
@@ -573,12 +625,6 @@ function isTerminalStatus(status: ShellTaskStatus): boolean {
   return status === "completed" || status === "failed" || status === "killed";
 }
 
-function pipeTaskOutput(stream: NodeJS.ReadableStream, output: TaskOutput): void {
-  stream.on("data", (chunk: Buffer | string) => {
-    output.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  });
-}
-
 async function ensureEmptyFile(filePath: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const file = await open(filePath, "w");
@@ -608,10 +654,3 @@ function errorCode(error: unknown): unknown {
     ? error.code
     : undefined;
 }
-
-const bashWrapperScript = `
-eval "$TINKER_BASH_COMMAND"
-exit_code=$?
-pwd -P > "$TINKER_BASH_CWD_FILE"
-exit "$exit_code"
-`;

@@ -19,6 +19,7 @@ type BashArgs = {
   timeout?: number;
   description?: string;
   run_in_background?: boolean;
+  tty?: boolean;
 };
 
 export type BashToolOptions = {
@@ -66,6 +67,11 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
             type: "boolean",
             description: "Run the command in the background and return immediately.",
           },
+          tty: {
+            type: "boolean",
+            description:
+              "Run the command in a pseudo-terminal so it can receive interactive input.",
+          },
         },
         required: ["command"],
       },
@@ -87,6 +93,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
           outputLines: 0,
           preview: "",
           truncated: false,
+          tty: false,
           error: parsed.error,
         };
       }
@@ -118,6 +125,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
             outputLines: 0,
             preview: "",
             truncated: false,
+            tty: input.tty === true,
             error: `Command denied: ${risk.reason}. ${suffix}`,
           };
         }
@@ -128,15 +136,19 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         command: input.command,
         description: input.description ?? input.command,
         origin: call,
+        tty: input.tty === true,
       });
 
       if (input.run_in_background === true) {
         // Starting and publishing an explicit background task is one commit
         // boundary. Cancellation is observed after its result is recorded.
         await options.taskManager.markBackgrounded(task.taskId, "requested");
-        const inspection = requireTaskInspection(options.taskManager, task.taskId);
+        const inspection = await requireTaskOutputInspection(
+          options.taskManager,
+          task.taskId,
+        );
         if (inspection.task.status !== "running") {
-          return buildCompletedResult(inspection.task, inspection.output);
+          return buildCompletedResult(inspection);
         }
 
         return buildRunningResult({
@@ -155,9 +167,12 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         // Timeout wins ownership. Marking the task backgrounded and returning
         // its task ID is an uninterrupted commit boundary.
         await options.taskManager.markBackgrounded(task.taskId, "foreground_timeout");
-        const inspection = requireTaskInspection(options.taskManager, task.taskId);
+        const inspection = await requireTaskOutputInspection(
+          options.taskManager,
+          task.taskId,
+        );
         if (inspection.task.status !== "running") {
-          return buildCompletedResult(inspection.task, inspection.output);
+          return buildCompletedResult(inspection);
         }
 
         return buildRunningResult({
@@ -169,11 +184,14 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         });
       }
 
-      const inspection = requireTaskInspection(options.taskManager, task.taskId);
-      const raw = await buildCompletedResult(waitResult.task, inspection.output);
+      const inspection = await requireTaskOutputInspection(
+        options.taskManager,
+        task.taskId,
+      );
+      const raw = await buildCompletedResult(inspection);
       updateCwdStateAfterForegroundCommand({
         raw,
-        task: waitResult.task,
+        task: inspection.task,
         cwdState: options.cwdState,
         workspaceRoot: options.workspaceRoot,
       });
@@ -210,6 +228,10 @@ export function parseBashArgs(
     return { ok: false, error: "Bash.run_in_background must be a boolean." };
   }
 
+  if (args.tty !== undefined && typeof args.tty !== "boolean") {
+    return { ok: false, error: "Bash.tty must be a boolean." };
+  }
+
   return {
     ok: true,
     value: {
@@ -220,6 +242,7 @@ export function parseBashArgs(
           ? undefined
           : args.description,
       run_in_background: args.run_in_background,
+      tty: args.tty,
     },
   };
 }
@@ -325,18 +348,22 @@ function buildRunningResult(input: {
     timeoutMs: input.timeoutMs,
     backgrounded: input.backgrounded,
     backgroundedDueToTimeout: input.backgroundedDueToTimeout,
+    tty: task.tty,
+    screenRows: input.inspection.screenRows,
+    screenColumns: input.inspection.screenColumns,
+    screen: input.inspection.screen,
   };
 }
 
 async function buildCompletedResult(
-  task: ShellTaskSnapshot,
-  fallbackOutput: TaskOutputSnapshot,
+  inspection: ShellTaskInspection,
 ): Promise<BashRawResult> {
+  const { task } = inspection;
   if (task.status === "running" || task.status === "stopping") {
     throw new Error(`Bash task ${task.taskId} completed with status=${task.status}.`);
   }
 
-  const snapshot = await snapshotCompletedOutput(task, fallbackOutput);
+  const snapshot = await snapshotCompletedOutput(task, inspection.output);
   const interpretation = interpretCommandResult({
     command: task.command,
     exitCode: task.exitCode,
@@ -359,6 +386,10 @@ async function buildCompletedResult(
     truncated: snapshot.truncated,
     omittedLines: snapshot.omittedLines,
     returnCodeInterpretation: interpretation.interpretation,
+    tty: task.tty,
+    screenRows: inspection.screenRows,
+    screenColumns: inspection.screenColumns,
+    screen: inspection.screen,
     error: task.error,
   };
 }
@@ -390,11 +421,11 @@ function updateCwdStateAfterForegroundCommand(input: {
   }
 }
 
-function requireTaskInspection(
+async function requireTaskOutputInspection(
   taskManager: ShellTaskManager,
   taskId: string,
-): ShellTaskInspection {
-  const inspection = taskManager.inspectTask(taskId);
+): Promise<ShellTaskInspection> {
+  const inspection = await taskManager.inspectTaskOutput(taskId);
   if (inspection === undefined) {
     throw new Error(`Bash task disappeared from task manager: ${taskId}`);
   }

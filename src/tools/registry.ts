@@ -8,6 +8,7 @@ import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
 import { createRecallToolExecutor } from "./recall";
 import { createTaskListToolExecutor } from "./task-list";
+import { createTaskInputToolExecutor } from "./task-input";
 import { createTaskOutputToolExecutor } from "./task-output-tool";
 import { createTaskStopToolExecutor } from "./task-stop";
 import { createWebFetchToolExecutor } from "./web-fetch";
@@ -256,6 +257,7 @@ export function createDefaultTooling(options: {
   );
   registry.register(createTaskListToolExecutor({ taskManager }));
   registry.register(createTaskOutputToolExecutor({ taskManager }));
+  registry.register(createTaskInputToolExecutor({ taskManager }));
   registry.register(createTaskStopToolExecutor({ taskManager }));
 
   const exaApiKey = options.exaApiKey ?? toolingConfig.exaApiKey;

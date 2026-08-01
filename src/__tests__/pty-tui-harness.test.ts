@@ -14,7 +14,10 @@ test("projects the current Unicode VT screen instead of accumulated output", asy
   const screen = new PtyTerminalScreen(3, 16);
   try {
     await screen.write("stale frame\r\nstale line");
-    await screen.write("\x1b[H\x1b[2J当前😀e\u0301");
+    const splitSequence = new TextEncoder().encode("\x1b[H\x1b[2J当前😀e\u0301");
+    for (const byte of splitSequence) {
+      await screen.write(Uint8Array.of(byte));
+    }
 
     expect(screen.text()).toBe("当前😀e\u0301");
 
@@ -23,6 +26,10 @@ test("projects the current Unicode VT screen instead of accumulated output", asy
     expect(screen.text()).toBe("宽字符");
     expect(screen.rows).toBe(2);
     expect(screen.columns).toBe(10);
+
+    await screen.resize(3, 16);
+    await screen.write("\x1b[2J\x1b[Hone\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix");
+    expect(screen.text()).toBe("four\nfive\nsix");
 
     await screen.write("\x1b[?2004h");
     expect(screen.bracketedPasteMode).toBe(true);

@@ -1241,6 +1241,7 @@ describe("tui components", () => {
             outputLines: 2,
             cwd: "/tmp/workspace",
             exitCode: 0,
+            tty: true,
           },
         ]}
       />,
@@ -1248,7 +1249,7 @@ describe("tui components", () => {
 
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Background tasks");
-    expect(frame).toContain("✔ completed Start development server exit=0");
+    expect(frame).toContain("✔ completed tty Start development server exit=0");
     expect(frame).toContain(
       "id=task-019f · started=2026-07-10T10:00:00.000Z · ended=2026-07-10T10:01:00.000Z",
     );
@@ -1273,6 +1274,7 @@ describe("tui components", () => {
       outputBytes: 0,
       outputLines: 0,
       cwd: "/tmp/workspace",
+      tty: false,
     }));
     const { lastFrame, cleanup } = render(<BackgroundTasks tasks={tasks} />);
 

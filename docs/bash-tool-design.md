@@ -7,7 +7,7 @@
 本方案参考成熟 coding agent 的 Bash 设计，但只保留当前需要的行为：
 
 - 公开 tool 名固定为 `Bash`。
-- 只暴露 `command`、`timeout`、`description`、`run_in_background` 四个参数。
+- 公开参数为 `command`、`timeout`、`description`、`run_in_background` 和 `tty`。
 - 不做 deny / ask / allow 权限规则。
 - 不做复杂安全检测。
 - 不做 `sed -i` 特殊解析和模拟编辑。
@@ -30,7 +30,7 @@
 - 不尝试判断命令是否只读。
 - 不做 tool call 并发调度。
 - 不把 stdout/stderr 大段内容直接塞进模型上下文。
-- 不实现复杂终端交互，比如伪终端、交互式 prompt 自动回答。
+- 不提供用户键盘直接接管子进程的 `/attach` 或嵌入式终端窗口。
 - 不保证后台命令的 `cd` 会改变后续 Bash 的 cwd。
 
 ## Tool Schema
@@ -61,6 +61,10 @@
       run_in_background: {
         type: "boolean",
         description: "Run the command in the background and return immediately."
+      },
+      tty: {
+        type: "boolean",
+        description: "Run the command in a pseudo-terminal so it can receive interactive input."
       }
     },
     required: ["command"]
@@ -74,6 +78,9 @@
 - `timeout`: 可选。控制前台等待时间，默认建议 `5_000` ms。
 - `description`: 可选。用于 TUI、日志和后台任务列表展示；缺省使用 `command`。
 - `run_in_background`: 可选。为 `true` 时命令启动后立即转后台，模型通过输出文件或任务查询观察后续结果。
+- `tty`: 可选。为 `true` 时 stdin/stdout/stderr 连接到固定 `80×24` PTY；模型使用
+  `TaskOutput` 读取当前 screen，使用 `TaskInput` 发送字符。该参数与
+  `run_in_background` 正交。
 
 ## 系统提示约束
 
@@ -85,10 +92,13 @@
 - 长时间运行的 dev server、watch、构建、测试服务应使用 `run_in_background: true`。
 - 不需要在 command 末尾添加 `&`；后台化由 runtime 处理。
 - Bash 输出会持久化到文件，后续需要完整输出时读取返回的 `outputFilePath`。
+- REPL、debugger 和交互式 prompt 使用 `tty: true`；`TaskInput` 不自动追加回车。
+- 不通过 `TaskInput` 输入密码、token 或其他秘密，因为参数会进入 canonical history。
 
 ## 执行模型
 
-第一版使用 Node/Bun 的 `child_process.spawn` 实现，不使用 `execSync`。
+普通命令使用 Node/Bun 的 `child_process.spawn`，`tty: true` 使用 `Bun.spawn` 和
+`Bun.Terminal`；两条路径都由同一个 `ShellTaskManager` 持有，不使用 `execSync`。
 
 核心原则：**每一次 Bash 调用都创建一个 ShellTask**。所谓前台执行，只是 runtime 在同一个 task 上等待一段时间；所谓后台执行，是 runtime 停止等待但让同一个 task 继续运行。
 
@@ -108,6 +118,12 @@ src/tools/bash-task.ts
 src/tools/task-output.ts
   output directory
   append / read / build line preview
+
+src/tools/task-input.ts
+  validate / write / wait / inspect PTY screen
+
+src/tools/terminal-screen.ts
+  headless xterm 80x24 current-screen projection
 
 src/tools/cwd-state.ts
   getCwd()
@@ -444,6 +460,14 @@ registry.register(
 - 支持 `block=false` 查询状态。
 - 支持 `block=true` 等待完成。
 
+第六步：交互式 PTY 任务（已实现）
+
+- `Bash tty=true` 通过 Bun PTY 启动任务，同时保留 raw transcript 和 headless VT screen。
+- `TaskInput` 原样发送 UTF-8 字符，并在固定等待窗口后返回当前 screen。
+- `TaskOutput` 对 PTY task 返回 current/final screen；`TaskStop` 和 session shutdown
+  继续终止整个 detached process group。
+- 详细合同见 [interactive-terminal-design.md](interactive-terminal-design.md)。
+
 ## 测试计划
 
 聚焦测试：
@@ -460,6 +484,10 @@ registry.register(
 - 输出不超过 `200` 行时，preview 包含完整已捕获输出。
 - 输出超过 `200` 行时，preview 包含前 `100` 行、省略标记和最后 `100` 行，`truncated=true`，`omittedLines` 为中间省略行数。
 - 大输出不进入完整 observation，只落盘并提供行级 preview 和完整输出路径。
+- `tty` 只接受 boolean，缺省时保持现有 pipe 行为。
+- Python REPL 可以通过 `TaskInput` 输入、读取 screen、发送 Ctrl-C 并退出。
+- PTY task 的 raw transcript 保留 ANSI，而模型和 TUI 使用 headless xterm screen。
+- TaskInput 取消只结束当前等待；TaskStop、one-shot cleanup 和 `/quit` 不遗留 PTY 进程。
 
 验证命令：
 
@@ -475,4 +503,6 @@ bun run check
 - 所有输出落盘：牺牲一点磁盘空间，换来模型上下文稳定和可复访。
 - timeout 默认转后台：更适合 agent loop，但需要任务管理和输出文件生命周期。
 - 保存 cwd：更符合模型直觉，但只保存 cwd，不保存 shell 变量和 alias。
+- PTY 使用固定 `80×24` screen：牺牲动态 resize，换取 TUI、one-shot、测试和宿主终端之间
+  稳定一致的模型观察。
 - 不做 `sed -i` 特殊处理：实现简单，但仍应在 prompt 中鼓励模型使用 `Write` 做文件修改。

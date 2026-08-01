@@ -130,6 +130,10 @@ export type BashRawResult = {
   backgrounded?: boolean;
   backgroundedDueToTimeout?: boolean;
   returnCodeInterpretation?: string;
+  tty: boolean;
+  screenRows?: number;
+  screenColumns?: number;
+  screen?: string;
   error?: string;
 };
 
@@ -152,8 +156,35 @@ export type TaskOutputRawResult = {
   truncated?: boolean;
   omittedLines?: number;
   outputFilePath?: string;
+  screenRows?: number;
+  screenColumns?: number;
+  screen?: string;
   error?: string;
 };
+
+export type TaskInputRawResult =
+  | {
+      ok: true;
+      taskId: string;
+      task: ShellTaskSnapshot;
+      status: ShellTaskStatus;
+      writtenBytes: number;
+      waitedMs: number;
+      screenRows: number;
+      screenColumns: number;
+      screen: string;
+      outputBytes: number;
+      outputLines: number;
+      outputFilePath: string;
+    }
+  | {
+      ok: false;
+      taskId: string;
+      task?: ShellTaskSnapshot;
+      status?: ShellTaskStatus;
+      writtenBytes?: number;
+      error: string;
+    };
 
 export type TaskStopRawResult = {
   ok: boolean;
@@ -326,6 +357,7 @@ export type ToolRawResultByKind = {
   bash: BashRawResult;
   task_list: TaskListRawResult;
   task_output: TaskOutputRawResult;
+  task_input: TaskInputRawResult;
   task_stop: TaskStopRawResult;
   web_search: WebSearchRawResult;
   web_fetch: WebFetchRawResult;

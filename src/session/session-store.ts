@@ -4844,6 +4844,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "bash",
       "task_list",
       "task_output",
+      "task_input",
       "task_stop",
       "web_search",
       "web_fetch",

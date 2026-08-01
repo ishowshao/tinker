@@ -26,7 +26,8 @@ export function BackgroundTasks(props: BackgroundTasksProps) {
       {visibleTasks.map((task) => (
         <Box key={task.taskId} flexDirection="column">
           <Text color={colorForStatus(task.status)}>
-            {symbolForStatus(task.status)} {task.status} {taskDescription(task)}
+            {symbolForStatus(task.status)} {task.status}
+            {task.tty ? " tty" : ""} {taskDescription(task)}
             {taskResult(task) === undefined ? "" : ` ${taskResult(task)}`}
           </Text>
           <Text dimColor>{taskTiming(task)}</Text>

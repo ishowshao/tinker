@@ -202,6 +202,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
       return optionalLine(formatDiff(call, raw));
     case "bash":
     case "task_output":
+    case "task_input":
       return optionalLine(formatBashResult(call, raw));
     case "task_list":
     case "task_stop":
@@ -278,7 +279,7 @@ function formatDiff(call: ToolCall, raw: ToolRawResult): string | undefined {
 }
 
 function formatBashResult(_call: ToolCall, raw: ToolRawResult): string | undefined {
-  if (raw.kind !== "bash" && raw.kind !== "task_output") {
+  if (raw.kind !== "bash" && raw.kind !== "task_output" && raw.kind !== "task_input") {
     return undefined;
   }
 
@@ -348,7 +349,11 @@ function formatToolLine(prefix: string, call: ToolCall): string {
     return `${prefix} name=${call.name}\n`;
   }
 
-  if (call.name === "TaskOutput" || call.name === "TaskStop") {
+  if (
+    call.name === "TaskOutput" ||
+    call.name === "TaskInput" ||
+    call.name === "TaskStop"
+  ) {
     const taskId = toolTaskId(call);
     return `${prefix} name=${call.name}${taskId === undefined ? "" : ` task=${taskId}`}\n`;
   }

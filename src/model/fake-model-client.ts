@@ -247,6 +247,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-background-task") {
       return this.ptyBackgroundTask(input, prepared, options);
     }
+    if (this.mode === "pty-interactive-terminal") {
+      return this.ptyInteractiveTerminal(input, prepared, options);
+    }
     if (this.mode === "pty-resume") {
       return this.ptyResume(input, prepared, options);
     }
@@ -656,6 +659,87 @@ export class FakeModelClient implements ModelClient {
       throw new Error("PTY TaskStop did not kill the background task.");
     }
     return textOutput(prepared, "PTY_BACKGROUND_STOPPED");
+  }
+
+  private ptyInteractiveTerminal(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["Bash", "TaskOutput", "TaskInput"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_INTERACTIVE_FOLLOWUP") {
+      requireMessage(input.messages, "assistant", "PTY_INTERACTIVE_DONE");
+      return textOutput(prepared, "PTY_INTERACTIVE_FOLLOWUP_DONE");
+    }
+    if (prompt !== "PTY_INTERACTIVE_TERMINAL" && prompt !== "PTY_INTERACTIVE_QUIT") {
+      throw new Error(
+        `Unexpected pty-interactive-terminal prompt: ${JSON.stringify(prompt)}.`,
+      );
+    }
+
+    const tools = toolMessagesAfterLastUser(input.messages);
+    const bash = tools.find((message) => message.name === "Bash");
+    if (bash === undefined) {
+      return toolCallOutput(prepared, options, "Bash", {
+        command: "python3 -q",
+        description: "Start interactive Python fixture",
+        tty: true,
+        timeout: 25,
+      });
+    }
+    if (!bash.content.includes("taskId=") || !bash.content.includes("tty=true")) {
+      throw new Error("PTY Bash task did not return an interactive task ID.");
+    }
+    const taskId = requireObservationValue(bash.content, "taskId");
+
+    const outputs = tools.filter((message) => message.name === "TaskOutput");
+    const output = outputs.at(-1);
+    if (output === undefined || !output.content.includes(">>>")) {
+      if (outputs.length >= 20) {
+        throw new Error("Interactive Python fixture did not show its prompt.");
+      }
+      return toolCallOutput(prepared, options, "TaskOutput", {
+        task_id: taskId,
+      });
+    }
+
+    const inputs = tools.filter((message) => message.name === "TaskInput");
+    if (inputs.length === 0) {
+      return toolCallOutput(prepared, options, "TaskInput", {
+        task_id: taskId,
+        chars:
+          prompt === "PTY_INTERACTIVE_QUIT"
+            ? "import os; print('PTY_INTERACTIVE_PID=' + str(os.getpid()))\n"
+            : "print(6 * 7)\n",
+        wait_ms: 250,
+      });
+    }
+
+    const latestInput = inputs.at(-1);
+    const expected = prompt === "PTY_INTERACTIVE_QUIT" ? "PTY_INTERACTIVE_PID=" : "42";
+    if (!latestInput?.content.includes(expected)) {
+      if (inputs.length >= 20) {
+        throw new Error(`Interactive Python fixture did not show ${expected}.`);
+      }
+      return toolCallOutput(prepared, options, "TaskInput", {
+        task_id: taskId,
+        chars: "",
+        wait_ms: 250,
+      });
+    }
+
+    if (prompt === "PTY_INTERACTIVE_QUIT") {
+      return textOutput(prepared, "PTY_INTERACTIVE_RUNNING");
+    }
+    if (!inputs.some((message) => message.content.includes("status=completed"))) {
+      return toolCallOutput(prepared, options, "TaskInput", {
+        task_id: taskId,
+        chars: "exit()\n",
+        wait_ms: 500,
+      });
+    }
+    return textOutput(prepared, "PTY_INTERACTIVE_DONE");
   }
 
   private ptyResume(

@@ -34,7 +34,7 @@ export function createTaskOutputToolExecutor(options: {
         return { ok: false, taskId: "", error: parsed.error };
       }
 
-      const inspection = options.taskManager.inspectTask(parsed.taskId);
+      const inspection = await options.taskManager.inspectTaskOutput(parsed.taskId);
       throwIfTurnCancelled(context.signal);
       if (inspection === undefined) {
         return {
@@ -56,6 +56,9 @@ export function createTaskOutputToolExecutor(options: {
         truncated: inspection.output.truncated,
         omittedLines: inspection.output.omittedLines,
         outputFilePath: inspection.task.outputFilePath,
+        screenRows: inspection.screenRows,
+        screenColumns: inspection.screenColumns,
+        screen: inspection.screen,
       };
     },
   });

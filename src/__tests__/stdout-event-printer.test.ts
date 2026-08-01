@@ -197,6 +197,7 @@ describe("stdout event printer", () => {
           truncated: false,
           outputFilePath: "/tmp/task-1.log",
           cwd: "/tmp",
+          tty: false,
         },
       },
     });
@@ -211,6 +212,72 @@ describe("stdout event printer", () => {
         "line 8",
         "… +3 lines (full output: /tmp/task-1.log)",
       ].join("\n") + "\n",
+    ]);
+  });
+
+  test("prints the bounded current screen for TaskInput without raw terminal bytes", async () => {
+    const stdout: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: () => undefined },
+    );
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-call-pty",
+      name: "TaskInput",
+      args: { task_id: "task-pty", chars: "print(42)\n" },
+    });
+    const task = {
+      taskId: "task-pty",
+      origin: runtime.toolCall({
+        providerToolCallId: "provider-call-bash",
+        name: "Bash",
+        args: { command: "python3 -q", tty: true },
+      }),
+      command: "python3 -q",
+      description: "Start Python",
+      status: "running" as const,
+      startedAt: "2026-08-01T00:00:00.000Z",
+      backgroundedAt: "2026-08-01T00:00:00.010Z",
+      backgroundReason: "foreground_timeout" as const,
+      outputFilePath: "/tmp/task-pty.log",
+      outputBytes: 64,
+      outputLines: 3,
+      cwd: "/tmp",
+      tty: true,
+    };
+
+    await runtime.runtimeSession.append({
+      type: "tool.started",
+      ...call,
+      data: { call },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...call,
+      data: {
+        call,
+        raw: {
+          kind: "task_input",
+          ok: true,
+          taskId: "task-pty",
+          task,
+          status: "running",
+          writtenBytes: 10,
+          waitedMs: 250,
+          screenRows: 24,
+          screenColumns: 80,
+          screen: ">>> print(42)\n42\n>>>",
+          outputBytes: 64,
+          outputLines: 3,
+          outputFilePath: "/tmp/task-pty.log",
+        },
+      },
+    });
+
+    expect(stdout).toEqual([
+      "tool.started name=TaskInput task=task-pty\n",
+      "$ python3 -q\n>>> print(42)\n42\n>>>\n",
     ]);
   });
 
@@ -328,6 +395,7 @@ describe("stdout event printer", () => {
       outputBytes: 0,
       outputLines: 0,
       cwd: "/tmp",
+      tty: false,
     };
 
     await runtime.runtimeSession.append({

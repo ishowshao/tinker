@@ -179,7 +179,11 @@ function toolCallSummary(call: ToolCall): string {
       .join("\n");
   }
 
-  if (call.name === "TaskOutput" || call.name === "TaskStop") {
+  if (
+    call.name === "TaskOutput" ||
+    call.name === "TaskInput" ||
+    call.name === "TaskStop"
+  ) {
     const taskId = stringProperty(args, "task_id");
     return [
       `Call ID: ${call.toolCallId}`,

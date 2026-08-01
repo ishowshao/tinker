@@ -81,6 +81,7 @@ describe("TuiProjectionStore", () => {
           outputFilePath: "/tmp/task-1.log",
           outputBytes: 5,
           outputLines: 1,
+          tty: false,
         },
       },
     });
@@ -848,6 +849,7 @@ function taskSnapshot(
     outputBytes: 0,
     outputLines: 0,
     cwd: "/tmp",
+    tty: false,
   };
 }
 

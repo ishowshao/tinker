@@ -110,6 +110,7 @@ describe("ContextSwapRenderer", () => {
           outputLines: 10,
           preview: "DO_NOT_COPY",
           truncated: false,
+          tty: false,
         },
         metadata: {
           status: "completed",
@@ -679,6 +680,7 @@ function planningFixture() {
         outputLines: 1,
         preview: "running",
         truncated: false,
+        tty: false,
       },
       observation: "d".repeat(9_000),
     },

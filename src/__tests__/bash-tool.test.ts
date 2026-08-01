@@ -63,13 +63,14 @@ describe("Bash tool", () => {
         await tooling.runtime.execute({
           providerToolCallId: "call_guard_deny",
           name: "Bash",
-          args: { command: `shutdown; touch ${marker}` },
+          args: { command: `shutdown; touch ${marker}`, tty: true },
         }),
       );
 
       expect(raw.ok).toBe(false);
       expect(raw.taskId).toBe("");
       expect(raw.outputFilePath).toBe("");
+      expect(raw.tty).toBe(true);
       expect(raw.error).toContain("Non-interactive mode cannot confirm");
       expect(await Bun.file(marker).exists()).toBe(false);
     } finally {
@@ -108,6 +109,44 @@ describe("Bash tool", () => {
       expect(raw.backgrounded).toBe(true);
       await tooling.dispose();
     } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("runs a safe PTY command in one-shot guard mode without confirmation", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+    const requests: string[] = [];
+    const tooling = createDefaultTooling({
+      workspaceRoot: workspace,
+      bashGuard: {
+        surface: "one-shot",
+        confirm: async (_call, request) => {
+          requests.push(request.command);
+          return "deny";
+        },
+      },
+    });
+
+    try {
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_safe_pty",
+          name: "Bash",
+          args: {
+            command:
+              'printf \'\\033[31msafe-pty\\033[0m %s %s %s %s\\n\' "$TERM" "$PAGER" "$GIT_PAGER" "$NO_COLOR"',
+            tty: true,
+          },
+        }),
+      );
+      expect(requests).toEqual([]);
+      expect(raw.ok).toBe(true);
+      expect(raw.tty).toBe(true);
+      expect(raw.screen).toContain("safe-pty xterm-256color cat cat 1");
+      expect(raw.screen).not.toContain("\x1b");
+      expect(await readFile(raw.outputFilePath, "utf8")).toContain("\x1b[31m");
+    } finally {
+      await tooling.dispose();
       await rm(workspace, { recursive: true });
     }
   });
@@ -177,6 +216,7 @@ describe("Bash tool", () => {
         type: "object",
         additionalProperties: false,
         required: ["command"],
+        properties: { tty: { type: "boolean" } },
       });
 
       const missingCommand = await tooling.runtime.execute({
@@ -198,6 +238,14 @@ describe("Bash tool", () => {
       expect("error" in invalidTimeout ? invalidTimeout.error : "").toContain(
         "Bash.timeout",
       );
+
+      const invalidTty = await tooling.runtime.execute({
+        providerToolCallId: "call_3",
+        name: "Bash",
+        args: { command: "echo nope", tty: "yes" },
+      });
+      expect(invalidTty.ok).toBe(false);
+      expect("error" in invalidTty ? invalidTty.error : "").toContain("Bash.tty");
     } finally {
       await rm(workspace, { recursive: true });
     }

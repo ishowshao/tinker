@@ -2,10 +2,12 @@
 
 ## 1. 文档状态
 
-- 状态：方案已认可，待实现。
+- 状态：已实现并通过验收。
 - 日期：2026-08-01。
 - 范围：在现有 Bash 后台任务体系中增加模型可操作的 PTY 任务。
 - 目标平台：macOS 和 Linux，延续当前 Bash runtime 的 POSIX 边界。
+- 验证：`bun run check` 通过；真实 TUI journey 覆盖交互、canonical history 和 `/quit`
+  清理。
 
 本文是 `docs/bash-tool-design.md` 和
 `docs/background-task-management-design.md` 的增量设计。它不建立第二套进程管理系统，
@@ -875,19 +877,19 @@ user prompt
 
 ## 19. 验收清单
 
-- [ ] Bash 公开 schema 支持 `tty`，普通 Bash 行为无回归。
-- [ ] `tty: true` 不额外触发 Bash Guard。
-- [ ] TaskInput 不调用 Bash Guard，也不自动追加回车。
-- [ ] Python REPL 可以启动、输入、观察结果并正常退出。
-- [ ] Ctrl-C 可以中断前台操作而不必停止整个 task。
-- [ ] current screen 由 headless VT parser 生成，不用正则模拟终端。
-- [ ] raw transcript 与 current screen 明确分离。
-- [ ] TaskStop 和 shutdown 清理完整 PTY 进程树。
-- [ ] turn cancellation 不杀死已后台化 PTY task。
-- [ ] `/resume` 不声称恢复旧 PTY 进程。
-- [ ] TaskInput args/observations 进入 canonical history，秘密输入限制已写入提示。
-- [ ] TUI 不持久化或实时渲染 per-byte PTY output event。
-- [ ] `bun run check` 全部通过。
+- [x] Bash 公开 schema 支持 `tty`，普通 Bash 行为无回归。
+- [x] `tty: true` 不额外触发 Bash Guard。
+- [x] TaskInput 不调用 Bash Guard，也不自动追加回车。
+- [x] Python REPL 可以启动、输入、观察结果并正常退出。
+- [x] Ctrl-C 可以中断前台操作而不必停止整个 task。
+- [x] current screen 由 headless VT parser 生成，不用正则模拟终端。
+- [x] raw transcript 与 current screen 明确分离。
+- [x] TaskStop 和 shutdown 清理完整 PTY 进程树。
+- [x] turn cancellation 不杀死已后台化 PTY task。
+- [x] `/resume` 不声称恢复旧 PTY 进程。
+- [x] TaskInput args/observations 进入 canonical history，秘密输入限制已写入提示。
+- [x] TUI 不持久化或实时渲染 per-byte PTY output event。
+- [x] `bun run check` 全部通过。
 
 完成这些条件后，Tinker 即具备一个小而可靠的 agent-driven interactive terminal：模型通过
 现有 Bash task 启动进程，通过同一个 task ID 读取 screen、发送输入和停止任务；runtime

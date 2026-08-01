@@ -22,12 +22,18 @@ export function bashResultDetail(raw: unknown): BashDisplayDetail | undefined {
     return undefined;
   }
 
-  const preview = typeof rawRecord.preview === "string" ? rawRecord.preview : "";
+  const usesTerminalScreen = typeof rawRecord.screen === "string";
+  const preview = usesTerminalScreen
+    ? (rawRecord.screen as string)
+    : typeof rawRecord.preview === "string"
+      ? rawRecord.preview
+      : "";
   const previewLines = preview === "" ? [] : preview.split("\n");
   const maxLines = rawRecord.ok === true ? successPreviewLines : failurePreviewLines;
   const outputPreview = previewLines.slice(-maxLines).map(sanitizeOutputLine);
-  const totalLines =
-    typeof rawRecord.outputLines === "number"
+  const totalLines = usesTerminalScreen
+    ? previewLines.length
+    : typeof rawRecord.outputLines === "number"
       ? rawRecord.outputLines
       : previewLines.length;
   const omittedOutputLines = Math.max(0, totalLines - outputPreview.length);
@@ -36,9 +42,10 @@ export function bashResultDetail(raw: unknown): BashDisplayDetail | undefined {
     command,
     outputPreview,
     omittedOutputLines,
-    outputFilePath:
-      nonEmptyString(rawRecord.outputFilePath) ??
-      nonEmptyString(taskRecord.outputFilePath),
+    outputFilePath: usesTerminalScreen
+      ? undefined
+      : (nonEmptyString(rawRecord.outputFilePath) ??
+        nonEmptyString(taskRecord.outputFilePath)),
   };
 }
 
