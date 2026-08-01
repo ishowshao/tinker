@@ -34,6 +34,15 @@ export class SessionCatalog {
   }
 
   async list(currentSessionId?: SessionId): Promise<readonly SessionSummary[]> {
+    const summaries = await this.scan(currentSessionId);
+    return Object.freeze(summaries.slice(0, this.input.limit ?? 20));
+  }
+
+  async listAll(currentSessionId?: SessionId): Promise<readonly SessionSummary[]> {
+    return Object.freeze(await this.scan(currentSessionId));
+  }
+
+  private async scan(currentSessionId?: SessionId): Promise<SessionSummary[]> {
     const workspaceRoot = await this.workspaceRootPromise;
     const sessionsRoot = path.join(workspaceRoot, ".tinker", "sessions");
     let entries;
@@ -63,17 +72,14 @@ export class SessionCatalog {
       );
     }
 
-    return Object.freeze(
-      summaries
-        .filter(
-          (summary) =>
-            summary.turnCount > 0 ||
-            summary.status === "incomplete" ||
-            summary.status === "unavailable",
-        )
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .slice(0, this.input.limit ?? 20),
-    );
+    return summaries
+      .filter(
+        (summary) =>
+          summary.turnCount > 0 ||
+          summary.status === "incomplete" ||
+          summary.status === "unavailable",
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async get(

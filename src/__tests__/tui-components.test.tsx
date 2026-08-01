@@ -1768,12 +1768,12 @@ describe("tui components", () => {
     await submitInput(stdin, "/resume");
     await waitForFrame(
       lastFrame,
-      (frame) => frame.includes("↑/↓ or j/k to move · Enter to resume"),
+      (frame) => frame.includes("· / to search · Enter to resume"),
       "the resume picker to open",
     );
     expect(lastFrame()).toContain("Resume session");
     expect(lastFrame()).toContain(
-      "↑/↓ or j/k to move · Enter to resume · Esc to cancel",
+      "↑/↓ or j/k to move · / to search · Enter to resume · Esc to cancel",
     );
     expect(lastFrame()).toContain("帮我提交推送");
 
@@ -1791,7 +1791,7 @@ describe("tui components", () => {
     await submitInput(stdin, "/resume");
     await waitForFrame(
       lastFrame,
-      (frame) => frame.includes("↑/↓ or j/k to move · Enter to resume"),
+      (frame) => frame.includes("· / to search · Enter to resume"),
       "the resume picker to reopen",
     );
     await writeInputUntilFrame(
@@ -1812,6 +1812,81 @@ describe("tui components", () => {
       "the direct session to resume",
     );
     expect(resumed).toEqual([targetId, directTargetId]);
+    cleanup();
+  });
+
+  test("searches stored sessions beyond the default 20 and resumes a match", async () => {
+    const projectionStore = createProjectionStore();
+    const targetId = "019f53e0-0000-7000-8000-000000000024" as SessionId;
+    const sessions: readonly SessionSummary[] = Array.from(
+      { length: 25 },
+      (_, index) => ({
+        sessionId:
+          index === 24
+            ? targetId
+            : (`019f53e0-0000-7000-8000-0000000000${String(index).padStart(2, "0")}` as SessionId),
+        modelName: "deepseek-v4-flash",
+        createdAt: "2026-07-12T00:00:00.000Z",
+        updatedAt: new Date(
+          Date.parse("2026-07-12T01:00:00.000Z") - index * 60_000,
+        ).toISOString(),
+        turnCount: 2,
+        firstUserPromptPreview:
+          index === 24 ? "wav repair notes" : `default prompt ${index}`,
+        status: "resumable" as const,
+        databaseBytes: 2_048,
+      }),
+    );
+    const resumed: SessionId[] = [];
+    const baseController = createSessionController(projectionStore, async () =>
+      completedResult(),
+    );
+    const controller: TuiSessionController = {
+      ...baseController,
+      listSessions: async () => sessions,
+      resume: async (sessionId) => {
+        resumed.push(sessionId);
+      },
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={controller} />,
+    );
+
+    await Bun.sleep(100);
+    await submitInput(stdin, "/resume");
+    await waitForFrame(
+      lastFrame,
+      (frame) => frame.includes("· 25 sessions total"),
+      "the resume picker to open with the full candidate count",
+    );
+    expect(lastFrame()).toContain("/ 20 recent · 25 sessions total");
+    expect(lastFrame()).not.toContain("wav repair notes");
+
+    await writeInputUntilFrame(
+      stdin,
+      "/",
+      lastFrame,
+      (frame) => frame.includes("Search:"),
+      "the search editor to open",
+    );
+    await writeInputUntilFrame(
+      stdin,
+      "wav repair",
+      lastFrame,
+      (frame) => frame.includes("wav repair notes"),
+      "the older session to match the query",
+    );
+    expect(lastFrame()).toContain("1 match");
+    expect(lastFrame()).not.toContain("default prompt 0");
+
+    await writeInputUntilFrame(
+      stdin,
+      "\r",
+      lastFrame,
+      (frame) => frame.includes(`Resumed session ${targetId}.`),
+      "the searched session to resume",
+    );
+    expect(resumed).toEqual([targetId]);
     cleanup();
   });
 });

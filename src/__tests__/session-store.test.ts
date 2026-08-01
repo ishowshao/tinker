@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -484,6 +485,103 @@ describe("SessionStore and SqliteSessionLedger", () => {
     }
   });
 });
+
+describe("SessionCatalog listing", () => {
+  test("list returns the 20 most recent sessions while listAll returns every candidate", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-"));
+    try {
+      const sessionIds = [];
+      for (let index = 0; index < 25; index += 1) {
+        sessionIds.push(await createInterruptedCatalogSession(workspace, index));
+      }
+      const catalog = new SessionCatalog({ workspaceRoot: workspace });
+      const all = await catalog.listAll();
+      const listed = await catalog.list();
+
+      expect(all.map((summary) => summary.sessionId)).toEqual(
+        [...sessionIds].reverse(),
+      );
+      expect(listed.map((summary) => summary.sessionId)).toEqual(
+        all.slice(0, 20).map((summary) => summary.sessionId),
+      );
+      for (const summary of listed) {
+        const complete = all.find(
+          (candidate) => candidate.sessionId === summary.sessionId,
+        );
+        expect(complete).toMatchObject({
+          status: summary.status,
+          turnCount: summary.turnCount,
+          modelName: summary.modelName,
+          updatedAt: summary.updatedAt,
+          ...(summary.firstUserPromptPreview === undefined
+            ? {}
+            : { firstUserPromptPreview: summary.firstUserPromptPreview }),
+        });
+      }
+      for (const summary of all) {
+        expect(summary.status).toBe("interrupted");
+        expect(summary.turnCount).toBe(1);
+        expect(summary.modelName).toBe("test-model");
+      }
+      expect(all.at(-1)?.firstUserPromptPreview).toBe("catalog prompt 0");
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps a corrupt session as an unavailable summary without blocking the list", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-corrupt-"));
+    try {
+      const healthyId = await createInterruptedCatalogSession(workspace, 0);
+      const corruptId = runtimeIdFactory.createSessionId();
+      const corruptDirectory = path.join(workspace, ".tinker", "sessions", corruptId);
+      await mkdir(corruptDirectory, { recursive: true });
+      await writeFile(path.join(corruptDirectory, "session.sqlite"), "not sqlite", {
+        mode: 0o600,
+      });
+
+      const all = await new SessionCatalog({ workspaceRoot: workspace }).listAll();
+      expect(all.map((summary) => summary.sessionId)).toHaveLength(2);
+      const healthy = all.find((summary) => summary.sessionId === healthyId);
+      const corrupt = all.find((summary) => summary.sessionId === corruptId);
+      expect(healthy?.status).toBe("interrupted");
+      expect(corrupt?.status).toBe("unavailable");
+      expect(corrupt?.turnCount).toBe(0);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+});
+
+async function createInterruptedCatalogSession(workspace: string, index: number) {
+  const sessionId = runtimeIdFactory.createSessionId();
+  const store = await SessionStore.createNew({
+    workspaceRoot: workspace,
+    sessionId,
+    modelName: "test-model",
+    systemPrompt: "system",
+    idFactory: runtimeIdFactory,
+  });
+  finalizeTestSessionStore(store, { systemPrompt: "system" });
+  const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
+  ledger.beginTurn({
+    turn: {
+      sessionId,
+      turnId: runtimeIdFactory.createTurnId(),
+      turnNumber: 1,
+    },
+    userMessage: { role: "user", content: `catalog prompt ${index}` },
+  });
+  await store.abandon();
+  const database = new Database(
+    path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+  );
+  database.run("UPDATE session_meta SET updated_at = ? WHERE singleton = 1", [
+    `2026-08-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+  ]);
+  database.close();
+  return sessionId;
+}
 
 async function createCloneSource(
   prefix: string,

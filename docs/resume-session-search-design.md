@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-08-01
-- 状态：待实施
+- 状态：已实施（2026-08-01）
 - 范围：仅增加 TUI `/resume` 会话选择面板的本地摘要搜索
 - 基线：现有 `SessionCatalog`、`TuiSessionController` 与
   `ResumeSessionPicker`

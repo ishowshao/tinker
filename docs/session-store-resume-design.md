@@ -940,7 +940,9 @@ frame 和 interrupted turn。
 /session delete <session-id> --confirm
 ```
 
-- `/resume`：显示当前 workspace 最近最多 20 个有至少一个 turn 的 session；
+- `/resume`：Catalog 可提供当前 workspace 全部有至少一个 turn 的 session；picker
+  默认展示最近 20 个，搜索时在全部候选中按 `firstUserPromptPreview` 匹配并最多展示
+  前 20 个结果（见 `docs/resume-session-search-design.md`）；
 - `/resume <id>`：TUI 空闲时切换；
 - `/session delete <id> --confirm`：删除非 current、非 active session。
 

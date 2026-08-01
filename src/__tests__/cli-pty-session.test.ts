@@ -78,6 +78,57 @@ test(
 );
 
 test(
+  "PTY-117: searches stored sessions in /resume and resumes a match",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-resume-search", rows: 40, columns: 120 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        const sourceId = currentSessionId(harness.screenText());
+        await submitPrompt(harness, "PTY_SEARCH_WAV repair notes");
+        await harness.waitForScreen("Fake model received: PTY_SEARCH_WAV repair notes");
+
+        await submitPrompt(harness, "/clear");
+        await harness.waitForScreen("Previous session remains available via /resume.");
+        await submitPrompt(harness, "PTY_SEARCH_OTHER");
+        await harness.waitForScreen("Fake model received: PTY_SEARCH_OTHER");
+
+        await submitPrompt(harness, "/resume");
+        await harness.waitForScreen("· / to search · Enter to resume");
+
+        const searchMark = harness.markTranscript();
+        await harness.type("/");
+        await harness.waitForScreen("Search:");
+        await harness.type("zzz no hits");
+        await harness.waitForScreen('No sessions match "zzz no hits"');
+        expect(harness.transcriptSince(searchMark).split("[3J").length - 1).toBe(0);
+
+        await harness.press("escape");
+        await harness.waitForScreen("· / to search · Enter to resume");
+        await harness.press("escape");
+        await harness.waitForPromptReady();
+
+        await submitPrompt(harness, "/resume");
+        await harness.waitForScreen("· / to search · Enter to resume");
+        await harness.type("/");
+        await harness.waitForScreen("Search:");
+        await harness.type("wav repair");
+        await harness.waitForScreen("1 match");
+        expect(harness.screenText()).toContain("PTY_SEARCH_WAV repair notes");
+
+        await harness.press("enter");
+        await harness.waitForScreen(`Resumed session ${sourceId}.`, {
+          timeoutMs: 10_000,
+        });
+        expect(harness.screenText()).toContain("PTY_SEARCH_WAV repair notes");
+        await quitTui(harness);
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
   "PTY-113: resumes long static history at the visible viewport tail",
   async () => {
     const fixture = await createPtyTuiFixture({

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { RuntimeSession, SessionDisposeReason } from "../agent/runtime-session";
 import type { SessionId } from "../ids/runtime-id";
-import type { SessionCatalog } from "../session/session-catalog";
+import type { SessionCatalog, SessionSummary } from "../session/session-catalog";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import {
   DefaultTuiSessionController,
@@ -10,6 +10,46 @@ import {
 import { createTestRuntime } from "./test-runtime";
 
 describe("DefaultTuiSessionController", () => {
+  test("lists every stored session candidate through catalog listAll", async () => {
+    const current = fakeRuntime("019f53e0-0000-7000-8000-000000000099" as SessionId);
+    const summaries = [
+      catalogSummary("019f53e0-0000-7000-8000-0000000000aa" as SessionId),
+      catalogSummary("019f53e0-0000-7000-8000-0000000000bb" as SessionId),
+    ];
+    const calls: { list: number; listAll: Array<SessionId | undefined> } = {
+      list: 0,
+      listAll: [],
+    };
+    const catalog = {
+      list: async () => {
+        calls.list += 1;
+        return summaries.slice(0, 1);
+      },
+      listAll: async (currentSessionId?: SessionId) => {
+        calls.listAll.push(currentSessionId);
+        return summaries;
+      },
+      delete: async () => undefined,
+    } as unknown as SessionCatalog;
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      catalog,
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+    );
+
+    expect(await controller.listSessions()).toEqual(summaries);
+    expect(calls.listAll).toEqual([current.runtime.sessionId]);
+    expect(calls.list).toBe(0);
+  });
+
   test("serializes undo against other session operations", async () => {
     const current = fakeRuntime("current-session" as SessionId);
     let releaseUndo!: () => void;
@@ -345,9 +385,23 @@ function binding(runtime: RuntimeSession, profileName?: string) {
   });
 }
 
+function catalogSummary(sessionId: SessionId): SessionSummary {
+  return {
+    sessionId,
+    modelName: "test-model",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T01:00:00.000Z",
+    turnCount: 1,
+    firstUserPromptPreview: "stored prompt",
+    status: "resumable",
+    databaseBytes: 1_024,
+  };
+}
+
 function emptyCatalog(): SessionCatalog {
   return {
     list: async () => [],
+    listAll: async () => [],
     delete: async () => undefined,
   } as unknown as SessionCatalog;
 }

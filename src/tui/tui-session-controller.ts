@@ -96,7 +96,7 @@ export class DefaultTuiSessionController implements TuiSessionController {
   };
 
   listSessions(): Promise<readonly SessionSummary[]> {
-    return this.catalog.list(this.binding.sessionId);
+    return this.catalog.listAll(this.binding.sessionId);
   }
 
   compact(): Promise<ContextCompactionResult> {
