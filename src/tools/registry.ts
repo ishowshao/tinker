@@ -14,6 +14,7 @@ import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
+import { TurnUndoManager } from "./turn-undo-manager";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import type {
   RuntimeSessionContext,
@@ -133,6 +134,7 @@ export type DefaultTooling = {
   snapshots: FileSnapshotStore;
   bashState: BashToolingState;
   taskManager: ShellTaskManager;
+  turnUndoManager?: TurnUndoManager;
   dispose(reason?: SessionDisposeReason["type"]): Promise<void>;
 };
 
@@ -154,6 +156,7 @@ export function createDefaultTooling(options: {
   skillCoordinator?: SkillActivationCoordinator;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
+  enableTurnUndo?: boolean;
   bashGuard?: {
     readonly surface: "tui" | "one-shot";
     confirm(
@@ -164,6 +167,9 @@ export function createDefaultTooling(options: {
   };
 }): DefaultTooling {
   const snapshots: FileSnapshotStore = new Map();
+  const turnUndoManager = options.enableTurnUndo
+    ? new TurnUndoManager({ snapshots })
+    : undefined;
   const registry = new ToolRegistry();
   const runtimeSession = options.runtimeSession;
   const toolingConfig = options.toolingConfig ?? DEFAULT_PUBLIC_TOOLING_CONFIG;
@@ -222,18 +228,21 @@ export function createDefaultTooling(options: {
     createWriteToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
+      ...(turnUndoManager === undefined ? {} : { undoManager: turnUndoManager }),
     }),
   );
   registry.register(
     createEditToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
+      ...(turnUndoManager === undefined ? {} : { undoManager: turnUndoManager }),
     }),
   );
   registry.register(
     createDeleteToolExecutor({
       workspaceRoot: options.workspaceRoot,
       snapshots,
+      ...(turnUndoManager === undefined ? {} : { undoManager: turnUndoManager }),
     }),
   );
   registry.register(
@@ -269,6 +278,7 @@ export function createDefaultTooling(options: {
     runtime: new ToolRuntime(registry, options.bashGuard),
     snapshots,
     taskManager,
+    ...(turnUndoManager === undefined ? {} : { turnUndoManager }),
     bashState: {
       get cwd() {
         return cwdState.cwd;

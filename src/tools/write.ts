@@ -5,6 +5,7 @@ import { computeFilePatch } from "./file-diff";
 import { ensureParentDirectory } from "./ensure-parent-directory";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
+import type { TurnUndoManager } from "./turn-undo-manager";
 import { defineToolExecutor } from "./types";
 import type {
   FileSnapshotStore,
@@ -21,6 +22,7 @@ type WriteArgs = {
 export type WriteToolOptions = {
   workspaceRoot: string;
   snapshots: FileSnapshotStore;
+  undoManager?: TurnUndoManager;
 };
 
 export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor {
@@ -47,7 +49,7 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
     },
     async execute(
       args,
-      _call,
+      call,
       context: ToolExecutionContext,
     ): Promise<WriteFileRawResult> {
       throwIfTurnCancelled(context.signal);
@@ -118,10 +120,24 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
         oldContent = target.content;
       }
 
+      const undoCapture = await options.undoManager?.captureBeforeMutation({
+        turnId: call.turnId,
+        turnNumber: call.turnNumber,
+        absolutePath,
+        displayPath: input.file_path,
+        loadBefore: async () =>
+          target.exists
+            ? { state: "present", bytes: target.bytes }
+            : { state: "absent" },
+      });
+
       throwIfTurnCancelled(context.signal);
       try {
         await ensureParentDirectory(absolutePath);
       } catch (error) {
+        if (undoCapture !== undefined) {
+          await options.undoManager?.recordMutationFailure(undoCapture);
+        }
         return {
           ok: false,
           filePath: input.file_path,
@@ -129,15 +145,39 @@ export function createWriteToolExecutor(options: WriteToolOptions): ToolExecutor
           error: `Failed to create parent directory: ${errorMessage(error)}`,
         };
       }
-      throwIfTurnCancelled(context.signal);
-      await writeFile(absolutePath, input.content, "utf8");
-      const newSha256 = sha256Text(input.content);
-      const writtenInfo = await stat(absolutePath);
-      options.snapshots.set(absolutePath, {
-        sha256: newSha256,
-        mtimeMs: writtenInfo.mtimeMs,
-        source: "write",
-      });
+      let newSha256: string;
+      try {
+        throwIfTurnCancelled(context.signal);
+        await writeFile(absolutePath, input.content, "utf8");
+        const expectedSha256 = sha256Text(input.content);
+        const written = await targetFileState(absolutePath);
+        if (!written.ok) {
+          throw new Error(`Failed to verify written file: ${written.error}`);
+        }
+        if (!written.exists) {
+          throw new Error("Failed to verify written file: File does not exist.");
+        }
+        if (written.sha256 !== expectedSha256) {
+          throw new Error("File changed while Write was being verified.");
+        }
+        newSha256 = written.sha256;
+        if (undoCapture !== undefined) {
+          options.undoManager?.recordMutationResult(undoCapture, {
+            state: "present",
+            sha256: newSha256,
+          });
+        }
+        options.snapshots.set(absolutePath, {
+          sha256: newSha256,
+          mtimeMs: written.mtimeMs,
+          source: "write",
+        });
+      } catch (error) {
+        if (undoCapture !== undefined) {
+          await options.undoManager?.recordMutationFailure(undoCapture);
+        }
+        throw error;
+      }
 
       const patch = computeFilePatch({
         filePath: input.file_path,
@@ -184,11 +224,16 @@ function parseWriteArgs(
   };
 }
 
-async function targetFileState(
-  absolutePath: string,
-): Promise<
+async function targetFileState(absolutePath: string): Promise<
   | { ok: true; exists: false }
-  | { ok: true; exists: true; sha256: string; content: string }
+  | {
+      ok: true;
+      exists: true;
+      sha256: string;
+      content: string;
+      bytes: Buffer;
+      mtimeMs: number;
+    }
   | { ok: false; error: string }
 > {
   try {
@@ -198,11 +243,17 @@ async function targetFileState(
     }
 
     const bytes = await readFile(absolutePath);
+    const currentInfo = await stat(absolutePath);
+    if (currentInfo.mtimeMs > info.mtimeMs) {
+      return { ok: false, error: "File changed while it was being read." };
+    }
     return {
       ok: true,
       exists: true,
       sha256: sha256Bytes(bytes),
       content: bytes.toString("utf8"),
+      bytes,
+      mtimeMs: currentInfo.mtimeMs,
     };
   } catch (error) {
     if (isNotFound(error)) {

@@ -1,6 +1,7 @@
-import { lstat, rm } from "node:fs/promises";
+import { lstat, readFile, rm } from "node:fs/promises";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { resolveWorkspacePath } from "./path-safety";
+import type { TurnUndoManager } from "./turn-undo-manager";
 import { defineToolExecutor } from "./types";
 import type {
   DeleteFileRawResult,
@@ -16,6 +17,7 @@ type DeleteArgs = {
 export type DeleteToolOptions = {
   workspaceRoot: string;
   snapshots: FileSnapshotStore;
+  undoManager?: TurnUndoManager;
 };
 
 export function createDeleteToolExecutor(options: DeleteToolOptions): ToolExecutor {
@@ -38,7 +40,7 @@ export function createDeleteToolExecutor(options: DeleteToolOptions): ToolExecut
     },
     async execute(
       args,
-      _call,
+      call,
       context: ToolExecutionContext,
     ): Promise<DeleteFileRawResult> {
       throwIfTurnCancelled(context.signal);
@@ -95,11 +97,28 @@ export function createDeleteToolExecutor(options: DeleteToolOptions): ToolExecut
         };
       }
 
-      throwIfTurnCancelled(context.signal);
+      const undoCapture = await options.undoManager?.captureBeforeMutation({
+        turnId: call.turnId,
+        turnNumber: call.turnNumber,
+        absolutePath,
+        displayPath: input.file_path,
+        knownByteLength: info.size,
+        loadBefore: async () => ({
+          state: "present",
+          bytes: await readFile(absolutePath),
+        }),
+      });
 
       try {
+        throwIfTurnCancelled(context.signal);
         await rm(absolutePath);
       } catch (error) {
+        if (undoCapture !== undefined) {
+          await options.undoManager?.recordMutationFailure(undoCapture);
+        }
+        if (context.signal.aborted) {
+          throw error;
+        }
         return {
           ok: false,
           filePath: input.file_path,
@@ -108,6 +127,9 @@ export function createDeleteToolExecutor(options: DeleteToolOptions): ToolExecut
         };
       }
 
+      if (undoCapture !== undefined) {
+        options.undoManager?.recordMutationResult(undoCapture, { state: "absent" });
+      }
       options.snapshots.delete(absolutePath);
 
       return {

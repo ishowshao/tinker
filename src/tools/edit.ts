@@ -1,10 +1,12 @@
 import { Buffer } from "node:buffer";
 import { readFile, stat, writeFile } from "node:fs/promises";
+import type { ToolCall } from "../agent/types";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { computeFilePatch } from "./file-diff";
 import { ensureParentDirectory } from "./ensure-parent-directory";
 import { sha256Bytes, sha256Text } from "./hash";
 import { resolveWorkspacePath } from "./path-safety";
+import type { TurnUndoManager } from "./turn-undo-manager";
 import { defineToolExecutor } from "./types";
 import type {
   EditFileRawResult,
@@ -23,6 +25,7 @@ type EditArgs = {
 export type EditToolOptions = {
   workspaceRoot: string;
   snapshots: FileSnapshotStore;
+  undoManager?: TurnUndoManager;
 };
 
 export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
@@ -58,7 +61,7 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
     },
     async execute(
       args,
-      _call,
+      call,
       context: ToolExecutionContext,
     ): Promise<EditFileRawResult> {
       throwIfTurnCancelled(context.signal);
@@ -102,6 +105,8 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
           target,
           newContent: input.new_string,
           snapshots: options.snapshots,
+          undoManager: options.undoManager,
+          call,
           signal: context.signal,
         });
       }
@@ -173,6 +178,9 @@ export function createEditToolExecutor(options: EditToolOptions): ToolExecutor {
         expectedSha256: target.sha256,
         readRequiredOnChange: true,
         snapshots: options.snapshots,
+        undoManager: options.undoManager,
+        call,
+        initialBefore: target,
         signal: context.signal,
       });
     },
@@ -219,6 +227,8 @@ async function writeEmptyTarget(input: {
   target: TargetFileState;
   newContent: string;
   snapshots: FileSnapshotStore;
+  undoManager?: TurnUndoManager;
+  call: ToolCall;
   signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   if (input.target.exists && input.target.content.length > 0) {
@@ -242,6 +252,9 @@ async function writeEmptyTarget(input: {
     expectedSha256: input.target.exists ? input.target.sha256 : undefined,
     readRequiredOnChange: false,
     snapshots: input.snapshots,
+    undoManager: input.undoManager,
+    call: input.call,
+    initialBefore: input.target,
     signal: input.signal,
   });
 }
@@ -258,10 +271,14 @@ async function writeEditedContent(input: {
   expectedSha256?: string;
   readRequiredOnChange: boolean;
   snapshots: FileSnapshotStore;
+  undoManager?: TurnUndoManager;
+  call: ToolCall;
+  initialBefore: TargetFileState;
   signal: AbortSignal;
 }): Promise<EditFileRawResult> {
   throwIfTurnCancelled(input.signal);
 
+  let verifiedBefore = input.initialBefore;
   if (input.expectedSha256 !== undefined) {
     const currentState = await targetFileState(input.absolutePath);
     throwIfTurnCancelled(input.signal);
@@ -296,12 +313,27 @@ async function writeEditedContent(input: {
           : "File changed while Edit was being prepared. Retry Edit with the current file state.",
       };
     }
+    verifiedBefore = currentState;
   }
+
+  const undoCapture = await input.undoManager?.captureBeforeMutation({
+    turnId: input.call.turnId,
+    turnNumber: input.call.turnNumber,
+    absolutePath: input.absolutePath,
+    displayPath: input.filePath,
+    loadBefore: async () =>
+      verifiedBefore.exists
+        ? { state: "present", bytes: verifiedBefore.bytes }
+        : { state: "absent" },
+  });
 
   if (input.created) {
     try {
       await ensureParentDirectory(input.absolutePath);
     } catch (error) {
+      if (undoCapture !== undefined) {
+        await input.undoManager?.recordMutationFailure(undoCapture);
+      }
       return {
         ok: false,
         filePath: input.filePath,
@@ -312,14 +344,39 @@ async function writeEditedContent(input: {
     throwIfTurnCancelled(input.signal);
   }
 
-  await writeFile(input.absolutePath, input.newContent, "utf8");
-  const newSha256 = sha256Text(input.newContent);
-  const writtenInfo = await stat(input.absolutePath);
-  input.snapshots.set(input.absolutePath, {
-    sha256: newSha256,
-    mtimeMs: writtenInfo.mtimeMs,
-    source: "edit",
-  });
+  let newSha256: string;
+  try {
+    throwIfTurnCancelled(input.signal);
+    await writeFile(input.absolutePath, input.newContent, "utf8");
+    const expectedSha256 = sha256Text(input.newContent);
+    const written = await targetFileState(input.absolutePath);
+    if (!written.ok) {
+      throw new Error(`Failed to verify edited file: ${written.error}`);
+    }
+    if (!written.exists) {
+      throw new Error("Failed to verify edited file: File does not exist.");
+    }
+    if (written.sha256 !== expectedSha256) {
+      throw new Error("File changed while Edit was being verified.");
+    }
+    newSha256 = written.sha256;
+    if (undoCapture !== undefined) {
+      input.undoManager?.recordMutationResult(undoCapture, {
+        state: "present",
+        sha256: newSha256,
+      });
+    }
+    input.snapshots.set(input.absolutePath, {
+      sha256: newSha256,
+      mtimeMs: written.mtimeMs,
+      source: "edit",
+    });
+  } catch (error) {
+    if (undoCapture !== undefined) {
+      await input.undoManager?.recordMutationFailure(undoCapture);
+    }
+    throw error;
+  }
 
   const patch = computeFilePatch({
     filePath: input.filePath,
@@ -348,6 +405,7 @@ type TargetFileState =
       ok: true;
       exists: true;
       content: string;
+      bytes: Buffer;
       sha256: string;
       mtimeMs: number;
     };
@@ -371,6 +429,7 @@ async function targetFileState(
       ok: true,
       exists: true,
       content: bytes.toString("utf8"),
+      bytes,
       sha256: sha256Bytes(bytes),
       mtimeMs: currentInfo.mtimeMs,
     };
