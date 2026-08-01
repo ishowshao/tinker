@@ -92,7 +92,6 @@ function spawnPtyShellProcess(input: {
   onOutput(bytes: Uint8Array): void;
 }): ShellProcessHandle {
   let terminalEnded = false;
-  let terminalExitError: Error | undefined;
   let resolveTerminalExit: (() => void) | undefined;
   let drainGeneration = 0;
   const drainWaiters = new Set<() => void>();
@@ -132,15 +131,8 @@ function spawnPtyShellProcess(input: {
       data(_terminal, bytes) {
         input.onOutput(new Uint8Array(bytes));
       },
-      exit(_terminal, exitCode) {
-        if (terminalEnded) {
-          return;
-        }
-        if (exitCode !== 0) {
-          terminalExitError = new Error(
-            `PTY output stream closed with lifecycle status ${exitCode}.`,
-          );
-        }
+      exit() {
+        // Linux reports slave closure as EIO; subprocess.exited owns task status.
         settleTerminalExit();
       },
       drain() {
@@ -214,12 +206,7 @@ function spawnPtyShellProcess(input: {
       return subprocess.signalCode;
     },
     wait: () => exit,
-    async waitForOutputClose() {
-      await terminalExit;
-      if (terminalExitError !== undefined) {
-        throw terminalExitError;
-      }
-    },
+    waitForOutputClose: () => terminalExit,
     write,
     close() {
       if (!terminal.closed) {
