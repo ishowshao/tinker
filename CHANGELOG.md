@@ -5,6 +5,35 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-01
+
+### Added
+
+- Add an `/undo` slash command that restores the files changed by the most recent
+  file-mutation turn from in-memory snapshots, with restore notices shown in the
+  TUI timeline.
+- Give the agent a Delete tool for removing files, guarded by the same permission
+  flow as the other file-mutation tools.
+- Guard destructive Bash commands behind an interactive confirmation prompt, with
+  a `/yolo` opt-out for sessions where unattended execution is intended.
+- Show the latest provider cache hit rate in the TUI prompt status line.
+- Stream assistant output in the TUI as sealed Markdown sections, so settled
+  content no longer repaints while the turn is still running.
+
+### Changed
+
+- Retry transient provider failures automatically with backoff instead of
+  surfacing them as immediate turn errors.
+- Update runtime dependencies, including `commander` 15, `openai` 7, and the
+  latest `@assistant-ui/react-ink` packages.
+
+### Fixed
+
+- Floor the displayed cache hit rate so append-heavy turns never show a false
+  100%.
+- Bound the TUI live region below the viewport height to protect the prompt
+  frame from being pushed out of view.
+
 ## [1.5.1] - 2026-07-29
 
 ### Changed
@@ -100,7 +129,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/ishowshao/tinker/releases/tag/v1.6.0
 [1.5.1]: https://github.com/ishowshao/tinker/releases/tag/v1.5.1
 [1.5.0]: https://github.com/ishowshao/tinker/releases/tag/v1.5.0
 [1.4.0]: https://github.com/ishowshao/tinker/releases/tag/v1.4.0

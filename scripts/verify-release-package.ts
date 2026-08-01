@@ -124,7 +124,7 @@ try {
       "utf8",
     ),
   ) as { version: string };
-  assert.equal(installedCommanderPackageJson.version, "14.0.3");
+  assert.equal(installedCommanderPackageJson.version, "15.0.0");
   const installedRipgrepPackageJson = JSON.parse(
     readFileSync(
       join(installedRoot, "node_modules", "@vscode", "ripgrep", "package.json"),
