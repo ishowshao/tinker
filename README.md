@@ -29,7 +29,7 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
 - **Infinite Context architecture**: Immutable canonical history, deterministic
   context revisions, Recall-addressable cold state, and qualified prefix retirement
   keep long-running sessions recoverable without pretending the model has infinite
-  tokens. See the [technical design](docs/infinite-context-technical-design-a.md).
+  tokens. See the [technical design](docs/infinite-context-technical-design.md).
 - **Choice of models**: Uses an OpenAI-compatible Chat Completions transport with
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
