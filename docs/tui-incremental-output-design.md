@@ -1,157 +1,131 @@
-# TUI 可见增量输出技术方案
+# TUI 段落式增量输出技术方案
 
 ## 文档状态
 
 - 日期：2026-08-01
-- 状态：待实施，核心边界已确认
-- 范围：只为交互式 TUI 增加 assistant 正文的可见增量预览
+- 状态：待实施，核心合同已确认
+- 范围：交互式 TUI 的 assistant 正文增量展示
 - 上位路线图：[`product-hardening-roadmap.md`](product-hardening-roadmap.md)
-- 相关实现：
-  - `src/model/openai-chat-model-client.ts`
-  - `src/model/openai-chat-stream.ts`
-  - `src/agent/loop.ts`
-  - `src/agent/runtime-session.ts`
-  - `src/tui/tui-projection-store.ts`
-  - `src/tui/app.tsx`
 
 ## 一、结论
 
-Tinker 保留现有完整响应合同：`ModelClient.request()` 继续返回一个经过严格校验的
-`Promise<ModelRequestOutput>`，agent loop、ledger、canonical history、正式 runtime event
-和 resume 都只消费完整响应。
-
-流式接收过程中，OpenAI-compatible adapter 额外把已经通过当前 chunk 结构校验的
-`delta.content` 片段发送到一条**临时 presentation 通道**。TUI 按当前 attempt 保留全部片段，
-把“截至当前已流出的完整正文”作为 Markdown source 在 live 区持续重渲染；完整响应通过现有
-mapper 后，再由 `assistant.progress` 或 `turn.finished` 原子替换为正式 Markdown 内容并进入
-`<Static>`。
-
-核心不变量是：
-
-> 流式文本只是可丢弃的界面预览。只有完整 provider 响应通过现有严格校验并进入 ledger
-> 后，才是 assistant 历史事实。
-
-本方案不把增量文本定义成 `AgentEvent`，不分配 `eventSequence`，不写 JSONL、observation、
-SQLite 或 Recall。临时 sink 失败只会关闭本次增量预览，不能使模型请求或 RuntimeSession
-失败。
+Tinker 采用 **section-framed streaming**：流式正文先在 presentation 层累积；当下一条完整的
+顶层 Markdown ATX heading 出现时，前一个 section 封口，独立渲染一次并 append 到
+`<Static>`。尚未封口的 section 只保存在内存中，不进入 live 区，也不触发 React 重渲染。
 
 ```text
-OpenAI SSE chunk
-  -> 在线 stream accumulator：校验并累积完整响应
-       -> delta.content 片段：临时 presentation sink
-            -> TUI live 区：当前完整 Markdown 前缀
-       -> finish：现有严格 mapper
-            -> ledger + 正式 AgentEvent
-                 -> 现有完整 Markdown renderer + Static 历史
+SSE chunk
+  -> 在线 response accumulator：组装并严格校验完整响应
+       -> delta.content：临时 presentation input
+            -> MarkdownSectionFramer
+                 -> 已封口 section：AssistantMarkdown -> <Static>
+                 -> 未封口 section：只留在 buffer
+       -> 完整响应成功
+            -> 有提前输出：flush 尾 section，正式正文认领既有输出
+            -> 无提前输出：沿用现有正式 Markdown 输出路径
 ```
 
-## 二、目标
+完整响应合同不变：`ModelClient.request()`、ledger、canonical history、正式 AgentEvent、SQLite、
+Recall 和 resume 仍只消费完整响应。提前进入 `<Static>` 的 section 是不可撤回但非 canonical 的
+presentation output。
 
-1. TUI 在完整模型请求结束前显示正在生成的 assistant 正文。
-2. 完整响应校验、tool-call 组装、ledger commit 和 canonical history 语义保持不变。
-3. retry、取消、provider 失败或最终响应非法时，不留下半截 assistant 历史。
-4. live 区使用当前已流出正文的完整 Markdown 前缀，视口跟随最新内容；不截断正文，也不降级为
-   纯文本。
-5. `/resume`、fork、session persistence 和 observation log 与当前行为完全一致。
-6. `stream: false` 和 one-shot CLI 保持当前非增量行为。
+失败或 retry 后，已经进入 `<Static>` 的 section 允许留在当前 scrollback；尚未封口的 buffer
+丢弃。这是本方案的明确产品合同。
 
-## 三、非目标
+## 二、用户可见合同
 
-- 不展示或传递 `reasoning_content` 的增量内容。
-- 不新增 thinking/reasoning 状态行、字符计数或动画。
-- 不展示尚未组装完成的 tool-call 名称、provider ID 或参数片段。
-- 不实现增量 Markdown AST、block cache 或手工折行；每个可见帧仍使用现有 Markdown renderer。
-- 不为 one-shot stdout 增加无法撤回的推测性正文输出。
-- 不增加新的 profile 字段、环境变量或 slash command。
-- 不修改 `assistant.progress` 的既有“完整中间说明”语义。
-- 不为临时更新建立回放、诊断日志或通用 presentation event bus。
+1. 一个 section 从某条顶层 ATX heading 开始，到下一条顶层 ATX heading 之前结束。
+2. 下一条 heading 完整到达后，前一个 section 才进入 `<Static>`；新 heading 属于下一 section。
+3. heading 前的非空导语视为 preamble；第一条 heading 到达时，preamble 可以先提交。
+4. 未封口 section 不显示正文；Footer 和现有 model 状态继续表示“仍在生成”。
+5. 如果已有 section 提前提交，成功结束时只补交最后一个 section，不再打印整篇回复。
+6. 如果没有 section 提前提交，继续由现有正式事件一次性显示完整 Markdown。
+7. 无 heading 或只有一条 heading 的短回复通常要等到结束才显示；不增加空行或普通 paragraph
+   fallback。
+8. reasoning、tool-call fragment、provider ID 和参数片段不进入可见通道。
 
-“忽略 reasoning”只限定本次可见增量功能。现有 stream accumulator 仍按当前协议累积
-`reasoning_content`，完整 mapper、reasoning-only 判定、脱敏诊断和 retry 行为均保持不变；
-这些内容不会进入新增的回调和 TUI preview。
+这里的“section”不是 CommonMark paragraph token。普通空行不是可靠的提交边界。
 
-## 四、为什么不复用正式事件总线
+## 三、Section 切分合同
 
-当前 `RuntimeSession.append()` 是正式事件提交路径：它校验 runtime identity、分配
-`eventSequence`、进入串行 event tail，并把事件送到 required persistence sinks 和 auxiliary
-presentation sinks。required sink 失败会 fault 当前 session。
+### 3.1 唯一边界
 
-如果把 token 或文本快照定义成 `assistant.delta` AgentEvent，再让 JSONL 和 observation sink
-各自过滤，会产生错误的所有权：
+第一版只接受 Markdown parser 识别出的**顶层 ATX heading**（`#` 至 `######`）：
 
-- 类型上是正式事件，持久化层却必须知道并忽略它；
-- `events.jsonl` 中会出现不可解释的 sequence 空洞；
-- `void runtimeSession.append(...)` 的异步失败仍可能 fault session；
-- 高频临时更新会进入正式 event tail，与 canonical 事件和磁盘写入争用；
-- 将来新增 sink 时容易意外持久化完整生成过程。
+- heading 行必须完整结束；chunk 末尾的半截 `## 新段` 不算；
+- token 必须位于 document root；代码围栏、blockquote、list、raw HTML 内的 `##` 不算；
+- 任意 heading 层级都可以开始新 section；
+- 连续 headings 合法；
+- 一个 delta 内出现多个 headings 时，按源顺序产出多个 section。
 
-因此本方案使用一个只服务当前界面的窄接口。它不是第二套 runtime event bus：没有 sequence、
-时间戳、持久化、回放和可靠投递承诺，只有“按当前 provider attempt 尽力更新预览”的语义。
+空行、Setext heading、list item、thematic break、provider chunk 边界都不切分。
 
-## 五、Model 层合同
+### 3.2 检测算法
 
-### 5.1 保持 Promise 返回值
+`MarkdownSectionFramer` 使用与 `markdansi` 相同的 `marked` lexer 确认 top-level heading。
+`marked` 声明为 Tinker 的直接依赖，不读取 `markdansi` 的内部文件。
 
-`ModelRequestOptions` 只增加一个可选的正文片段回调：
+framer 保留原始 source 和增量扫描位置：
+
+1. delta 原样追加到当前 attempt buffer；
+2. 只扫描新追加内容中已经结束的行；
+3. 没有 ATX-heading 候选行时，不运行 lexer；
+4. 出现候选行时，用 lexer 确认它是否是新的顶层 heading；
+5. 确认后按原始 UTF-16 offset 切分，不规范化正文或换行。
+
+因此每个 fragment 只有小型行扫描；完整 Markdown 解析只发生在 heading 候选点，不形成按
+chunk 全量重扫的 O(n²) 路径。
+
+### 3.3 文档级语义
+
+Markdown reference definition 可能从后文改变前文：
+
+```md
+参见 [文档][ref]
+
+## 下一节
+
+[ref]: https://example.com
+```
+
+候选 section 出现 reference-style link、shortcut reference 或其他可能依赖后置定义的语法时，
+该 attempt 停止提前封口，完整响应结束后走现有正式 Markdown 路径。inline link
+（`[text](url)`）不受影响。section 独立性不能确认时，不猜测、不改写。
+
+### 3.4 示例
+
+收到：
+
+```md
+## 第一部分
+第一部分正文。
+
+## 第二部分
+```
+
+完整的 `## 第二部分\n` 到达后，第一部分进入 `<Static>`；buffer 从 `## 第二部分` 开始继续
+累积。第二部分直到下一条顶层 heading 或完整响应成功时才提交。
+
+## 四、分层与接口
+
+### 4.1 Model 层
+
+`ModelRequestOptions` 增加可选回调：
 
 ```ts
-export type ModelRequestOptions = {
-  signal: AbortSignal;
-  identity?: {
-    iteration: IterationIdentity;
-    runtimeSession: RuntimeSessionContext;
-  };
-  onTextDelta?: (content: string) => void;
-};
+onTextDelta?: (content: string) => void;
 ```
 
-`content` 是 provider 当前 chunk 中的原始 `delta.content` 片段，不是累计快照。空字符串和
-`null` 不触发回调。未提供回调时，streaming 与当前行为完全相同。
+`content` 是已经通过当前 chunk 全部结构校验的原始 `delta.content`，不是累计快照。空值和
+非流式请求不回调。
 
-非流式请求不调用 `onTextDelta`。在完整响应返回前人为调用一次没有可见延迟收益，只会制造
-一个马上被正式内容替换的 preview 帧。
+现有 stream accumulator 改为在线 `push()` / `finish()`：`push()` 先校验并合并整个 chunk，
+再返回可展示 content；`finish()` 继续交给现有 mapper 严格校验 role、finish reason、usage、
+tool calls 和有效 assistant 内容。同一 chunk 的 tool-call fragment 非法时，不发出其中的正文。
 
-### 5.2 accumulator 改成在线消费
+reasoning delta 仍只服务现有完整响应组装与 reasoning-only 判定，不触发正文回调。
 
-将当前“收集全部 chunk 数组后一次性累积”收敛成有状态 accumulator：
-
-```ts
-class OpenAIChatStreamAccumulator {
-  push(chunk: unknown): readonly string[];
-  finish(): Record<string, unknown>;
-}
-```
-
-`push()` 完成当前 chunk 的全部结构校验和状态合并后，才返回其中可展示的 content 片段。
-若同一 chunk 同时包含 `content` 与 `tool_calls`，两者必须独立处理；tool-call fragment 非法时
-整个 chunk 失败，不发送该 chunk 的 preview。
-
-`finish()` 继续生成 non-streaming completion 形状，并交给现有
-`fromOpenAIChatCompletion()` 校验 role、finish reason、usage、tool calls 和有效 assistant
-内容。usage-only chunk、reasoning delta 和 tool-call fragment 都不产生可见文本。
-
-保留现有 `accumulateOpenAIChatCompletionChunks()` 作为对 accumulator 的小型包装也可以，
-便于继续覆盖现有纯函数测试；生产路径不再保存完整 chunk 数组。
-
-### 5.3 回调不是成功承诺
-
-某个 content chunk 合法，不代表完整响应最终合法。后续仍可能出现：
-
-- malformed chunk；
-- stream 中断或取消；
-- 缺少终止 finish reason；
-- 缺少 usage-only chunk；
-- tool-call ID、类型、名称或参数不完整；
-- 完整 mapper 拒绝响应。
-
-因此 UI 必须把 preview 标记为临时内容，并在失败路径丢弃。adapter 不允许因 preview sink
-不可用而改变 provider request 的结果。
-
-## 六、Runtime 临时通道
-
-### 6.1 窄接口
-
-新增只描述正文片段的接口：
+### 4.2 临时 presentation 通道
 
 ```ts
 export type AssistantTextDeltaUpdate = IterationIdentity & {
@@ -164,282 +138,179 @@ export interface AssistantTextDeltaSink {
 }
 ```
 
-`CreateRuntimeSessionInput` 增加一个可选的 `assistantTextDeltaSink`。只有 TUI session 注入；
-one-shot runner 不注入。`RuntimeSessionContext` 向 agent loop 暴露对应的可选、同步、
-non-throwing presentation 方法。
+只有 TUI session 注入该 sink。loop 在每个 provider attempt 内创建带
+`iterationId + attemptNumber` 的回调；stale attempt、错误 session 和 abort 后的 fragment
+直接忽略。
 
-TUI 中同一个 `TuiProjectionStore` 可以同时实现：
+该通道同步、best-effort、non-throwing：不经过 `RuntimeSession.append()`，不分配
+`eventSequence`，不产生 `assistant.delta`，不写 JSONL、observation、SQLite 或 Recall。sink
+异常只禁用本 session 的后续增量展示，不影响模型请求和正式事件。
 
-- `EventSink.append(event)`：消费正式、可持久化语义的 runtime event；
-- `AssistantTextDeltaSink.updateAssistantTextDelta(update)`：消费可丢弃的正文片段。
+### 4.3 TUI presentation 层
 
-共用一个 store 只为保证 React 看到原子的 render snapshot，不代表两种输入共享事件协议。
+`TuiProjectionStore` 接收 raw delta，内部使用独立、可单测的 `MarkdownSectionFramer`。只有封口
+section 才更新 render log 和通知 React；未封口 fragment 只改变内部 buffer。
 
-### 6.2 attempt 归属
-
-`loop.ts` 必须在每次 provider attempt 内创建回调闭包，显式携带当前
-`iterationId + attemptNumber`。不能只依赖 iteration，因为 transient retry 和
-reasoning-only retry 会在同一 iteration 中重新 dispatch。
-
-```text
-model.request.started(attempt N) 已正式投影
-  -> model.request(..., onTextDelta for attempt N)
-       -> transient sink update(iterationId, attempt N, fragment)
-```
-
-TUI 只接受与当前活动 attempt 完全匹配的片段。旧 attempt、已结束 attempt 或错误 session
-的更新直接忽略。
-
-### 6.3 失败隔离
-
-RuntimeSession 调用临时 sink 时捕获同步异常，并在当前 session 内禁用后续 delta 投递。
-它不得调用 `RuntimeSession.append()`，也不得产生 `diagnostic.sink_failed`；正式事件 sink
-仍继续工作，因此用户最终仍能看到完整回复或明确错误。
-
-signal 已经 aborted 时，loop 不再投递新的片段。临时通道不启动独立异步任务，所以不存在
-请求结束后仍等待发送的 loop 侧 timer。
-
-## 七、TUI preview
-
-### 7.1 状态归属
-
-preview 只进入 `TuiProjectionStore` 派生的 render log，不进入 `TuiProjectionState`：
+`TuiProjectionState` 和 `reduceTuiProjection()` 仍只认识正式 AgentEvent。临时 section 使用
+独立 render item：
 
 ```ts
-export type AssistantTextPreview = IterationIdentity & {
+export type AssistantStreamSectionItem = {
+  kind: "assistant-stream-section";
+  id: string;
+  iterationId: IterationId;
   attemptNumber: number;
+  sectionNumber: number;
   markdown: string;
+  showAssistantLabel: boolean;
 };
-
-export type TuiTimelineLog = Readonly<{
-  committed: readonly TimelineItem[];
-  live: readonly TimelineItem[];
-  assistantPreview?: AssistantTextPreview;
-}>;
 ```
 
-这样可以保持以下边界：
+每个 attempt 的第一个可见 section 输出一次现有 `- assistant` label；后续 section 只输出正文。
+正文复用 `AssistantMarkdown`。Shiki 继续在 App mount 前准备，因为 Static item 打印后会离开
+React tree。
 
-- `reduceTuiProjection()` 仍是正式 AgentEvent 的纯 reducer；
-- projection policy、recent turns、omission marker 和 resume snapshot 不认识 preview；
-- preview 不可能进入 `<Static>` 的 committed item 集合；
-- 正式内容与 preview 可以在同一次 store 更新中原子交接。
+## 五、成功收口与去重
 
-store 内按顺序保留当前 attempt 的全部正文片段；通知 React 时生成一个完整 Markdown source。
-不设置独立字符上限，也不从头部截断。其生命周期只覆盖一次 provider attempt，体积由现有
-模型输出预算约束，正式事件收口后立即释放。
+store 为当前 attempt 保存完整原始 content、已提交 source 范围、未封口 buffer，以及是否在
+`ModelClient.request()` settle 前提交过 section。
 
-### 7.2 通知节流
+收到正式 `model.request.finished` 时：
 
-provider chunk 到达时立即追加到临时 buffer，但 React listener 使用 presentation 侧合帧：
+1. 校验累计正文与 `event.data.output.message.content` 完全一致；
+2. 此前没有 section 提前提交：丢弃 framer，沿用现有正式输出路径；
+3. 此前已经提交 section：把 buffer 作为最后一节进入 `<Static>`；
+4. 将该 iteration 标记为 physically adopted；
+5. 后续 `assistant.progress` 或 `turn.finished` 仍进入 canonical reducer，但对应 assistant item
+   标记为已经物理输出，不再追加到 `<Static>`。
 
-- 第一个非空片段立即通知，保证首段反馈及时；
-- 后续更新最多每 80ms 通知一次，且任意时刻最多存在一个待发送通知；
-- 同一窗口中的多个片段只生成一个新 render snapshot；
-- 每个 snapshot 都包含截至当时的完整 Markdown source，不丢片段；
-- 正式 lifecycle event 到达时取消待发送的 preview timer，并以该 event 的收口规则为准。
+“认领”只是一条 TUI 去重规则，不改变正式 event 或 session schema。
 
-节流不放在 model adapter 或 agent loop。模型层只负责协议与有序片段，具体界面可以按自己的
-刷新成本选择策略；one-shot 等没有 sink 的 surface 不承担任何额外调度。
+### running model 行
 
-### 7.3 live Markdown 渲染
+Ink 的单一 `<Static>` 始终位于 live 内容上方。section 提前提交时，running model 行继续留在
+底部表达生成状态，Footer 同时保持 `Running`。
 
-新增 `AssistantStreamPreview`，但不新增第二套正文 renderer：
-
-- label 复用现有 `- assistant` 视觉，不增加 streaming 徽标或动画；
-- 正文直接复用 `AssistantMarkdown`，输入是当前 attempt 已流出内容的完整 Markdown 前缀；
-- 未闭合代码围栏、强调、列表或表格按当前前缀正常解析；后续片段补全语法时，允许此前内容
-  重新排版；
-- Markdown 视口固定高度并自动跟随底部，始终展示最新渲染结果；不对 source 做尾部切片或
-  纯文本截断。
-
-当前 live timeline 上限分别是 8 行和 3 行。模型请求期间 canonical live 区只有一条 running
-model item，因此预算为：
+成功 attempt 已提前输出 section 时，settled model item 不再晚于 assistant section 进入
+`<Static>`；store 将它标记为 presentation-complete 并从 live 区移除。最终物理顺序保持为：
 
 ```text
-无后台任务：model 1 + assistant label 1 + Markdown viewport 6 = 8
-有后台任务：model 1 + assistant label 1 + Markdown viewport 1 = 3
+prompt
+assistant sections
+tool / turn 后续内容
 ```
 
-组件使用 `useBoxMetrics()` 测量完整 Markdown 的物理高度，并通过负 `top` 偏移把最后一屏放入
-固定视口；该机制只裁剪终端可见行，不裁剪 Markdown source。终端宽度必须进入该子树的 render
-identity，resize 时强制重新测量和回流。
+没有提前 section 时，model item 和正式 assistant item 完全沿用当前排序。
 
-流结束且完整响应通过 mapper、ledger 与正式事件提交后，store 在同一次 snapshot 更新中移除
-preview。随后由现有 `TimelineRow` 渲染正式完整 Markdown，并把它作为唯一 assistant 正文进入
-`<Static>`。
+## 六、失败、retry 与取消
 
-### 7.4 性能边界
+| 输入 | 已提交 section | 未封口 buffer | 正式状态 |
+| --- | --- | --- | --- |
+| `model.request.failed`，将 retry | 保留；非空时追加简短 retry 分隔行 | 丢弃 | model 行继续显示 retrying |
+| `model.request.failed`，终止 | 保留 | 丢弃 | 沿用正式 turn failure |
+| `turn.cancelled` | 保留 | 丢弃 | 沿用正式 cancelled |
+| abort 后迟到 delta | 不变 | 不接收 | 不变 |
+| 新 attempt | 旧 section 保留 | 建立全新 buffer | attemptNumber 递增 |
+| session switch / 退出 | 不回滚已打印内容 | 丢弃 | 新 session 只按 canonical state 重建 |
 
-`overflow="hidden"` 只能限制终端输出行数，不能消除完整 Markdown 的解析和 Yoga 布局成本。
-因此本方案不宣称流式帧是 O(视口) 或固定成本：响应越长，单帧重渲染可能越慢。第一版选择
-Markdown 语义一致性，并用 80ms 合帧、单一 pending timer 和固定 live 视口限制刷新压力与
-终端输出。
+retry 分隔行只在失败 attempt 已经物理输出正文时添加。新 attempt 的第一个 section 重新输出
+`- assistant` label。失败、取消或协议错误都不强行提交未封口尾部。
 
-实现验收必须覆盖代表性的长 Markdown 响应，记录实际帧耗时和输入响应；如果不能满足 TUI
-可用性，则该阶段不能以纯文本或截断正文静默降级。后续优化仍须保持“完整 Markdown 前缀”
-语义，可考虑 Markdown block 级缓存或窗口化，但不在第一版范围内。
+当前终端可能保留失败 attempt 的 section，而 resume 不会重建它们；这是已接受差异。
 
-## 八、生命周期与收口
+## 七、性能、兼容与范围
 
-| 输入 | Preview 行为 | 正式状态行为 |
-| --- | --- | --- |
-| `model.request.started` attempt 1 | 建立当前 attempt，清空旧 preview | 创建 running model item |
-| `model.request.started` retry | 切换 attempt，清空失败 attempt preview | 更新同一 model item 为 retrying |
-| 匹配 attempt 的 text delta | 追加片段，按 80ms 合帧渲染当前完整 Markdown 前缀 | 不产生 AgentEvent |
-| 旧 attempt 或错误 identity 的 delta | 忽略 | 不变 |
-| `model.request.failed` | 立即清空并停止接受该 attempt | 沿用现有 retry/failure 投影 |
-| `model.request.finished`，正文为空 | 清空 preview | 后续只展示 tool 流程或错误 |
-| `model.request.finished`，正文非空 | 停止接收，暂留 preview 等待正式正文 | model item 定稿 |
-| `assistant.progress` | 同一次 store 更新中清空 preview | 完整中间正文进入 committed/Static |
-| `turn.finished` | 同一次 store 更新中清空 preview | 完整最终正文进入 committed/Static |
-| `turn.failed` / `turn.cancelled` | 清空，不保留半截文本 | 只展示现有失败或取消状态 |
-| `session.finished` / session switch | 取消 timer 并清空 | 沿用现有 session 生命周期 |
+本方案没有 assistant live Markdown viewport，也不需要 timer、字符上限、尾部截断或 React
+帧节流：
 
-不采用“失败后把 preview 标成 failed/cancelled 并提交 Static”的策略。未通过最终协议校验的
-正文不能在当前终端成为永久历史，同时又在 `/resume` 后消失；失败路径只保留明确的 model
-或 turn 错误。
+- fragment 只更新 buffer 和增量行扫描位置；
+- section 只调用一次 `AssistantMarkdown`；
+- 进入 `<Static>` 后不再参与正常活动帧；
+- 极长的单一 section 只占内存，不持续重渲染。
 
-## 九、Resume、one-shot 与配置语义
+Static section 使用提交时的终端宽度，和现有 Static history 一样不会在后续 resize 时重排。
 
-### 9.1 Resume
+SQLite 不保存 framing、offset 或 physical adoption。成功响应 resume 后作为一个完整 canonical
+Markdown item 重建；失败 attempt 的临时 section 不重建。
 
-SQLite 和 `ResumeProjectionReader` 不保存、不读取 preview。resume 只重建完整 assistant
-message、tool results 和 turn terminal state。中断发生在 stream 中间时，恢复后不会出现
-半截内容，也不需要 delta replay 或去重水位。
+one-shot 不注入临时 sink。`stream: false` 完全沿用现有行为。不增加 profile 字段、环境变量或
+slash command。
 
-### 9.2 One-shot
-
-第一版不向 `StdoutEventPrinter` 注入临时 sink。one-shot stdout 无法撤回已经写出的非法、
-失败或取消响应，而且 `run-runner.ts` 仍在 turn 完成后打印最终 `result.finalText`。为避免引入
-新的推测性 stdout 合同和去重状态，本方案保持它的当前行为。
-
-### 9.3 配置
-
-不增加“visible streaming”开关：
-
-- TUI + `stream: true`：provider 有 content delta 时显示 preview；
-- TUI + `stream: false`：没有 preview，完整响应行为与当前一致；
-- provider 没有及时分片或批量返回大 chunk：按实际收到的 content 片段展示，不伪造 token；
-- one-shot：无论 profile 是否 streaming，都只显示现有正式输出。
-
-## 十、代码落点
+## 八、代码落点
 
 | 文件 | 变更 |
 | --- | --- |
-| `src/model/model-client.ts` | `ModelRequestOptions` 增加可选 `onTextDelta` |
-| `src/model/openai-chat-stream.ts` | 把 accumulator 收敛为 `push()` / `finish()`，返回已校验 content fragment |
-| `src/model/openai-chat-model-client.ts` | 在线消费 SDK stream，不再先保存完整 chunk 数组；按片段调用回调 |
-| `src/agent/runtime-session.ts` | 增加可选 `AssistantTextDeltaSink` 接线与失败隔离，不经过 `append()` |
-| `src/agent/loop.ts` | 每个 attempt 注入带 identity 的 non-throwing text callback |
-| `src/cli/tui-runner.tsx` | 将当前 projection store 同时接成正式 event sink 和临时 text sink；deferred sink 只在 attach 后转发 delta |
-| `src/tui/tui-projection-store.ts` | 维护 attempt 的完整片段、80ms 合帧和正式事件收口 |
-| `src/tui/app.tsx` | 在 canonical live timeline 后渲染固定高度的 Markdown preview |
-| `src/tui/components/assistant-stream-preview.tsx` | 复用 `AssistantMarkdown`，测量高度并让 live 视口跟随底部 |
-| `src/model/fake-model-client.ts` | 增加一个显式、确定性的延迟分片测试场景 |
+| `package.json`、`bun.lock` | 将 `marked` 声明为直接依赖 |
+| `src/model/model-client.ts` | `ModelRequestOptions` 增加 `onTextDelta` |
+| `src/model/openai-chat-stream.ts` | accumulator 改为在线 `push()` / `finish()` |
+| `src/model/openai-chat-model-client.ts` | 逐 chunk 调用已校验 content callback |
+| `src/agent/loop.ts` | 每个 attempt 注入带 identity 的 callback |
+| `src/agent/runtime-session.ts` | 接入临时 sink，并隔离失败，不经过 `append()` |
+| `src/cli/tui-runner.tsx` | 只为 TUI 注入临时 sink |
+| `src/tui/assistant-markdown-section-framer.ts` | 新增 section 切分器 |
+| `src/tui/tui-projection-store.ts` | 管理 attempt、Static section、retry、认领和去重 |
+| `src/tui/app.tsx` | Static renderer 支持 section render item |
+| `src/model/fake-model-client.ts` | 增加 delayed section stream fixture |
 
-明确不修改：
+明确不修改正式事件类型、`event-store` reducer 语义、session schema、JSONL、observation 和
+one-shot stdout 合同。
 
-- `src/events/types.ts`
-- `src/events/jsonl-event-log.ts`
-- `src/events/observation-text-log.ts`
-- `src/events/stdout-event-printer.ts`
-- `src/session/*`
-- session schema 与 compatibility contract
-- public config contract 和 README 配置表
+## 九、测试与验收
 
-## 十一、测试计划
+### Section framer
 
-### 11.1 Stream accumulator 与 adapter
+- heading 跨 delta、单 delta 多 headings、preamble 和连续 headings；
+- code fence、blockquote、list、HTML 内 heading-like 行不切分；
+- 空行、Setext heading、thematic break 不切分；
+- CRLF、CJK、emoji 和原始 source offset；
+- reference-style syntax fallback，inline link 正常；
+- 无 heading、单 heading 不提前产出；reset 隔离 attempts。
 
-1. `push()` 按 provider 顺序返回 content fragment，`finish()` 仍组装相同完整响应。
-2. content 与 tool-call fragment 同 chunk 时独立消费，最终 tool call 保持严格校验。
-3. malformed chunk 不产生该 chunk 的 preview，并按现有错误类型 fast-fail。
-4. reasoning delta、usage-only chunk 和 tool-call-only chunk 不触发正文回调。
-5. `stream: false` 不触发回调。
-6. 使用可控 `ReadableStream` 延迟终止 chunk，证明首个 callback 发生在 `request()` settle 之前。
-7. partial chunk 后 abort 仍返回现有 cancellation 结果，不产生完整 assistant message。
+### Model 与 runtime
 
-### 11.2 Runtime 隔离
+- 首个封口 section 在 `request()` settle 前到达；
+- malformed chunk、reasoning、usage-only、tool-call-only 不产生正文；
+- sink 失败和 abort 不改变正式请求结果；
+- tool call 只在完整 mapper 与 ledger 成功后执行；
+- JSONL、observation、SQLite、Recall 不含临时 section。
 
-1. delta sink 能在 request 尚未完成时收到 `iterationId + attemptNumber + content`。
-2. sink 抛错后 turn 仍能完成，正式 event sink 继续收到最终事件。
-3. retry 时 attempt 递增，旧 attempt 的 preview 不进入新 attempt。
-4. abort 后不再投递片段。
-5. `events.jsonl`、`observations.md` 和 SQLite 均不包含 preview marker 或半截正文。
-6. tool call 只在完整 response mapping 和 ledger append 成功后执行。
+### TUI 与真实 PTY
 
-### 11.3 TUI store 与组件
+- 未封口 fragment 不通知 React；下一 heading 只提交前一 section 一次；
+- 同一 attempt 只显示一次 assistant label；
+- 成功补交尾 section，并认领正式 item，不出现整篇副本；
+- 无提前 section 时，完整 Markdown 路径不变；
+- 成功 model item 不晚于 assistant section 进入 Static；
+- retry 保留 sealed section、丢弃尾部并分隔新 attempt；
+- failure/cancel 不提交未封口尾部；resume 只重建 canonical 正文；
+- `transcriptSince(mark)` 证明无 `ESC[3J`，也不重放既有 Static history。
 
-1. 首个片段立即出现，后续片段在 80ms 窗口内合并通知，且没有 timer backlog。
-2. 每个 render snapshot 都包含当前 attempt 的完整有序正文，并忽略 stale attempt。
-3. retry、失败、取消和 session finish 都清空 preview。
-4. `assistant.progress` 与 `turn.finished` 在一个 store snapshot 中完成 preview → committed
-   交接，不重复一帧。
-5. 普通段落、列表、强调、链接、表格和未闭合代码围栏都由 `AssistantMarkdown` 渲染；语法补全
-   后允许既有内容重新排版。
-6. live Markdown 视口保持 6/1 行并跟随最新物理行，source 不截断；resize 后重新测量和回流。
-7. 正式完成态仍由 `AssistantMarkdown` 渲染完整原文。
-8. 多次 preview 更新不含 `ESC[3J`，不重放 Static history sentinel。
-9. 长 Markdown fixture 验证刷新不会形成通知积压，并记录渲染耗时与按键响应。
+真实 provider smoke 还必须证明 section 输出早于 request settle、拼接 source 等于最终 content、
+最终终端无重复、工具不提前执行，且不记录凭据、reasoning 或 tool 参数。
 
-### 11.4 真实 PTY
+## 十、非目标
 
-FakeModel 增加一个显式 streaming 场景，以两个不同 marker 分隔早期片段和最终正文：
+- token、逐行或普通 paragraph 级输出；
+- 未封口 section 的 live Markdown；
+- 空行或计时器 fallback；
+- reasoning 和 tool-call argument streaming；
+- one-shot streaming；
+- 临时 section 持久化、resume replay 或失败回滚。
 
-1. 提交 Prompt 后，在 footer 仍为 running 时看到 early marker。
-2. 最终 marker 尚未产生时，证明 request 仍未完成。
-3. streaming 期间看到已经流出部分的 Markdown 样式，最新内容保持在 live 视口内。
-4. 完成后看到完整 Markdown 进入 Static、idle footer 恢复，且 live preview 与正式正文不重复。
-5. 取消场景不留下 early marker 作为 Static assistant 历史。
-6. `/resume` 后只重建最终 canonical 回复，不重建 preview。
-7. 使用 `transcriptSince(mark)` 证明增量更新没有清屏或重复打印旧历史。
+## 十一、实施门禁与完成条件
 
-### 11.5 真实 provider smoke
+实施顺序：section framer → 在线 response accumulator → runtime 临时 sink → TUI Static
+section/认领/retry → 真实 PTY 与 provider smoke。
 
-在资格矩阵内至少验证一个真实 streaming profile：
+迭代运行 `bun run check:fast`；源代码完成后必须运行 `bun run check`。文档通过
+`git diff --check` 和 `bun run docs:check`。
 
-- 首个 content delta 的时间早于完整 request settle；
-- 最终 TUI 文本与 `ModelRequestOutput.message.content` 完全一致；
-- 含工具调用的 response 不提前执行工具；
-- 用户取消后没有 canonical partial assistant；
-- smoke 输出不记录凭据、请求正文、reasoning 原文或 tool-call 参数片段。
+完成条件：
 
-## 十二、实施顺序与门禁
-
-1. 先完成在线 accumulator 和可控 delayed-stream 测试，保证完整响应行为不变。
-2. 增加 runtime 临时 sink 与 retry/cancel 隔离测试，不接 UI。
-3. 增加 TUI live Markdown preview、原子收口和组件测试。
-4. 增加真实 PTY 场景与 provider smoke。
-
-迭代期间运行相关测试和：
-
-```bash
-bun run check:fast
-```
-
-源代码实现完成后必须运行完整门禁：
-
-```bash
-bun run check
-```
-
-文档本身应通过：
-
-```bash
-git diff --check
-bun run docs:check
-```
-
-## 十三、完成条件
-
-- streaming TUI 在模型完整返回前，用 Markdown 展示当前已流出的完整正文前缀。
-- live 视口高度和通知频率有界，始终跟随最新内容；Markdown source 不截断、不降级纯文本。
-- 长响应下的 Markdown 重渲染成本经过测量，不产生通知积压或不可接受的交互阻塞。
-- reasoning、tool-call fragment 和 provider raw response 不进入临时可见通道。
-- preview 不属于 AgentEvent、canonical history、SQLite、JSONL、observation 或 Recall。
-- retry、失败、取消、退出与 resume 均不留下半截 assistant 历史。
-- 正式 assistant 内容仍经过现有严格 mapper，并由现有 Markdown renderer 只进入 `<Static>`
-  一次。
-- `stream: false` 与 one-shot CLI 没有行为变化。
-- 相关单测、真实 PTY、真实 provider smoke 和 `bun run check` 全部通过。
+- 满足切分合同时，至少一个完整 section 在 request 结束前进入 `<Static>`；
+- 未封口正文不进入 live 区，也不产生 React frame；
+- 已提交 section、尾 section 和正式 assistant item 在当前终端只出现一次；
+- 无 heading、单 heading 和保守 fallback 沿用现有完整 Markdown 输出；
+- retry、失败、取消只保留 sealed 物理输出，不污染 canonical history；
+- resume、one-shot、`stream: false`、session schema 和正式 AgentEvent 合同不变；
+- 单测、真实 PTY、真实 provider smoke 和 `bun run check` 全部通过。

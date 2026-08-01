@@ -55,12 +55,13 @@ resume 语义不变。
 ### 验收重点
 
 - `content` delta 只进入临时 presentation state，完整响应通过校验后才写入 canonical history。
-- TUI live 区以当前已流出的完整正文前缀渲染 Markdown，并跟随最新内容；流结束后正式正文只
-  进入 `<Static>` 一次。
+- 下一条完整的顶层 ATX heading 到达后，前一个 Markdown section 才进入 `<Static>`；未封口
+  section 只在内存累积，不进入 live 区。
+- 无 heading、单 heading 或无法确认 section 独立性时，沿用完整响应结束后的一次性输出。
 - `reasoning_content` 不进入可见增量通道；现有完整响应组装和 reasoning-only 判定保持不变。
 - 未完整组装的 tool call 不进入执行链，参数和 provider tool-call ID 继续严格校验。
-- 取消、provider 失败或 TUI 退出不会留下半截 assistant message，也不会在恢复后重复内容。
-- 完成态继续使用当前 timeline renderer；`/resume` 只重建最终 canonical 内容。
+- retry、失败或取消可以保留已经封口的物理输出，但不能写入 canonical history；未封口正文丢弃。
+- 正式事件认领已经输出的 sections，当前终端不重复整篇回复；`/resume` 只重建 canonical 内容。
 - 通过组件测试、真实 PTY 和资格矩阵内 provider 的流式 smoke。
 
 ## 阶段四：Chrome 一阶段交付
