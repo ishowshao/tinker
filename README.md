@@ -340,6 +340,7 @@ complete fixed policy and persistence contract.
 | `/yolo [on\|off]` | Show or change destructive Bash confirmation |
 | `/memory` | Browse stored global memories |
 | `/compact [retire]` | Swap tool output or retire a cold history prefix |
+| `/undo` | Undo the latest Write/Edit/Delete turn |
 | `/clear` | Start a new session and clear conversation |
 | `/fork` | Clone the current session |
 | `/view <path>` | View a local UTF-8 text file |

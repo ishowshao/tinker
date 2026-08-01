@@ -104,6 +104,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         presentationSinks: [sink],
         webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
         toolingConfig: options.publicConfig.tooling,
+        enableTurnUndo: true,
         bashGuard: {
           mode: sessionConfig.bashGuardMode,
           source: sessionConfig.bashGuardSource,

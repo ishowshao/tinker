@@ -55,6 +55,7 @@ import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { loadViewFile, type ViewFile } from "./view-file";
 import { writeClipboardText } from "./clipboard";
 import type { WorkspaceFileLister } from "./workspace-file-search";
+import type { TurnUndoBarrierReason, TurnUndoResult } from "../tools/turn-undo-manager";
 
 export type AppProps = {
   sessionController: TuiSessionController;
@@ -598,6 +599,22 @@ export function App(props: AppProps) {
             .finally(() => setIsSessionOperation(false));
           return true;
         }
+        if (command.type === "undo") {
+          setIsSessionOperation(true);
+          void props.sessionController
+            .undo()
+            .then((result) => {
+              if (result.status === "restored" || result.status === "incomplete") {
+                setGitBranchRefresh((current) => current + 1);
+              }
+              setNotice(formatTurnUndoNotice(result));
+            })
+            .catch((error: unknown) => {
+              setNotice(errorMessage(error));
+            })
+            .finally(() => setIsSessionOperation(false));
+          return true;
+        }
         if (command.type === "clear") {
           setIsSessionOperation(true);
           void props.sessionController
@@ -849,6 +866,56 @@ export function formatContextCompactionNotice(result: ContextCompactionResult): 
           100
         ).toFixed(1);
   return `Context compacted: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.addedOverrideCount} observations swapped, ${before} -> ${after} estimated tokens (-${reduction}%).`;
+}
+
+export function formatTurnUndoNotice(result: TurnUndoResult): string {
+  if (result.status === "nothing") {
+    return "Nothing to undo in this active session.";
+  }
+  if (result.status === "unavailable") {
+    return `Cannot undo turn ${result.turnNumber}: ${formatUndoBarrierReason(result.reason)}`;
+  }
+  if (result.status === "refused") {
+    const count = result.conflicts.length;
+    return [
+      `Undo refused: ${count} ${count === 1 ? "file" : "files"} changed after turn ${result.turnNumber}.`,
+      ...result.conflicts.map(
+        (conflict) => `- ${conflict.displayPath}: ${conflict.detail}`,
+      ),
+    ].join("\n");
+  }
+  if (result.status === "incomplete") {
+    return `Undo incomplete for turn ${result.turnNumber}: ${formatPartialUndoCount(result)} before ${result.failedPath} failed: ${sentenceDetail(result.detail)}\nRun /undo again to retry.`;
+  }
+  return `Restored workspace to before turn ${result.turnNumber}: ${formatFileCount(result.restoredFileCount)} restored, ${formatFileCount(result.deletedFileCount)} deleted.`;
+}
+
+function formatUndoBarrierReason(reason: TurnUndoBarrierReason): string {
+  if (reason.kind === "file-too-large" || reason.kind === "turn-too-large") {
+    return "undo snapshot capacity was exceeded.";
+  }
+  return `undo snapshot could not be captured for ${reason.displayPath}: ${sentenceDetail(reason.detail)}`;
+}
+
+function formatPartialUndoCount(
+  result: Extract<TurnUndoResult, { status: "incomplete" }>,
+): string {
+  const completed: string[] = [];
+  if (result.restoredFileCount > 0) {
+    completed.push(`${formatFileCount(result.restoredFileCount)} restored`);
+  }
+  if (result.deletedFileCount > 0) {
+    completed.push(`${formatFileCount(result.deletedFileCount)} deleted`);
+  }
+  return completed.length === 0 ? "no files restored" : completed.join(" and ");
+}
+
+function formatFileCount(count: number): string {
+  return `${count} ${count === 1 ? "file" : "files"}`;
+}
+
+function sentenceDetail(detail: string): string {
+  return /[.!?]$/.test(detail) ? detail : `${detail}.`;
 }
 
 export function formatContextCompactionFailureNotice(error: unknown): string {

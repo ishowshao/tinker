@@ -103,6 +103,7 @@ function createSessionController(
     listSessions: async () => [],
     compact,
     retire,
+    undo: async () => ({ status: "nothing" }),
     fork: async () => {
       throw new Error("not used");
     },
@@ -958,6 +959,36 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("48,361 -> 34,735 estimated tokens");
     expect(lastFrame()).toContain("(-28.2%)");
     expect(compactCalls).toBe(1);
+    expect(runCalls).toBe(0);
+    cleanup();
+  });
+
+  test("runs /undo locally and renders the restore result", async () => {
+    let runCalls = 0;
+    let undoCalls = 0;
+    const controller = createSessionController(createProjectionStore(), async () => {
+      runCalls += 1;
+      return completedResult();
+    });
+    controller.undo = async () => {
+      undoCalls += 1;
+      return {
+        status: "restored",
+        turnNumber: 7,
+        restoredFileCount: 2,
+        deletedFileCount: 1,
+      };
+    };
+    const { stdin, lastFrame, cleanup } = render(
+      <App sessionController={controller} />,
+    );
+
+    await submitInput(stdin, "/undo");
+    await Bun.sleep(30);
+    expect(lastFrame()).toContain(
+      "Restored workspace to before turn 7: 2 files restored, 1 file deleted.",
+    );
+    expect(undoCalls).toBe(1);
     expect(runCalls).toBe(0);
     cleanup();
   });

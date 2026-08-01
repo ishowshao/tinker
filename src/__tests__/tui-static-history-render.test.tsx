@@ -213,6 +213,7 @@ function controller(store: TuiProjectionStore): TuiSessionController {
     retire: async () => {
       throw new Error("not used");
     },
+    undo: async () => ({ status: "nothing" }),
     fork: async () => {
       throw new Error("not used");
     },

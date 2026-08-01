@@ -11,6 +11,7 @@ import type {
   SessionDisposeReason,
 } from "../agent/runtime-session";
 import type { RunAgentResult, UserMessage } from "../agent/types";
+import type { TurnUndoResult } from "../tools/turn-undo-manager";
 import type { ImageAssetRef } from "../image/image-types";
 import type { ImportedImageAsset } from "../image/image-asset-store";
 import type { SessionId } from "../ids/runtime-id";
@@ -52,6 +53,7 @@ export type TuiSessionController = {
   listSessions: () => Promise<readonly SessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
+  undo: () => Promise<TurnUndoResult>;
   fork: (beforeCommit?: () => void) => Promise<SessionId>;
   clear: (beforeCommit?: () => void) => Promise<void>;
   resume: (sessionId: SessionId, beforeCommit?: () => void) => Promise<void>;
@@ -103,6 +105,12 @@ export class DefaultTuiSessionController implements TuiSessionController {
 
   retire(): Promise<ContextRetirementResult> {
     return this.serialize(() => this.binding.runtimeSession.retireContext());
+  }
+
+  undo(): Promise<TurnUndoResult> {
+    return this.serialize(() =>
+      this.binding.runtimeSession.undoLatestFileMutationTurn(),
+    );
   }
 
   fork(beforeCommit?: () => void): Promise<SessionId> {

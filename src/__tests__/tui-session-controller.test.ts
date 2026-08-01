@@ -10,6 +10,50 @@ import {
 import { createTestRuntime } from "./test-runtime";
 
 describe("DefaultTuiSessionController", () => {
+  test("serializes undo against other session operations", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    let releaseUndo!: () => void;
+    const undoStarted = Promise.withResolvers<void>();
+    current.runtime.undoLatestFileMutationTurn = async () => {
+      undoStarted.resolve();
+      await new Promise<void>((resolve) => {
+        releaseUndo = resolve;
+      });
+      return {
+        status: "restored",
+        turnNumber: 3,
+        restoredFileCount: 1,
+        deletedFileCount: 0,
+      };
+    };
+    const controller = new DefaultTuiSessionController(
+      binding(current.runtime),
+      emptyCatalog(),
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("not used");
+      },
+      async () => {
+        throw new Error("must not create");
+      },
+    );
+
+    const undo = controller.undo();
+    await undoStarted.promise;
+    expect(controller.clear()).rejects.toThrow(
+      "Another session operation is already running.",
+    );
+    releaseUndo();
+    expect(await undo).toEqual({
+      status: "restored",
+      turnNumber: 3,
+      restoredFileCount: 1,
+      deletedFileCount: 0,
+    });
+  });
+
   test("keeps the current binding when target preparation fails", async () => {
     const current = fakeRuntime("current-session" as SessionId);
     const controller = new DefaultTuiSessionController(
@@ -271,6 +315,7 @@ function fakeRuntime(
     retireContext: async () => {
       throw new Error("not used");
     },
+    undoLatestFileMutationTurn: async () => ({ status: "nothing" }),
     cloneSession: async (targetSessionId) => {
       clones.push(targetSessionId);
     },

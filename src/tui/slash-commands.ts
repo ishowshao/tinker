@@ -40,6 +40,11 @@ export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
     description: "Swap tool output or retire a cold history prefix",
   },
   {
+    name: "undo",
+    usage: "/undo",
+    description: "Undo the latest Write/Edit/Delete turn",
+  },
+  {
     name: "clear",
     usage: "/clear",
     description: "Start a new session and clear conversation",
@@ -82,6 +87,7 @@ export type ParsedSlashCommand =
   | { type: "memory" }
   | { type: "compact" }
   | { type: "compact_retire" }
+  | { type: "undo" }
   | { type: "clear" }
   | { type: "fork" }
   | { type: "view"; filePath: string }
@@ -150,6 +156,12 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "compact_retire" };
     }
     throw slashCommandUsageError("compact");
+  }
+  if (command === "/undo") {
+    if (tokens.length === 1) {
+      return { type: "undo" };
+    }
+    throw slashCommandUsageError("undo");
   }
   if (command === "/clear") {
     if (tokens.length === 1) {

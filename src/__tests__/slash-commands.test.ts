@@ -108,6 +108,13 @@ describe("parseSlashCommand", () => {
     );
   });
 
+  test("parses /undo without arguments", () => {
+    expect(parseSlashCommand("/undo")).toEqual({ type: "undo" });
+    expect(parseSlashCommand("/undo   ")).toEqual({ type: "undo" });
+    expect(() => parseSlashCommand("/undo list")).toThrow("Usage: /undo");
+    expect(() => parseSlashCommand("/undo --force")).toThrow("Usage: /undo");
+  });
+
   test("parses /clear without arguments", () => {
     expect(parseSlashCommand("/clear")).toEqual({ type: "clear" });
     expect(() => parseSlashCommand("/clear now")).toThrow("Usage: /clear");
