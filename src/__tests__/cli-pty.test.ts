@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
 import { sessionDatabasePath } from "../session/session-store";
@@ -258,6 +258,73 @@ test(
               )
               .get(),
           ).toEqual({ ok: 1, exit_code: 0 });
+        });
+      },
+    );
+  },
+  { timeout: 30_000 },
+);
+
+test(
+  "PTY-116: undoes one multi-file mutation turn without rewriting history",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-turn-undo", rows: 80, columns: 140 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        const modifiedPath = path.join(harness.workspaceRoot, "pty-undo-modified.txt");
+        const createdPath = path.join(
+          harness.workspaceRoot,
+          "pty-undo-created",
+          "nested.txt",
+        );
+        const deletedPath = path.join(harness.workspaceRoot, "pty-undo-deleted.bin");
+        const deletedBytes = Buffer.from([0xff, 0x00, 0x80, 0x61]);
+        await writeFile(modifiedPath, "before undo turn\n");
+        await writeFile(deletedPath, deletedBytes);
+
+        await submitPrompt(harness, "PTY_UNDO_MUTATE");
+        await harness.waitForScreen("PTY_UNDO_MUTATIONS_DONE");
+        expect(await readFile(modifiedPath, "utf8")).toBe("after undo turn\n");
+        expect(await readFile(createdPath, "utf8")).toBe("created by undo turn\n");
+        expect(readFile(deletedPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+        await submitPrompt(harness, "/undo");
+        await harness.waitForScreen(
+          "Restored workspace to before turn 1: 2 files restored, 1 file deleted.",
+        );
+        expect(await readFile(modifiedPath, "utf8")).toBe("before undo turn\n");
+        expect(await readFile(deletedPath)).toEqual(deletedBytes);
+        expect(readFile(createdPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await stat(path.dirname(createdPath))).isDirectory()).toBe(true);
+
+        await submitPrompt(harness, "/undo");
+        await harness.waitForScreen("Nothing to undo in this active session.");
+        await quitTui(harness);
+
+        const session = await onlyStoredSession(harness.workspaceRoot);
+        expect(session.turnCount).toBe(1);
+        withSessionDatabase(harness.workspaceRoot, session, (database) => {
+          expect(
+            database
+              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+              .all(),
+          ).toEqual([{ turn_number: 1, status: "completed" }]);
+          expect(
+            database
+              .query(
+                `SELECT messages.name
+                 FROM tool_results
+                 JOIN messages ON messages.message_id = tool_results.tool_message_id
+                 ORDER BY messages.ordinal`,
+              )
+              .all(),
+          ).toEqual([
+            { name: "Read" },
+            { name: "Write" },
+            { name: "Write" },
+            { name: "Delete" },
+          ]);
         });
       },
     );

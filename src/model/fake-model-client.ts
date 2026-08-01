@@ -238,6 +238,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-tool-chain") {
       return this.ptyToolChain(input, prepared, options);
     }
+    if (this.mode === "pty-turn-undo") {
+      return this.ptyTurnUndo(input, prepared, options);
+    }
     if (this.mode === "pty-background-task") {
       return this.ptyBackgroundTask(input, prepared, options);
     }
@@ -502,6 +505,60 @@ export class FakeModelClient implements ModelClient {
       throw new Error("PTY Bash tool did not verify the edited file.");
     }
     return textOutput(prepared, "PTY_TOOL_CHAIN_DONE");
+  }
+
+  private ptyTurnUndo(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): ModelRequestOutput {
+    requireTools(input, ["Read", "Write", "Delete"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt !== "PTY_UNDO_MUTATE") {
+      throw new Error(`Unexpected pty-turn-undo prompt: ${JSON.stringify(prompt)}.`);
+    }
+
+    const tools = toolMessagesAfterLastUser(input.messages);
+    const read = tools.find((message) => message.name === "Read");
+    if (read === undefined) {
+      return toolCallOutput(prepared, options, "Read", {
+        file_path: "pty-undo-modified.txt",
+      });
+    }
+    if (!read.content.includes("Read succeeded")) {
+      throw new Error("PTY undo Read tool did not succeed.");
+    }
+
+    const writes = tools.filter((message) => message.name === "Write");
+    if (writes.length === 0) {
+      return toolCallOutput(prepared, options, "Write", {
+        file_path: "pty-undo-modified.txt",
+        content: "after undo turn\n",
+      });
+    }
+    if (!writes[0]?.content.includes("Write succeeded")) {
+      throw new Error("PTY undo modifying Write did not succeed.");
+    }
+    if (writes.length === 1) {
+      return toolCallOutput(prepared, options, "Write", {
+        file_path: "pty-undo-created/nested.txt",
+        content: "created by undo turn\n",
+      });
+    }
+    if (!writes[1]?.content.includes("Write succeeded")) {
+      throw new Error("PTY undo creating Write did not succeed.");
+    }
+
+    const deletion = tools.find((message) => message.name === "Delete");
+    if (deletion === undefined) {
+      return toolCallOutput(prepared, options, "Delete", {
+        file_path: "pty-undo-deleted.bin",
+      });
+    }
+    if (!deletion.content.includes("Delete succeeded")) {
+      throw new Error("PTY undo Delete tool did not succeed.");
+    }
+    return textOutput(prepared, "PTY_UNDO_MUTATIONS_DONE");
   }
 
   private ptyBackgroundTask(
