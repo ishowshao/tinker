@@ -20,10 +20,6 @@ export type ShellProcessHandle = {
   close(): void;
 };
 
-const terminalExitDrainQuietMs = 50;
-const terminalExitDrainPollMs = 10;
-const terminalExitDrainMaxMs = 2_000;
-
 export class ShellProcessWriteError extends Error {
   constructor(
     message: string,
@@ -99,7 +95,6 @@ function spawnPtyShellProcess(input: {
   let terminalExitError: Error | undefined;
   let resolveTerminalExit: (() => void) | undefined;
   let drainGeneration = 0;
-  let lastOutputAt = Date.now();
   const drainWaiters = new Set<() => void>();
   const terminalExit = new Promise<void>((resolve) => {
     resolveTerminalExit = resolve;
@@ -120,48 +115,40 @@ function spawnPtyShellProcess(input: {
     resolveTerminalExit?.();
   };
 
-  const terminal = new Bun.Terminal({
-    cols: TERMINAL_SCREEN_COLUMNS,
-    rows: TERMINAL_SCREEN_ROWS,
-    name: "xterm-256color",
-    data(_terminal, bytes) {
-      lastOutputAt = Date.now();
-      input.onOutput(new Uint8Array(bytes));
+  const subprocess = Bun.spawn(["bash", "-lc", bashWrapperScript], {
+    cwd: input.cwd,
+    detached: true,
+    env: {
+      ...input.env,
+      TERM: "xterm-256color",
+      NO_COLOR: "1",
+      PAGER: "cat",
+      GIT_PAGER: "cat",
     },
-    exit(_terminal, exitCode) {
-      if (terminalEnded) {
-        return;
-      }
-      if (exitCode !== 0) {
-        terminalExitError = new Error(
-          `PTY output stream closed with lifecycle status ${exitCode}.`,
-        );
-      }
-      settleTerminalExit();
-    },
-    drain() {
-      notifyDrain();
+    terminal: {
+      cols: TERMINAL_SCREEN_COLUMNS,
+      rows: TERMINAL_SCREEN_ROWS,
+      name: "xterm-256color",
+      data(_terminal, bytes) {
+        input.onOutput(new Uint8Array(bytes));
+      },
+      exit(_terminal, exitCode) {
+        if (terminalEnded) {
+          return;
+        }
+        if (exitCode !== 0) {
+          terminalExitError = new Error(
+            `PTY output stream closed with lifecycle status ${exitCode}.`,
+          );
+        }
+        settleTerminalExit();
+      },
+      drain() {
+        notifyDrain();
+      },
     },
   });
-
-  let subprocess: Bun.Subprocess;
-  try {
-    subprocess = Bun.spawn(["bash", "-lc", bashWrapperScript], {
-      cwd: input.cwd,
-      detached: true,
-      env: {
-        ...input.env,
-        TERM: "xterm-256color",
-        NO_COLOR: "1",
-        PAGER: "cat",
-        GIT_PAGER: "cat",
-      },
-      terminal,
-    });
-  } catch (error) {
-    terminal.close();
-    throw error;
-  }
+  const terminal = subprocess.terminal!;
 
   let writeQueue = Promise.resolve();
   const write = (chars: string): Promise<number> => {
@@ -217,34 +204,6 @@ function spawnPtyShellProcess(input: {
     }),
   );
 
-  // Linux does not deliver PTY EOF for a pre-created Bun.Terminal: the
-  // parent keeps its slave fd open for terminal reuse, so the master's read
-  // side never observes EOF and the terminal exit callback never fires
-  // (oven-sh/bun#33237). Once the subprocess exits, drain any remaining
-  // output and close the terminal ourselves so waitForOutputClose() settles
-  // on every platform.
-  const drainTerminalAfterExit = async (): Promise<void> => {
-    const startedAt = Date.now();
-    while (!terminalEnded && !terminal.closed) {
-      if (Date.now() - lastOutputAt >= terminalExitDrainQuietMs) {
-        break;
-      }
-      if (Date.now() - startedAt >= terminalExitDrainMaxMs) {
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, terminalExitDrainPollMs));
-    }
-    if (!terminal.closed) {
-      try {
-        terminal.close();
-      } catch {
-        // Closing is best-effort; settle the waiters regardless.
-      }
-    }
-    settleTerminalExit();
-  };
-  void subprocess.exited.then(drainTerminalAfterExit, drainTerminalAfterExit);
-
   return {
     pid: subprocess.pid,
     mode: "pty",
@@ -266,7 +225,6 @@ function spawnPtyShellProcess(input: {
       if (!terminal.closed) {
         terminal.close();
       }
-      settleTerminalExit();
     },
   };
 }

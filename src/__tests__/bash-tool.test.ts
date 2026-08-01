@@ -113,7 +113,7 @@ describe("Bash tool", () => {
     }
   });
 
-  test("runs a safe PTY command in one-shot guard mode without confirmation", async () => {
+  test("runs a safe PTY command with a controlling terminal without confirmation", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
     const requests: string[] = [];
     const tooling = createDefaultTooling({
@@ -134,7 +134,7 @@ describe("Bash tool", () => {
           name: "Bash",
           args: {
             command:
-              'printf \'\\033[31msafe-pty\\033[0m %s %s %s %s\\n\' "$TERM" "$PAGER" "$GIT_PAGER" "$NO_COLOR"',
+              'printf \'\\033[31msafe-pty\\033[0m %s %s %s %s\\n\' "$TERM" "$PAGER" "$GIT_PAGER" "$NO_COLOR"; printf \'controlling-tty\\n\' > /dev/tty',
             tty: true,
           },
         }),
@@ -143,6 +143,7 @@ describe("Bash tool", () => {
       expect(raw.ok).toBe(true);
       expect(raw.tty).toBe(true);
       expect(raw.screen).toContain("safe-pty xterm-256color cat cat 1");
+      expect(raw.screen).toContain("controlling-tty");
       expect(raw.screen).not.toContain("\x1b");
       expect(await readFile(raw.outputFilePath, "utf8")).toContain("\x1b[31m");
     } finally {
