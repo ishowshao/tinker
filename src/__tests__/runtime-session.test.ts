@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { FatalAgentTurnError } from "../agent/loop";
@@ -109,6 +109,96 @@ class BackgroundTaskModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: "background started",
+    });
+  }
+}
+
+class UndoMutationModel extends TestModelClient {
+  calls = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected runtime identity for undo mutations.");
+      }
+      const { iteration, runtimeSession } = options.identity;
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: "provider-undo-delete",
+            name: "Delete",
+            args: { file_path: "original.bin" },
+          },
+          {
+            ...runtimeSession.createToolCall(iteration, 2),
+            providerToolCallId: "provider-undo-write",
+            name: "Write",
+            args: { file_path: "created.txt", content: "created\n" },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "mutations complete",
+    });
+  }
+}
+
+class UndoTerminalModel extends TestModelClient {
+  readonly secondStarted: Promise<void>;
+  private markSecondStarted!: () => void;
+  private calls = 0;
+
+  constructor(private readonly outcome: "failed" | "cancelled") {
+    super();
+    this.secondStarted = new Promise((resolve) => {
+      this.markSecondStarted = resolve;
+    });
+  }
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected runtime identity for terminal undo mutation.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "provider-terminal-undo-write",
+            name: "Write",
+            args: { file_path: "terminal.txt", content: this.outcome },
+          },
+        ],
+      });
+    }
+
+    this.markSecondStarted();
+    if (this.outcome === "failed") {
+      throw new Error("terminal model failure");
+    }
+    return new Promise((_resolve, reject) => {
+      const abort = () => reject(cancellationError(options.signal));
+      if (options.signal.aborted) {
+        abort();
+        return;
+      }
+      options.signal.addEventListener("abort", abort, { once: true });
     });
   }
 }
@@ -1336,6 +1426,9 @@ describe("RuntimeSession lifecycle", () => {
       expect(session.cloneSession(runtimeIdFactory.createSessionId())).rejects.toThrow(
         "Cannot clone the session while a turn, context operation, or background task is active.",
       );
+      expect(session.undoLatestFileMutationTurn()).rejects.toThrow(
+        "Cannot undo while a turn or context operation is active.",
+      );
     } finally {
       controller.abort();
       await turn;
@@ -1362,8 +1455,103 @@ describe("RuntimeSession lifecycle", () => {
       expect(session.cloneSession(runtimeIdFactory.createSessionId())).rejects.toThrow(
         "Cannot clone the session while a turn, context operation, or background task is active.",
       );
+      expect(session.undoLatestFileMutationTurn()).rejects.toThrow(
+        "Cannot undo while a background task is active.",
+      );
     } finally {
       await session.dispose({ type: "tui_exit" });
+    }
+  });
+
+  test("completes and restores active-runtime undo without events or model calls", async () => {
+    const model = new UndoMutationModel();
+    const sink = collectingEventSink();
+    const input = {
+      ...createInput(model, sink, "runtime-turn-undo"),
+      enableTurnUndo: true,
+    };
+    const originalBytes = Buffer.from([0xff, 0x00, 0x61, 0x80]);
+    await writeFile(path.join(input.workspaceRoot, "original.bin"), originalBytes);
+    const session = await createRuntimeSession(input, {
+      loadMcpConfig: async () => undefined,
+    });
+
+    try {
+      expect(
+        await session.executeTurn({
+          userMessage: { role: "user", content: "change files" },
+          signal: new AbortController().signal,
+        }),
+      ).toMatchObject({ status: "completed" });
+      expect(
+        readFile(path.join(input.workspaceRoot, "original.bin")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        await readFile(path.join(input.workspaceRoot, "created.txt"), "utf8"),
+      ).toBe("created\n");
+      await session.compactContext();
+      const eventCount = sink.events.length;
+      const modelCallCount = model.calls;
+
+      expect(await session.undoLatestFileMutationTurn()).toEqual({
+        status: "restored",
+        turnNumber: 1,
+        restoredFileCount: 1,
+        deletedFileCount: 1,
+      });
+      expect(await readFile(path.join(input.workspaceRoot, "original.bin"))).toEqual(
+        originalBytes,
+      );
+      expect(
+        readFile(path.join(input.workspaceRoot, "created.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(model.calls).toBe(modelCallCount);
+      expect(sink.events).toHaveLength(eventCount);
+      expect(await session.undoLatestFileMutationTurn()).toEqual({
+        status: "nothing",
+      });
+    } finally {
+      await session.dispose({ type: "tui_exit" });
+      await rm(input.workspaceRoot, { recursive: true });
+    }
+  });
+
+  test("keeps file mutations from failed and cancelled turns undoable", async () => {
+    for (const outcome of ["failed", "cancelled"] as const) {
+      const model = new UndoTerminalModel(outcome);
+      const input = {
+        ...createInput(model, collectingEventSink(), `runtime-undo-${outcome}`),
+        enableTurnUndo: true,
+      };
+      const session = await createRuntimeSession(input, {
+        loadMcpConfig: async () => undefined,
+      });
+      const controller = new AbortController();
+
+      try {
+        const completion = session.executeTurn({
+          userMessage: { role: "user", content: outcome },
+          signal: controller.signal,
+        });
+        await model.secondStarted;
+        if (outcome === "cancelled") {
+          controller.abort();
+        }
+        expect(await completion).toMatchObject({ status: outcome });
+        expect(
+          await readFile(path.join(input.workspaceRoot, "terminal.txt"), "utf8"),
+        ).toBe(outcome);
+        expect(await session.undoLatestFileMutationTurn()).toMatchObject({
+          status: "restored",
+          deletedFileCount: 1,
+        });
+        expect(
+          readFile(path.join(input.workspaceRoot, "terminal.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await session.dispose({ type: "tui_exit" });
+        await rm(input.workspaceRoot, { recursive: true });
+      }
     }
   });
 

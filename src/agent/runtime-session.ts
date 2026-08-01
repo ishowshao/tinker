@@ -73,6 +73,7 @@ import {
 } from "../context/compiled-context-hash";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
 import type { ToolExecutor } from "../tools/types";
+import type { TurnUndoResult } from "../tools/turn-undo-manager";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import {
@@ -159,6 +160,7 @@ export type RuntimeSession = {
   executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
   compactContext(): Promise<ContextCompactionResult>;
   retireContext(): Promise<ContextRetirementResult>;
+  undoLatestFileMutationTurn(): Promise<TurnUndoResult>;
   cloneSession(targetSessionId: SessionId): Promise<void>;
   canSwitchSession(): boolean;
   bashGuard(): BashGuardSnapshot;
@@ -272,6 +274,7 @@ type CommonRuntimeSessionInput = {
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
   completedTurnHook?: CompletedTurnHook;
+  enableTurnUndo?: boolean;
   bashGuard?: {
     readonly mode: "guard" | "yolo";
     readonly source: Exclude<BashGuardSource, "session">;
@@ -329,6 +332,7 @@ type RuntimeSessionState =
   | "executing"
   | "compacting"
   | "maintaining_context"
+  | "undoing"
   | "faulted"
   | "disposing"
   | "disposed";
@@ -595,6 +599,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         workspaceRoot: input.workspaceRoot,
         runtimeSession: session.context,
         historyReader: store.historyReader(),
+        ...(input.enableTurnUndo === true ? { enableTurnUndo: true } : {}),
         webFetchRefiner: input.webFetchRefiner,
         toolingConfig: input.toolingConfig,
         bashGuard: {
@@ -1785,6 +1790,36 @@ class DefaultRuntimeSession implements RuntimeSession {
     );
   }
 
+  async undoLatestFileMutationTurn(): Promise<TurnUndoResult> {
+    if (
+      this.state !== "ready" ||
+      this.activeTurn !== undefined ||
+      this.activeContextRevision !== undefined
+    ) {
+      throw new Error("Cannot undo while a turn or context operation is active.");
+    }
+    const tooling = this.requireTooling();
+    if (
+      tooling.taskManager
+        .listBackgroundTasks()
+        .some((task) => task.status === "running" || task.status === "stopping")
+    ) {
+      throw new Error("Cannot undo while a background task is active.");
+    }
+    if (tooling.turnUndoManager === undefined) {
+      return { status: "nothing" };
+    }
+
+    this.state = "undoing";
+    try {
+      return await tooling.turnUndoManager.undoLatest();
+    } finally {
+      if (this.state === "undoing") {
+        this.state = "ready";
+      }
+    }
+  }
+
   async cloneSession(targetSessionId: SessionId): Promise<void> {
     if (!this.canSwitchSession()) {
       throw new Error(
@@ -1916,6 +1951,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       await this.appendTerminalEvent(turn, result, projectedMessageCount);
       pendingLedgerTurn.finish(result);
       settled = true;
+      this.requireTooling().turnUndoManager?.completeTurn(turn);
       if (result.status === "completed") {
         this.notifyCompletedTurn(turn);
       }
