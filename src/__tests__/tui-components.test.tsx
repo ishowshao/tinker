@@ -1255,7 +1255,7 @@ describe("tui components", () => {
     cleanup();
   });
 
-  test("shows only five background tasks and summarizes the remainder", () => {
+  test("shows only two background tasks and summarizes the remainder", () => {
     const tasks = Array.from({ length: 7 }, (_, index) => ({
       taskId: `task-${index + 1}`,
       origin: testRuntime.toolCall({
@@ -1278,10 +1278,10 @@ describe("tui components", () => {
 
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Task 1");
-    expect(frame).toContain("Task 5");
-    expect(frame).not.toContain("Task 6");
+    expect(frame).toContain("Task 2");
+    expect(frame).not.toContain("Task 3");
     expect(frame).not.toContain("Task 7");
-    expect(frame).toContain("+2 more");
+    expect(frame).toContain("+5 more");
     cleanup();
   });
 

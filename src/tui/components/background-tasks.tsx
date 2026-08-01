@@ -5,7 +5,7 @@ export type BackgroundTasksProps = {
   tasks: readonly ShellTaskSnapshot[];
 };
 
-const MAX_VISIBLE_TASKS = 5;
+const MAX_VISIBLE_TASKS = 2;
 
 export function BackgroundTasks(props: BackgroundTasksProps) {
   if (props.tasks.length === 0) {
