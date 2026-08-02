@@ -6,9 +6,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { ChromeBridgeServer } from "../src/bridge-server";
-import { EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "../src/constants";
+import {
+  EXTENSION_ORIGIN,
+  NATIVE_HOST_NAME,
+  PLUGIN_CAPABILITIES_V2,
+} from "../src/constants";
 import { encodeJsonFrame, JsonFrameDecoder } from "../src/frame-codec";
-import type { BridgeRequestV1 } from "../src/protocol-v1";
+import type { BridgeRequestV2 } from "../src/protocol-v2";
 import {
   ensureRuntimeDirectories,
   publishRuntimeRegistry,
@@ -42,14 +46,14 @@ test("Native Host subprocess relays a complete plugin-to-MCP RPC", async () => {
   const plugin = new NativeMessagingPeer(child);
   plugin.send({
     kind: "plugin_hello",
-    protocolVersion: 1,
+    protocolVersion: 2,
     pluginVersion: "test-plugin",
-    capabilities: ["page.open", "page.summary"],
+    capabilities: [...PLUGIN_CAPABILITIES_V2],
   });
 
   expect(await plugin.next()).toEqual({
     kind: "hello_ack",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
   });
   expect(bridge.isReady()).toBe(true);
@@ -60,15 +64,16 @@ test("Native Host subprocess relays a complete plugin-to-MCP RPC", async () => {
     { pageId, url: "https://example.com/" },
     2_000,
   );
-  const request = (await plugin.next()) as BridgeRequestV1;
+  const request = (await plugin.next()) as BridgeRequestV2;
   expect(request.method).toBe("page.open");
   plugin.send({
     kind: "response",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
     requestId: request.requestId,
     ok: true,
     result: {
+      schemaVersion: 2,
       pageId,
       url: "https://example.com/",
       title: "Example Domain",
@@ -76,6 +81,7 @@ test("Native Host subprocess relays a complete plugin-to-MCP RPC", async () => {
     },
   });
   expect(await pending).toEqual({
+    schemaVersion: 2,
     pageId,
     url: "https://example.com/",
     title: "Example Domain",
@@ -101,7 +107,7 @@ test("Native Host waits when Chrome starts before the MCP runtime", async () => 
   });
   expect(await plugin.next(8_000)).toEqual({
     kind: "hello_ack",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
   });
 
@@ -129,7 +135,7 @@ test("Native Host rediscovers after a selected runtime vanishes", async () => {
   await chmod(socketPath, 0o600);
   const deadRegistry: RuntimeRegistryV1 = {
     schemaVersion: 1,
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId,
     pid: process.pid,
     socketPath,
@@ -152,7 +158,7 @@ test("Native Host rediscovers after a selected runtime vanishes", async () => {
   });
   expect(await plugin.next(8_000)).toEqual({
     kind: "hello_ack",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
   });
 
@@ -257,9 +263,9 @@ function spawnNativeHost(home: string): ChildProcessWithoutNullStreams {
 function pluginHello(): unknown {
   return {
     kind: "plugin_hello",
-    protocolVersion: 1,
+    protocolVersion: 2,
     pluginVersion: "test-plugin",
-    capabilities: ["page.open", "page.summary"],
+    capabilities: [...PLUGIN_CAPABILITIES_V2],
   };
 }
 

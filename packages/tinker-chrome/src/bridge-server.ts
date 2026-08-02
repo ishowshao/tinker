@@ -5,21 +5,24 @@ import path from "node:path";
 import process from "node:process";
 import {
   PLUGIN_HELLO_TIMEOUT_MS,
-  PROTOCOL_VERSION,
+  PROTOCOL_VERSION_V2,
   RPC_HEARTBEAT_INTERVAL_MS,
   RPC_HEARTBEAT_TIMEOUT_MS,
 } from "./constants";
 import { ChromeBridgeError } from "./errors";
 import { encodeJsonFrame, JsonFrameDecoder } from "./frame-codec";
 import {
-  type BridgeHelloAckV1,
-  type BridgeMethod,
-  type BridgePingV1,
-  type BridgeRequestV1,
-  parseBridgeHello,
-  parseBridgePong,
-  parseBridgeResponse,
-} from "./protocol-v1";
+  type BridgeHelloAckV2,
+  type BridgeMethodV2,
+  type BridgePingV2,
+  type BridgeRequestV2,
+  isReadOnlyBridgeMethodV2,
+  parseBridgeHelloV2,
+  parseBridgePongV2,
+  parseBridgeRequestV2,
+  parseBridgeResponseV2,
+  parseBridgeResultV2,
+} from "./protocol-v2";
 import {
   defaultRuntimeRoot,
   ensureRuntimeDirectories,
@@ -33,7 +36,7 @@ import {
 } from "./runtime-registry";
 
 type PendingRequest = {
-  method: BridgeMethod;
+  method: BridgeMethodV2;
   resolve(value: unknown): void;
   reject(error: ChromeBridgeError): void;
   timer: ReturnType<typeof setTimeout>;
@@ -90,7 +93,7 @@ export class ChromeBridgeServer {
     await unlink(socketPath).catch(ignoreMissing);
     const registry: RuntimeRegistryV1 = {
       schemaVersion: 1,
-      protocolVersion: 1,
+      protocolVersion: 2,
       runtimeId,
       pid: process.pid,
       socketPath,
@@ -135,7 +138,7 @@ export class ChromeBridgeServer {
   }
 
   async request(
-    method: BridgeMethod,
+    method: BridgeMethodV2,
     params: unknown,
     timeoutMs: number,
   ): Promise<unknown> {
@@ -163,15 +166,15 @@ export class ChromeBridgeServer {
 
     const requestId = randomUUID();
     const deadlineUnixMs = Date.now() + timeoutMs;
-    const request: BridgeRequestV1 = {
+    const request: BridgeRequestV2 = parseBridgeRequestV2({
       kind: "request",
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: PROTOCOL_VERSION_V2,
       runtimeId: this.runtimeId,
       requestId,
       method,
       deadlineUnixMs,
       params,
-    };
+    });
 
     return new Promise<unknown>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -180,7 +183,7 @@ export class ChromeBridgeServer {
           new ChromeBridgeError({
             code: "REQUEST_TIMEOUT",
             message: `Chrome bridge request ${method} timed out.`,
-            retryable: method === "page.summary",
+            retryable: isReadOnlyBridgeMethodV2(method),
             outcome: "unknown",
           }),
         );
@@ -263,7 +266,7 @@ export class ChromeBridgeServer {
   }
 
   private acceptHello(rawMessage: unknown): void {
-    const hello = parseBridgeHello(rawMessage);
+    const hello = parseBridgeHelloV2(rawMessage);
     if (hello.runtimeId !== this.runtimeId) {
       throw new ChromeBridgeError({
         code: "BRIDGE_AUTH_FAILED",
@@ -292,9 +295,9 @@ export class ChromeBridgeServer {
     clearTimeout(this.handshakeTimer);
     this.handshakeTimer = undefined;
     this.ready = true;
-    const ack: BridgeHelloAckV1 = {
+    const ack: BridgeHelloAckV2 = {
       kind: "hello_ack",
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: PROTOCOL_VERSION_V2,
       runtimeId: this.runtimeId,
     };
     void this.write(ack).catch((error) => {
@@ -317,14 +320,14 @@ export class ChromeBridgeServer {
       "kind" in rawMessage &&
       rawMessage.kind === "pong"
     ) {
-      const pong = parseBridgePong(rawMessage);
+      const pong = parseBridgePongV2(rawMessage);
       if (pong.runtimeId !== this.runtimeId) {
         throw new Error("Pong runtimeId does not match the active runtime.");
       }
       return;
     }
 
-    const response = parseBridgeResponse(rawMessage);
+    const response = parseBridgeResponseV2(rawMessage);
     if (response.runtimeId !== this.runtimeId) {
       throw new Error("Response runtimeId does not match the active runtime.");
     }
@@ -339,7 +342,7 @@ export class ChromeBridgeServer {
     this.pending.delete(response.requestId);
     clearTimeout(pending.timer);
     if (response.ok) {
-      pending.resolve(response.result);
+      pending.resolve(parseBridgeResultV2(pending.method, response.result));
       this.log("rpc_finished", {
         method: pending.method,
         requestId: response.requestId,
@@ -376,9 +379,9 @@ export class ChromeBridgeServer {
         this.disconnectSocket();
         return;
       }
-      const ping: BridgePingV1 = {
+      const ping: BridgePingV2 = {
         kind: "ping",
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: PROTOCOL_VERSION_V2,
         runtimeId: this.runtimeId,
         sentAtUnixMs: Date.now(),
       };
@@ -438,11 +441,11 @@ export class ChromeBridgeServer {
   }
 }
 
-function disconnectedError(method: BridgeMethod, cause?: unknown): ChromeBridgeError {
+function disconnectedError(method: BridgeMethodV2, cause?: unknown): ChromeBridgeError {
   return new ChromeBridgeError({
     code: method === "page.open" ? "OPEN_PAGE_OUTCOME_UNKNOWN" : "BRIDGE_DISCONNECTED",
     message: "The Chrome bridge disconnected before the response arrived.",
-    retryable: method === "page.summary",
+    retryable: isReadOnlyBridgeMethodV2(method),
     outcome: "unknown",
     cause,
   });

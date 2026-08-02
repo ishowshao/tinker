@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { EXTENSION_ID, EXTENSION_PUBLIC_KEY } from "../src/constants";
 import { extensionBuildRoot, extensionSourceRoot } from "../src/extension-path";
 
@@ -35,6 +36,20 @@ if (!result.success) {
   }
   throw new Error("Failed to build the Tinker Chrome extension.");
 }
+
+const puppeteerBrowserBundlePath = fileURLToPath(
+  import.meta.resolve("puppeteer-core/lib/es5-iife/puppeteer-core-browser.js"),
+);
+const serviceWorkerPath = path.join(outputRoot, "service-worker.js");
+const [puppeteerBrowserBundle, serviceWorker] = await Promise.all([
+  readFile(puppeteerBrowserBundlePath, "utf8"),
+  readFile(serviceWorkerPath, "utf8"),
+]);
+await writeFile(
+  serviceWorkerPath,
+  `${puppeteerBrowserBundle}\n${serviceWorker}`,
+  "utf8",
+);
 
 await writeFile(
   path.join(outputRoot, "manifest.json"),

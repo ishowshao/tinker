@@ -74,6 +74,22 @@ test("Tinker Chrome protocol rejects unknown fields and loose capabilities", () 
       ignored: true,
     }),
   ).toThrow("unknown field ignored");
+
+  expect(() =>
+    parseBridgeResponse({
+      kind: "response",
+      protocolVersion: 1,
+      runtimeId: randomUUID(),
+      requestId: randomUUID(),
+      ok: false,
+      error: {
+        code: "SNAPSHOT_REQUIRED",
+        message: "v2-only error",
+        retryable: false,
+        outcome: "not_started",
+      },
+    }),
+  ).toThrow("Unknown bridge error code");
 });
 
 test("Tinker Chrome validates page summary shape", () => {

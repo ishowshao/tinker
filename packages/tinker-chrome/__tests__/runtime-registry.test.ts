@@ -59,7 +59,7 @@ function createRegistry(
   const runtimeId = randomUUID();
   return {
     schemaVersion: 1,
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId,
     pid,
     socketPath: runtimeSocketPath(runtimeId, directories),

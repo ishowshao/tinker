@@ -1,18 +1,18 @@
 import net from "node:net";
 import process from "node:process";
-import { PLUGIN_HELLO_TIMEOUT_MS, PROTOCOL_VERSION } from "./constants";
+import { PLUGIN_HELLO_TIMEOUT_MS, PROTOCOL_VERSION_V2 } from "./constants";
 import { encodeJsonFrame, JsonFrameDecoder } from "./frame-codec";
 import { loadNativeHostConfig, type NativeHostConfigV1 } from "./install-host";
 import {
-  type BridgeHelloV1,
-  type PluginHelloV1,
-  parseBridgeHelloAck,
-  parseBridgePing,
-  parseBridgePong,
-  parseBridgeRequest,
-  parseBridgeResponse,
-  parsePluginHello,
-} from "./protocol-v1";
+  type BridgeHelloV2,
+  type PluginHelloV2,
+  parseBridgeHelloAckV2,
+  parseBridgePingV2,
+  parseBridgePongV2,
+  parseBridgeRequestV2,
+  parseBridgeResponseV2,
+  parsePluginHelloV2,
+} from "./protocol-v2";
 import { type RuntimeRegistryV1, scanRuntimeRegistries } from "./runtime-registry";
 
 export async function runNativeHost(chromeArgs: string[]): Promise<void> {
@@ -31,7 +31,7 @@ export async function runNativeHost(chromeArgs: string[]): Promise<void> {
 class NativeHostBridge {
   private readonly pluginDecoder = new JsonFrameDecoder();
   private readonly config: NativeHostConfigV1;
-  private pluginHello: PluginHelloV1 | undefined;
+  private pluginHello: PluginHelloV2 | undefined;
   private socket: net.Socket | undefined;
   private socketDecoder: JsonFrameDecoder | undefined;
   private selectedRuntime: RuntimeRegistryV1 | undefined;
@@ -90,7 +90,7 @@ class NativeHostBridge {
 
   private handlePluginMessage(rawMessage: unknown): void {
     if (this.pluginHello === undefined) {
-      this.pluginHello = parsePluginHello(rawMessage);
+      this.pluginHello = parsePluginHelloV2(rawMessage);
       clearTimeout(this.helloTimer);
       this.helloTimer = undefined;
       log("plugin_hello_received", {
@@ -108,13 +108,13 @@ class NativeHostBridge {
       "kind" in rawMessage &&
       rawMessage.kind === "pong"
     ) {
-      const pong = parseBridgePong(rawMessage);
+      const pong = parseBridgePongV2(rawMessage);
       this.requireSelectedRuntime(pong.runtimeId);
       this.writeSocket(pong);
       return;
     }
 
-    const response = parseBridgeResponse(rawMessage);
+    const response = parseBridgeResponseV2(rawMessage);
     this.requireSelectedRuntime(response.runtimeId);
     this.writeSocket(response);
   }
@@ -191,9 +191,9 @@ class NativeHostBridge {
       throw new Error(`Runtime socket ${registry.socketPath} closed while connecting.`);
     }
 
-    const hello: BridgeHelloV1 = {
+    const hello: BridgeHelloV2 = {
       kind: "hello",
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: PROTOCOL_VERSION_V2,
       runtimeId: registry.runtimeId,
       authToken: registry.authToken,
       extensionOrigin: this.config.extensionOrigin,
@@ -230,7 +230,7 @@ class NativeHostBridge {
 
   private handleRuntimeMessage(rawMessage: unknown): void {
     if (!this.bridgeReady) {
-      const ack = parseBridgeHelloAck(rawMessage);
+      const ack = parseBridgeHelloAckV2(rawMessage);
       this.requireSelectedRuntime(ack.runtimeId);
       clearTimeout(this.bridgeHandshakeTimer);
       this.bridgeHandshakeTimer = undefined;
@@ -245,13 +245,13 @@ class NativeHostBridge {
       "kind" in rawMessage &&
       rawMessage.kind === "ping"
     ) {
-      const ping = parseBridgePing(rawMessage);
+      const ping = parseBridgePingV2(rawMessage);
       this.requireSelectedRuntime(ping.runtimeId);
       void this.writePlugin(ping);
       return;
     }
 
-    const request = parseBridgeRequest(rawMessage);
+    const request = parseBridgeRequestV2(rawMessage);
     this.requireSelectedRuntime(request.runtimeId);
     void this.writePlugin(request);
   }

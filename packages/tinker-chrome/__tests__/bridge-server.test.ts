@@ -4,8 +4,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { ChromeBridgeServer } from "../src/bridge-server";
+import { PLUGIN_CAPABILITIES_V2 } from "../src/constants";
+import { ChromeBridgeError } from "../src/errors";
 import { encodeJsonFrame, JsonFrameDecoder } from "../src/frame-codec";
-import type { BridgeRequestV1 } from "../src/protocol-v1";
+import type { BridgeRequestV2 } from "../src/protocol-v2";
 
 const roots: string[] = [];
 
@@ -26,16 +28,16 @@ test("Tinker Chrome bridge authenticates and completes an RPC", async () => {
 
   peer.send({
     kind: "hello",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
     authToken: bridge.registry.authToken,
     extensionOrigin: "chrome-extension://bakgbafndlkajmiifhlndicifmhdchpn/",
     pluginVersion: "0.1.0",
-    capabilities: ["page.open", "page.summary"],
+    capabilities: [...PLUGIN_CAPABILITIES_V2],
   });
   expect(await peer.next()).toEqual({
     kind: "hello_ack",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
   });
   expect(bridge.isReady()).toBe(true);
@@ -46,15 +48,16 @@ test("Tinker Chrome bridge authenticates and completes an RPC", async () => {
     { pageId, url: "https://example.com/" },
     2_000,
   );
-  const request = (await peer.next()) as BridgeRequestV1;
+  const request = (await peer.next()) as BridgeRequestV2;
   expect(request.method).toBe("page.open");
   peer.send({
     kind: "response",
-    protocolVersion: 1,
+    protocolVersion: 2,
     runtimeId: bridge.runtimeId,
     requestId: request.requestId,
     ok: true,
     result: {
+      schemaVersion: 2,
       pageId,
       url: "https://example.com/",
       title: "Example Domain",
@@ -62,6 +65,7 @@ test("Tinker Chrome bridge authenticates and completes an RPC", async () => {
     },
   });
   expect(await pending).toEqual({
+    schemaVersion: 2,
     pageId,
     url: "https://example.com/",
     title: "Example Domain",
@@ -69,6 +73,45 @@ test("Tinker Chrome bridge authenticates and completes an RPC", async () => {
   });
 
   peer.close();
+  await bridge.close();
+});
+
+test("Tinker Chrome bridge reports an unknown non-retryable action outcome on disconnect", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tinker-chrome-bridge-"));
+  roots.push(root);
+  const bridge = await ChromeBridgeServer.start({
+    runtimeRoot: root,
+    log: () => undefined,
+  });
+  const peer = await FramedPeer.connect(bridge.registry.socketPath);
+  peer.send({
+    kind: "hello",
+    protocolVersion: 2,
+    runtimeId: bridge.runtimeId,
+    authToken: bridge.registry.authToken,
+    extensionOrigin: "chrome-extension://bakgbafndlkajmiifhlndicifmhdchpn/",
+    pluginVersion: "0.2.0",
+    capabilities: [...PLUGIN_CAPABILITIES_V2],
+  });
+  await peer.next();
+
+  const pending = bridge.request(
+    "page.click",
+    { pageId: crypto.randomUUID(), uid: "1_1" },
+    2_000,
+  );
+  await peer.next();
+  peer.close();
+  const error = await pending.then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  expect(error).toBeInstanceOf(ChromeBridgeError);
+  expect(error).toMatchObject({
+    code: "BRIDGE_DISCONNECTED",
+    retryable: false,
+    outcome: "unknown",
+  });
   await bridge.close();
 });
 

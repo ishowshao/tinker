@@ -10,11 +10,11 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { requireUuid } from "./protocol-v1";
+import { requireUuid } from "./protocol-v2";
 
 export type RuntimeRegistryV1 = {
   schemaVersion: 1;
-  protocolVersion: 1;
+  protocolVersion: 2;
   runtimeId: string;
   pid: number;
   socketPath: string;
@@ -214,7 +214,7 @@ export function parseRuntimeRegistry(
 
   const registry: RuntimeRegistryV1 = {
     schemaVersion: requireOne(record.schemaVersion, "schemaVersion"),
-    protocolVersion: requireOne(record.protocolVersion, "protocolVersion"),
+    protocolVersion: requireTwo(record.protocolVersion, "protocolVersion"),
     runtimeId: requireUuid(record.runtimeId, "runtimeId"),
     pid: requirePositiveInteger(record.pid, "pid"),
     socketPath: requireNonEmptyString(record.socketPath, "socketPath"),
@@ -231,8 +231,10 @@ export function validateRuntimeRegistry(
   directories: RuntimeDirectories,
 ): void {
   requireUuid(registry.runtimeId, "runtimeId");
-  if (registry.schemaVersion !== 1 || registry.protocolVersion !== 1) {
-    throw new Error("Runtime registry requires schema and protocol version 1.");
+  if (registry.schemaVersion !== 1 || registry.protocolVersion !== 2) {
+    throw new Error(
+      "Runtime registry requires schema version 1 and protocol version 2.",
+    );
   }
   if (!Number.isSafeInteger(registry.pid) || registry.pid <= 0) {
     throw new Error("Runtime registry pid must be a positive integer.");
@@ -301,6 +303,13 @@ function requireOne(value: unknown, label: string): 1 {
     throw new Error(`${label} must be 1.`);
   }
   return 1;
+}
+
+function requireTwo(value: unknown, label: string): 2 {
+  if (value !== 2) {
+    throw new Error(`${label} must be 2.`);
+  }
+  return 2;
 }
 
 function requirePositiveInteger(value: unknown, label: string): number {

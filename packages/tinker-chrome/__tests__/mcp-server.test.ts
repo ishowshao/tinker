@@ -6,7 +6,7 @@ import {
   createTinkerChromeMcpServer,
   type ChromeBridgeClient,
 } from "../src/mcp-server";
-import type { BridgeMethod } from "../src/protocol-v1";
+import type { BridgeMethodV2 } from "../src/protocol-v2";
 
 describe("Tinker Chrome MCP server", () => {
   test("lists a fixed tool surface while Chrome is offline", async () => {
@@ -24,6 +24,14 @@ describe("Tinker Chrome MCP server", () => {
     expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
       "open_page",
       "get_page_summary",
+      "take_snapshot",
+      "click",
+      "fill",
+      "press_key",
+      "type_text",
+      "wait_for",
+      "scroll",
+      "hover",
     ]);
 
     const result = await client.callTool({
@@ -32,15 +40,18 @@ describe("Tinker Chrome MCP server", () => {
     });
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain("code=PLUGIN_NOT_CONNECTED");
+    expect(resultText(result)).toContain("retryable=true");
+    expect(resultText(result)).toContain("outcome=not_started");
     await client.close();
   });
 
   test("maps bridge page results into bounded MCP text", async () => {
     const bridge: ChromeBridgeClient = {
-      request(method: BridgeMethod, params: unknown): Promise<unknown> {
+      request(method: BridgeMethodV2, params: unknown): Promise<unknown> {
         const record = params as Record<string, string>;
         if (method === "page.open") {
           return Promise.resolve({
+            schemaVersion: 2,
             pageId: record.pageId,
             url: "https://example.com/",
             title: "Example Domain",
@@ -48,7 +59,7 @@ describe("Tinker Chrome MCP server", () => {
           });
         }
         return Promise.resolve({
-          schemaVersion: 1,
+          schemaVersion: 2,
           pageId: record.pageId,
           url: "https://example.com/",
           title: "Example Domain",
@@ -72,6 +83,79 @@ describe("Tinker Chrome MCP server", () => {
     });
     expect(resultText(summary)).toContain("title=Example Domain");
     expect(resultText(summary)).toContain("This domain is for use in examples.");
+    await client.close();
+  });
+
+  test("maps snapshots and actions through strict v2 params", async () => {
+    const pageId = crypto.randomUUID();
+    const calls: Array<{ method: BridgeMethodV2; params: unknown }> = [];
+    const bridge: ChromeBridgeClient = {
+      request(method, params): Promise<unknown> {
+        calls.push({ method, params });
+        if (method === "page.snapshot") {
+          return Promise.resolve({
+            schemaVersion: 2,
+            pageId,
+            url: "https://example.com/",
+            title: "Example Domain",
+            verbose: false,
+            snapshot: 'uid=1_0 RootWebArea "Example Domain"\n',
+            truncated: false,
+          });
+        }
+        if (method === "page.wait_for") {
+          return Promise.resolve({
+            schemaVersion: 2,
+            pageId,
+            matchedText: "Ready",
+            url: "https://example.com/",
+          });
+        }
+        const action = method.slice("page.".length);
+        return Promise.resolve({
+          schemaVersion: 2,
+          pageId,
+          action,
+          performed: true,
+          url: "https://example.com/",
+          navigatedToUrl: null,
+        });
+      },
+    };
+    const client = await connectClient(bridge);
+    const snapshot = await client.callTool({
+      name: "take_snapshot",
+      arguments: { pageId },
+    });
+    expect(resultText(snapshot)).toContain("uid=1_0 RootWebArea");
+
+    const callsToMake = [
+      ["click", { pageId, uid: "1_1" }],
+      ["fill", { pageId, uid: "1_2", value: "hello" }],
+      ["press_key", { pageId, key: "Enter" }],
+      ["type_text", { pageId, text: "world" }],
+      ["scroll", { pageId, direction: "down" }],
+      ["hover", { pageId, uid: "1_3" }],
+    ] as const;
+    for (const [name, args] of callsToMake) {
+      const result = await client.callTool({ name, arguments: args });
+      expect(resultText(result)).toContain("outcome=performed");
+    }
+    const waited = await client.callTool({
+      name: "wait_for",
+      arguments: { pageId, text: ["Ready"] },
+    });
+    expect(resultText(waited)).toContain("matchedText=Ready");
+    expect(calls.map((call) => call.method)).toEqual([
+      "page.snapshot",
+      "page.click",
+      "page.fill",
+      "page.press_key",
+      "page.type_text",
+      "page.scroll",
+      "page.hover",
+      "page.wait_for",
+    ]);
     await client.close();
   });
 
