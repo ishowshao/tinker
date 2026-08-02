@@ -264,11 +264,7 @@ export class ShellTaskManager {
     }
 
     this.synchronizeTerminalState(task);
-    if (
-      task.mode === "pty" &&
-      isTerminalStatus(task.status) &&
-      task.finalScreen === undefined
-    ) {
+    if (isTerminalStatus(task.status)) {
       await task.completion;
     } else {
       await task.terminalScreen?.flush();
