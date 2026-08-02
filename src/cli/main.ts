@@ -67,6 +67,14 @@ type OneShotRunner = {
   ) => Promise<number>;
 };
 
+type UpdateRunner = {
+  readonly runUpdate: (options: {
+    readonly metadata: PackageMetadata;
+    readonly stdout: CliOutputWriter;
+    readonly env: NodeJS.ProcessEnv;
+  }) => Promise<number>;
+};
+
 export type MainDependencies = {
   readonly loadPackageMetadata: () => Promise<PackageMetadata>;
   readonly parseCommandLine: (
@@ -81,6 +89,7 @@ export type MainDependencies = {
   ) => Promise<ResolvedPrompt>;
   readonly loadTuiRunner: () => Promise<TuiRunner>;
   readonly loadOneShotRunner: () => Promise<OneShotRunner>;
+  readonly loadUpdateRunner: () => Promise<UpdateRunner>;
 };
 
 const DEFAULT_DEPENDENCIES: MainDependencies = {
@@ -91,6 +100,7 @@ const DEFAULT_DEPENDENCIES: MainDependencies = {
   resolvePromptSource,
   loadTuiRunner: () => import("./tui-runner"),
   loadOneShotRunner: () => import("./run-runner"),
+  loadUpdateRunner: () => import("./update-runner"),
 };
 
 export async function main(
@@ -131,6 +141,22 @@ export async function main(
       await writeCliOutput(input.stdout, parsed.stdout);
       await writeCliOutput(input.stderr, parsed.stderr);
       return finish(0);
+    }
+
+    if (parsed.command.type === "update") {
+      try {
+        const runner = await dependencies.loadUpdateRunner();
+        return finish(
+          await runner.runUpdate({
+            metadata,
+            stdout: input.stdout,
+            env,
+          }),
+        );
+      } catch (error) {
+        await writeCliOutput(input.stderr, renderCliFailure("Update failed", error));
+        return finish(1);
+      }
     }
 
     let configBoundary: ConfigBoundary;

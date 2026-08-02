@@ -4,7 +4,7 @@ const TRUNCATION_MARKER = "...[truncated]";
 const ESCAPE = String.fromCharCode(27);
 const ANSI_CSI_PATTERN = new RegExp(`${ESCAPE}\\[[0-?]*[ -/]*[@-~]`, "g");
 
-export type CliCommandScope = "root" | "run";
+export type CliCommandScope = "root" | "run" | "update";
 
 export interface CliOutputWriter {
   write(chunk: string): boolean | void;
@@ -24,9 +24,9 @@ export class CliUsageError extends Error {
 
 export function renderUsageError(error: CliUsageError): string {
   const hint =
-    error.scope === "run"
-      ? 'Run "tinker run --help" for usage.'
-      : 'Run "tinker --help" for usage.';
+    error.scope === "root"
+      ? 'Run "tinker --help" for usage.'
+      : `Run "tinker ${error.scope} --help" for usage.`;
   return `error: ${sanitizeDiagnosticDetail(error.message)}\n${hint}\n`;
 }
 

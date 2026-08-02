@@ -5,6 +5,11 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+### Added
+
+- Add `tinker update` for manually upgrading a direct npm global installation to
+  the latest stable release from the official npm registry.
+
 ## [1.7.0] - 2026-08-01
 
 ### Added

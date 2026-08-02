@@ -20,6 +20,8 @@ describe("public CLI documentation contract", () => {
     }
     expect(rendered).toContain("tinker --help");
     expect(rendered).toContain("tinker --version");
+    expect(rendered).toContain(`tinker ${PUBLIC_CLI_CONTRACT.update.command}`);
+    expect(rendered).toContain(PUBLIC_CLI_CONTRACT.update.description);
   });
 
   test("replaces exactly one ordered marker pair deterministically", () => {

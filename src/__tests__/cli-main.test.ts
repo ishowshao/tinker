@@ -50,6 +50,10 @@ describe("CLI main boundary", () => {
           downstreamLoads += 1;
           throw new Error("must not load");
         },
+        loadUpdateRunner: async () => {
+          downstreamLoads += 1;
+          throw new Error("must not load");
+        },
       });
 
       expect(code).toBe(expected.code);
@@ -167,6 +171,52 @@ describe("CLI main boundary", () => {
     expect(await main(state.input, dependencies)).toBe(0);
     expect(tuiRuns).toBe(1);
     expect(oneShotLoads).toBe(0);
+  });
+
+  test("dispatches update before loading configuration or agent runners", async () => {
+    const state = testInput(["update"], { UPDATE_MARKER: "captured" });
+    const dependencies = successfulDependencies();
+    let configLoads = 0;
+    let updateRuns = 0;
+    dependencies.loadConfigBoundary = async () => {
+      configLoads += 1;
+      throw new Error("must not load");
+    };
+    dependencies.loadUpdateRunner = async () => ({
+      runUpdate: async ({ metadata, stdout, env }) => {
+        updateRuns += 1;
+        expect(metadata).toEqual({ name: "tinker-agent", version: "1.3.0" });
+        expect(env.UPDATE_MARKER).toBe("captured");
+        stdout.write("update complete\n");
+        return 0;
+      },
+    });
+
+    expect(await main(state.input, dependencies)).toBe(0);
+    expect(updateRuns).toBe(1);
+    expect(configLoads).toBe(0);
+    expect(state.stdout.output).toBe("update complete\n");
+    expect(state.stderr.output).toBe("");
+  });
+
+  test("maps update failures without loading configuration", async () => {
+    const state = testInput(["update"]);
+    const dependencies = successfulDependencies();
+    let configLoads = 0;
+    dependencies.loadConfigBoundary = async () => {
+      configLoads += 1;
+      throw new Error("must not load");
+    };
+    dependencies.loadUpdateRunner = async () => ({
+      runUpdate: async () => {
+        throw new Error("registry unavailable");
+      },
+    });
+
+    expect(await main(state.input, dependencies)).toBe(1);
+    expect(configLoads).toBe(0);
+    expect(state.stdout.output).toBe("");
+    expect(state.stderr.output).toBe("Update failed: registry unavailable\n");
   });
 
   test("does not load a runner after Prompt validation fails", async () => {
@@ -319,6 +369,7 @@ function successfulDependencies(order: string[] = []): MutableDependencies {
     },
     loadTuiRunner: async () => ({ runTui: async () => undefined }),
     loadOneShotRunner: async () => ({ runOneShot: async () => 0 }),
+    loadUpdateRunner: async () => ({ runUpdate: async () => 0 }),
   };
 }
 

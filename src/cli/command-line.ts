@@ -5,6 +5,7 @@ import { CliUsageError, type CliCommandScope } from "./output";
 
 export type CliCommand =
   | { readonly type: "tui"; readonly profileName?: string }
+  | { readonly type: "update" }
   | {
       readonly type: "run";
       readonly profileName?: string;
@@ -129,6 +130,17 @@ export async function parseCommandLine(
       },
     );
 
+  program
+    .command(contract.update.command)
+    .description(contract.update.description)
+    .showHelpAfterError('Run "tinker update --help" for usage.')
+    .showSuggestionAfterError(false)
+    .allowExcessArguments(false)
+    .exitOverride()
+    .action(() => {
+      selectedCommand = Object.freeze({ type: "update" });
+    });
+
   try {
     await program.parseAsync([...args], { from: "user" });
   } catch (error) {
@@ -154,6 +166,12 @@ export async function parseCommandLine(
       "run",
     );
   }
+  if (selectedCommand.type === "update" && topLevelProfile !== undefined) {
+    throw new CliUsageError(
+      "The top-level --profile option only applies to the TUI.",
+      "update",
+    );
+  }
   return Object.freeze({ type: "command", command: selectedCommand });
 }
 
@@ -173,7 +191,7 @@ function preflightArgv(args: readonly string[]): CliCommandScope {
 
     if (
       (!rootBlocked && scope === "root" && isRootTerminalOption(token)) ||
-      (scope === "run" && isRunTerminalOption(token))
+      (scope !== "root" && isSubcommandTerminalOption(token))
     ) {
       return scope;
     }
@@ -200,6 +218,10 @@ function preflightArgv(args: readonly string[]): CliCommandScope {
       }
       if (token === "run") {
         scope = "run";
+        continue;
+      }
+      if (token === "update") {
+        scope = "update";
         continue;
       }
       if (token === "help") {
@@ -290,7 +312,7 @@ function isRootTerminalOption(token: string): boolean {
   );
 }
 
-function isRunTerminalOption(token: string): boolean {
+function isSubcommandTerminalOption(token: string): boolean {
   return token === "--help" || token === "-h";
 }
 

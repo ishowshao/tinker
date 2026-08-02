@@ -58,6 +58,13 @@ describe("CLI command line", () => {
     await expectUsage(["--yolo"], "unknown option", "root");
   });
 
+  test("selects the standalone update command", async () => {
+    expect(await parseCommand(["update"])).toEqual({ type: "update" });
+    await expectUsage(["update", "latest"], "too many arguments", "update");
+    await expectUsage(["update", "--profile", "kimi"], "unknown option", "update");
+    await expectUsage(["update", "--version"], "unknown option", "update");
+  });
+
   test("accepts attached leading-dash values and -- protected prompts", async () => {
     expect(await parseCommand(["run", "--file=-prompt.md"])).toEqual({
       type: "run",
@@ -114,6 +121,11 @@ describe("CLI command line", () => {
       "only applies to the TUI",
       "run",
     );
+    await expectUsage(
+      ["--profile", "kimi", "update"],
+      "only applies to the TUI",
+      "update",
+    );
   });
 
   test("renders root help, run help, help commands, and bare version as terminal success", async () => {
@@ -138,6 +150,15 @@ describe("CLI command line", () => {
       await parseCommandLine(["help", "run"], VERSION),
       "Usage: tinker run [options] [prompt]",
     );
+    expectTerminal(
+      await parseCommandLine(["update", "--help"], VERSION),
+      "Usage: tinker update",
+    );
+    expectTerminal(
+      await parseCommandLine(["help", "update"], VERSION),
+      "Usage: tinker update",
+    );
+    expect(rootHelp.type === "terminal" && rootHelp.stdout).toContain("update");
 
     const version = await parseCommandLine(["--version"], VERSION);
     expect(version).toEqual({ type: "terminal", stdout: `${VERSION}\n`, stderr: "" });
@@ -207,7 +228,7 @@ async function captureUsage(args: readonly string[]): Promise<CliUsageError> {
 async function expectUsage(
   args: readonly string[],
   message: string,
-  scope: "root" | "run",
+  scope: "root" | "run" | "update",
 ): Promise<void> {
   const error = await captureUsage(args);
   expect(error.message).toContain(message);

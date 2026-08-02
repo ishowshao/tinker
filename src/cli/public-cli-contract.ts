@@ -68,6 +68,10 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     helpAfter:
       "Use exactly one prompt source. For complex or sensitive prompts, prefer --stdin or --file.",
   }),
+  update: Object.freeze({
+    command: "update",
+    description: "Update the global npm installation from the official npm registry.",
+  }),
 });
 
 export type PublicCliContract = typeof PUBLIC_CLI_CONTRACT;

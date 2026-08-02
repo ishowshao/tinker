@@ -6,6 +6,7 @@ import {
   type SpawnSyncReturns,
 } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 interface PackFile {
   path: string;
@@ -50,10 +51,12 @@ try {
   const installPrefix = join(temporaryRoot, "install");
   const emptyHome = join(temporaryRoot, "home");
   const emptyWorkspace = join(temporaryRoot, "workspace");
+  const fakeNpmBin = join(temporaryRoot, "fake-npm-bin");
   mkdirSync(packageDirectory);
   mkdirSync(installPrefix);
   mkdirSync(emptyHome);
   mkdirSync(emptyWorkspace);
+  mkdirSync(fakeNpmBin);
 
   const pack = run("npm", ["pack", "--json", "--pack-destination", packageDirectory]);
   const packResults = JSON.parse(pack.stdout) as PackResult[];
@@ -77,6 +80,7 @@ try {
     "src/cli/package-metadata.ts",
     "src/cli/prompt-source.ts",
     "src/cli/public-cli-contract.ts",
+    "src/cli/update-runner.ts",
   ]) {
     assert(packedPaths.includes(requiredPath), `package is missing ${requiredPath}`);
   }
@@ -150,6 +154,7 @@ try {
   assert.equal(rootHelp.status, 0, commandFailure(executable, ["--help"], rootHelp));
   assert.match(rootHelp.stdout, /Usage: tinker \[options\] \[command\]/);
   assert.match(rootHelp.stdout, /--profile <profile-name>/);
+  assert.match(rootHelp.stdout, /update/);
   assert.equal(rootHelp.stderr, "");
 
   const version = await runInstalled(
@@ -173,6 +178,20 @@ try {
   assert.match(runHelp.stdout, /--file <path>/);
   assert.match(runHelp.stdout, /complex or sensitive prompts/);
 
+  const updateHelp = await runInstalled(
+    executable,
+    ["help", "update"],
+    cleanEnvironment,
+    emptyWorkspace,
+  );
+  assert.equal(
+    updateHelp.status,
+    0,
+    commandFailure(executable, ["help", "update"], updateHelp),
+  );
+  assert.match(updateHelp.stdout, /official npm registry/);
+  assert.equal(updateHelp.stderr, "");
+
   await assertUsageFailure(
     executable,
     ["--unknown"],
@@ -190,6 +209,13 @@ try {
   await assertUsageFailure(
     executable,
     ["run", "--file", "--stdin"],
+    cleanEnvironment,
+    emptyWorkspace,
+    2,
+  );
+  await assertUsageFailure(
+    executable,
+    ["update", "unexpected"],
     cleanEnvironment,
     emptyWorkspace,
     2,
@@ -277,8 +303,18 @@ try {
     "release profile",
   );
 
+  await assertFakeUpdate(
+    executable,
+    cleanEnvironment,
+    emptyWorkspace,
+    fakeNpmBin,
+    installPrefix,
+    installedRoot,
+    packageJson.version,
+  );
+
   process.stdout.write(
-    `Verified ${packed.id}: npm tarball, clean global prefix, bundled Bun and ripgrep, CLI help/version/errors, and argument/stdin/file Prompt sources on ${process.platform}.\n`,
+    `Verified ${packed.id}: npm tarball, clean global prefix, bundled Bun and ripgrep, CLI help/version/errors, offline update, and argument/stdin/file Prompt sources on ${process.platform}.\n`,
   );
 } finally {
   rmSync(temporaryRoot, { recursive: true });
@@ -309,7 +345,108 @@ async function assertUsageFailure(
   assert.equal(result.status, expectedStatus, commandFailure(executable, args, result));
   assert.equal(result.stdout, "");
   assert.match(result.stderr, /^error: /);
-  assert.match(result.stderr, /Run "tinker(?: run)? --help" for usage\.\n$/);
+  assert.match(result.stderr, /Run "tinker(?: (?:run|update))? --help" for usage\.\n$/);
+}
+
+async function assertFakeUpdate(
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+  cwd: string,
+  fakeNpmBin: string,
+  installPrefix: string,
+  installedRoot: string,
+  currentVersion: string,
+): Promise<void> {
+  const targetVersion = nextPatchVersion(currentVersion);
+  const fakeNpmPath = join(fakeNpmBin, "npm");
+  const logPath = join(fakeNpmBin, "calls.jsonl");
+  writeFileSync(
+    fakeNpmPath,
+    `#!/usr/bin/env node
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+const args = process.argv.slice(2);
+const globalRoot = requiredEnv("TINKER_TEST_NPM_ROOT");
+const globalPrefix = requiredEnv("TINKER_TEST_NPM_PREFIX");
+const targetVersion = requiredEnv("TINKER_TEST_NPM_TARGET");
+appendFileSync(requiredEnv("TINKER_TEST_NPM_LOG"), JSON.stringify(args) + "\\n");
+
+if (args[0] === "root") {
+  requireArgs(["root", "--global"]);
+  process.stdout.write(globalRoot + "\\n");
+} else if (args[0] === "prefix") {
+  requireArgs(["prefix", "--global"]);
+  process.stdout.write(globalPrefix + "\\n");
+} else if (args[0] === "view") {
+  requireArgs([
+    "view", "tinker-agent@latest", "version", "--json", "--registry",
+    "https://registry.npmjs.org/", "--prefer-online"
+  ]);
+  process.stdout.write(JSON.stringify(targetVersion) + "\\n");
+} else if (args[0] === "install") {
+  requireArgs([
+    "install", "--global", "--prefix", globalPrefix,
+    "tinker-agent@" + targetVersion, "--registry",
+    "https://registry.npmjs.org/", "--prefer-online", "--no-audit",
+    "--no-fund", "--loglevel", "error"
+  ]);
+  const packageJsonPath = join(globalRoot, "tinker-agent", "package.json");
+  const metadata = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  metadata.version = targetVersion;
+  writeFileSync(packageJsonPath, JSON.stringify(metadata, null, 2) + "\\n");
+} else {
+  fail("unexpected npm command");
+}
+
+function requiredEnv(name) {
+  const value = process.env[name];
+  if (!value) fail("missing " + name);
+  return value;
+}
+
+function requireArgs(expected) {
+  if (JSON.stringify(args) !== JSON.stringify(expected)) fail("unexpected arguments");
+}
+
+function fail(message) {
+  process.stderr.write(message + "\\n");
+  process.exit(2);
+}
+`,
+  );
+  chmodSync(fakeNpmPath, 0o755);
+
+  const updateEnvironment: NodeJS.ProcessEnv = {
+    ...environment,
+    PATH: `${fakeNpmBin}${delimiter}${environment.PATH ?? ""}`,
+    TINKER_TEST_NPM_ROOT: dirname(installedRoot),
+    TINKER_TEST_NPM_PREFIX: installPrefix,
+    TINKER_TEST_NPM_TARGET: targetVersion,
+    TINKER_TEST_NPM_LOG: logPath,
+  };
+  const result = await runInstalled(executable, ["update"], updateEnvironment, cwd);
+  assert.equal(result.status, 0, commandFailure(executable, ["update"], result));
+  assert.equal(result.stderr, "");
+  assert.equal(
+    result.stdout,
+    `Current version: ${currentVersion}\n` +
+      "Checking npm official registry for the latest version...\n" +
+      `Updating to ${targetVersion}...\n` +
+      `Successfully updated from ${currentVersion} to version ${targetVersion}\n`,
+  );
+  const calls = readFileSync(logPath, "utf8").trim().split("\n");
+  assert.equal(calls.length, 4, "update must make four npm calls");
+  const updatedPackageJson = JSON.parse(
+    readFileSync(join(installedRoot, "package.json"), "utf8"),
+  ) as { version: string };
+  assert.equal(updatedPackageJson.version, targetVersion);
+}
+
+function nextPatchVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  assert(match !== null, `release version must be stable semver: ${version}`);
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
 }
 
 async function assertFakePrompt(

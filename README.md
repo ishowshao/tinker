@@ -80,10 +80,16 @@ The installed package exposes this public CLI:
 | `tinker run [--profile <profile-name>] [--yolo] <prompt>` | Submit one shell-quoted prompt argument. |
 | `tinker run [--profile <profile-name>] [--yolo] --stdin` | Read the prompt from standard input until EOF. |
 | `tinker run [--profile <profile-name>] [--yolo] --file <path>` | Read the prompt from a UTF-8 text file. |
+| `tinker update` | Update the global npm installation from the official npm registry. |
 | `tinker --help` | Show top-level CLI help. |
 | `tinker help run` | Show one-shot command help. |
+| `tinker help update` | Show update command help. |
 | `tinker --version` | Print the installed package version. |
 <!-- END GENERATED: PUBLIC CLI COMMANDS -->
+
+`tinker update` is available only to direct npm global installations. It checks
+the `latest` stable version on the official npm registry, updates that same global
+prefix, and exits without loading model configuration or starting a session.
 
 Repository development commands are separate from the installed CLI:
 

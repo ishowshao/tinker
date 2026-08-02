@@ -87,6 +87,7 @@ export function renderPublicCliCommands(): string {
   const help = longFlags(contract.helpFlags);
   const version = longFlags(contract.versionFlags);
   const runCommand = firstCommandWord(contract.run.command);
+  const updateCommand = firstCommandWord(contract.update.command);
   const helpCommand = firstCommandWord(contract.helpCommand.command);
   const rows = [
     ["`tinker`", contract.tui.description],
@@ -103,8 +104,10 @@ export function renderPublicCliCommands(): string {
       `\`tinker ${runCommand} [${runProfile}] [${runYolo}] ${contract.run.promptSources[2].syntax}\``,
       contract.run.promptSources[2].description,
     ],
+    [`\`tinker ${updateCommand}\``, contract.update.description],
     [`\`tinker ${help}\``, "Show top-level CLI help."],
     [`\`tinker ${helpCommand} ${runCommand}\``, "Show one-shot command help."],
+    [`\`tinker ${helpCommand} ${updateCommand}\``, "Show update command help."],
     [`\`tinker ${version}\``, "Print the installed package version."],
   ];
   return renderTable(["Command", "Description"], rows);
