@@ -28,6 +28,9 @@ export const CHROME_BRIDGE_ERROR_CODES_V2 = [
   "INTERACTION_FAILED",
   "INVALID_KEY",
   "WAIT_TIMEOUT",
+  "DIALOG_NOT_FOUND",
+  "CONSOLE_MESSAGE_NOT_FOUND",
+  "NETWORK_REQUEST_NOT_FOUND",
 ] as const;
 
 export type ChromeBridgeErrorCode = (typeof CHROME_BRIDGE_ERROR_CODES)[number];

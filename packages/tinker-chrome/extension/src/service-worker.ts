@@ -3,6 +3,8 @@ import {
   MAX_DESCRIPTION_CODE_POINTS,
   MAX_HEADING_CODE_POINTS,
   MAX_HEADINGS,
+  MAX_OWNED_PAGES,
+  MAX_URL_CHARS,
   NATIVE_HOST_NAME,
   PLUGIN_CAPABILITIES_V2,
   PLUGIN_VERSION,
@@ -14,6 +16,8 @@ import {
   type BridgeRequestV2,
   type BridgeSuccessV2,
   type OpenPageResultV2,
+  type ClosePageResultV2,
+  type ListPagesResultV2,
   type PageSummaryV2,
   isReadOnlyBridgeMethodV2,
   parseBridgeHelloAckV2,
@@ -33,6 +37,11 @@ type StoredPageV1 = {
   pageId: string;
   tabId: number;
 };
+
+type OwnedPageRequestV2 = Exclude<
+  BridgeRequestV2,
+  Extract<BridgeRequestV2, { method: "page.open" | "page.list" }>
+>;
 
 const PAGE_KEY_PREFIX = "tinkerChromePageV1:";
 const RECONNECT_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
@@ -238,6 +247,60 @@ async function routeRequest(request: BridgeRequestV2): Promise<unknown> {
         uid: request.params.uid,
       });
     }
+    case "page.list":
+      return listPages(request);
+    case "page.navigate": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.navigate({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        type: request.params.type,
+        url: request.params.url,
+        ignoreCache: request.params.ignoreCache,
+        handleBeforeUnload: request.params.handleBeforeUnload,
+      });
+    }
+    case "page.close":
+      return closePage(request);
+    case "page.handle_dialog": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.handleDialog({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        action: request.params.action,
+        promptText: request.params.promptText,
+      });
+    }
+    case "page.console.list": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.listConsoleMessages({
+        tabId: owned.page.tabId,
+        params: request.params,
+      });
+    }
+    case "page.console.get": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.getConsoleMessage({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        msgid: request.params.msgid,
+      });
+    }
+    case "page.network.list": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.listNetworkRequests({
+        tabId: owned.page.tabId,
+        params: request.params,
+      });
+    }
+    case "page.network.get": {
+      const owned = await requireOwnedPage(request, { waitForComplete: false });
+      return automation.getNetworkRequest({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        reqid: request.params.reqid,
+      });
+    }
   }
 }
 
@@ -249,7 +312,9 @@ async function openPage(
 
   let tab: chrome.tabs.Tab;
   try {
-    tab = await chrome.tabs.create({ url, active: true });
+    // Attach Puppeteer and the console/network collectors before the first
+    // real navigation so initial document activity is not lost.
+    tab = await chrome.tabs.create({ url: "about:blank", active: true });
   } catch (error) {
     throw new ChromeBridgeError({
       code: "TAB_CREATE_FAILED",
@@ -278,9 +343,13 @@ async function openPage(
     [pageKey(request.runtimeId, pageId)]: storedPage,
   });
 
-  let completed: chrome.tabs.Tab;
   try {
-    completed = await waitForTabComplete(tab.id, request.deadlineUnixMs);
+    return await automation.open({
+      pageId,
+      tabId: tab.id,
+      url,
+      timeoutMs: Math.max(1, request.deadlineUnixMs - Date.now()),
+    });
   } catch (error) {
     if (error instanceof ChromeBridgeError) {
       throw error;
@@ -298,14 +367,91 @@ async function openPage(
       cause: error,
     });
   }
+}
 
+async function listPages(
+  request: Extract<BridgeRequestV2, { method: "page.list" }>,
+): Promise<ListPagesResultV2> {
+  const prefix = `${PAGE_KEY_PREFIX}${request.runtimeId}:`;
+  const stored = await chrome.storage.session.get(null);
+  const cleanupKeys: string[] = [];
+  const pages: Array<{
+    page: ListPagesResultV2["pages"][number];
+    windowId: number;
+    index: number;
+  }> = [];
+
+  for (const [key, value] of Object.entries(stored)) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const pageId = key.slice(prefix.length);
+    try {
+      const page = parseStoredPage(value, request.runtimeId, pageId);
+      const tab = await chrome.tabs.get(page.tabId);
+      pages.push({
+        page: {
+          pageId,
+          url: truncateCodePoints(tab.url ?? "", MAX_URL_CHARS),
+          title: truncateCodePoints(tab.title ?? "", MAX_HEADING_CODE_POINTS),
+          loadState: tab.status === "complete" ? "complete" : "loading",
+          active: tab.active,
+        },
+        windowId: tab.windowId,
+        index: tab.index,
+      });
+    } catch {
+      cleanupKeys.push(key);
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        "tabId" in value &&
+        Number.isSafeInteger(value.tabId)
+      ) {
+        await automation.closeTab(value.tabId as number);
+      }
+    }
+  }
+  if (cleanupKeys.length > 0) {
+    await chrome.storage.session.remove(cleanupKeys);
+  }
+  pages.sort(
+    (left, right) => left.windowId - right.windowId || left.index - right.index,
+  );
   return {
     schemaVersion: 2,
-    pageId,
-    url: requireHttpUrl(completed.url),
-    title: completed.title ?? "",
-    loadState: "complete",
+    pages: pages.slice(0, MAX_OWNED_PAGES).map((entry) => entry.page),
+    truncated: pages.length > MAX_OWNED_PAGES,
   };
+}
+
+async function closePage(
+  request: Extract<BridgeRequestV2, { method: "page.close" }>,
+): Promise<ClosePageResultV2> {
+  const { page } = await requireOwnedPage(request, {
+    waitForComplete: false,
+    requireHttp: false,
+  });
+  let started = false;
+  try {
+    started = true;
+    await chrome.tabs.remove(page.tabId);
+    await chrome.storage.session.remove(pageKey(request.runtimeId, page.pageId));
+    await automation.closeTab(page.tabId);
+    return {
+      schemaVersion: 2,
+      pageId: page.pageId,
+      closed: true,
+    };
+  } catch (error) {
+    throw new ChromeBridgeError({
+      code: "INTERACTION_FAILED",
+      message: `Chrome could not close the page: ${asError(error).message}`,
+      retryable: false,
+      outcome: started ? "unknown" : "not_started",
+      cause: error,
+    });
+  }
 }
 
 async function getPageSummary(
@@ -349,7 +495,8 @@ async function getPageSummary(
 }
 
 async function requireOwnedPage(
-  request: Exclude<BridgeRequestV2, { method: "page.open" }>,
+  request: OwnedPageRequestV2,
+  options: { waitForComplete?: boolean; requireHttp?: boolean } = {},
 ): Promise<{ page: StoredPageV1; tab: chrome.tabs.Tab }> {
   const pageId = request.params.pageId;
   const key = pageKey(request.runtimeId, pageId);
@@ -370,7 +517,7 @@ async function requireOwnedPage(
       cause: error,
     });
   }
-  if (tab.status !== "complete") {
+  if (options.waitForComplete !== false && tab.status !== "complete") {
     try {
       tab = await waitForTabComplete(page.tabId, request.deadlineUnixMs);
     } catch (error) {
@@ -386,7 +533,9 @@ async function requireOwnedPage(
       });
     }
   }
-  requireHttpUrl(tab.url);
+  if (options.requireHttp !== false) {
+    requireHttpUrl(tab.url);
+  }
   return { page, tab };
 }
 
@@ -594,6 +743,10 @@ async function removePagesForTab(tabId: number): Promise<void> {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+function truncateCodePoints(value: string, maximum: number): string {
+  return Array.from(value).slice(0, maximum).join("");
 }
 
 function log(event: string, details?: Record<string, unknown>): void {

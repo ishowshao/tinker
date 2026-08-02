@@ -1,5 +1,8 @@
 # Tinker Chrome 二阶段：可访问性观察与页面操作
 
+> 本文记录 `0.2.0` 的历史合同；`0.3.0` 页面管理与调试工具见
+> [Tinker Chrome 三阶段](./tinker-chrome-phase-three-debug-design.md)。
+
 ## 状态
 
 - 版本：Tinker Chrome `0.2.0`，bridge protocol v2。

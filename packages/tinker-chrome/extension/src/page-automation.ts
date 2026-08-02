@@ -1,12 +1,25 @@
-import type { Browser, ElementHandle, KeyInput, Page } from "puppeteer-core";
-import { MAX_SNAPSHOT_CODE_POINTS } from "../../src/constants";
+import type { Browser, Dialog, ElementHandle, KeyInput, Page } from "puppeteer-core";
+import {
+  MAX_DIALOG_TEXT_CODE_POINTS,
+  MAX_SNAPSHOT_CODE_POINTS,
+} from "../../src/constants";
 import { ChromeBridgeError } from "../../src/errors";
 import type {
+  DialogActionV2,
+  GetConsoleMessageResultV2,
+  GetNetworkRequestResultV2,
+  ListConsoleMessagesParamsV2,
+  ListConsoleMessagesResultV2,
+  ListNetworkRequestsParamsV2,
+  ListNetworkRequestsResultV2,
+  NavigationTypeV2,
+  OpenPageResultV2,
   PageActionResultV2,
   PageSnapshotV2,
   PageWaitResultV2,
   ScrollDirectionV2,
 } from "../../src/protocol-v2";
+import { PageDebugSession } from "./page-debug";
 import { parseKey } from "./keyboard";
 import { SnapshotFormatter } from "./snapshot-formatter";
 import {
@@ -24,11 +37,23 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const PROTOCOL_TIMEOUT_MS = 10_000;
 const EXPECT_NAVIGATION_MS = 100;
 const NAVIGATION_SETTLE_TIMEOUT_MS = 3_000;
+const NAVIGATION_OPERATION_TIMEOUT_MS = 25_000;
 const STABLE_DOM_TIMEOUT_MS = 3_000;
 const STABLE_DOM_FOR_MS = 100;
 
 export class PageAutomationManager {
   private readonly sessions = new Map<number, PageAutomationSession>();
+
+  async open(options: {
+    pageId: string;
+    tabId: number;
+    url: string;
+    timeoutMs: number;
+  }): Promise<OpenPageResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.open(options.pageId, options.url, options.timeoutMs),
+    );
+  }
 
   async snapshot(options: {
     pageId: string;
@@ -114,6 +139,74 @@ export class PageAutomationManager {
     );
   }
 
+  async navigate(options: {
+    pageId: string;
+    tabId: number;
+    type: NavigationTypeV2;
+    url: string | null;
+    ignoreCache: boolean;
+    handleBeforeUnload: DialogActionV2;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.navigate(
+        options.pageId,
+        options.type,
+        options.url,
+        options.ignoreCache,
+        options.handleBeforeUnload,
+      ),
+    );
+  }
+
+  async handleDialog(options: {
+    pageId: string;
+    tabId: number;
+    action: DialogActionV2;
+    promptText: string | null;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.handleDialog(options.pageId, options.action, options.promptText),
+    );
+  }
+
+  async listConsoleMessages(options: {
+    tabId: number;
+    params: ListConsoleMessagesParamsV2;
+  }): Promise<ListConsoleMessagesResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.listConsoleMessages(options.params),
+    );
+  }
+
+  async getConsoleMessage(options: {
+    pageId: string;
+    tabId: number;
+    msgid: number;
+  }): Promise<GetConsoleMessageResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.getConsoleMessage(options.pageId, options.msgid),
+    );
+  }
+
+  async listNetworkRequests(options: {
+    tabId: number;
+    params: ListNetworkRequestsParamsV2;
+  }): Promise<ListNetworkRequestsResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.listNetworkRequests(options.params),
+    );
+  }
+
+  async getNetworkRequest(options: {
+    pageId: string;
+    tabId: number;
+    reqid: number;
+  }): Promise<GetNetworkRequestResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.getNetworkRequest(options.pageId, options.reqid),
+    );
+  }
+
   invalidateTab(tabId: number): void {
     this.sessions.get(tabId)?.invalidateForNavigation();
   }
@@ -144,8 +237,15 @@ class PageAutomationSession {
   private readonly snapshotState = new TextSnapshotState();
   private browser: Browser | undefined;
   private page: Page | undefined;
+  private debugSession: PageDebugSession | undefined;
+  private currentDialog: Dialog | undefined;
+  private dialogBlockedAction: Promise<void> | undefined;
   private currentSnapshot: TextSnapshot | undefined;
   private operationTail: Promise<void> = Promise.resolve();
+
+  private readonly onDialog = (dialog: Dialog): void => {
+    this.currentDialog = dialog;
+  };
 
   constructor(private readonly tabId: number) {}
 
@@ -159,6 +259,41 @@ class PageAutomationSession {
       () => undefined,
     );
     return result;
+  }
+
+  async open(
+    pageId: string,
+    url: string,
+    timeoutMs: number,
+  ): Promise<OpenPageResultV2> {
+    const page = await this.requirePage();
+    try {
+      await page.goto(url, { timeout: timeoutMs });
+      if (this.dialogInfo() === null) {
+        await waitForStableDom(page);
+      }
+      const tab = await requireHttpTab(this.tabId);
+      return {
+        schemaVersion: 2,
+        pageId,
+        url: tab.url,
+        title: tab.title ?? "",
+        loadState: "complete",
+      };
+    } catch (error) {
+      const current = await chrome.tabs.get(this.tabId).catch(() => undefined);
+      throw new ChromeBridgeError({
+        code: "NAVIGATION_TIMEOUT",
+        message: `Chrome page navigation failed: ${asError(error).message}`,
+        retryable: true,
+        outcome: "performed",
+        details: {
+          pageId,
+          ...(current?.url === undefined ? {} : { url: current.url }),
+        },
+        cause: error,
+      });
+    }
   }
 
   async snapshot(pageId: string, verbose: boolean): Promise<PageSnapshotV2> {
@@ -325,6 +460,131 @@ class PageAutomationSession {
     }
   }
 
+  async navigate(
+    pageId: string,
+    type: NavigationTypeV2,
+    url: string | null,
+    ignoreCache: boolean,
+    handleBeforeUnload: DialogActionV2,
+  ): Promise<PageActionResultV2> {
+    const page = await this.requirePage();
+    let autoHandledDialog: Promise<void> | undefined;
+    const onDialog = (dialog: Dialog): void => {
+      if (dialog.type() !== "beforeunload") {
+        return;
+      }
+      autoHandledDialog = (
+        handleBeforeUnload === "dismiss" ? dialog.dismiss() : dialog.accept()
+      ).then(() => {
+        if (this.currentDialog === dialog) {
+          this.currentDialog = undefined;
+        }
+      });
+    };
+    page.on("dialog", onDialog);
+    try {
+      const result = await this.performAction(pageId, "navigate_page", async () => {
+        const options = { timeout: NAVIGATION_OPERATION_TIMEOUT_MS };
+        switch (type) {
+          case "url":
+            if (url === null) {
+              throw new Error("Navigation URL is missing.");
+            }
+            await page.goto(url, options);
+            break;
+          case "back":
+            await page.goBack(options);
+            break;
+          case "forward":
+            await page.goForward(options);
+            break;
+          case "reload":
+            await page.reload({ ...options, ignoreCache });
+            break;
+        }
+      });
+      try {
+        await autoHandledDialog;
+      } catch (error) {
+        throw new ChromeBridgeError({
+          code: "INTERACTION_FAILED",
+          message: `Chrome could not handle the beforeunload dialog: ${asError(error).message}`,
+          retryable: false,
+          outcome: "unknown",
+          cause: error,
+        });
+      }
+      return { ...result, dialog: this.dialogInfo() };
+    } finally {
+      page.off("dialog", onDialog);
+    }
+  }
+
+  async handleDialog(
+    pageId: string,
+    action: DialogActionV2,
+    promptText: string | null,
+  ): Promise<PageActionResultV2> {
+    const page = await this.requirePage();
+    const dialog = this.currentDialog;
+    if (dialog === undefined || dialog.handled) {
+      this.currentDialog = undefined;
+      throw new ChromeBridgeError({
+        code: "DIALOG_NOT_FOUND",
+        message: "No open Chrome dialog is available for this page.",
+        retryable: false,
+        outcome: "not_started",
+      });
+    }
+    const blockedAction = this.dialogBlockedAction;
+    try {
+      const result = await this.performAction(pageId, "handle_dialog", async () => {
+        await (action === "dismiss"
+          ? dialog.dismiss()
+          : dialog.accept(promptText ?? undefined));
+        await blockedAction;
+        // A mouseReleased CDP command can outlive the dialog while Puppeteer's
+        // transaction still records the button as pressed. Normalize it before
+        // the next serialized action.
+        await page.mouse.reset();
+      });
+      return { ...result, dialog: null };
+    } finally {
+      this.currentDialog = undefined;
+      this.dialogBlockedAction = undefined;
+    }
+  }
+
+  async listConsoleMessages(
+    params: ListConsoleMessagesParamsV2,
+  ): Promise<ListConsoleMessagesResultV2> {
+    await this.requirePage();
+    return this.requireDebugSession().listConsoleMessages(params);
+  }
+
+  async getConsoleMessage(
+    pageId: string,
+    msgid: number,
+  ): Promise<GetConsoleMessageResultV2> {
+    await this.requirePage();
+    return this.requireDebugSession().getConsoleMessage(pageId, msgid);
+  }
+
+  async listNetworkRequests(
+    params: ListNetworkRequestsParamsV2,
+  ): Promise<ListNetworkRequestsResultV2> {
+    await this.requirePage();
+    return this.requireDebugSession().listNetworkRequests(params);
+  }
+
+  async getNetworkRequest(
+    pageId: string,
+    reqid: number,
+  ): Promise<GetNetworkRequestResultV2> {
+    await this.requirePage();
+    return this.requireDebugSession().getNetworkRequest(pageId, reqid);
+  }
+
   invalidateForNavigation(): void {
     this.currentSnapshot = undefined;
     this.snapshotState.invalidateForNavigation();
@@ -332,8 +592,14 @@ class PageAutomationSession {
 
   async close(): Promise<void> {
     const browser = this.browser;
+    const page = this.page;
+    page?.off("dialog", this.onDialog);
+    this.debugSession?.dispose();
     this.browser = undefined;
     this.page = undefined;
+    this.debugSession = undefined;
+    this.currentDialog = undefined;
+    this.dialogBlockedAction = undefined;
     this.currentSnapshot = undefined;
     if (browser !== undefined) {
       await browser.disconnect().catch(() => undefined);
@@ -344,6 +610,12 @@ class PageAutomationSession {
     if (this.page !== undefined && this.browser?.connected === true) {
       return this.page;
     }
+    this.page?.off("dialog", this.onDialog);
+    this.debugSession?.dispose();
+    this.page = undefined;
+    this.debugSession = undefined;
+    this.currentDialog = undefined;
+    this.dialogBlockedAction = undefined;
     let transport: Awaited<ReturnType<typeof Puppeteer.ExtensionTransport.connectTab>>;
     try {
       transport = await Puppeteer.ExtensionTransport.connectTab(this.tabId);
@@ -367,8 +639,10 @@ class PageAutomationSession {
         throw new Error("ExtensionTransport did not expose the attached page.");
       }
       page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+      page.on("dialog", this.onDialog);
       this.browser = browser;
       this.page = page;
+      this.debugSession = new PageDebugSession(page);
       return page;
     } catch (error) {
       transport.close();
@@ -380,6 +654,31 @@ class PageAutomationSession {
         cause: error,
       });
     }
+  }
+
+  private requireDebugSession(): PageDebugSession {
+    if (this.debugSession === undefined) {
+      throw new Error("Chrome page debug collectors are not attached.");
+    }
+    return this.debugSession;
+  }
+
+  private dialogInfo(): PageActionResultV2["dialog"] {
+    const dialog = this.currentDialog;
+    if (dialog === undefined || dialog.handled) {
+      if (dialog?.handled === true) {
+        this.currentDialog = undefined;
+      }
+      return null;
+    }
+    return {
+      type: dialog.type(),
+      message: truncateCodePoints(dialog.message(), MAX_DIALOG_TEXT_CODE_POINTS),
+      defaultValue: truncateCodePoints(
+        dialog.defaultValue(),
+        MAX_DIALOG_TEXT_CODE_POINTS,
+      ),
+    };
   }
 
   private requireSnapshotNode(uid: string): TextSnapshotNode {
@@ -430,11 +729,51 @@ class PageAutomationSession {
     const page = await this.requirePage();
     const initialTab = await requireHttpTab(this.tabId);
     const watcher = new TabNavigationWatcher(this.tabId, initialTab.url);
+    const returnWhenDialogOpens =
+      action !== "navigate_page" && action !== "handle_dialog";
+    const dialogOpened = deferred<Dialog>();
+    const onDialog = (dialog: Dialog): void => {
+      dialogOpened.resolve(dialog);
+    };
+    if (returnWhenDialogOpens) {
+      page.on("dialog", onDialog);
+    }
     let started = false;
     try {
       started = true;
-      await operation();
-      const navigatedToUrl = await watcher.settle(page);
+      const operationPromise = Promise.resolve().then(operation);
+      const firstCompleted = returnWhenDialogOpens
+        ? await Promise.race([
+            operationPromise.then(() => "operation" as const),
+            dialogOpened.promise.then(() => "dialog" as const),
+          ])
+        : await operationPromise.then(() => "operation" as const);
+      if (firstCompleted === "dialog") {
+        // Like upstream WaitForHelper, a dialog is a terminal observation for
+        // the action. ExtensionTransport can keep the input command pending
+        // while the renderer is paused, so let handle_dialog release it.
+        const blockedAction = operationPromise.then(
+          () => undefined,
+          () => undefined,
+        );
+        this.dialogBlockedAction = blockedAction;
+        void blockedAction.then(() => {
+          if (this.dialogBlockedAction === blockedAction) {
+            this.dialogBlockedAction = undefined;
+          }
+        });
+        const tab = await requireHttpTab(this.tabId);
+        return {
+          schemaVersion: 2,
+          pageId,
+          action,
+          performed: true,
+          url: tab.url,
+          navigatedToUrl: null,
+          dialog: this.dialogInfo(),
+        };
+      }
+      const navigatedToUrl = await watcher.settle(page, this.dialogInfo() !== null);
       const tab = await requireHttpTab(this.tabId);
       return {
         schemaVersion: 2,
@@ -443,6 +782,7 @@ class PageAutomationSession {
         performed: true,
         url: tab.url,
         navigatedToUrl,
+        dialog: this.dialogInfo(),
       };
     } catch (error) {
       if (error instanceof ChromeBridgeError) {
@@ -456,6 +796,9 @@ class PageAutomationSession {
         cause: error,
       });
     } finally {
+      if (returnWhenDialogOpens) {
+        page.off("dialog", onDialog);
+      }
       watcher.close();
     }
   }
@@ -473,7 +816,7 @@ class TabNavigationWatcher {
     chrome.tabs.onUpdated.addListener(this.onUpdated);
   }
 
-  async settle(page: Page): Promise<string | null> {
+  async settle(page: Page, dialogOpen: boolean): Promise<string | null> {
     await Promise.race([this.started.promise, sleep(EXPECT_NAVIGATION_MS)]);
     if (this.navigationStarted) {
       await Promise.race([
@@ -481,7 +824,9 @@ class TabNavigationWatcher {
         sleep(NAVIGATION_SETTLE_TIMEOUT_MS),
       ]).catch(() => undefined);
     }
-    await waitForStableDom(page);
+    if (!dialogOpen) {
+      await waitForStableDom(page);
+    }
     const tab = await requireHttpTab(this.tabId);
     return tab.url === this.initialUrl ? null : tab.url;
   }
@@ -758,6 +1103,10 @@ function deferred<T>(): {
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function truncateCodePoints(value: string, maximum: number): string {
+  return Array.from(value).slice(0, maximum).join("");
 }
 
 function asError(error: unknown): Error {

@@ -86,6 +86,11 @@ resume 语义不变。
 `click`、`fill`、`press_key`、`type_text`、`wait_for`、`scroll`、`hover` 已完成
 真实 Chrome 验收；MCP multimodal observation 仍明确延期。
 
+实现进展（2026-08-02）：在同一严格 v2 和 runtime-owned `pageId` 边界内增加页面
+列举/导航/关闭、JavaScript dialog，以及 console/network 两级调试 observation；
+collector、稳定 ID、导航分桶、分页和 formatter 以 chrome-devtools-mcp 为基础移植，
+并已完成本机真实 Chrome 十八项工具 smoke。
+
 ### 目标
 
 在 Chrome 一阶段交付稳定后，为扩展自己打开的页面增加确定性的页面快照和元素操作，

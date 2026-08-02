@@ -32,6 +32,14 @@ describe("Tinker Chrome MCP server", () => {
       "wait_for",
       "scroll",
       "hover",
+      "list_pages",
+      "navigate_page",
+      "close_page",
+      "handle_dialog",
+      "list_console_messages",
+      "get_console_message",
+      "list_network_requests",
+      "get_network_request",
     ]);
 
     const result = await client.callTool({
@@ -119,6 +127,7 @@ describe("Tinker Chrome MCP server", () => {
           performed: true,
           url: "https://example.com/",
           navigatedToUrl: null,
+          dialog: null,
         });
       },
     };
@@ -155,6 +164,178 @@ describe("Tinker Chrome MCP server", () => {
       "page.scroll",
       "page.hover",
       "page.wait_for",
+    ]);
+    await client.close();
+  });
+
+  test("maps page lifecycle and debug tools through normalized strict params", async () => {
+    const pageId = crypto.randomUUID();
+    const calls: Array<{ method: BridgeMethodV2; params: unknown }> = [];
+    const bridge: ChromeBridgeClient = {
+      request(method, params): Promise<unknown> {
+        calls.push({ method, params });
+        switch (method) {
+          case "page.list":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pages: [
+                {
+                  pageId,
+                  url: "https://example.com/",
+                  title: "Example Domain",
+                  loadState: "complete",
+                  active: true,
+                },
+              ],
+              truncated: false,
+            });
+          case "page.navigate":
+          case "page.handle_dialog":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pageId,
+              action: method === "page.navigate" ? "navigate_page" : "handle_dialog",
+              performed: true,
+              url: "https://example.com/next",
+              navigatedToUrl:
+                method === "page.navigate" ? "https://example.com/next" : null,
+              dialog: null,
+            });
+          case "page.close":
+            return Promise.resolve({ schemaVersion: 2, pageId, closed: true });
+          case "page.console.list":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pageId,
+              pageIdx: 0,
+              pageSize: 50,
+              totalMessages: 1,
+              totalPages: 1,
+              output: "msgid=1 [log] ready (1 args)",
+              truncated: false,
+            });
+          case "page.console.get":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pageId,
+              msgid: 1,
+              output: "ID: 1\nMessage: log> ready",
+              truncated: false,
+            });
+          case "page.network.list":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pageId,
+              pageIdx: 0,
+              pageSize: 50,
+              totalRequests: 1,
+              totalPages: 1,
+              output: "reqid=2 GET https://example.com/api [200] type=fetch",
+              truncated: false,
+            });
+          case "page.network.get":
+            return Promise.resolve({
+              schemaVersion: 2,
+              pageId,
+              reqid: 2,
+              output: "## Request https://example.com/api\nStatus: 200",
+              truncated: false,
+            });
+          default:
+            throw new Error(`Unexpected method ${method}`);
+        }
+      },
+    };
+    const client = await connectClient(bridge);
+
+    expect(resultText(await client.callTool({ name: "list_pages" }))).toContain(
+      `pageId=${pageId}`,
+    );
+    expect(
+      resultText(
+        await client.callTool({
+          name: "navigate_page",
+          arguments: { pageId, type: "url", url: "https://example.com/next" },
+        }),
+      ),
+    ).toContain("action=navigate_page");
+    expect(
+      resultText(
+        await client.callTool({
+          name: "handle_dialog",
+          arguments: { pageId, action: "accept" },
+        }),
+      ),
+    ).toContain("action=handle_dialog");
+    expect(
+      resultText(
+        await client.callTool({ name: "list_console_messages", arguments: { pageId } }),
+      ),
+    ).toContain("msgid=1");
+    expect(
+      resultText(
+        await client.callTool({
+          name: "get_console_message",
+          arguments: { pageId, msgid: 1 },
+        }),
+      ),
+    ).toContain("Message: log> ready");
+    expect(
+      resultText(
+        await client.callTool({ name: "list_network_requests", arguments: { pageId } }),
+      ),
+    ).toContain("reqid=2");
+    expect(
+      resultText(
+        await client.callTool({
+          name: "get_network_request",
+          arguments: { pageId, reqid: 2 },
+        }),
+      ),
+    ).toContain("Status: 200");
+    expect(
+      resultText(await client.callTool({ name: "close_page", arguments: { pageId } })),
+    ).toContain("outcome=performed");
+
+    expect(calls).toEqual([
+      { method: "page.list", params: {} },
+      {
+        method: "page.navigate",
+        params: {
+          pageId,
+          type: "url",
+          url: "https://example.com/next",
+          ignoreCache: false,
+          handleBeforeUnload: "accept",
+        },
+      },
+      {
+        method: "page.handle_dialog",
+        params: { pageId, action: "accept", promptText: null },
+      },
+      {
+        method: "page.console.list",
+        params: {
+          pageId,
+          pageIdx: 0,
+          pageSize: 50,
+          types: [],
+          includePreservedMessages: false,
+        },
+      },
+      { method: "page.console.get", params: { pageId, msgid: 1 } },
+      {
+        method: "page.network.list",
+        params: {
+          pageId,
+          pageIdx: 0,
+          pageSize: 50,
+          resourceTypes: [],
+          includePreservedRequests: false,
+        },
+      },
+      { method: "page.network.get", params: { pageId, reqid: 2 } },
+      { method: "page.close", params: { pageId } },
     ]);
     await client.close();
   });

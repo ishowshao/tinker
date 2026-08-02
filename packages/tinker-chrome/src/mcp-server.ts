@@ -9,13 +9,20 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { ChromeBridgeServer } from "./bridge-server";
 import {
+  CONSOLE_MESSAGE_TYPES,
+  DEBUG_LIST_DEFAULT_PAGE_SIZE,
+  DEBUG_LIST_MAX_PAGE_SIZE,
   MAX_ACTION_TEXT_CODE_POINTS,
+  MAX_DIALOG_TEXT_CODE_POINTS,
   MAX_KEY_CHARS,
   MAX_SCROLL_AMOUNT,
   MAX_URL_CHARS,
   MAX_WAIT_TEXTS,
+  NETWORK_RESOURCE_TYPES,
   OPEN_PAGE_TIMEOUT_MS,
   PAGE_ACTION_TIMEOUT_MS,
+  PAGE_DEBUG_TIMEOUT_MS,
+  PAGE_NAVIGATION_TIMEOUT_MS,
   PAGE_SNAPSHOT_TIMEOUT_MS,
   PAGE_SUMMARY_TIMEOUT_MS,
   PAGE_WAIT_DEFAULT_TIMEOUT_MS,
@@ -25,6 +32,12 @@ import {
 import { ChromeBridgeError, internalBridgeError } from "./errors";
 import {
   type BridgeMethodV2,
+  parseClosePageResultV2,
+  parseGetConsoleMessageResultV2,
+  parseGetNetworkRequestResultV2,
+  parseListConsoleMessagesResultV2,
+  parseListNetworkRequestsResultV2,
+  parseListPagesResultV2,
   parseOpenPageResultV2,
   parsePageActionResultV2,
   parsePageSnapshotV2,
@@ -237,6 +250,167 @@ export const HOVER_TOOL: Tool = {
   },
 };
 
+export const LIST_PAGES_TOOL: Tool = {
+  name: "list_pages",
+  description: "List HTTP(S) Chrome pages owned by this Tinker runtime.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+};
+
+export const NAVIGATE_PAGE_TOOL: Tool = {
+  name: "navigate_page",
+  description: "Navigate an owned page by URL, back, forward, or reload.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      type: {
+        type: "string",
+        enum: ["url", "back", "forward", "reload"],
+      },
+      url: {
+        type: "string",
+        minLength: 1,
+        maxLength: MAX_URL_CHARS,
+        description: "Required only when type is url; must be HTTP or HTTPS",
+      },
+      ignoreCache: {
+        type: "boolean",
+        description: "Ignore cache when type is reload. Default false.",
+      },
+      handleBeforeUnload: {
+        type: "string",
+        enum: ["accept", "dismiss"],
+        description: "How to handle beforeunload dialogs. Default accept.",
+      },
+    },
+    required: ["pageId", "type"],
+  },
+};
+
+export const CLOSE_PAGE_TOOL: Tool = {
+  name: "close_page",
+  description: "Close a Chrome page owned by this Tinker runtime.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: { pageId: { ...PAGE_ID_PROPERTY } },
+    required: ["pageId"],
+  },
+};
+
+export const HANDLE_DIALOG_TOOL: Tool = {
+  name: "handle_dialog",
+  description: "Accept or dismiss an open JavaScript dialog on an owned page.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      action: { type: "string", enum: ["accept", "dismiss"] },
+      promptText: {
+        type: "string",
+        maxLength: MAX_DIALOG_TEXT_CODE_POINTS,
+        description: "Optional prompt value when accepting a prompt dialog",
+      },
+    },
+    required: ["pageId", "action"],
+  },
+};
+
+export const LIST_CONSOLE_MESSAGES_TOOL: Tool = {
+  name: "list_console_messages",
+  description:
+    "List bounded console messages collected for an owned page since its latest navigation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      pageIdx: { type: "integer", minimum: 0 },
+      pageSize: {
+        type: "integer",
+        minimum: 1,
+        maximum: DEBUG_LIST_MAX_PAGE_SIZE,
+        description: `Default ${DEBUG_LIST_DEFAULT_PAGE_SIZE}`,
+      },
+      types: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", enum: [...CONSOLE_MESSAGE_TYPES] },
+      },
+      includePreservedMessages: {
+        type: "boolean",
+        description: "Include messages preserved across the latest three navigations",
+      },
+    },
+    required: ["pageId"],
+  },
+};
+
+export const GET_CONSOLE_MESSAGE_TOOL: Tool = {
+  name: "get_console_message",
+  description: "Get bounded arguments and stack details for one console message ID.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      msgid: { type: "integer", minimum: 1 },
+    },
+    required: ["pageId", "msgid"],
+  },
+};
+
+export const LIST_NETWORK_REQUESTS_TOOL: Tool = {
+  name: "list_network_requests",
+  description:
+    "List bounded network requests collected for an owned page since its latest navigation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      pageIdx: { type: "integer", minimum: 0 },
+      pageSize: {
+        type: "integer",
+        minimum: 1,
+        maximum: DEBUG_LIST_MAX_PAGE_SIZE,
+        description: `Default ${DEBUG_LIST_DEFAULT_PAGE_SIZE}`,
+      },
+      resourceTypes: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", enum: [...NETWORK_RESOURCE_TYPES] },
+      },
+      includePreservedRequests: {
+        type: "boolean",
+        description: "Include requests preserved across the latest three navigations",
+      },
+    },
+    required: ["pageId"],
+  },
+};
+
+export const GET_NETWORK_REQUEST_TOOL: Tool = {
+  name: "get_network_request",
+  description:
+    "Get bounded request headers, bodies, response data, failure, and redirects for one request ID.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      reqid: { type: "integer", minimum: 1 },
+    },
+    required: ["pageId", "reqid"],
+  },
+};
+
 export const TINKER_CHROME_TOOLS = [
   OPEN_PAGE_TOOL,
   GET_PAGE_SUMMARY_TOOL,
@@ -248,6 +422,14 @@ export const TINKER_CHROME_TOOLS = [
   WAIT_FOR_TOOL,
   SCROLL_TOOL,
   HOVER_TOOL,
+  LIST_PAGES_TOOL,
+  NAVIGATE_PAGE_TOOL,
+  CLOSE_PAGE_TOOL,
+  HANDLE_DIALOG_TOOL,
+  LIST_CONSOLE_MESSAGES_TOOL,
+  GET_CONSOLE_MESSAGE_TOOL,
+  LIST_NETWORK_REQUESTS_TOOL,
+  GET_NETWORK_REQUEST_TOOL,
 ] as const;
 
 export type ChromeBridgeClient = {
@@ -260,7 +442,7 @@ export function createTinkerChromeMcpServer(bridge: ChromeBridgeClient): Server 
     {
       capabilities: { tools: {} },
       instructions:
-        "Use open_page first. Take a fresh snapshot before uid-based actions and after every navigation. Only pages opened by this server can be observed or controlled.",
+        "Use open_page first and retain its pageId. Use list_pages to recover owned pageIds. Take a fresh snapshot before uid-based actions and after every navigation. If an action reports a dialog, call handle_dialog. Use list_console_messages/list_network_requests before their matching get tool. Only pages opened by this server can be observed or controlled.",
     },
   );
 
@@ -291,6 +473,22 @@ export function createTinkerChromeMcpServer(bridge: ChromeBridgeClient): Server 
           return await callScroll(bridge, request.params.arguments);
         case HOVER_TOOL.name:
           return await callUidAction("hover", bridge, request.params.arguments);
+        case LIST_PAGES_TOOL.name:
+          return await callListPages(bridge, request.params.arguments);
+        case NAVIGATE_PAGE_TOOL.name:
+          return await callNavigatePage(bridge, request.params.arguments);
+        case CLOSE_PAGE_TOOL.name:
+          return await callClosePage(bridge, request.params.arguments);
+        case HANDLE_DIALOG_TOOL.name:
+          return await callHandleDialog(bridge, request.params.arguments);
+        case LIST_CONSOLE_MESSAGES_TOOL.name:
+          return await callListConsoleMessages(bridge, request.params.arguments);
+        case GET_CONSOLE_MESSAGE_TOOL.name:
+          return await callGetConsoleMessage(bridge, request.params.arguments);
+        case LIST_NETWORK_REQUESTS_TOOL.name:
+          return await callListNetworkRequests(bridge, request.params.arguments);
+        case GET_NETWORK_REQUEST_TOOL.name:
+          return await callGetNetworkRequest(bridge, request.params.arguments);
       }
       return errorResult(
         new ChromeBridgeError({
@@ -449,7 +647,8 @@ async function callTakeSnapshot(
 ): Promise<CallToolResult> {
   const input = requireObjectKeys(args, ["pageId"], ["verbose"]);
   const pageId = requireUuid(input.pageId, "pageId");
-  const verbose = input.verbose === undefined ? false : requireBoolean(input.verbose);
+  const verbose =
+    input.verbose === undefined ? false : requireBoolean(input.verbose, "verbose");
   const snapshot = parsePageSnapshotV2(
     await bridge.request(
       "page.snapshot",
@@ -613,9 +812,266 @@ async function callScroll(
   return actionResult(result);
 }
 
+async function callListPages(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  requireNoArguments(args);
+  const result = parseListPagesResultV2(
+    await bridge.request("page.list", {}, PAGE_DEBUG_TIMEOUT_MS),
+  );
+  const pages =
+    result.pages.length === 0
+      ? "<no owned Chrome pages>"
+      : result.pages
+          .map((page) =>
+            [
+              `pageId=${page.pageId}`,
+              `url=${singleLine(page.url)}`,
+              `title=${singleLine(page.title)}`,
+              `loadState=${page.loadState}`,
+              `active=${String(page.active)}`,
+            ].join(" "),
+          )
+          .join("\n");
+  return {
+    content: [
+      {
+        type: "text",
+        text: [
+          "Chrome pages owned by this Tinker runtime.",
+          `count=${result.pages.length}`,
+          `truncated=${String(result.truncated)}`,
+          "",
+          pages,
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+async function callNavigatePage(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId", "type"],
+    ["url", "ignoreCache", "handleBeforeUnload"],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  if (
+    input.type !== "url" &&
+    input.type !== "back" &&
+    input.type !== "forward" &&
+    input.type !== "reload"
+  ) {
+    throw invalidArgumentError("type must be url, back, forward, or reload.");
+  }
+  const type = input.type;
+  let url: string | null = null;
+  if (type === "url") {
+    if (input.url === undefined) {
+      throw invalidArgumentError("url is required when type is url.");
+    }
+    url = requireHttpUrl(input.url);
+  } else if (input.url !== undefined) {
+    throw invalidArgumentError("url is allowed only when type is url.");
+  }
+  const ignoreCache =
+    input.ignoreCache === undefined
+      ? false
+      : requireBoolean(input.ignoreCache, "ignoreCache");
+  if (ignoreCache && type !== "reload") {
+    throw invalidArgumentError("ignoreCache is allowed only when type is reload.");
+  }
+  if (
+    input.handleBeforeUnload !== undefined &&
+    input.handleBeforeUnload !== "accept" &&
+    input.handleBeforeUnload !== "dismiss"
+  ) {
+    throw invalidArgumentError("handleBeforeUnload must be accept or dismiss.");
+  }
+  const handleBeforeUnload = input.handleBeforeUnload ?? "accept";
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.navigate",
+      { pageId, type, url, ignoreCache, handleBeforeUnload },
+      PAGE_NAVIGATION_TIMEOUT_MS,
+    ),
+    "navigate_page",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResult(result);
+}
+
+async function callClosePage(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireExactObject(args, ["pageId"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  const result = parseClosePageResultV2(
+    await bridge.request("page.close", { pageId }, PAGE_ACTION_TIMEOUT_MS),
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return {
+    content: [
+      {
+        type: "text",
+        text: [
+          "Chrome page closed.",
+          `pageId=${result.pageId}`,
+          "outcome=performed",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+async function callHandleDialog(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(args, ["pageId", "action"], ["promptText"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  if (input.action !== "accept" && input.action !== "dismiss") {
+    throw invalidArgumentError("action must be accept or dismiss.");
+  }
+  const action = input.action;
+  const promptText =
+    input.promptText === undefined
+      ? null
+      : requireString(input.promptText, "promptText", MAX_DIALOG_TEXT_CODE_POINTS);
+  if (action === "dismiss" && promptText !== null) {
+    throw invalidArgumentError("promptText is allowed only when action is accept.");
+  }
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.handle_dialog",
+      { pageId, action, promptText },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "handle_dialog",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResult(result);
+}
+
+async function callListConsoleMessages(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId"],
+    ["pageIdx", "pageSize", "types", "includePreservedMessages"],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  const pageIdx =
+    input.pageIdx === undefined
+      ? 0
+      : requireInteger(input.pageIdx, "pageIdx", 0, Number.MAX_SAFE_INTEGER);
+  const pageSize =
+    input.pageSize === undefined
+      ? DEBUG_LIST_DEFAULT_PAGE_SIZE
+      : requireInteger(input.pageSize, "pageSize", 1, DEBUG_LIST_MAX_PAGE_SIZE);
+  const types =
+    input.types === undefined
+      ? []
+      : requireEnumArray(input.types, "types", CONSOLE_MESSAGE_TYPES);
+  const includePreservedMessages =
+    input.includePreservedMessages === undefined
+      ? false
+      : requireBoolean(input.includePreservedMessages, "includePreservedMessages");
+  const result = parseListConsoleMessagesResultV2(
+    await bridge.request(
+      "page.console.list",
+      { pageId, pageIdx, pageSize, types, includePreservedMessages },
+      PAGE_DEBUG_TIMEOUT_MS,
+    ),
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return debugListResult("Chrome console messages.", result, result.totalMessages);
+}
+
+async function callGetConsoleMessage(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireExactObject(args, ["pageId", "msgid"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  const msgid = requireInteger(input.msgid, "msgid", 1, Number.MAX_SAFE_INTEGER);
+  const result = parseGetConsoleMessageResultV2(
+    await bridge.request("page.console.get", { pageId, msgid }, PAGE_DEBUG_TIMEOUT_MS),
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return debugDetailResult("Chrome console message.", result);
+}
+
+async function callListNetworkRequests(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId"],
+    ["pageIdx", "pageSize", "resourceTypes", "includePreservedRequests"],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  const pageIdx =
+    input.pageIdx === undefined
+      ? 0
+      : requireInteger(input.pageIdx, "pageIdx", 0, Number.MAX_SAFE_INTEGER);
+  const pageSize =
+    input.pageSize === undefined
+      ? DEBUG_LIST_DEFAULT_PAGE_SIZE
+      : requireInteger(input.pageSize, "pageSize", 1, DEBUG_LIST_MAX_PAGE_SIZE);
+  const resourceTypes =
+    input.resourceTypes === undefined
+      ? []
+      : requireEnumArray(input.resourceTypes, "resourceTypes", NETWORK_RESOURCE_TYPES);
+  const includePreservedRequests =
+    input.includePreservedRequests === undefined
+      ? false
+      : requireBoolean(input.includePreservedRequests, "includePreservedRequests");
+  const result = parseListNetworkRequestsResultV2(
+    await bridge.request(
+      "page.network.list",
+      { pageId, pageIdx, pageSize, resourceTypes, includePreservedRequests },
+      PAGE_DEBUG_TIMEOUT_MS,
+    ),
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return debugListResult("Chrome network requests.", result, result.totalRequests);
+}
+
+async function callGetNetworkRequest(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireExactObject(args, ["pageId", "reqid"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  const reqid = requireInteger(input.reqid, "reqid", 1, Number.MAX_SAFE_INTEGER);
+  const result = parseGetNetworkRequestResultV2(
+    await bridge.request("page.network.get", { pageId, reqid }, PAGE_DEBUG_TIMEOUT_MS),
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return debugDetailResult("Chrome network request.", result);
+}
+
 function actionResult(
   result: ReturnType<typeof parsePageActionResultV2>,
 ): CallToolResult {
+  const dialogLines =
+    result.dialog === null
+      ? []
+      : [
+          `dialogType=${result.dialog.type}`,
+          `dialogMessage=${singleLine(result.dialog.message)}`,
+          `dialogDefaultValue=${singleLine(result.dialog.defaultValue)}`,
+          "Call handle_dialog before continuing page interaction.",
+        ];
   return {
     content: [
       {
@@ -627,6 +1083,59 @@ function actionResult(
           "outcome=performed",
           `url=${singleLine(result.url)}`,
           `navigatedToUrl=${singleLine(result.navigatedToUrl ?? "")}`,
+          ...dialogLines,
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function debugListResult(
+  heading: string,
+  result: {
+    pageId: string;
+    pageIdx: number;
+    pageSize: number;
+    totalPages: number;
+    output: string;
+    truncated: boolean;
+  },
+  totalItems: number,
+): CallToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: [
+          heading,
+          `pageId=${result.pageId}`,
+          `pageIdx=${result.pageIdx}`,
+          `pageSize=${result.pageSize}`,
+          `totalItems=${totalItems}`,
+          `totalPages=${result.totalPages}`,
+          `truncated=${String(result.truncated)}`,
+          "",
+          result.output,
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function debugDetailResult(
+  heading: string,
+  result: { pageId: string; output: string; truncated: boolean },
+): CallToolResult {
+  return {
+    content: [
+      {
+        type: "text",
+        text: [
+          heading,
+          `pageId=${result.pageId}`,
+          `truncated=${String(result.truncated)}`,
+          "",
+          result.output,
         ].join("\n"),
       },
     ],
@@ -660,6 +1169,13 @@ function requireExactObject(
   requiredKeys: readonly string[],
 ): Record<string, unknown> {
   return requireObjectKeys(value, requiredKeys, []);
+}
+
+function requireNoArguments(value: Record<string, unknown> | undefined): void {
+  if (value === undefined) {
+    return;
+  }
+  requireExactObject(value, []);
 }
 
 function requireObjectKeys(
@@ -706,11 +1222,33 @@ function requireNonEmptyString(
   return text;
 }
 
-function requireBoolean(value: unknown): boolean {
+function requireBoolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") {
-    throw invalidArgumentError("verbose must be a boolean.");
+    throw invalidArgumentError(`${label} must be a boolean.`);
   }
   return value;
+}
+
+function requireEnumArray<T extends string>(
+  value: unknown,
+  label: string,
+  allowed: readonly T[],
+): T[] {
+  if (!Array.isArray(value) || value.length > allowed.length) {
+    throw invalidArgumentError(`${label} must be an array of supported values.`);
+  }
+  const items = value.map((item) => {
+    if (!allowed.includes(item as T)) {
+      throw invalidArgumentError(
+        `${label} contains unsupported value ${JSON.stringify(item)}.`,
+      );
+    }
+    return item as T;
+  });
+  if (new Set(items).size !== items.length) {
+    throw invalidArgumentError(`${label} must not contain duplicate values.`);
+  }
+  return items;
 }
 
 function requireStringArray(value: unknown, label: string, maxItems: number): string[] {
@@ -751,6 +1289,20 @@ function requireMatchingPageId(actual: string, expected: string): void {
       outcome: "unknown",
     });
   }
+}
+
+function requireHttpUrl(value: unknown): string {
+  const input = requireNonEmptyString(value, "url", MAX_URL_CHARS);
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch (error) {
+    throw invalidUrlError("url is not a valid absolute URL.", error);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw invalidUrlError("Only http: and https: URLs are supported.");
+  }
+  return url.href;
 }
 
 function invalidArgumentError(message: string): ChromeBridgeError {

@@ -1,14 +1,20 @@
 import {
+  CONSOLE_MESSAGE_TYPES,
+  DEBUG_LIST_MAX_PAGE_SIZE,
   MAX_ACTION_TEXT_CODE_POINTS,
   MAX_CONTENT_CODE_POINTS,
+  MAX_DEBUG_OUTPUT_CODE_POINTS,
+  MAX_DIALOG_TEXT_CODE_POINTS,
   MAX_DESCRIPTION_CODE_POINTS,
   MAX_HEADING_CODE_POINTS,
   MAX_HEADINGS,
   MAX_KEY_CHARS,
+  MAX_OWNED_PAGES,
   MAX_SCROLL_AMOUNT,
   MAX_SNAPSHOT_CODE_POINTS,
   MAX_URL_CHARS,
   MAX_WAIT_TEXTS,
+  NETWORK_RESOURCE_TYPES,
   PAGE_WAIT_MAX_TIMEOUT_MS,
   PLUGIN_CAPABILITIES_V2,
   PROTOCOL_VERSION_V2,
@@ -23,13 +29,26 @@ import {
 export type PluginCapabilityV2 = (typeof PLUGIN_CAPABILITIES_V2)[number];
 export type BridgeMethodV2 = PluginCapabilityV2;
 export type ScrollDirectionV2 = "up" | "down" | "left" | "right";
+export type NavigationTypeV2 = "url" | "back" | "forward" | "reload";
+export type DialogActionV2 = "accept" | "dismiss";
+export type DialogTypeV2 = "alert" | "beforeunload" | "confirm" | "prompt";
+export type ConsoleMessageTypeV2 = (typeof CONSOLE_MESSAGE_TYPES)[number];
+export type NetworkResourceTypeV2 = (typeof NETWORK_RESOURCE_TYPES)[number];
 export type PageActionV2 =
   | "click"
   | "fill"
   | "press_key"
   | "type_text"
   | "scroll"
-  | "hover";
+  | "hover"
+  | "navigate_page"
+  | "handle_dialog";
+
+export type PageDialogInfoV2 = {
+  type: DialogTypeV2;
+  message: string;
+  defaultValue: string;
+};
 
 export type PluginHelloV2 = {
   kind: "plugin_hello";
@@ -76,6 +95,35 @@ export type ScrollParamsV2 = {
   amount: number;
 };
 export type HoverParamsV2 = { pageId: string; uid: string };
+export type ListPagesParamsV2 = Record<string, never>;
+export type NavigatePageParamsV2 = {
+  pageId: string;
+  type: NavigationTypeV2;
+  url: string | null;
+  ignoreCache: boolean;
+  handleBeforeUnload: DialogActionV2;
+};
+export type HandleDialogParamsV2 = {
+  pageId: string;
+  action: DialogActionV2;
+  promptText: string | null;
+};
+export type ListConsoleMessagesParamsV2 = {
+  pageId: string;
+  pageIdx: number;
+  pageSize: number;
+  types: ConsoleMessageTypeV2[];
+  includePreservedMessages: boolean;
+};
+export type GetConsoleMessageParamsV2 = { pageId: string; msgid: number };
+export type ListNetworkRequestsParamsV2 = {
+  pageId: string;
+  pageIdx: number;
+  pageSize: number;
+  resourceTypes: NetworkResourceTypeV2[];
+  includePreservedRequests: boolean;
+};
+export type GetNetworkRequestParamsV2 = { pageId: string; reqid: number };
 
 type BridgeRequestBaseV2 = {
   kind: "request";
@@ -104,7 +152,33 @@ export type BridgeRequestV2 =
       params: WaitForParamsV2;
     })
   | (BridgeRequestBaseV2 & { method: "page.scroll"; params: ScrollParamsV2 })
-  | (BridgeRequestBaseV2 & { method: "page.hover"; params: HoverParamsV2 });
+  | (BridgeRequestBaseV2 & { method: "page.hover"; params: HoverParamsV2 })
+  | (BridgeRequestBaseV2 & { method: "page.list"; params: ListPagesParamsV2 })
+  | (BridgeRequestBaseV2 & {
+      method: "page.navigate";
+      params: NavigatePageParamsV2;
+    })
+  | (BridgeRequestBaseV2 & { method: "page.close"; params: PageIdParamsV2 })
+  | (BridgeRequestBaseV2 & {
+      method: "page.handle_dialog";
+      params: HandleDialogParamsV2;
+    })
+  | (BridgeRequestBaseV2 & {
+      method: "page.console.list";
+      params: ListConsoleMessagesParamsV2;
+    })
+  | (BridgeRequestBaseV2 & {
+      method: "page.console.get";
+      params: GetConsoleMessageParamsV2;
+    })
+  | (BridgeRequestBaseV2 & {
+      method: "page.network.list";
+      params: ListNetworkRequestsParamsV2;
+    })
+  | (BridgeRequestBaseV2 & {
+      method: "page.network.get";
+      params: GetNetworkRequestParamsV2;
+    });
 
 export type BridgeSuccessV2 = {
   kind: "response";
@@ -184,6 +258,7 @@ export type PageActionResultV2 = {
   performed: true;
   url: string;
   navigatedToUrl: string | null;
+  dialog: PageDialogInfoV2 | null;
 };
 
 export type PageWaitResultV2 = {
@@ -193,12 +268,76 @@ export type PageWaitResultV2 = {
   url: string;
 };
 
+export type PageInfoV2 = {
+  pageId: string;
+  url: string;
+  title: string;
+  loadState: "loading" | "complete";
+  active: boolean;
+};
+
+export type ListPagesResultV2 = {
+  schemaVersion: 2;
+  pages: PageInfoV2[];
+  truncated: boolean;
+};
+
+export type ClosePageResultV2 = {
+  schemaVersion: 2;
+  pageId: string;
+  closed: true;
+};
+
+export type ListConsoleMessagesResultV2 = {
+  schemaVersion: 2;
+  pageId: string;
+  pageIdx: number;
+  pageSize: number;
+  totalMessages: number;
+  totalPages: number;
+  output: string;
+  truncated: boolean;
+};
+
+export type GetConsoleMessageResultV2 = {
+  schemaVersion: 2;
+  pageId: string;
+  msgid: number;
+  output: string;
+  truncated: boolean;
+};
+
+export type ListNetworkRequestsResultV2 = {
+  schemaVersion: 2;
+  pageId: string;
+  pageIdx: number;
+  pageSize: number;
+  totalRequests: number;
+  totalPages: number;
+  output: string;
+  truncated: boolean;
+};
+
+export type GetNetworkRequestResultV2 = {
+  schemaVersion: 2;
+  pageId: string;
+  reqid: number;
+  output: string;
+  truncated: boolean;
+};
+
 export type BridgeResultV2 =
   | OpenPageResultV2
   | PageSummaryV2
   | PageSnapshotV2
   | PageActionResultV2
-  | PageWaitResultV2;
+  | PageWaitResultV2
+  | ListPagesResultV2
+  | ClosePageResultV2
+  | ListConsoleMessagesResultV2
+  | GetConsoleMessageResultV2
+  | ListNetworkRequestsResultV2
+  | GetNetworkRequestResultV2;
 
 export function parsePluginHelloV2(value: unknown): PluginHelloV2 {
   const record = requireRecord(value, "plugin hello");
@@ -300,6 +439,38 @@ export function parseBridgeRequestV2(value: unknown): BridgeRequestV2 {
       return { ...base, method, params: parseScrollParams(record.params) };
     case "page.hover":
       return { ...base, method, params: parseHoverParams(record.params) };
+    case "page.list":
+      return { ...base, method, params: parseListPagesParams(record.params) };
+    case "page.navigate":
+      return { ...base, method, params: parseNavigatePageParams(record.params) };
+    case "page.close":
+      return { ...base, method, params: parsePageIdParams(record.params) };
+    case "page.handle_dialog":
+      return { ...base, method, params: parseHandleDialogParams(record.params) };
+    case "page.console.list":
+      return {
+        ...base,
+        method,
+        params: parseListConsoleMessagesParams(record.params),
+      };
+    case "page.console.get":
+      return {
+        ...base,
+        method,
+        params: parseGetConsoleMessageParams(record.params),
+      };
+    case "page.network.list":
+      return {
+        ...base,
+        method,
+        params: parseListNetworkRequestsParams(record.params),
+      };
+    case "page.network.get":
+      return {
+        ...base,
+        method,
+        params: parseGetNetworkRequestParams(record.params),
+      };
   }
 }
 
@@ -377,6 +548,22 @@ export function parseBridgeResultV2(
       return parsePageActionResultV2(value, "scroll");
     case "page.hover":
       return parsePageActionResultV2(value, "hover");
+    case "page.list":
+      return parseListPagesResultV2(value);
+    case "page.navigate":
+      return parsePageActionResultV2(value, "navigate_page");
+    case "page.close":
+      return parseClosePageResultV2(value);
+    case "page.handle_dialog":
+      return parsePageActionResultV2(value, "handle_dialog");
+    case "page.console.list":
+      return parseListConsoleMessagesResultV2(value);
+    case "page.console.get":
+      return parseGetConsoleMessageResultV2(value);
+    case "page.network.list":
+      return parseListNetworkRequestsResultV2(value);
+    case "page.network.get":
+      return parseGetNetworkRequestResultV2(value);
   }
 }
 
@@ -512,6 +699,7 @@ export function parsePageActionResultV2(
     "performed",
     "url",
     "navigatedToUrl",
+    "dialog",
   ]);
   requireLiteral(record.schemaVersion, 2, "action schemaVersion");
   requireLiteral(record.performed, true, "action performed");
@@ -537,6 +725,7 @@ export function parsePageActionResultV2(
             MAX_URL_CHARS,
             true,
           ),
+    dialog: record.dialog === null ? null : parsePageDialogInfo(record.dialog),
   };
 }
 
@@ -549,6 +738,220 @@ export function parsePageWaitResultV2(value: unknown): PageWaitResultV2 {
     pageId: requireUuid(record.pageId, "pageId"),
     matchedText: requireBoundedString(record.matchedText, "matchedText", 1_000, true),
     url: requireBoundedString(record.url, "url", MAX_URL_CHARS, true),
+  };
+}
+
+export function parseListPagesResultV2(value: unknown): ListPagesResultV2 {
+  const record = requireRecord(value, "list pages result");
+  requireExactKeys(record, ["schemaVersion", "pages", "truncated"]);
+  requireLiteral(record.schemaVersion, 2, "list pages schemaVersion");
+  if (!Array.isArray(record.pages) || record.pages.length > MAX_OWNED_PAGES) {
+    throw new Error(`Page list must contain at most ${MAX_OWNED_PAGES} pages.`);
+  }
+  return {
+    schemaVersion: 2,
+    pages: record.pages.map((page, index) => parsePageInfo(page, index)),
+    truncated: requireBoolean(record.truncated, "page list truncated"),
+  };
+}
+
+export function parseClosePageResultV2(value: unknown): ClosePageResultV2 {
+  const record = requireRecord(value, "close page result");
+  requireExactKeys(record, ["schemaVersion", "pageId", "closed"]);
+  requireLiteral(record.schemaVersion, 2, "close page schemaVersion");
+  requireLiteral(record.closed, true, "close page closed");
+  return {
+    schemaVersion: 2,
+    pageId: requireUuid(record.pageId, "pageId"),
+    closed: true,
+  };
+}
+
+export function parseListConsoleMessagesResultV2(
+  value: unknown,
+): ListConsoleMessagesResultV2 {
+  const record = parseDebugListResult(value, "console messages", "totalMessages");
+  return {
+    schemaVersion: 2,
+    pageId: record.pageId,
+    pageIdx: record.pageIdx,
+    pageSize: record.pageSize,
+    totalMessages: record.totalItems,
+    totalPages: record.totalPages,
+    output: record.output,
+    truncated: record.truncated,
+  };
+}
+
+export function parseGetConsoleMessageResultV2(
+  value: unknown,
+): GetConsoleMessageResultV2 {
+  const record = parseDebugDetailResult(value, "console message", "msgid");
+  return {
+    schemaVersion: 2,
+    pageId: record.pageId,
+    msgid: record.itemId,
+    output: record.output,
+    truncated: record.truncated,
+  };
+}
+
+export function parseListNetworkRequestsResultV2(
+  value: unknown,
+): ListNetworkRequestsResultV2 {
+  const record = parseDebugListResult(value, "network requests", "totalRequests");
+  return {
+    schemaVersion: 2,
+    pageId: record.pageId,
+    pageIdx: record.pageIdx,
+    pageSize: record.pageSize,
+    totalRequests: record.totalItems,
+    totalPages: record.totalPages,
+    output: record.output,
+    truncated: record.truncated,
+  };
+}
+
+export function parseGetNetworkRequestResultV2(
+  value: unknown,
+): GetNetworkRequestResultV2 {
+  const record = parseDebugDetailResult(value, "network request", "reqid");
+  return {
+    schemaVersion: 2,
+    pageId: record.pageId,
+    reqid: record.itemId,
+    output: record.output,
+    truncated: record.truncated,
+  };
+}
+
+function parsePageInfo(value: unknown, index: number): PageInfoV2 {
+  const record = requireRecord(value, `page ${index}`);
+  requireExactKeys(record, ["pageId", "url", "title", "loadState", "active"]);
+  if (record.loadState !== "loading" && record.loadState !== "complete") {
+    throw new Error(`Page ${index} loadState is invalid.`);
+  }
+  return {
+    pageId: requireUuid(record.pageId, `page ${index} pageId`),
+    url: requireBoundedString(record.url, `page ${index} url`, MAX_URL_CHARS, false),
+    title: requireBoundedString(
+      record.title,
+      `page ${index} title`,
+      MAX_HEADING_CODE_POINTS,
+      false,
+    ),
+    loadState: record.loadState,
+    active: requireBoolean(record.active, `page ${index} active`),
+  };
+}
+
+function parsePageDialogInfo(value: unknown): PageDialogInfoV2 {
+  const record = requireRecord(value, "page dialog");
+  requireExactKeys(record, ["type", "message", "defaultValue"]);
+  if (!DIALOG_TYPES.includes(record.type as DialogTypeV2)) {
+    throw new Error(`Unknown dialog type ${JSON.stringify(record.type)}.`);
+  }
+  return {
+    type: record.type as DialogTypeV2,
+    message: requireBoundedString(
+      record.message,
+      "dialog message",
+      MAX_DIALOG_TEXT_CODE_POINTS,
+      false,
+    ),
+    defaultValue: requireBoundedString(
+      record.defaultValue,
+      "dialog defaultValue",
+      MAX_DIALOG_TEXT_CODE_POINTS,
+      false,
+    ),
+  };
+}
+
+function parseDebugListResult(
+  value: unknown,
+  label: string,
+  totalKey: "totalMessages" | "totalRequests",
+): {
+  pageId: string;
+  pageIdx: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+  output: string;
+  truncated: boolean;
+} {
+  const record = requireRecord(value, `${label} result`);
+  requireExactKeys(record, [
+    "schemaVersion",
+    "pageId",
+    "pageIdx",
+    "pageSize",
+    totalKey,
+    "totalPages",
+    "output",
+    "truncated",
+  ]);
+  requireLiteral(record.schemaVersion, 2, `${label} schemaVersion`);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    pageIdx: requireBoundedInteger(
+      record.pageIdx,
+      "pageIdx",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    pageSize: requireBoundedInteger(
+      record.pageSize,
+      "pageSize",
+      1,
+      DEBUG_LIST_MAX_PAGE_SIZE,
+    ),
+    totalItems: requireBoundedInteger(
+      record[totalKey],
+      totalKey,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    totalPages: requireBoundedInteger(
+      record.totalPages,
+      "totalPages",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    output: requireBoundedString(
+      record.output,
+      `${label} output`,
+      MAX_DEBUG_OUTPUT_CODE_POINTS,
+      false,
+    ),
+    truncated: requireBoolean(record.truncated, `${label} truncated`),
+  };
+}
+
+function parseDebugDetailResult(
+  value: unknown,
+  label: string,
+  idKey: "msgid" | "reqid",
+): {
+  pageId: string;
+  itemId: number;
+  output: string;
+  truncated: boolean;
+} {
+  const record = requireRecord(value, `${label} result`);
+  requireExactKeys(record, ["schemaVersion", "pageId", idKey, "output", "truncated"]);
+  requireLiteral(record.schemaVersion, 2, `${label} schemaVersion`);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    itemId: requireBoundedInteger(record[idKey], idKey, 1, Number.MAX_SAFE_INTEGER),
+    output: requireBoundedString(
+      record.output,
+      `${label} output`,
+      MAX_DEBUG_OUTPUT_CODE_POINTS,
+      false,
+    ),
+    truncated: requireBoolean(record.truncated, `${label} truncated`),
   };
 }
 
@@ -568,7 +971,12 @@ export function isReadOnlyBridgeMethodV2(method: BridgeMethodV2): boolean {
   return (
     method === "page.summary" ||
     method === "page.snapshot" ||
-    method === "page.wait_for"
+    method === "page.wait_for" ||
+    method === "page.list" ||
+    method === "page.console.list" ||
+    method === "page.console.get" ||
+    method === "page.network.list" ||
+    method === "page.network.get"
   );
 }
 
@@ -579,7 +987,10 @@ export function isActionBridgeMethodV2(method: BridgeMethodV2): boolean {
     method === "page.press_key" ||
     method === "page.type_text" ||
     method === "page.scroll" ||
-    method === "page.hover"
+    method === "page.hover" ||
+    method === "page.navigate" ||
+    method === "page.close" ||
+    method === "page.handle_dialog"
   );
 }
 
@@ -706,6 +1117,181 @@ function parseHoverParams(value: unknown): HoverParamsV2 {
     pageId: requireUuid(record.pageId, "pageId"),
     uid: requireBoundedString(record.uid, "uid", 200, true),
   };
+}
+
+function parseListPagesParams(value: unknown): ListPagesParamsV2 {
+  requireExactRecord(value, "page.list params", []);
+  return {};
+}
+
+function parseNavigatePageParams(value: unknown): NavigatePageParamsV2 {
+  const record = requireExactRecord(value, "page.navigate params", [
+    "pageId",
+    "type",
+    "url",
+    "ignoreCache",
+    "handleBeforeUnload",
+  ]);
+  if (!NAVIGATION_TYPES.includes(record.type as NavigationTypeV2)) {
+    throw new Error(`Unknown navigation type ${JSON.stringify(record.type)}.`);
+  }
+  const type = record.type as NavigationTypeV2;
+  const url =
+    record.url === null
+      ? null
+      : requireBoundedString(record.url, "url", MAX_URL_CHARS, true);
+  if ((type === "url") !== (url !== null)) {
+    throw new Error("url must be present only when navigation type is url.");
+  }
+  if (!DIALOG_ACTIONS.includes(record.handleBeforeUnload as DialogActionV2)) {
+    throw new Error("handleBeforeUnload must be accept or dismiss.");
+  }
+  const ignoreCache = requireBoolean(record.ignoreCache, "ignoreCache");
+  if (ignoreCache && type !== "reload") {
+    throw new Error("ignoreCache is allowed only for reload navigation.");
+  }
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    type,
+    url,
+    ignoreCache,
+    handleBeforeUnload: record.handleBeforeUnload as DialogActionV2,
+  };
+}
+
+function parseHandleDialogParams(value: unknown): HandleDialogParamsV2 {
+  const record = requireExactRecord(value, "page.handle_dialog params", [
+    "pageId",
+    "action",
+    "promptText",
+  ]);
+  if (!DIALOG_ACTIONS.includes(record.action as DialogActionV2)) {
+    throw new Error("dialog action must be accept or dismiss.");
+  }
+  const action = record.action as DialogActionV2;
+  const promptText =
+    record.promptText === null
+      ? null
+      : requireBoundedString(
+          record.promptText,
+          "promptText",
+          MAX_DIALOG_TEXT_CODE_POINTS,
+          false,
+        );
+  if (action === "dismiss" && promptText !== null) {
+    throw new Error("promptText is allowed only when accepting a dialog.");
+  }
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    action,
+    promptText,
+  };
+}
+
+function parseListConsoleMessagesParams(value: unknown): ListConsoleMessagesParamsV2 {
+  const record = requireExactRecord(value, "page.console.list params", [
+    "pageId",
+    "pageIdx",
+    "pageSize",
+    "types",
+    "includePreservedMessages",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    pageIdx: requireBoundedInteger(
+      record.pageIdx,
+      "pageIdx",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    pageSize: requireBoundedInteger(
+      record.pageSize,
+      "pageSize",
+      1,
+      DEBUG_LIST_MAX_PAGE_SIZE,
+    ),
+    types: parseStringEnumArray(record.types, "types", CONSOLE_MESSAGE_TYPES),
+    includePreservedMessages: requireBoolean(
+      record.includePreservedMessages,
+      "includePreservedMessages",
+    ),
+  };
+}
+
+function parseGetConsoleMessageParams(value: unknown): GetConsoleMessageParamsV2 {
+  const record = requireExactRecord(value, "page.console.get params", [
+    "pageId",
+    "msgid",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    msgid: requireBoundedInteger(record.msgid, "msgid", 1, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function parseListNetworkRequestsParams(value: unknown): ListNetworkRequestsParamsV2 {
+  const record = requireExactRecord(value, "page.network.list params", [
+    "pageId",
+    "pageIdx",
+    "pageSize",
+    "resourceTypes",
+    "includePreservedRequests",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    pageIdx: requireBoundedInteger(
+      record.pageIdx,
+      "pageIdx",
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
+    pageSize: requireBoundedInteger(
+      record.pageSize,
+      "pageSize",
+      1,
+      DEBUG_LIST_MAX_PAGE_SIZE,
+    ),
+    resourceTypes: parseStringEnumArray(
+      record.resourceTypes,
+      "resourceTypes",
+      NETWORK_RESOURCE_TYPES,
+    ),
+    includePreservedRequests: requireBoolean(
+      record.includePreservedRequests,
+      "includePreservedRequests",
+    ),
+  };
+}
+
+function parseGetNetworkRequestParams(value: unknown): GetNetworkRequestParamsV2 {
+  const record = requireExactRecord(value, "page.network.get params", [
+    "pageId",
+    "reqid",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    reqid: requireBoundedInteger(record.reqid, "reqid", 1, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+function parseStringEnumArray<T extends string>(
+  value: unknown,
+  label: string,
+  allowed: readonly T[],
+): T[] {
+  if (!Array.isArray(value) || value.length > allowed.length) {
+    throw new Error(`${label} must be an array of supported values.`);
+  }
+  const parsed = value.map((item) => {
+    if (!allowed.includes(item as T)) {
+      throw new Error(`${label} contains unsupported value ${JSON.stringify(item)}.`);
+    }
+    return item as T;
+  });
+  if (new Set(parsed).size !== parsed.length) {
+    throw new Error(`${label} must not contain duplicate values.`);
+  }
+  return parsed;
 }
 
 function parseCapabilitiesV2(value: unknown): PluginCapabilityV2[] {
@@ -916,5 +1502,20 @@ const PAGE_ACTIONS: readonly PageActionV2[] = [
   "type_text",
   "scroll",
   "hover",
+  "navigate_page",
+  "handle_dialog",
 ];
 const SCROLL_DIRECTIONS: readonly ScrollDirectionV2[] = ["up", "down", "left", "right"];
+const NAVIGATION_TYPES: readonly NavigationTypeV2[] = [
+  "url",
+  "back",
+  "forward",
+  "reload",
+];
+const DIALOG_ACTIONS: readonly DialogActionV2[] = ["accept", "dismiss"];
+const DIALOG_TYPES: readonly DialogTypeV2[] = [
+  "alert",
+  "beforeunload",
+  "confirm",
+  "prompt",
+];
