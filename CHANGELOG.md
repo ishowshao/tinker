@@ -5,10 +5,17 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-02
+
 ### Added
 
 - Add `tinker update` for manually upgrading a direct npm global installation to
   the latest stable release from the official npm registry.
+
+### Fixed
+
+- Wait for completed background-task output to finish flushing before returning
+  it through `TaskOutput`.
 
 ## [1.7.0] - 2026-08-01
 
@@ -154,7 +161,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/ishowshao/tinker/releases/tag/v1.8.0
 [1.7.0]: https://github.com/ishowshao/tinker/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ishowshao/tinker/releases/tag/v1.6.0
 [1.5.1]: https://github.com/ishowshao/tinker/releases/tag/v1.5.1
