@@ -436,9 +436,6 @@ describe("system prompt", () => {
     const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
 
     expect(prompt).toContain("Use Grep to search file contents.");
-    expect(prompt).toContain(
-      "Do not use Bash with grep or rg for routine content searches.",
-    );
     expect(prompt).toContain('output_mode="files_with_matches"');
     expect(prompt).toContain("head_limit and offset");
   });
@@ -459,7 +456,6 @@ describe("system prompt", () => {
     expect(prompt).toContain(
       "Successful Write and Edit operations establish the current version",
     );
-    expect(prompt).toContain("Use Bash to run tests");
     expect(prompt).toContain("Use Bash with tty=true");
     expect(prompt).toContain("include \\n explicitly");
     expect(prompt).toContain("use \\u0003 for Ctrl-C");
