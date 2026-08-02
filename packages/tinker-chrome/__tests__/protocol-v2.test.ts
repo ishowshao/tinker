@@ -117,6 +117,111 @@ test("Tinker Chrome v2 validates bounded snapshot and action results", () => {
       "click",
     ),
   ).toMatchObject({ pageId, action: "click", performed: true });
+  expect(
+    parsePageActionResultV2(
+      {
+        schemaVersion: 2,
+        pageId,
+        action: "drag",
+        performed: true,
+        url: "https://example.com/",
+        navigatedToUrl: null,
+        dialog: null,
+      },
+      "drag",
+    ),
+  ).toMatchObject({ pageId, action: "drag", performed: true });
+});
+
+test("Tinker Chrome v2 normalizes strict input, emulation, and upload params", () => {
+  const base = {
+    kind: "request",
+    protocolVersion: 2,
+    runtimeId: randomUUID(),
+    requestId: randomUUID(),
+    deadlineUnixMs: Date.now() + 1_000,
+  };
+  const pageId = randomUUID();
+  expect(
+    parseBridgeRequestV2({
+      ...base,
+      method: "page.click",
+      params: { pageId, uid: "1_1", doubleClick: true },
+    }),
+  ).toMatchObject({
+    method: "page.click",
+    params: { pageId, uid: "1_1", doubleClick: true },
+  });
+  expect(
+    parseBridgeRequestV2({
+      ...base,
+      requestId: randomUUID(),
+      method: "page.fill_form",
+      params: {
+        pageId,
+        elements: [
+          { uid: "1_2", value: "Ada" },
+          { uid: "1_3", value: "true" },
+        ],
+      },
+    }),
+  ).toMatchObject({ method: "page.fill_form", params: { pageId } });
+  expect(
+    parseBridgeRequestV2({
+      ...base,
+      requestId: randomUUID(),
+      method: "page.emulate",
+      params: {
+        pageId,
+        networkConditions: "Fast 3G",
+        cpuThrottlingRate: 2,
+        geolocation: { latitude: 1.25, longitude: 103.8 },
+        userAgent: "Tinker Chrome Test",
+        colorScheme: "dark",
+        viewport: {
+          width: 390,
+          height: 844,
+          deviceScaleFactor: 3,
+          isMobile: true,
+          hasTouch: true,
+          isLandscape: false,
+        },
+        extraHttpHeaders: { "X-Tinker-Test": "yes" },
+      },
+    }),
+  ).toMatchObject({
+    method: "page.emulate",
+    params: {
+      pageId,
+      networkConditions: "Fast 3G",
+      viewport: { width: 390, height: 844 },
+    },
+  });
+  expect(
+    parseBridgeRequestV2({
+      ...base,
+      requestId: randomUUID(),
+      method: "page.upload_file",
+      params: { pageId, uid: "1_4", filePath: "/tmp/tinker-upload.txt" },
+    }),
+  ).toMatchObject({ method: "page.upload_file", params: { pageId } });
+  expect(() =>
+    parseBridgeRequestV2({
+      ...base,
+      requestId: randomUUID(),
+      method: "page.emulate",
+      params: {
+        pageId,
+        networkConditions: null,
+        cpuThrottlingRate: 1,
+        geolocation: null,
+        userAgent: null,
+        colorScheme: "auto",
+        viewport: null,
+        extraHttpHeaders: { Authorization: 123 },
+      },
+    }),
+  ).toThrow("HTTP header Authorization must be a string");
 });
 
 test("Tinker Chrome v2 normalizes strict page lifecycle and debug requests", () => {

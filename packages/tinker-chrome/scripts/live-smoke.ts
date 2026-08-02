@@ -1,4 +1,6 @@
 import process from "node:process";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -12,6 +14,11 @@ const fixtureServer = Bun.serve({
     if (pathname === "/api/data") {
       return Response.json({ ok: true, source: "tinker-chrome-smoke" });
     }
+    if (pathname === "/api/headers") {
+      return Response.json({
+        header: request.headers.get("x-tinker-smoke") ?? "missing",
+      });
+    }
     return new Response(pathname === "/next" ? nextHtml() : fixtureHtml(), {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
@@ -22,6 +29,7 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: ["packages/tinker-chrome/src/cli.ts", "mcp"],
   cwd: repositoryRoot,
+  env: process.platform === "win32" ? { TEMP: tmpdir() } : { TMPDIR: tmpdir() },
   stderr: "pipe",
 });
 transport.stderr?.on("data", (chunk: unknown) => {
@@ -34,12 +42,14 @@ const client = new Client({
   version: "1.0.0",
 });
 let activePageId: string | undefined;
+const uploadPath = path.join(tmpdir(), `tinker-chrome-live-${crypto.randomUUID()}.txt`);
+await writeFile(uploadPath, "Tinker Chrome live upload fixture", "utf8");
 
 try {
   await client.connect(transport);
   const tools = await client.listTools();
-  if (tools.tools.length !== 18) {
-    throw new Error(`Expected 18 Tinker Chrome tools; received ${tools.tools.length}.`);
+  if (tools.tools.length !== 23) {
+    throw new Error(`Expected 23 Tinker Chrome tools; received ${tools.tools.length}.`);
   }
 
   const opened = await openPageWhenConnected(fixtureUrl);
@@ -78,8 +88,15 @@ try {
   const firstSnapshot = await callTool("take_snapshot", { pageId });
   const secondSnapshot = await callTool("take_snapshot", { pageId });
   const nameUid = uidFor(firstSnapshot, "Name");
+  const emailUid = uidFor(firstSnapshot, "Email");
+  const termsUid = uidFor(firstSnapshot, "Accept terms");
+  const planUid = uidFor(firstSnapshot, "Plan");
   const showUid = uidFor(firstSnapshot, "Show success");
+  const doubleClickUid = uidFor(firstSnapshot, "Double click target");
   const hoverUid = uidFor(firstSnapshot, "Hover target");
+  const dragUid = uidFor(firstSnapshot, "Drag source");
+  const dropUid = uidFor(firstSnapshot, "Drop target");
+  const uploadUid = uidFor(firstSnapshot, "Upload fixture");
   const dialogUid = uidFor(firstSnapshot, "Open dialog");
   const nextUid = uidFor(firstSnapshot, "Go next");
   if (uidFor(secondSnapshot, "Name") !== nameUid) {
@@ -95,6 +112,39 @@ try {
     timeoutMs: 3_000,
   });
 
+  const filledForm = await callTool("fill_form", {
+    pageId,
+    elements: [
+      { uid: emailUid, value: "ada@example.com" },
+      { uid: termsUid, value: "true" },
+      { uid: planUid, value: "Pro" },
+    ],
+    includeSnapshot: true,
+  });
+  requireIncludes(filledForm, "postActionSnapshot=included", "fill form snapshot");
+  await callTool("wait_for", {
+    pageId,
+    text: ["Form complete: ada@example.com | true | pro"],
+    timeoutMs: 3_000,
+  });
+
+  const doubleClicked = await callTool("click", {
+    pageId,
+    uid: doubleClickUid,
+    doubleClick: true,
+    includeSnapshot: true,
+  });
+  requireIncludes(
+    doubleClicked,
+    "postActionSnapshot=included",
+    "double click snapshot",
+  );
+  await callTool("wait_for", {
+    pageId,
+    text: ["Double-clicked signal"],
+    timeoutMs: 3_000,
+  });
+
   await callTool("click", { pageId, uid: showUid });
   await callTool("wait_for", {
     pageId,
@@ -107,6 +157,49 @@ try {
     text: ["Hovered signal"],
     timeoutMs: 3_000,
   });
+  await callTool("drag", { pageId, fromUid: dragUid, toUid: dropUid });
+  await callTool("wait_for", {
+    pageId,
+    text: ["Dropped signal"],
+    timeoutMs: 3_000,
+  });
+  await callTool("upload_file", {
+    pageId,
+    uid: uploadUid,
+    filePath: uploadPath,
+  });
+  await callTool("wait_for", {
+    pageId,
+    text: ["Uploaded: " + path.basename(uploadPath)],
+    timeoutMs: 3_000,
+  });
+
+  await callTool("resize_page", { pageId, width: 800, height: 600 });
+  await callTool("wait_for", {
+    pageId,
+    text: ["Viewport: 800x600"],
+    timeoutMs: 3_000,
+  });
+  await callTool("emulate", {
+    pageId,
+    networkConditions: "Fast 4G",
+    cpuThrottlingRate: 1,
+    geolocation: "1.25,103.8",
+    userAgent: "TinkerChromeSmoke/1.0",
+    colorScheme: "dark",
+    viewport: "640x480x1",
+    extraHttpHeaders: '{"X-Tinker-Smoke":"present"}',
+  });
+  const emulatedSnapshot = await callTool("take_snapshot", { pageId });
+  const checkEmulationUid = uidFor(emulatedSnapshot, "Check emulation");
+  await callTool("click", { pageId, uid: checkEmulationUid });
+  await callTool("wait_for", {
+    pageId,
+    text: ["Emulated: 640x480 | dark | ua | present"],
+    timeoutMs: 5_000,
+  });
+  await callTool("emulate", { pageId, extraHttpHeaders: "" });
+
   await callTool("scroll", { pageId, direction: "down", amount: 700 });
   await callTool("wait_for", {
     pageId,
@@ -175,6 +268,9 @@ try {
         stableUid: nameUid,
         consoleMessageId,
         networkRequestId,
+        inputBatch: "fill_form, drag, double click",
+        responsiveBatch: "resize_page, emulate",
+        upload: path.basename(uploadPath),
         navigationInvalidation: "SNAPSHOT_REQUIRED",
         finalUrl: `${fixtureUrl}/next`,
       },
@@ -190,6 +286,7 @@ try {
   }
   await client.close().catch(() => undefined);
   await fixtureServer.stop(true);
+  await unlink(uploadPath).catch(() => undefined);
 }
 
 async function openPageWhenConnected(url: string): Promise<string> {
@@ -281,16 +378,42 @@ function fixtureHtml(): string {
   <body>
     <h1>Chrome interaction fixture</h1>
     <label>Name <input id="name" aria-label="Name"></label>
+    <label>Email <input id="email" aria-label="Email"></label>
+    <label><input id="terms" type="checkbox" aria-label="Accept terms"> Accept terms</label>
+    <label>Plan
+      <select id="plan" aria-label="Plan">
+        <option value="basic">Basic</option>
+        <option value="pro">Pro</option>
+      </select>
+    </label>
     <button id="show">Show success</button>
+    <button id="double-click">Double click target</button>
     <button id="dialog">Open dialog</button>
     <div id="hover" role="button" tabindex="0">Hover target</div>
+    <div id="drag-source" role="button" tabindex="0" draggable="true">Drag source</div>
+    <div id="drop-target" role="button" tabindex="0">Drop target</div>
+    <label>Upload fixture <input id="upload" type="file" aria-label="Upload fixture"></label>
+    <button id="check-emulation">Check emulation</button>
     <p id="status" aria-live="polite">Idle</p>
+    <p id="viewport-status" aria-live="polite"></p>
     <p id="network-status">Loading network</p>
     <div style="height: 1800px"></div>
     <a href="/next">Go next</a>
     <script>
       const nameInput = document.getElementById("name");
+      const emailInput = document.getElementById("email");
+      const termsInput = document.getElementById("terms");
+      const planInput = document.getElementById("plan");
       const status = document.getElementById("status");
+      const viewportStatus = document.getElementById("viewport-status");
+      const updateFormStatus = () => {
+        if (emailInput.value && termsInput.checked && planInput.value === "pro") {
+          status.textContent = "Form complete: " + emailInput.value + " | " + termsInput.checked + " | " + planInput.value;
+        }
+      };
+      const updateViewportStatus = () => {
+        viewportStatus.textContent = "Viewport: " + innerWidth + "x" + innerHeight;
+      };
       console.log("fixture console ready", { answer: 42 });
       fetch("/api/data").then((response) => response.json()).then(() => {
         document.getElementById("network-status").textContent = "Network ready";
@@ -298,8 +421,28 @@ function fixtureHtml(): string {
       document.getElementById("show").addEventListener("click", () => {
         setTimeout(() => { status.textContent = "Ready signal"; }, 150);
       });
+      document.getElementById("double-click").addEventListener("dblclick", () => {
+        status.textContent = "Double-clicked signal";
+      });
       document.getElementById("hover").addEventListener("mouseenter", () => {
         status.textContent = "Hovered signal";
+      });
+      document.getElementById("drop-target").addEventListener("dragover", (event) => {
+        event.preventDefault();
+      });
+      document.getElementById("drop-target").addEventListener("drop", (event) => {
+        event.preventDefault();
+        status.textContent = "Dropped signal";
+      });
+      document.getElementById("upload").addEventListener("change", (event) => {
+        status.textContent = "Uploaded: " + event.target.files[0].name;
+      });
+      document.getElementById("check-emulation").addEventListener("click", async () => {
+        const response = await fetch("/api/headers");
+        const data = await response.json();
+        const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        const ua = navigator.userAgent.includes("TinkerChromeSmoke") ? "ua" : "default-ua";
+        status.textContent = "Emulated: " + innerWidth + "x" + innerHeight + " | " + scheme + " | " + ua + " | " + data.header;
       });
       document.getElementById("dialog").addEventListener("click", () => {
         status.textContent = confirm("Proceed with dialog?")
@@ -309,6 +452,11 @@ function fixtureHtml(): string {
       nameInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") status.textContent = "Submitted: " + nameInput.value;
       });
+      emailInput.addEventListener("input", updateFormStatus);
+      termsInput.addEventListener("change", updateFormStatus);
+      planInput.addEventListener("change", updateFormStatus);
+      addEventListener("resize", updateViewportStatus);
+      updateViewportStatus();
       addEventListener("scroll", () => { status.textContent = "Scrolled signal"; }, { once: true });
     </script>
   </body>

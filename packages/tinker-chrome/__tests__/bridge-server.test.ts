@@ -97,7 +97,7 @@ test("Tinker Chrome bridge reports an unknown non-retryable action outcome on di
 
   const pending = bridge.request(
     "page.click",
-    { pageId: crypto.randomUUID(), uid: "1_1" },
+    { pageId: crypto.randomUUID(), uid: "1_1", doubleClick: false },
     2_000,
   );
   await peer.next();

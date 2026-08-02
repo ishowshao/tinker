@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -27,7 +28,7 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
   ],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === "echo") {
     const message = request.params.arguments?.message;
     const callLog = process.env.TINKER_TEST_MCP_CALL_LOG;
@@ -40,6 +41,22 @@ server.setRequestHandler(CallToolRequestSchema, (request) => {
         })}\n`,
         "utf8",
       );
+    }
+    if (process.env.TINKER_TEST_MCP_RETURN_ROOT === "1") {
+      const roots = await server.listRoots();
+      return {
+        content: [
+          {
+            type: "text",
+            text: `root: ${roots.roots[0]?.uri ?? "<missing>"}`,
+          },
+        ],
+      };
+    }
+    if (process.env.TINKER_TEST_MCP_RETURN_TMPDIR === "1") {
+      return {
+        content: [{ type: "text", text: `tmpdir: ${tmpdir()}` }],
+      };
     }
     return { content: [{ type: "text", text: `echo: ${String(message)}` }] };
   }

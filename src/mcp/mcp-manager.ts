@@ -1,14 +1,23 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { pathToFileURL } from "node:url";
 import {
   StdioClientTransport,
   getDefaultEnvironment,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
+import { ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ToolExecutor } from "../tools/types";
 import type { McpConfig, McpServerConfig } from "./mcp-config";
 import { createMcpToolExecutor } from "./mcp-tool-executor";
 
 const STDERR_TAIL_MAX_CHARS = 2_000;
+
+function temporaryDirectoryEnvironment(): Record<string, string> {
+  return process.platform === "win32" ? { TEMP: tmpdir() } : { TMPDIR: tmpdir() };
+}
 
 export type McpClientConnection = {
   client: Client;
@@ -18,6 +27,7 @@ export type McpClientConnection = {
 export type McpClientFactory = (
   serverName: string,
   serverConfig: McpServerConfig,
+  workspaceRoot: string,
 ) => Promise<McpClientConnection>;
 
 export type McpManager = {
@@ -37,6 +47,7 @@ export type McpServerInventory = {
 
 export type CreateMcpManagerOptions = {
   config: McpConfig;
+  workspaceRoot: string;
   runtimeSession: RuntimeSessionContext;
   clientFactory?: McpClientFactory;
   timeoutMs?: number;
@@ -70,7 +81,11 @@ export async function createMcpManager(
       let tools;
 
       try {
-        connection = await clientFactory(serverName, serverConfig);
+        connection = await clientFactory(
+          serverName,
+          serverConfig,
+          options.workspaceRoot,
+        );
       } catch (error) {
         await options.runtimeSession.append({
           type: "mcp.server.failed",
@@ -227,11 +242,16 @@ async function closeConnections(
 async function stdioClientFactory(
   serverName: string,
   serverConfig: McpServerConfig,
+  workspaceRoot: string,
 ): Promise<McpClientConnection> {
   const transport = new StdioClientTransport({
     command: serverConfig.command,
     args: serverConfig.args,
-    env: { ...getDefaultEnvironment(), ...serverConfig.env },
+    env: {
+      ...getDefaultEnvironment(),
+      ...temporaryDirectoryEnvironment(),
+      ...serverConfig.env,
+    },
     cwd: serverConfig.cwd,
     stderr: "pipe",
   });
@@ -241,7 +261,18 @@ async function stdioClientFactory(
     stderrTail = (stderrTail + chunk.toString("utf8")).slice(-STDERR_TAIL_MAX_CHARS);
   });
 
-  const client = new Client({ name: "tinker", version: "0.1.0" });
+  const client = new Client(
+    { name: "tinker", version: "0.1.0" },
+    { capabilities: { roots: { listChanged: false } } },
+  );
+  client.setRequestHandler(ListRootsRequestSchema, () => ({
+    roots: [
+      {
+        uri: pathToFileURL(workspaceRoot).href,
+        name: path.basename(workspaceRoot),
+      },
+    ],
+  }));
 
   try {
     await client.connect(transport);

@@ -193,6 +193,7 @@ async function routeRequest(request: BridgeRequestV2): Promise<unknown> {
         pageId: request.params.pageId,
         tabId: owned.page.tabId,
         uid: request.params.uid,
+        doubleClick: request.params.doubleClick,
       });
     }
     case "page.fill": {
@@ -202,6 +203,23 @@ async function routeRequest(request: BridgeRequestV2): Promise<unknown> {
         tabId: owned.page.tabId,
         uid: request.params.uid,
         value: request.params.value,
+      });
+    }
+    case "page.fill_form": {
+      const owned = await requireOwnedPage(request);
+      return automation.fillForm({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        elements: request.params.elements,
+      });
+    }
+    case "page.drag": {
+      const owned = await requireOwnedPage(request);
+      return automation.drag({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        fromUid: request.params.fromUid,
+        toUid: request.params.toUid,
       });
     }
     case "page.press_key": {
@@ -245,6 +263,31 @@ async function routeRequest(request: BridgeRequestV2): Promise<unknown> {
         pageId: request.params.pageId,
         tabId: owned.page.tabId,
         uid: request.params.uid,
+      });
+    }
+    case "page.resize": {
+      const owned = await requireOwnedPage(request);
+      return automation.resize({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        width: request.params.width,
+        height: request.params.height,
+      });
+    }
+    case "page.emulate": {
+      const owned = await requireOwnedPage(request);
+      return automation.emulate({
+        ...request.params,
+        tabId: owned.page.tabId,
+      });
+    }
+    case "page.upload_file": {
+      const owned = await requireOwnedPage(request);
+      return automation.uploadFile({
+        pageId: request.params.pageId,
+        tabId: owned.page.tabId,
+        uid: request.params.uid,
+        filePath: request.params.filePath,
       });
     }
     case "page.list":

@@ -13,10 +13,17 @@ import {
   DEBUG_LIST_DEFAULT_PAGE_SIZE,
   DEBUG_LIST_MAX_PAGE_SIZE,
   MAX_ACTION_TEXT_CODE_POINTS,
+  MAX_DEVICE_SCALE_FACTOR,
   MAX_DIALOG_TEXT_CODE_POINTS,
+  MAX_EXTRA_HTTP_HEADERS,
+  MAX_FILE_PATH_CHARS,
+  MAX_FORM_ELEMENTS,
+  MAX_HTTP_HEADER_NAME_CHARS,
+  MAX_HTTP_HEADER_VALUE_CHARS,
   MAX_KEY_CHARS,
   MAX_SCROLL_AMOUNT,
   MAX_URL_CHARS,
+  MAX_VIEWPORT_DIMENSION,
   MAX_WAIT_TEXTS,
   NETWORK_RESOURCE_TYPES,
   OPEN_PAGE_TIMEOUT_MS,
@@ -32,6 +39,10 @@ import {
 import { ChromeBridgeError, internalBridgeError } from "./errors";
 import {
   type BridgeMethodV2,
+  type EmulateParamsV2,
+  type GeolocationV2,
+  type NetworkConditionV2,
+  type ViewportV2,
   parseClosePageResultV2,
   parseGetConsoleMessageResultV2,
   parseGetNetworkRequestResultV2,
@@ -45,6 +56,7 @@ import {
   parsePageWaitResultV2,
   requireUuid,
 } from "./protocol-v2";
+import { resolveUploadFilePath } from "./upload-file-access";
 
 const PAGE_ID_PROPERTY = {
   type: "string" as const,
@@ -55,6 +67,10 @@ const UID_PROPERTY = {
   type: "string" as const,
   minLength: 1,
   description: "Element uid from the latest take_snapshot result",
+};
+const INCLUDE_SNAPSHOT_PROPERTY = {
+  type: "boolean" as const,
+  description: "Include a fresh bounded accessibility snapshot after the action.",
 };
 
 export const OPEN_PAGE_TOOL: Tool = {
@@ -119,6 +135,11 @@ export const CLICK_TOOL: Tool = {
     properties: {
       pageId: { ...PAGE_ID_PROPERTY },
       uid: { ...UID_PROPERTY },
+      doubleClick: {
+        type: "boolean",
+        description: "Click twice instead of once. Default false.",
+      },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
     },
     required: ["pageId", "uid"],
   },
@@ -139,6 +160,7 @@ export const FILL_TOOL: Tool = {
         maxLength: MAX_ACTION_TEXT_CODE_POINTS,
         description: "Value to fill; use true or false for toggles",
       },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
     },
     required: ["pageId", "uid", "value"],
   },
@@ -158,6 +180,7 @@ export const PRESS_KEY_TOOL: Tool = {
         minLength: 1,
         maxLength: MAX_KEY_CHARS,
       },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
     },
     required: ["pageId", "key"],
   },
@@ -245,8 +268,154 @@ export const HOVER_TOOL: Tool = {
     properties: {
       pageId: { ...PAGE_ID_PROPERTY },
       uid: { ...UID_PROPERTY },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
     },
     required: ["pageId", "uid"],
+  },
+};
+
+export const FILL_FORM_TOOL: Tool = {
+  name: "fill_form",
+  description:
+    "Fill multiple inputs, selects, checkboxes, radios, or switches from one accessibility snapshot.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      elements: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_FORM_ELEMENTS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            uid: { ...UID_PROPERTY },
+            value: {
+              type: "string",
+              maxLength: MAX_ACTION_TEXT_CODE_POINTS,
+              description: "Value to fill; use true or false for toggles",
+            },
+          },
+          required: ["uid", "value"],
+        },
+      },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
+    },
+    required: ["pageId", "elements"],
+  },
+};
+
+export const DRAG_TOOL: Tool = {
+  name: "drag",
+  description: "Drag one element from the latest snapshot onto another element.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      fromUid: { ...UID_PROPERTY, description: "UID of the element to drag" },
+      toUid: { ...UID_PROPERTY, description: "UID of the drop target" },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
+    },
+    required: ["pageId", "fromUid", "toUid"],
+  },
+};
+
+export const RESIZE_PAGE_TOOL: Tool = {
+  name: "resize_page",
+  description: "Resize the selected Chrome page's content area.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      width: {
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_VIEWPORT_DIMENSION,
+      },
+      height: {
+        type: "integer",
+        minimum: 1,
+        maximum: MAX_VIEWPORT_DIMENSION,
+      },
+    },
+    required: ["pageId", "width", "height"],
+  },
+};
+
+export const EMULATE_TOOL: Tool = {
+  name: "emulate",
+  description:
+    "Configure network, CPU, geolocation, user agent, color scheme, viewport, and HTTP-header emulation.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      networkConditions: {
+        type: "string",
+        enum: ["Offline", "Slow 3G", "Fast 3G", "Slow 4G", "Fast 4G"],
+        description: "Omit to disable network throttling.",
+      },
+      cpuThrottlingRate: {
+        type: "number",
+        minimum: 1,
+        maximum: 20,
+        description: "CPU slowdown factor. Omit or use 1 to disable throttling.",
+      },
+      geolocation: {
+        type: "string",
+        description:
+          "Latitude and longitude as <latitude>,<longitude>. Omit to clear the override.",
+      },
+      userAgent: {
+        type: "string",
+        maxLength: 1_000,
+        description: "Use an empty string to clear the user-agent override.",
+      },
+      colorScheme: {
+        type: "string",
+        enum: ["dark", "light", "auto"],
+        description: "Omit or use auto to restore the default color scheme.",
+      },
+      viewport: {
+        type: "string",
+        description:
+          "Viewport as <width>x<height>x<devicePixelRatio>[,mobile][,touch][,landscape]. Omit to reset it.",
+      },
+      extraHttpHeaders: {
+        type: "string",
+        description:
+          'Extra headers as a JSON object string, for example {"X-Test":"value"}. Use an empty string to clear them; omit to preserve them.',
+      },
+    },
+    required: ["pageId"],
+  },
+};
+
+export const UPLOAD_FILE_TOOL: Tool = {
+  name: "upload_file",
+  description:
+    "Upload one local file through a file input or an element that opens a file chooser.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      pageId: { ...PAGE_ID_PROPERTY },
+      uid: { ...UID_PROPERTY },
+      filePath: {
+        type: "string",
+        minLength: 1,
+        maxLength: MAX_FILE_PATH_CHARS,
+        description:
+          "Absolute path inside an MCP workspace root or the system temporary directory",
+      },
+      includeSnapshot: { ...INCLUDE_SNAPSHOT_PROPERTY },
+    },
+    required: ["pageId", "uid", "filePath"],
   },
 };
 
@@ -417,11 +586,16 @@ export const TINKER_CHROME_TOOLS = [
   TAKE_SNAPSHOT_TOOL,
   CLICK_TOOL,
   FILL_TOOL,
+  FILL_FORM_TOOL,
+  DRAG_TOOL,
   PRESS_KEY_TOOL,
   TYPE_TEXT_TOOL,
   WAIT_FOR_TOOL,
   SCROLL_TOOL,
   HOVER_TOOL,
+  RESIZE_PAGE_TOOL,
+  EMULATE_TOOL,
+  UPLOAD_FILE_TOOL,
   LIST_PAGES_TOOL,
   NAVIGATE_PAGE_TOOL,
   CLOSE_PAGE_TOOL,
@@ -442,7 +616,7 @@ export function createTinkerChromeMcpServer(bridge: ChromeBridgeClient): Server 
     {
       capabilities: { tools: {} },
       instructions:
-        "Use open_page first and retain its pageId. Use list_pages to recover owned pageIds. Take a fresh snapshot before uid-based actions and after every navigation. If an action reports a dialog, call handle_dialog. Use list_console_messages/list_network_requests before their matching get tool. Only pages opened by this server can be observed or controlled.",
+        "Use open_page first and retain its pageId. Use list_pages to recover owned pageIds. Take a fresh snapshot before uid-based actions and after every navigation. Prefer fill_form over repeated fill calls. If an action reports a dialog, call handle_dialog. Use list_console_messages/list_network_requests before their matching get tool. Only pages opened by this server can be observed or controlled. upload_file accepts files only from client workspace roots or the system temporary directory.",
     },
   );
 
@@ -460,9 +634,13 @@ export function createTinkerChromeMcpServer(bridge: ChromeBridgeClient): Server 
         case TAKE_SNAPSHOT_TOOL.name:
           return await callTakeSnapshot(bridge, request.params.arguments);
         case CLICK_TOOL.name:
-          return await callUidAction("click", bridge, request.params.arguments);
+          return await callClick(bridge, request.params.arguments);
         case FILL_TOOL.name:
           return await callFill(bridge, request.params.arguments);
+        case FILL_FORM_TOOL.name:
+          return await callFillForm(bridge, request.params.arguments);
+        case DRAG_TOOL.name:
+          return await callDrag(bridge, request.params.arguments);
         case PRESS_KEY_TOOL.name:
           return await callPressKey(bridge, request.params.arguments);
         case TYPE_TEXT_TOOL.name:
@@ -472,7 +650,18 @@ export function createTinkerChromeMcpServer(bridge: ChromeBridgeClient): Server 
         case SCROLL_TOOL.name:
           return await callScroll(bridge, request.params.arguments);
         case HOVER_TOOL.name:
-          return await callUidAction("hover", bridge, request.params.arguments);
+          return await callHover(bridge, request.params.arguments);
+        case RESIZE_PAGE_TOOL.name:
+          return await callResizePage(bridge, request.params.arguments);
+        case EMULATE_TOOL.name:
+          return await callEmulate(bridge, request.params.arguments);
+        case UPLOAD_FILE_TOOL.name:
+          return await callUploadFile(bridge, request.params.arguments, async () => {
+            if (server.getClientCapabilities()?.roots === undefined) {
+              return [];
+            }
+            return (await server.listRoots()).roots.map((root) => root.uri);
+          });
         case LIST_PAGES_TOOL.name:
           return await callListPages(bridge, request.params.arguments);
         case NAVIGATE_PAGE_TOOL.name:
@@ -676,52 +865,130 @@ async function callTakeSnapshot(
   };
 }
 
-async function callUidAction(
-  action: "click" | "hover",
+async function callClick(
   bridge: ChromeBridgeClient,
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
-  const input = requireExactObject(args, ["pageId", "uid"]);
+  const input = requireObjectKeys(
+    args,
+    ["pageId", "uid"],
+    ["doubleClick", "includeSnapshot"],
+  );
   const pageId = requireUuid(input.pageId, "pageId");
   const uid = requireNonEmptyString(input.uid, "uid", 200);
-  const method = action === "click" ? "page.click" : "page.hover";
+  const doubleClick = optionalBoolean(input.doubleClick, "doubleClick");
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
   const result = parsePageActionResultV2(
-    await bridge.request(method, { pageId, uid }, PAGE_ACTION_TIMEOUT_MS),
-    action,
+    await bridge.request(
+      "page.click",
+      { pageId, uid, doubleClick },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "click",
   );
   requireMatchingPageId(result.pageId, pageId);
-  return actionResult(result);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
 }
 
 async function callFill(
   bridge: ChromeBridgeClient,
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
-  const input = requireExactObject(args, ["pageId", "uid", "value"]);
+  const input = requireObjectKeys(
+    args,
+    ["pageId", "uid", "value"],
+    ["includeSnapshot"],
+  );
   const pageId = requireUuid(input.pageId, "pageId");
   const uid = requireNonEmptyString(input.uid, "uid", 200);
   const value = requireString(input.value, "value", MAX_ACTION_TEXT_CODE_POINTS);
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
   const result = parsePageActionResultV2(
     await bridge.request("page.fill", { pageId, uid, value }, PAGE_ACTION_TIMEOUT_MS),
     "fill",
   );
   requireMatchingPageId(result.pageId, pageId);
-  return actionResult(result);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
+}
+
+async function callFillForm(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(args, ["pageId", "elements"], ["includeSnapshot"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  if (
+    !Array.isArray(input.elements) ||
+    input.elements.length === 0 ||
+    input.elements.length > MAX_FORM_ELEMENTS
+  ) {
+    throw invalidArgumentError(
+      `elements must contain between 1 and ${MAX_FORM_ELEMENTS} items.`,
+    );
+  }
+  const elements = input.elements.map((value, index) => {
+    const element = requireUnknownObject(value, `elements[${index}]`, ["uid", "value"]);
+    return {
+      uid: requireNonEmptyString(element.uid, `elements[${index}].uid`, 200),
+      value: requireString(
+        element.value,
+        `elements[${index}].value`,
+        MAX_ACTION_TEXT_CODE_POINTS,
+      ),
+    };
+  });
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.fill_form",
+      { pageId, elements },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "fill_form",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
+}
+
+async function callDrag(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId", "fromUid", "toUid"],
+    ["includeSnapshot"],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  const fromUid = requireNonEmptyString(input.fromUid, "fromUid", 200);
+  const toUid = requireNonEmptyString(input.toUid, "toUid", 200);
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.drag",
+      { pageId, fromUid, toUid },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "drag",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
 }
 
 async function callPressKey(
   bridge: ChromeBridgeClient,
   args: Record<string, unknown> | undefined,
 ): Promise<CallToolResult> {
-  const input = requireExactObject(args, ["pageId", "key"]);
+  const input = requireObjectKeys(args, ["pageId", "key"], ["includeSnapshot"]);
   const pageId = requireUuid(input.pageId, "pageId");
   const key = requireNonEmptyString(input.key, "key", MAX_KEY_CHARS);
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
   const result = parsePageActionResultV2(
     await bridge.request("page.press_key", { pageId, key }, PAGE_ACTION_TIMEOUT_MS),
     "press_key",
   );
   requireMatchingPageId(result.pageId, pageId);
-  return actionResult(result);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
 }
 
 async function callTypeText(
@@ -810,6 +1077,125 @@ async function callScroll(
   );
   requireMatchingPageId(result.pageId, pageId);
   return actionResult(result);
+}
+
+async function callHover(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(args, ["pageId", "uid"], ["includeSnapshot"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  const uid = requireNonEmptyString(input.uid, "uid", 200);
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
+  const result = parsePageActionResultV2(
+    await bridge.request("page.hover", { pageId, uid }, PAGE_ACTION_TIMEOUT_MS),
+    "hover",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
+}
+
+async function callResizePage(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireExactObject(args, ["pageId", "width", "height"]);
+  const pageId = requireUuid(input.pageId, "pageId");
+  const width = requireInteger(input.width, "width", 1, MAX_VIEWPORT_DIMENSION);
+  const height = requireInteger(input.height, "height", 1, MAX_VIEWPORT_DIMENSION);
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.resize",
+      { pageId, width, height },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "resize_page",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResult(result);
+}
+
+async function callEmulate(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId"],
+    [
+      "networkConditions",
+      "cpuThrottlingRate",
+      "geolocation",
+      "userAgent",
+      "colorScheme",
+      "viewport",
+      "extraHttpHeaders",
+    ],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  const networkConditions = parseNetworkConditions(input.networkConditions);
+  const cpuThrottlingRate =
+    input.cpuThrottlingRate === undefined
+      ? 1
+      : requireNumber(input.cpuThrottlingRate, "cpuThrottlingRate", 1, 20);
+  const geolocation = parseGeolocation(input.geolocation);
+  const userAgent =
+    input.userAgent === undefined
+      ? null
+      : requireString(input.userAgent, "userAgent", 1_000) || null;
+  const colorScheme = parseColorScheme(input.colorScheme);
+  const viewport = parseViewport(input.viewport);
+  const extraHttpHeaders = parseExtraHttpHeaders(input.extraHttpHeaders);
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.emulate",
+      {
+        pageId,
+        networkConditions,
+        cpuThrottlingRate,
+        geolocation,
+        userAgent,
+        colorScheme,
+        viewport,
+        extraHttpHeaders,
+      },
+      PAGE_NAVIGATION_TIMEOUT_MS,
+    ),
+    "emulate",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResult(result);
+}
+
+async function callUploadFile(
+  bridge: ChromeBridgeClient,
+  args: Record<string, unknown> | undefined,
+  rootUris: () => Promise<string[]>,
+): Promise<CallToolResult> {
+  const input = requireObjectKeys(
+    args,
+    ["pageId", "uid", "filePath"],
+    ["includeSnapshot"],
+  );
+  const pageId = requireUuid(input.pageId, "pageId");
+  const uid = requireNonEmptyString(input.uid, "uid", 200);
+  const requestedPath = requireNonEmptyString(
+    input.filePath,
+    "filePath",
+    MAX_FILE_PATH_CHARS,
+  );
+  const includeSnapshot = optionalBoolean(input.includeSnapshot, "includeSnapshot");
+  const filePath = await resolveUploadFilePath(requestedPath, await rootUris());
+  const result = parsePageActionResultV2(
+    await bridge.request(
+      "page.upload_file",
+      { pageId, uid, filePath },
+      PAGE_ACTION_TIMEOUT_MS,
+    ),
+    "upload_file",
+  );
+  requireMatchingPageId(result.pageId, pageId);
+  return actionResultWithSnapshot(bridge, result, includeSnapshot);
 }
 
 async function callListPages(
@@ -1090,6 +1476,70 @@ function actionResult(
   };
 }
 
+async function actionResultWithSnapshot(
+  bridge: ChromeBridgeClient,
+  result: ReturnType<typeof parsePageActionResultV2>,
+  includeSnapshot: boolean,
+): Promise<CallToolResult> {
+  const base = actionResult(result);
+  if (!includeSnapshot) {
+    return base;
+  }
+  const block = base.content[0];
+  if (block?.type !== "text") {
+    throw new Error("Chrome action result must contain text.");
+  }
+  if (result.dialog !== null) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${block.text}\npostActionSnapshot=blocked_by_dialog`,
+        },
+      ],
+    };
+  }
+  try {
+    const snapshot = parsePageSnapshotV2(
+      await bridge.request(
+        "page.snapshot",
+        { pageId: result.pageId, verbose: false },
+        PAGE_SNAPSHOT_TIMEOUT_MS,
+      ),
+    );
+    requireMatchingPageId(snapshot.pageId, result.pageId);
+    return {
+      content: [
+        {
+          type: "text",
+          text: [
+            block.text,
+            "postActionSnapshot=included",
+            `snapshotTruncated=${String(snapshot.truncated)}`,
+            "",
+            snapshot.snapshot,
+          ].join("\n"),
+        },
+      ],
+    };
+  } catch (error) {
+    const snapshotError = internalBridgeError(error);
+    return {
+      content: [
+        {
+          type: "text",
+          text: [
+            block.text,
+            "postActionSnapshot=unavailable",
+            `snapshotErrorCode=${snapshotError.code}`,
+            `snapshotError=${singleLine(snapshotError.message).slice(0, 1_000)}`,
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+}
+
 function debugListResult(
   heading: string,
   result: {
@@ -1227,6 +1677,178 @@ function requireBoolean(value: unknown, label: string): boolean {
     throw invalidArgumentError(`${label} must be a boolean.`);
   }
   return value;
+}
+
+function optionalBoolean(value: unknown, label: string): boolean {
+  return value === undefined ? false : requireBoolean(value, label);
+}
+
+function requireNumber(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw invalidArgumentError(
+      `${label} must be a number from ${minimum} through ${maximum}.`,
+    );
+  }
+  return value;
+}
+
+function requireUnknownObject(
+  value: unknown,
+  label: string,
+  requiredKeys: readonly string[],
+): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidArgumentError(`${label} must be an object.`);
+  }
+  const record = value as Record<string, unknown>;
+  const unknown = Object.keys(record).find((key) => !requiredKeys.includes(key));
+  if (unknown !== undefined) {
+    throw invalidArgumentError(`${label} contains unknown field ${unknown}.`);
+  }
+  const missing = requiredKeys.find((key) => !(key in record));
+  if (missing !== undefined) {
+    throw invalidArgumentError(`${label} is missing ${missing}.`);
+  }
+  return record;
+}
+
+function parseNetworkConditions(value: unknown): NetworkConditionV2 | null {
+  if (value === undefined) {
+    return null;
+  }
+  const supported: readonly NetworkConditionV2[] = [
+    "Offline",
+    "Slow 3G",
+    "Fast 3G",
+    "Slow 4G",
+    "Fast 4G",
+  ];
+  if (!supported.includes(value as NetworkConditionV2)) {
+    throw invalidArgumentError("networkConditions is not supported.");
+  }
+  return value as NetworkConditionV2;
+}
+
+function parseColorScheme(value: unknown): EmulateParamsV2["colorScheme"] {
+  if (value === undefined) {
+    return "auto";
+  }
+  if (value !== "dark" && value !== "light" && value !== "auto") {
+    throw invalidArgumentError("colorScheme must be dark, light, or auto.");
+  }
+  return value;
+}
+
+function parseGeolocation(value: unknown): GeolocationV2 | null {
+  if (value === undefined) {
+    return null;
+  }
+  const parts = requireNonEmptyString(value, "geolocation", 100).split(",");
+  if (parts.length !== 2) {
+    throw invalidArgumentError("geolocation must use <latitude>,<longitude>.");
+  }
+  return {
+    latitude: requireNumber(Number(parts[0]), "latitude", -90, 90),
+    longitude: requireNumber(Number(parts[1]), "longitude", -180, 180),
+  };
+}
+
+function parseViewport(value: unknown): ViewportV2 | null {
+  if (value === undefined) {
+    return null;
+  }
+  const [dimensions = "", ...tags] = requireNonEmptyString(
+    value,
+    "viewport",
+    200,
+  ).split(",");
+  const dimensionParts = dimensions.split("x");
+  if (dimensionParts.length < 2 || dimensionParts.length > 3) {
+    throw invalidArgumentError(
+      "viewport must use <width>x<height>x<devicePixelRatio>.",
+    );
+  }
+  const allowedTags = ["mobile", "touch", "landscape"] as const;
+  if (
+    tags.some((tag) => !allowedTags.includes(tag as (typeof allowedTags)[number])) ||
+    new Set(tags).size !== tags.length
+  ) {
+    throw invalidArgumentError(
+      "viewport tags may contain mobile, touch, and landscape once each.",
+    );
+  }
+  const width = requireInteger(
+    Number(dimensionParts[0]),
+    "viewport width",
+    1,
+    MAX_VIEWPORT_DIMENSION,
+  );
+  const height = requireInteger(
+    Number(dimensionParts[1]),
+    "viewport height",
+    1,
+    MAX_VIEWPORT_DIMENSION,
+  );
+  const deviceScaleFactor =
+    dimensionParts[2] === undefined
+      ? 1
+      : requireNumber(
+          Number(dimensionParts[2]),
+          "viewport devicePixelRatio",
+          0.1,
+          MAX_DEVICE_SCALE_FACTOR,
+        );
+  return {
+    width,
+    height,
+    deviceScaleFactor,
+    isMobile: tags.includes("mobile"),
+    hasTouch: tags.includes("touch"),
+    isLandscape: tags.includes("landscape"),
+  };
+}
+
+function parseExtraHttpHeaders(value: unknown): Record<string, string> | null {
+  if (value === undefined) {
+    return null;
+  }
+  const input = requireString(value, "extraHttpHeaders", 64_000);
+  if (input === "") {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    throw invalidArgumentError(
+      `extraHttpHeaders is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw invalidArgumentError("extraHttpHeaders must be a JSON object.");
+  }
+  const entries = Object.entries(parsed);
+  if (entries.length > MAX_EXTRA_HTTP_HEADERS) {
+    throw invalidArgumentError(
+      `extraHttpHeaders may contain at most ${MAX_EXTRA_HTTP_HEADERS} entries.`,
+    );
+  }
+  return Object.fromEntries(
+    entries.map(([name, headerValue]) => [
+      requireNonEmptyString(name, "HTTP header name", MAX_HTTP_HEADER_NAME_CHARS),
+      requireString(headerValue, `HTTP header ${name}`, MAX_HTTP_HEADER_VALUE_CHARS),
+    ]),
+  );
 }
 
 function requireEnumArray<T extends string>(

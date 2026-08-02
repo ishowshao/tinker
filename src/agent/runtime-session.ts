@@ -635,6 +635,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (mcpConfig !== undefined) {
         session.mcpManager = await dependencies.createMcpManager({
           config: mcpConfig,
+          workspaceRoot: input.workspaceRoot,
           runtimeSession: session.context,
           timeoutMs: input.toolingConfig?.mcpTimeoutMs,
           maxObservationChars: input.toolingConfig?.mcpMaxObservationChars,

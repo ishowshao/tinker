@@ -6,6 +6,7 @@ import {
 import { ChromeBridgeError } from "../../src/errors";
 import type {
   DialogActionV2,
+  EmulateParamsV2,
   GetConsoleMessageResultV2,
   GetNetworkRequestResultV2,
   ListConsoleMessagesParamsV2,
@@ -13,6 +14,7 @@ import type {
   ListNetworkRequestsParamsV2,
   ListNetworkRequestsResultV2,
   NavigationTypeV2,
+  NetworkConditionV2,
   OpenPageResultV2,
   PageActionResultV2,
   PageSnapshotV2,
@@ -30,7 +32,7 @@ import {
 
 declare const Puppeteer: Pick<
   typeof import("puppeteer-core"),
-  "connect" | "ExtensionTransport"
+  "connect" | "ExtensionTransport" | "PredefinedNetworkConditions"
 >;
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -69,9 +71,10 @@ export class PageAutomationManager {
     pageId: string;
     tabId: number;
     uid: string;
+    doubleClick: boolean;
   }): Promise<PageActionResultV2> {
     return this.session(options.tabId).run((session) =>
-      session.click(options.pageId, options.uid),
+      session.click(options.pageId, options.uid, options.doubleClick),
     );
   }
 
@@ -83,6 +86,27 @@ export class PageAutomationManager {
   }): Promise<PageActionResultV2> {
     return this.session(options.tabId).run((session) =>
       session.fill(options.pageId, options.uid, options.value),
+    );
+  }
+
+  async fillForm(options: {
+    pageId: string;
+    tabId: number;
+    elements: Array<{ uid: string; value: string }>;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.fillForm(options.pageId, options.elements),
+    );
+  }
+
+  async drag(options: {
+    pageId: string;
+    tabId: number;
+    fromUid: string;
+    toUid: string;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.drag(options.pageId, options.fromUid, options.toUid),
     );
   }
 
@@ -136,6 +160,36 @@ export class PageAutomationManager {
   }): Promise<PageActionResultV2> {
     return this.session(options.tabId).run((session) =>
       session.hover(options.pageId, options.uid),
+    );
+  }
+
+  async resize(options: {
+    pageId: string;
+    tabId: number;
+    width: number;
+    height: number;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.resize(options.pageId, options.width, options.height),
+    );
+  }
+
+  async emulate(
+    options: EmulateParamsV2 & { tabId: number },
+  ): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.emulate(options.pageId, options),
+    );
+  }
+
+  async uploadFile(options: {
+    pageId: string;
+    tabId: number;
+    uid: string;
+    filePath: string;
+  }): Promise<PageActionResultV2> {
+    return this.session(options.tabId).run((session) =>
+      session.uploadFile(options.pageId, options.uid, options.filePath),
     );
   }
 
@@ -241,6 +295,8 @@ class PageAutomationSession {
   private currentDialog: Dialog | undefined;
   private dialogBlockedAction: Promise<void> | undefined;
   private currentSnapshot: TextSnapshot | undefined;
+  private networkConditions: NetworkConditionV2 | null = null;
+  private cpuThrottlingRate = 1;
   private operationTail: Promise<void> = Promise.resolve();
 
   private readonly onDialog = (dialog: Dialog): void => {
@@ -326,7 +382,11 @@ class PageAutomationSession {
     };
   }
 
-  async click(pageId: string, uid: string): Promise<PageActionResultV2> {
+  async click(
+    pageId: string,
+    uid: string,
+    doubleClick: boolean,
+  ): Promise<PageActionResultV2> {
     const page = await this.requirePage();
     const handle = await this.resolveElement(uid);
     try {
@@ -340,7 +400,9 @@ class PageAutomationSession {
         });
       }
       return await this.performAction(pageId, "click", async () => {
-        await page.mouse.click(point.x, point.y);
+        await page.mouse.click(point.x, point.y, {
+          count: doubleClick ? 2 : 1,
+        });
       });
     } finally {
       await handle.dispose().catch(() => undefined);
@@ -356,6 +418,76 @@ class PageAutomationSession {
       );
     } finally {
       await handle.dispose().catch(() => undefined);
+    }
+  }
+
+  async fillForm(
+    pageId: string,
+    elements: Array<{ uid: string; value: string }>,
+  ): Promise<PageActionResultV2> {
+    let completedElements = 0;
+    let latestResult: PageActionResultV2 | undefined;
+    for (const element of elements) {
+      try {
+        latestResult = await this.fill(pageId, element.uid, element.value);
+        completedElements += 1;
+      } catch (error) {
+        if (completedElements === 0) {
+          throw error;
+        }
+        const bridgeError =
+          error instanceof ChromeBridgeError
+            ? error
+            : new ChromeBridgeError({
+                code: "INTERACTION_FAILED",
+                message: asError(error).message,
+                retryable: false,
+                outcome: "unknown",
+                cause: error,
+              });
+        throw new ChromeBridgeError({
+          code: bridgeError.code,
+          message: `Chrome fill_form stopped after ${completedElements} of ${elements.length} elements: ${bridgeError.message}`,
+          retryable: bridgeError.retryable,
+          outcome: "performed",
+          details: {
+            ...(bridgeError.details ?? {}),
+            completedElements,
+            totalElements: elements.length,
+          },
+          cause: error,
+        });
+      }
+      if (latestResult.dialog !== null || latestResult.navigatedToUrl !== null) {
+        break;
+      }
+    }
+    if (latestResult === undefined) {
+      throw new Error("fill_form requires at least one element.");
+    }
+    return { ...latestResult, action: "fill_form" };
+  }
+
+  async drag(
+    pageId: string,
+    fromUid: string,
+    toUid: string,
+  ): Promise<PageActionResultV2> {
+    const fromHandle = await this.resolveElement(fromUid);
+    let toHandle: ElementHandle<Element> | undefined;
+    try {
+      const targetHandle = await this.resolveElement(toUid);
+      toHandle = targetHandle;
+      return await this.performAction(pageId, "drag", async () => {
+        await fromHandle.drag(targetHandle);
+        await sleep(50);
+        await targetHandle.drop(fromHandle);
+      });
+    } finally {
+      await Promise.all([
+        fromHandle.dispose().catch(() => undefined),
+        toHandle?.dispose().catch(() => undefined),
+      ]);
     }
   }
 
@@ -455,6 +587,109 @@ class PageAutomationSession {
       return await this.performAction(pageId, "hover", () =>
         page.mouse.move(point.x, point.y),
       );
+    } finally {
+      await handle.dispose().catch(() => undefined);
+    }
+  }
+
+  async resize(
+    pageId: string,
+    width: number,
+    height: number,
+  ): Promise<PageActionResultV2> {
+    const page = await this.requirePage();
+    return this.performAction(pageId, "resize_page", async () => {
+      const tab = await requireHttpTab(this.tabId);
+      const initialWindow = await chrome.windows.get(tab.windowId);
+      if (initialWindow.state === "fullscreen") {
+        await chrome.windows.update(tab.windowId, { state: "normal" });
+        await chrome.windows.update(tab.windowId, { state: "normal" });
+      } else if (initialWindow.state !== "normal") {
+        await chrome.windows.update(tab.windowId, { state: "normal" });
+      }
+
+      const [normalWindow, viewport] = await Promise.all([
+        chrome.windows.get(tab.windowId),
+        page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+      ]);
+      if (normalWindow.width === undefined || normalWindow.height === undefined) {
+        throw new Error("Chrome did not expose the current window dimensions.");
+      }
+      await chrome.windows.update(tab.windowId, {
+        width: width + normalWindow.width - viewport.width,
+        height: height + normalWindow.height - viewport.height,
+      });
+    });
+  }
+
+  async emulate(
+    pageId: string,
+    options: Omit<EmulateParamsV2, "pageId">,
+  ): Promise<PageActionResultV2> {
+    const page = await this.requirePage();
+    return this.performAction(pageId, "emulate", async () => {
+      if (options.networkConditions === null) {
+        await page.emulateNetworkConditions(null);
+      } else if (options.networkConditions === "Offline") {
+        await page.emulateNetworkConditions({
+          offline: true,
+          download: 0,
+          upload: 0,
+          latency: 0,
+        });
+      } else {
+        await page.emulateNetworkConditions(
+          Puppeteer.PredefinedNetworkConditions[options.networkConditions],
+        );
+      }
+      this.networkConditions = options.networkConditions;
+
+      await page.emulateCPUThrottling(options.cpuThrottlingRate);
+      this.cpuThrottlingRate = options.cpuThrottlingRate;
+
+      await page.setGeolocation(options.geolocation ?? { latitude: 0, longitude: 0 });
+      await page.setUserAgent({ userAgent: options.userAgent ?? undefined });
+      await page.emulateMediaFeatures([
+        {
+          name: "prefers-color-scheme",
+          value: options.colorScheme === "auto" ? "" : options.colorScheme,
+        },
+      ]);
+      if (options.extraHttpHeaders !== null) {
+        await page.setExtraHTTPHeaders(options.extraHttpHeaders);
+      }
+
+      this.updateTimeouts(page);
+      await page.setViewport(options.viewport);
+    });
+  }
+
+  async uploadFile(
+    pageId: string,
+    uid: string,
+    filePath: string,
+  ): Promise<PageActionResultV2> {
+    const page = await this.requirePage();
+    const handle = await this.resolveElement(uid);
+    try {
+      return await this.performAction(pageId, "upload_file", async () => {
+        try {
+          await (handle as ElementHandle<HTMLInputElement>).uploadFile(filePath);
+        } catch {
+          try {
+            const [fileChooser] = await Promise.all([
+              page.waitForFileChooser({ timeout: 3_000 }),
+              handle.asLocator().click(),
+            ]);
+            await fileChooser.accept([filePath]);
+          } catch (error) {
+            throw new Error(
+              "The element could not accept the file and did not open a file chooser.",
+              { cause: error },
+            );
+          }
+        }
+      });
     } finally {
       await handle.dispose().catch(() => undefined);
     }
@@ -601,6 +836,8 @@ class PageAutomationSession {
     this.currentDialog = undefined;
     this.dialogBlockedAction = undefined;
     this.currentSnapshot = undefined;
+    this.networkConditions = null;
+    this.cpuThrottlingRate = 1;
     if (browser !== undefined) {
       await browser.disconnect().catch(() => undefined);
     }
@@ -616,6 +853,8 @@ class PageAutomationSession {
     this.debugSession = undefined;
     this.currentDialog = undefined;
     this.dialogBlockedAction = undefined;
+    this.networkConditions = null;
+    this.cpuThrottlingRate = 1;
     let transport: Awaited<ReturnType<typeof Puppeteer.ExtensionTransport.connectTab>>;
     try {
       transport = await Puppeteer.ExtensionTransport.connectTab(this.tabId);
@@ -661,6 +900,14 @@ class PageAutomationSession {
       throw new Error("Chrome page debug collectors are not attached.");
     }
     return this.debugSession;
+  }
+
+  private updateTimeouts(page: Page): void {
+    const networkMultiplier = networkConditionMultiplier(this.networkConditions);
+    page.setDefaultTimeout(DEFAULT_TIMEOUT_MS * this.cpuThrottlingRate);
+    page.setDefaultNavigationTimeout(
+      NAVIGATION_OPERATION_TIMEOUT_MS * networkMultiplier * this.cpuThrottlingRate,
+    );
   }
 
   private dialogInfo(): PageActionResultV2["dialog"] {
@@ -975,6 +1222,21 @@ function scrollDelta(
       return { deltaX: -amount, deltaY: 0 };
     case "right":
       return { deltaX: amount, deltaY: 0 };
+  }
+}
+
+function networkConditionMultiplier(condition: NetworkConditionV2 | null): number {
+  switch (condition) {
+    case "Slow 3G":
+      return 10;
+    case "Fast 3G":
+      return 5;
+    case "Slow 4G":
+      return 2.5;
+    case "Offline":
+    case "Fast 4G":
+    case null:
+      return 1;
   }
 }
 

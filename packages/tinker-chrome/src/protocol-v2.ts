@@ -6,13 +6,20 @@ import {
   MAX_DEBUG_OUTPUT_CODE_POINTS,
   MAX_DIALOG_TEXT_CODE_POINTS,
   MAX_DESCRIPTION_CODE_POINTS,
+  MAX_DEVICE_SCALE_FACTOR,
+  MAX_EXTRA_HTTP_HEADERS,
+  MAX_FILE_PATH_CHARS,
+  MAX_FORM_ELEMENTS,
   MAX_HEADING_CODE_POINTS,
   MAX_HEADINGS,
+  MAX_HTTP_HEADER_NAME_CHARS,
+  MAX_HTTP_HEADER_VALUE_CHARS,
   MAX_KEY_CHARS,
   MAX_OWNED_PAGES,
   MAX_SCROLL_AMOUNT,
   MAX_SNAPSHOT_CODE_POINTS,
   MAX_URL_CHARS,
+  MAX_VIEWPORT_DIMENSION,
   MAX_WAIT_TEXTS,
   NETWORK_RESOURCE_TYPES,
   PAGE_WAIT_MAX_TIMEOUT_MS,
@@ -34,13 +41,33 @@ export type DialogActionV2 = "accept" | "dismiss";
 export type DialogTypeV2 = "alert" | "beforeunload" | "confirm" | "prompt";
 export type ConsoleMessageTypeV2 = (typeof CONSOLE_MESSAGE_TYPES)[number];
 export type NetworkResourceTypeV2 = (typeof NETWORK_RESOURCE_TYPES)[number];
+export type NetworkConditionV2 =
+  | "Offline"
+  | "Slow 3G"
+  | "Fast 3G"
+  | "Slow 4G"
+  | "Fast 4G";
+export type GeolocationV2 = { latitude: number; longitude: number };
+export type ViewportV2 = {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  isMobile: boolean;
+  hasTouch: boolean;
+  isLandscape: boolean;
+};
 export type PageActionV2 =
   | "click"
   | "fill"
+  | "fill_form"
+  | "drag"
   | "press_key"
   | "type_text"
   | "scroll"
   | "hover"
+  | "resize_page"
+  | "emulate"
+  | "upload_file"
   | "navigate_page"
   | "handle_dialog";
 
@@ -76,8 +103,13 @@ export type BridgeHelloAckV2 = {
 export type OpenPageParamsV2 = { pageId: string; url: string };
 export type PageIdParamsV2 = { pageId: string };
 export type SnapshotParamsV2 = { pageId: string; verbose: boolean };
-export type ClickParamsV2 = { pageId: string; uid: string };
+export type ClickParamsV2 = { pageId: string; uid: string; doubleClick: boolean };
 export type FillParamsV2 = { pageId: string; uid: string; value: string };
+export type FillFormParamsV2 = {
+  pageId: string;
+  elements: Array<{ uid: string; value: string }>;
+};
+export type DragParamsV2 = { pageId: string; fromUid: string; toUid: string };
 export type PressKeyParamsV2 = { pageId: string; key: string };
 export type TypeTextParamsV2 = {
   pageId: string;
@@ -95,6 +127,22 @@ export type ScrollParamsV2 = {
   amount: number;
 };
 export type HoverParamsV2 = { pageId: string; uid: string };
+export type ResizePageParamsV2 = { pageId: string; width: number; height: number };
+export type EmulateParamsV2 = {
+  pageId: string;
+  networkConditions: NetworkConditionV2 | null;
+  cpuThrottlingRate: number;
+  geolocation: GeolocationV2 | null;
+  userAgent: string | null;
+  colorScheme: "dark" | "light" | "auto";
+  viewport: ViewportV2 | null;
+  extraHttpHeaders: Record<string, string> | null;
+};
+export type UploadFileParamsV2 = {
+  pageId: string;
+  uid: string;
+  filePath: string;
+};
 export type ListPagesParamsV2 = Record<string, never>;
 export type NavigatePageParamsV2 = {
   pageId: string;
@@ -140,6 +188,11 @@ export type BridgeRequestV2 =
   | (BridgeRequestBaseV2 & { method: "page.click"; params: ClickParamsV2 })
   | (BridgeRequestBaseV2 & { method: "page.fill"; params: FillParamsV2 })
   | (BridgeRequestBaseV2 & {
+      method: "page.fill_form";
+      params: FillFormParamsV2;
+    })
+  | (BridgeRequestBaseV2 & { method: "page.drag"; params: DragParamsV2 })
+  | (BridgeRequestBaseV2 & {
       method: "page.press_key";
       params: PressKeyParamsV2;
     })
@@ -153,6 +206,15 @@ export type BridgeRequestV2 =
     })
   | (BridgeRequestBaseV2 & { method: "page.scroll"; params: ScrollParamsV2 })
   | (BridgeRequestBaseV2 & { method: "page.hover"; params: HoverParamsV2 })
+  | (BridgeRequestBaseV2 & {
+      method: "page.resize";
+      params: ResizePageParamsV2;
+    })
+  | (BridgeRequestBaseV2 & { method: "page.emulate"; params: EmulateParamsV2 })
+  | (BridgeRequestBaseV2 & {
+      method: "page.upload_file";
+      params: UploadFileParamsV2;
+    })
   | (BridgeRequestBaseV2 & { method: "page.list"; params: ListPagesParamsV2 })
   | (BridgeRequestBaseV2 & {
       method: "page.navigate";
@@ -429,6 +491,10 @@ export function parseBridgeRequestV2(value: unknown): BridgeRequestV2 {
       return { ...base, method, params: parseClickParams(record.params) };
     case "page.fill":
       return { ...base, method, params: parseFillParams(record.params) };
+    case "page.fill_form":
+      return { ...base, method, params: parseFillFormParams(record.params) };
+    case "page.drag":
+      return { ...base, method, params: parseDragParams(record.params) };
     case "page.press_key":
       return { ...base, method, params: parsePressKeyParams(record.params) };
     case "page.type_text":
@@ -439,6 +505,12 @@ export function parseBridgeRequestV2(value: unknown): BridgeRequestV2 {
       return { ...base, method, params: parseScrollParams(record.params) };
     case "page.hover":
       return { ...base, method, params: parseHoverParams(record.params) };
+    case "page.resize":
+      return { ...base, method, params: parseResizePageParams(record.params) };
+    case "page.emulate":
+      return { ...base, method, params: parseEmulateParams(record.params) };
+    case "page.upload_file":
+      return { ...base, method, params: parseUploadFileParams(record.params) };
     case "page.list":
       return { ...base, method, params: parseListPagesParams(record.params) };
     case "page.navigate":
@@ -540,6 +612,10 @@ export function parseBridgeResultV2(
       return parsePageActionResultV2(value, "click");
     case "page.fill":
       return parsePageActionResultV2(value, "fill");
+    case "page.fill_form":
+      return parsePageActionResultV2(value, "fill_form");
+    case "page.drag":
+      return parsePageActionResultV2(value, "drag");
     case "page.press_key":
       return parsePageActionResultV2(value, "press_key");
     case "page.type_text":
@@ -548,6 +624,12 @@ export function parseBridgeResultV2(
       return parsePageActionResultV2(value, "scroll");
     case "page.hover":
       return parsePageActionResultV2(value, "hover");
+    case "page.resize":
+      return parsePageActionResultV2(value, "resize_page");
+    case "page.emulate":
+      return parsePageActionResultV2(value, "emulate");
+    case "page.upload_file":
+      return parsePageActionResultV2(value, "upload_file");
     case "page.list":
       return parseListPagesResultV2(value);
     case "page.navigate":
@@ -984,10 +1066,15 @@ export function isActionBridgeMethodV2(method: BridgeMethodV2): boolean {
   return (
     method === "page.click" ||
     method === "page.fill" ||
+    method === "page.fill_form" ||
+    method === "page.drag" ||
     method === "page.press_key" ||
     method === "page.type_text" ||
     method === "page.scroll" ||
     method === "page.hover" ||
+    method === "page.resize" ||
+    method === "page.emulate" ||
+    method === "page.upload_file" ||
     method === "page.navigate" ||
     method === "page.close" ||
     method === "page.handle_dialog"
@@ -1019,10 +1106,15 @@ function parseSnapshotParams(value: unknown): SnapshotParamsV2 {
 }
 
 function parseClickParams(value: unknown): ClickParamsV2 {
-  const record = requireExactRecord(value, "page.click params", ["pageId", "uid"]);
+  const record = requireExactRecord(value, "page.click params", [
+    "pageId",
+    "uid",
+    "doubleClick",
+  ]);
   return {
     pageId: requireUuid(record.pageId, "pageId"),
     uid: requireBoundedString(record.uid, "uid", 200, true),
+    doubleClick: requireBoolean(record.doubleClick, "doubleClick"),
   };
 }
 
@@ -1041,6 +1133,48 @@ function parseFillParams(value: unknown): FillParamsV2 {
       MAX_ACTION_TEXT_CODE_POINTS,
       false,
     ),
+  };
+}
+
+function parseFillFormParams(value: unknown): FillFormParamsV2 {
+  const record = requireExactRecord(value, "page.fill_form params", [
+    "pageId",
+    "elements",
+  ]);
+  if (
+    !Array.isArray(record.elements) ||
+    record.elements.length === 0 ||
+    record.elements.length > MAX_FORM_ELEMENTS
+  ) {
+    throw new Error(`elements must contain from 1 through ${MAX_FORM_ELEMENTS} items.`);
+  }
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    elements: record.elements.map((value, index) => {
+      const element = requireExactRecord(value, `elements[${index}]`, ["uid", "value"]);
+      return {
+        uid: requireBoundedString(element.uid, `elements[${index}].uid`, 200, true),
+        value: requireBoundedString(
+          element.value,
+          `elements[${index}].value`,
+          MAX_ACTION_TEXT_CODE_POINTS,
+          false,
+        ),
+      };
+    }),
+  };
+}
+
+function parseDragParams(value: unknown): DragParamsV2 {
+  const record = requireExactRecord(value, "page.drag params", [
+    "pageId",
+    "fromUid",
+    "toUid",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    fromUid: requireBoundedString(record.fromUid, "fromUid", 200, true),
+    toUid: requireBoundedString(record.toUid, "toUid", 200, true),
   };
 }
 
@@ -1116,6 +1250,83 @@ function parseHoverParams(value: unknown): HoverParamsV2 {
   return {
     pageId: requireUuid(record.pageId, "pageId"),
     uid: requireBoundedString(record.uid, "uid", 200, true),
+  };
+}
+
+function parseResizePageParams(value: unknown): ResizePageParamsV2 {
+  const record = requireExactRecord(value, "page.resize params", [
+    "pageId",
+    "width",
+    "height",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    width: requireBoundedInteger(record.width, "width", 1, MAX_VIEWPORT_DIMENSION),
+    height: requireBoundedInteger(record.height, "height", 1, MAX_VIEWPORT_DIMENSION),
+  };
+}
+
+function parseEmulateParams(value: unknown): EmulateParamsV2 {
+  const record = requireExactRecord(value, "page.emulate params", [
+    "pageId",
+    "networkConditions",
+    "cpuThrottlingRate",
+    "geolocation",
+    "userAgent",
+    "colorScheme",
+    "viewport",
+    "extraHttpHeaders",
+  ]);
+  if (
+    record.networkConditions !== null &&
+    !NETWORK_CONDITIONS.includes(record.networkConditions as NetworkConditionV2)
+  ) {
+    throw new Error(
+      `Unknown network conditions ${JSON.stringify(record.networkConditions)}.`,
+    );
+  }
+  if (!COLOR_SCHEMES.includes(record.colorScheme as EmulateParamsV2["colorScheme"])) {
+    throw new Error(`Unknown color scheme ${JSON.stringify(record.colorScheme)}.`);
+  }
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    networkConditions: record.networkConditions as NetworkConditionV2 | null,
+    cpuThrottlingRate: requireFiniteNumber(
+      record.cpuThrottlingRate,
+      "cpuThrottlingRate",
+      1,
+      20,
+    ),
+    geolocation:
+      record.geolocation === null ? null : parseGeolocation(record.geolocation),
+    userAgent:
+      record.userAgent === null
+        ? null
+        : requireBoundedString(record.userAgent, "userAgent", 1_000, true),
+    colorScheme: record.colorScheme as EmulateParamsV2["colorScheme"],
+    viewport: record.viewport === null ? null : parseViewport(record.viewport),
+    extraHttpHeaders:
+      record.extraHttpHeaders === null
+        ? null
+        : parseExtraHttpHeaders(record.extraHttpHeaders),
+  };
+}
+
+function parseUploadFileParams(value: unknown): UploadFileParamsV2 {
+  const record = requireExactRecord(value, "page.upload_file params", [
+    "pageId",
+    "uid",
+    "filePath",
+  ]);
+  return {
+    pageId: requireUuid(record.pageId, "pageId"),
+    uid: requireBoundedString(record.uid, "uid", 200, true),
+    filePath: requireBoundedString(
+      record.filePath,
+      "filePath",
+      MAX_FILE_PATH_CHARS,
+      true,
+    ),
   };
 }
 
@@ -1378,6 +1589,69 @@ function parseErrorDetails(value: unknown): ChromeBridgeErrorDetails {
   return details;
 }
 
+function parseGeolocation(value: unknown): GeolocationV2 {
+  const record = requireExactRecord(value, "geolocation", ["latitude", "longitude"]);
+  return {
+    latitude: requireFiniteNumber(record.latitude, "latitude", -90, 90),
+    longitude: requireFiniteNumber(record.longitude, "longitude", -180, 180),
+  };
+}
+
+function parseViewport(value: unknown): ViewportV2 {
+  const record = requireExactRecord(value, "viewport", [
+    "width",
+    "height",
+    "deviceScaleFactor",
+    "isMobile",
+    "hasTouch",
+    "isLandscape",
+  ]);
+  return {
+    width: requireBoundedInteger(
+      record.width,
+      "viewport.width",
+      1,
+      MAX_VIEWPORT_DIMENSION,
+    ),
+    height: requireBoundedInteger(
+      record.height,
+      "viewport.height",
+      1,
+      MAX_VIEWPORT_DIMENSION,
+    ),
+    deviceScaleFactor: requireFiniteNumber(
+      record.deviceScaleFactor,
+      "viewport.deviceScaleFactor",
+      0.1,
+      MAX_DEVICE_SCALE_FACTOR,
+    ),
+    isMobile: requireBoolean(record.isMobile, "viewport.isMobile"),
+    hasTouch: requireBoolean(record.hasTouch, "viewport.hasTouch"),
+    isLandscape: requireBoolean(record.isLandscape, "viewport.isLandscape"),
+  };
+}
+
+function parseExtraHttpHeaders(value: unknown): Record<string, string> {
+  const record = requireRecord(value, "extraHttpHeaders");
+  const entries = Object.entries(record);
+  if (entries.length > MAX_EXTRA_HTTP_HEADERS) {
+    throw new Error(
+      `extraHttpHeaders must contain at most ${MAX_EXTRA_HTTP_HEADERS} entries.`,
+    );
+  }
+  return Object.fromEntries(
+    entries.map(([name, headerValue]) => [
+      requireBoundedString(name, "HTTP header name", MAX_HTTP_HEADER_NAME_CHARS, true),
+      requireBoundedString(
+        headerValue,
+        `HTTP header ${name}`,
+        MAX_HTTP_HEADER_VALUE_CHARS,
+        false,
+      ),
+    ]),
+  );
+}
+
 function requireExactRecord(
   value: unknown,
   label: string,
@@ -1495,15 +1769,49 @@ function requireBoundedInteger(
   return integer;
 }
 
+function requireFiniteNumber(
+  value: unknown,
+  label: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < minimum ||
+    value > maximum
+  ) {
+    throw new Error(`${label} must be from ${minimum} through ${maximum}.`);
+  }
+  return value;
+}
+
 const PAGE_ACTIONS: readonly PageActionV2[] = [
   "click",
   "fill",
+  "fill_form",
+  "drag",
   "press_key",
   "type_text",
   "scroll",
   "hover",
+  "resize_page",
+  "emulate",
+  "upload_file",
   "navigate_page",
   "handle_dialog",
+];
+const NETWORK_CONDITIONS: readonly NetworkConditionV2[] = [
+  "Offline",
+  "Slow 3G",
+  "Fast 3G",
+  "Slow 4G",
+  "Fast 4G",
+];
+const COLOR_SCHEMES: readonly EmulateParamsV2["colorScheme"][] = [
+  "dark",
+  "light",
+  "auto",
 ];
 const SCROLL_DIRECTIONS: readonly ScrollDirectionV2[] = ["up", "down", "left", "right"];
 const NAVIGATION_TYPES: readonly NavigationTypeV2[] = [

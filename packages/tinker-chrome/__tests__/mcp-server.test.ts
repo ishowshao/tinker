@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ChromeBridgeError } from "../src/errors";
@@ -27,11 +30,16 @@ describe("Tinker Chrome MCP server", () => {
       "take_snapshot",
       "click",
       "fill",
+      "fill_form",
+      "drag",
       "press_key",
       "type_text",
       "wait_for",
       "scroll",
       "hover",
+      "resize_page",
+      "emulate",
+      "upload_file",
       "list_pages",
       "navigate_page",
       "close_page",
@@ -166,6 +174,182 @@ describe("Tinker Chrome MCP server", () => {
       "page.wait_for",
     ]);
     await client.close();
+  });
+
+  test("maps form, drag, responsive, emulation, upload, and snapshot options", async () => {
+    const pageId = crypto.randomUUID();
+    const calls: Array<{ method: BridgeMethodV2; params: unknown }> = [];
+    const bridge: ChromeBridgeClient = {
+      request(method, params): Promise<unknown> {
+        calls.push({ method, params });
+        if (method === "page.snapshot") {
+          return Promise.resolve({
+            schemaVersion: 2,
+            pageId,
+            url: "https://example.com/",
+            title: "Example Domain",
+            verbose: false,
+            snapshot: 'uid=1_9 button "Done"',
+            truncated: false,
+          });
+        }
+        const action =
+          method === "page.resize" ? "resize_page" : method.slice("page.".length);
+        return Promise.resolve({
+          schemaVersion: 2,
+          pageId,
+          action,
+          performed: true,
+          url: "https://example.com/",
+          navigatedToUrl: null,
+          dialog: null,
+        });
+      },
+    };
+    const uploadDirectory = await mkdtemp(path.join(tmpdir(), "tinker-upload-test-"));
+    const uploadPath = path.join(uploadDirectory, "fixture.txt");
+    await writeFile(uploadPath, "upload fixture", "utf8");
+    const canonicalUploadPath = await realpath(uploadPath);
+    const client = await connectClient(bridge);
+    try {
+      const clicked = await client.callTool({
+        name: "click",
+        arguments: {
+          pageId,
+          uid: "1_1",
+          doubleClick: true,
+          includeSnapshot: true,
+        },
+      });
+      expect(resultText(clicked)).toContain("postActionSnapshot=included");
+      expect(resultText(clicked)).toContain('uid=1_9 button "Done"');
+
+      await client.callTool({
+        name: "fill_form",
+        arguments: {
+          pageId,
+          elements: [
+            { uid: "1_2", value: "Ada" },
+            { uid: "1_3", value: "true" },
+          ],
+        },
+      });
+      await client.callTool({
+        name: "drag",
+        arguments: { pageId, fromUid: "1_4", toUid: "1_5" },
+      });
+      await client.callTool({
+        name: "resize_page",
+        arguments: { pageId, width: 800, height: 600 },
+      });
+      await client.callTool({
+        name: "emulate",
+        arguments: {
+          pageId,
+          networkConditions: "Fast 3G",
+          cpuThrottlingRate: 2,
+          geolocation: "1.25,103.8",
+          userAgent: "Tinker Chrome Test",
+          colorScheme: "dark",
+          viewport: "390x844x3,mobile,touch",
+          extraHttpHeaders: '{"X-Tinker-Test":"yes"}',
+        },
+      });
+      await client.callTool({
+        name: "upload_file",
+        arguments: { pageId, uid: "1_6", filePath: uploadPath },
+      });
+
+      expect(calls).toContainEqual({
+        method: "page.click",
+        params: { pageId, uid: "1_1", doubleClick: true },
+      });
+      expect(calls).toContainEqual({
+        method: "page.emulate",
+        params: {
+          pageId,
+          networkConditions: "Fast 3G",
+          cpuThrottlingRate: 2,
+          geolocation: { latitude: 1.25, longitude: 103.8 },
+          userAgent: "Tinker Chrome Test",
+          colorScheme: "dark",
+          viewport: {
+            width: 390,
+            height: 844,
+            deviceScaleFactor: 3,
+            isMobile: true,
+            hasTouch: true,
+            isLandscape: false,
+          },
+          extraHttpHeaders: { "X-Tinker-Test": "yes" },
+        },
+      });
+      expect(calls).toContainEqual({
+        method: "page.upload_file",
+        params: { pageId, uid: "1_6", filePath: canonicalUploadPath },
+      });
+    } finally {
+      await client.close();
+      await unlink(uploadPath);
+      await rmdir(uploadDirectory);
+    }
+  });
+
+  test("preserves a performed action when its optional snapshot is unavailable", async () => {
+    const pageId = crypto.randomUUID();
+    let snapshotCalls = 0;
+    const client = await connectClient({
+      request(method): Promise<unknown> {
+        if (method === "page.snapshot") {
+          snapshotCalls += 1;
+          return Promise.reject(
+            new ChromeBridgeError({
+              code: "SNAPSHOT_FAILED",
+              message: "snapshot unavailable",
+              retryable: true,
+              outcome: "not_started",
+            }),
+          );
+        }
+        const action = method === "page.click" ? "click" : "fill";
+        return Promise.resolve({
+          schemaVersion: 2,
+          pageId,
+          action,
+          performed: true,
+          url: "https://example.com/",
+          navigatedToUrl: null,
+          dialog:
+            method === "page.click"
+              ? { type: "confirm", message: "Continue?", defaultValue: "" }
+              : null,
+        });
+      },
+    });
+    try {
+      const unavailable = await client.callTool({
+        name: "fill",
+        arguments: {
+          pageId,
+          uid: "1_1",
+          value: "Ada",
+          includeSnapshot: true,
+        },
+      });
+      expect(unavailable.isError).not.toBe(true);
+      expect(resultText(unavailable)).toContain("outcome=performed");
+      expect(resultText(unavailable)).toContain("postActionSnapshot=unavailable");
+      expect(resultText(unavailable)).toContain("snapshotErrorCode=SNAPSHOT_FAILED");
+
+      const blocked = await client.callTool({
+        name: "click",
+        arguments: { pageId, uid: "1_2", includeSnapshot: true },
+      });
+      expect(resultText(blocked)).toContain("postActionSnapshot=blocked_by_dialog");
+      expect(snapshotCalls).toBe(1);
+    } finally {
+      await client.close();
+    }
   });
 
   test("maps page lifecycle and debug tools through normalized strict params", async () => {

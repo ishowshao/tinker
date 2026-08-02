@@ -1,5 +1,8 @@
 # Tinker Chrome 三阶段：页面生命周期与调试观察
 
+> 本文记录 `0.3.0` 的历史合同；`0.4.0` 输入、环境仿真与文件上传见
+> [Tinker Chrome 四阶段](./tinker-chrome-phase-four-input-emulation-upload-design.md)。
+
 ## 状态
 
 - 版本：Tinker Chrome `0.3.0`，bridge protocol v2。

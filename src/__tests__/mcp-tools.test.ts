@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { realpath } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -342,6 +345,7 @@ describe("mcp manager", () => {
     const runtimeSession = createTestRuntime(sink).runtimeSession;
 
     const error = await createMcpManager({
+      workspaceRoot: process.cwd(),
       config: {
         servers: new Map([
           ["good", { command: "nope", args: [], env: {} }],
@@ -391,6 +395,7 @@ describe("mcp manager", () => {
     });
     const runtimeSession = createTestRuntime().runtimeSession;
     const manager = await createMcpManager({
+      workspaceRoot: process.cwd(),
       config: {
         servers: new Map([
           ["z-server", { command: "unused", args: [], env: {} }],
@@ -430,6 +435,7 @@ describe("mcp manager", () => {
     const sink = collectingEventSink();
     const runtimeSession = createTestRuntime(sink).runtimeSession;
     const error = await createMcpManager({
+      workspaceRoot: process.cwd(),
       config: {
         servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
       },
@@ -466,6 +472,7 @@ describe("mcp manager", () => {
     const sink = collectingEventSink();
     const runtimeSession = createTestRuntime(sink).runtimeSession;
     const error = await createMcpManager({
+      workspaceRoot: process.cwd(),
       config: {
         servers: new Map([["srv", { command: "unused", args: [], env: {} }]]),
       },
@@ -501,6 +508,7 @@ describe("mcp manager", () => {
       const fixturePath = path.join(import.meta.dir, "fixtures", "fake-mcp-server.ts");
 
       const manager = await createMcpManager({
+        workspaceRoot: process.cwd(),
         config: {
           servers: new Map([
             ["fixture", { command: process.execPath, args: [fixturePath], env: {} }],
@@ -533,6 +541,85 @@ describe("mcp manager", () => {
         )) as McpToolRawResult;
         expect(raw.ok).toBe(true);
         expect(raw.text).toBe("echo: hi");
+      } finally {
+        await manager.dispose();
+      }
+    },
+    { timeout: 20_000 },
+  );
+
+  test(
+    "advertises the active workspace as the MCP client root",
+    async () => {
+      const workspaceRoot = await realpath(path.resolve(import.meta.dir, "../.."));
+      const fixturePath = path.join(import.meta.dir, "fixtures", "fake-mcp-server.ts");
+      const manager = await createMcpManager({
+        workspaceRoot,
+        config: {
+          servers: new Map([
+            [
+              "fixture",
+              {
+                command: process.execPath,
+                args: [fixturePath],
+                env: { TINKER_TEST_MCP_RETURN_ROOT: "1" },
+              },
+            ],
+          ]),
+        },
+        runtimeSession: createTestRuntime().runtimeSession,
+      });
+      try {
+        const raw = (await manager.executors[0]?.execute(
+          { message: "root" },
+          testRuntime.toolCall({
+            providerToolCallId: "call_roots",
+            name: "mcp__fixture__echo",
+            args: { message: "root" },
+          }),
+          testToolContext,
+        )) as McpToolRawResult;
+        expect(raw.ok).toBe(true);
+        expect(raw.text).toBe(`root: ${pathToFileURL(workspaceRoot).href}`);
+      } finally {
+        await manager.dispose();
+      }
+    },
+    { timeout: 20_000 },
+  );
+
+  test(
+    "preserves the effective temporary directory for stdio MCP servers",
+    async () => {
+      const fixturePath = path.join(import.meta.dir, "fixtures", "fake-mcp-server.ts");
+      const manager = await createMcpManager({
+        workspaceRoot: process.cwd(),
+        config: {
+          servers: new Map([
+            [
+              "fixture",
+              {
+                command: process.execPath,
+                args: [fixturePath],
+                env: { TINKER_TEST_MCP_RETURN_TMPDIR: "1" },
+              },
+            ],
+          ]),
+        },
+        runtimeSession: createTestRuntime().runtimeSession,
+      });
+      try {
+        const raw = (await manager.executors[0]?.execute(
+          { message: "tmpdir" },
+          testRuntime.toolCall({
+            providerToolCallId: "call_tmpdir",
+            name: "mcp__fixture__echo",
+            args: { message: "tmpdir" },
+          }),
+          testToolContext,
+        )) as McpToolRawResult;
+        expect(raw.ok).toBe(true);
+        expect(raw.text).toBe(`tmpdir: ${tmpdir()}`);
       } finally {
         await manager.dispose();
       }

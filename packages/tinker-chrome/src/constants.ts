@@ -8,7 +8,7 @@ export const EXTENSION_ORIGIN = `chrome-extension://${EXTENSION_ID}/`;
 export const EXTENSION_PUBLIC_KEY =
   "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqGlL8D8gqoSvijoMlAxM7qGSO4g5VzVK6/+ulZBkaOe5hgCAmRkSktS4bUGTWEc6xv6HOT33qCzrhjEQTkUcS5XnPfY94M2kFwVFV5uEwQEElPuOLRuFlWbBnklp19y9l4v7KtBSWNR8p5Erpo0JVsuhyp1PaOauwstcf/oIDR6+YAx9bVe6Llo9k+sCFu54f5wd+QKNDX9bBCIrV4muRQjMqgNW5hF6EOq/XEhUyA8GpCkpqf9uP4luxWhWrv24uRZ/kvAGgWIToMWyYsF5v1yj6Ko/vsbj3yrltK+MlbD8B2R8OvK5h0M1zQi2w241kwTCBWWrh/DwVfwxltsufwIDAQAB";
 
-export const PLUGIN_VERSION = "0.3.0";
+export const PLUGIN_VERSION = "0.4.0";
 export const PLUGIN_CAPABILITIES = ["page.open", "page.summary"] as const;
 export const PLUGIN_CAPABILITIES_V2 = [
   "page.open",
@@ -21,6 +21,11 @@ export const PLUGIN_CAPABILITIES_V2 = [
   "page.wait_for",
   "page.scroll",
   "page.hover",
+  "page.fill_form",
+  "page.drag",
+  "page.resize",
+  "page.emulate",
+  "page.upload_file",
   "page.list",
   "page.navigate",
   "page.close",
@@ -53,6 +58,13 @@ export const MAX_ACTION_TEXT_CODE_POINTS = 20_000;
 export const MAX_WAIT_TEXTS = 20;
 export const MAX_KEY_CHARS = 100;
 export const MAX_SCROLL_AMOUNT = 10_000;
+export const MAX_FORM_ELEMENTS = 100;
+export const MAX_VIEWPORT_DIMENSION = 10_000;
+export const MAX_DEVICE_SCALE_FACTOR = 10;
+export const MAX_EXTRA_HTTP_HEADERS = 100;
+export const MAX_HTTP_HEADER_NAME_CHARS = 200;
+export const MAX_HTTP_HEADER_VALUE_CHARS = 8_192;
+export const MAX_FILE_PATH_CHARS = 8_192;
 export const MAX_OWNED_PAGES = 100;
 export const DEBUG_LIST_DEFAULT_PAGE_SIZE = 50;
 export const DEBUG_LIST_MAX_PAGE_SIZE = 200;
