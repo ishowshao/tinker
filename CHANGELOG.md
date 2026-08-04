@@ -5,6 +5,20 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-04
+
+### Added
+
+- Add an UpdatePlan tool that lets the agent maintain a visible, ordered task
+  plan for multi-phase work, rendered as a plan view in the TUI timeline and
+  printed by the one-shot CLI. Plans are validated (at most 12 steps, at most
+  one step in progress), persisted in canonical session history, and fully
+  restored when resuming a session.
+
+### Changed
+
+- Trim the runtime system prompt to keep core tool-usage guidance compact.
+
 ## [1.8.0] - 2026-08-02
 
 ### Added
@@ -161,7 +175,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/ishowshao/tinker/releases/tag/v1.9.0
 [1.8.0]: https://github.com/ishowshao/tinker/releases/tag/v1.8.0
 [1.7.0]: https://github.com/ishowshao/tinker/releases/tag/v1.7.0
 [1.6.0]: https://github.com/ishowshao/tinker/releases/tag/v1.6.0
