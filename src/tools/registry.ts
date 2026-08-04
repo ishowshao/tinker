@@ -11,6 +11,7 @@ import { createTaskListToolExecutor } from "./task-list";
 import { createTaskInputToolExecutor } from "./task-input";
 import { createTaskOutputToolExecutor } from "./task-output-tool";
 import { createTaskStopToolExecutor } from "./task-stop";
+import { createUpdatePlanToolExecutor } from "./update-plan";
 import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
@@ -255,6 +256,7 @@ export function createDefaultTooling(options: {
       maxTimeoutMs: toolingConfig.bashMaxTimeoutMs,
     }),
   );
+  registry.register(createUpdatePlanToolExecutor());
   registry.register(createTaskListToolExecutor({ taskManager }));
   registry.register(createTaskOutputToolExecutor({ taskManager }));
   registry.register(createTaskInputToolExecutor({ taskManager }));

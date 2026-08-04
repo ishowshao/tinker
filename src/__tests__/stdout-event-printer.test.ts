@@ -164,6 +164,45 @@ describe("stdout event printer", () => {
     ]);
   });
 
+  test("prints UpdatePlan explanation and step states", async () => {
+    const stdout: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: () => undefined },
+    );
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-plan-1",
+      name: "UpdatePlan",
+      args: {},
+    });
+
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...call,
+      data: {
+        call,
+        raw: {
+          kind: "update_plan",
+          ok: true,
+          explanation: "Adjusted after inspection.",
+          plan: [
+            { step: "Inspect", status: "completed" },
+            { step: "Implement", status: "in_progress" },
+            { step: "Verify", status: "pending" },
+          ],
+        },
+      },
+    });
+
+    expect(stdout).toEqual([
+      "Adjusted after inspection.\n",
+      "  ✓ Inspect\n",
+      "  → Implement\n",
+      "  • Verify\n",
+    ]);
+  });
+
   test("prints the command and output preview for Bash raw results", async () => {
     const stdout: string[] = [];
     const printer = new StdoutEventPrinter(

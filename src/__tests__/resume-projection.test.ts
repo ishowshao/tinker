@@ -22,6 +22,7 @@ import {
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
   TestModelClient,
+  testModelRequestInput,
   testModelOutput,
 } from "./test-runtime";
 
@@ -67,6 +68,59 @@ class BashProjectionModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: "stored answer after Bash",
+    });
+  }
+}
+
+class PlanProjectionModel extends TestModelClient {
+  private requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "provider-projection-plan",
+            name: "UpdatePlan",
+            args: {
+              explanation: "Starting implementation.",
+              plan: [
+                { step: "Inspect", status: "completed" },
+                { step: "Implement", status: "in_progress" },
+                { step: "Verify", status: "pending" },
+              ],
+            },
+          },
+        ],
+      });
+    }
+    const input = testModelRequestInput(prepared);
+    const planCall = input.messages.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.toolCalls?.some((call) => call.name === "UpdatePlan"),
+    );
+    const planObservation = input.messages.find(
+      (message) => message.role === "tool" && message.name === "UpdatePlan",
+    );
+    if (planCall === undefined || planObservation?.content !== "Plan updated.") {
+      throw new Error("The next model iteration did not receive the plan exchange.");
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "stored answer after plan update",
     });
   }
 }
@@ -189,6 +243,49 @@ describe("session catalog and resume projection", () => {
       await rm(workspace, { recursive: true });
     }
   });
+
+  test("restores UpdatePlan details from canonical tool results", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-plan-projection-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const liveProjection = new TuiProjectionStore({
+      sessionId,
+      modelName: "test-model",
+      workspaceRoot: workspace,
+    });
+    try {
+      const session = await createRuntimeSession(
+        runtimeInput(workspace, sessionId, new PlanProjectionModel(), liveProjection),
+        { loadMcpConfig: async () => undefined },
+      );
+      await session.executeTurn({
+        userMessage: { role: "user", content: "implement the fixture" },
+        signal: new AbortController().signal,
+      });
+      const liveItems = visibleTimelineItems(liveProjection.getSnapshot());
+      await session.dispose({ type: "tui_exit" });
+
+      const resumed = await ResumeProjectionReader.read({
+        workspaceRoot: workspace,
+        sessionId,
+        modelName: "test-model",
+      });
+      const resumedItems = visibleTimelineItems(resumed);
+      expect(resumedItems.map(displayShape)).toEqual(liveItems.map(displayShape));
+      expect(resumedItems.find((item) => item.plan !== undefined)).toMatchObject({
+        text: "UpdatePlan -> 1/3 completed",
+        plan: {
+          explanation: "Starting implementation.",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Implement", status: "in_progress" },
+            { step: "Verify", status: "pending" },
+          ],
+        },
+      });
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
 });
 
 function runtimeInput(
@@ -221,5 +318,6 @@ function displayShape(item: TimelineItem) {
     bash: item.bash,
     diff: item.diff,
     diffTruncated: item.diffTruncated,
+    plan: item.plan,
   };
 }

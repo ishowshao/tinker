@@ -239,6 +239,36 @@ describe("tui components", () => {
     cleanup();
   });
 
+  test("renders plan progress with explanation and step states", () => {
+    const { lastFrame, cleanup } = render(
+      <Timeline
+        items={[
+          {
+            id: "tool-plan",
+            text: "UpdatePlan -> 1/3 completed",
+            status: "ok",
+            plan: {
+              explanation: "Adjusted after inspection.",
+              steps: [
+                { step: "Inspect implementation", status: "completed" },
+                { step: "Add coverage", status: "in_progress" },
+                { step: "Run checks", status: "pending" },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+
+    const frame = lastFrame();
+    expect(frame).toContain("UpdatePlan -> 1/3 completed");
+    expect(frame).toContain("Adjusted after inspection.");
+    expect(frame).toContain("✓ Inspect implementation");
+    expect(frame).toContain("→ Add coverage");
+    expect(frame).toContain("• Run checks");
+    cleanup();
+  });
+
   test("renders footer status", () => {
     const { lastFrame, cleanup } = render(
       <Footer status="done" workedForMs={207_000} />,

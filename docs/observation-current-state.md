@@ -40,6 +40,7 @@ tool call，运行时会按顺序执行并逐个提交 tool message；全部闭�
 | `Edit` | `edit` | 是 | 精确字符串替换 |
 | `Delete` | `delete` | 是 | 删除一个现有普通文件 |
 | `Bash` | `bash` | 是 | 前台、后台或 PTY 执行 shell 命令 |
+| `UpdatePlan` | `update_plan` | 是 | 替换当前任务的完整步骤和进度快照 |
 | `TaskList` | `task_list` | 是 | 列出后台 Bash 任务 |
 | `TaskOutput` | `task_output` | 是 | 查看后台任务当前输出或 PTY screen |
 | `TaskInput` | `task_input` | 是 | 向 PTY task 写入字符并返回当前 screen |
@@ -618,7 +619,20 @@ error code 包括 `RECALL_ARGS_INVALID`、`RECALL_SOURCE_INVALID`、
 `RECALL_SOURCE_NOT_FOUND`、`RECALL_PAGE_INVALID`、`RECALL_SNAPSHOT_INVALID`。
 底层 session 存储失败则是 fatal failure，不走上述普通失败模板。
 
-### 4.15 MCP 工具
+### 4.15 UpdatePlan
+
+成功时，模型只看到简短确认：
+
+```text
+Plan updated.
+```
+
+完整的 `explanation`、步骤文本和 `pending` / `in_progress` / `completed` 状态保留在
+assistant tool call 与 typed raw result 中。每次调用替换整个计划；最多允许一个
+`in_progress` 步骤。raw result 同时供实时 TUI、one-shot 输出和 resume projection
+渲染，失败格式为 `UpdatePlan failed: <error>`。
+
+### 4.16 MCP 工具
 
 MCP 成功时尽量原样把 server 返回的 text 交给模型：
 

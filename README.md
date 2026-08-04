@@ -13,6 +13,7 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
   - `Read` / `Write` / `Edit` — File I/O with content hashing and concurrent-modification protection
   - `Delete` — Delete one existing regular file without directory or symlink support
   - `Bash` — Run foreground, background, and PTY shell commands with per-task working directories
+  - `UpdatePlan` — Track a complete ordered task plan and its progress
   - `TaskList` / `TaskOutput` / `TaskInput` / `TaskStop` — Inspect, interact with, and stop long-running shell tasks
   - `WebSearch` — Search the web via Exa API
   - `WebFetch` — Fetch and refine web page content (local, browser, or Exa backend)

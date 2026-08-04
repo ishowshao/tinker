@@ -458,6 +458,9 @@ describe("system prompt", () => {
     );
     expect(prompt).toContain("Use Bash with tty=true");
     expect(prompt).toContain("include \\n explicitly");
+    expect(prompt).toContain("Use UpdatePlan for non-trivial work");
+    expect(prompt).toContain("Each UpdatePlan call replaces the complete plan");
+    expect(prompt).toContain("keep at most one step in_progress");
     expect(prompt).toContain("use \\u0003 for Ctrl-C");
     expect(prompt).not.toContain("\u0003");
     expect(prompt).toContain(

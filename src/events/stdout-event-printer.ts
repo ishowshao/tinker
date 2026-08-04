@@ -207,6 +207,8 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "task_list":
     case "task_stop":
       return optionalLine(formatTaskResult(call, raw));
+    case "update_plan":
+      return raw.ok ? formatPlanResult(raw) : [];
     case "skill":
       return [formatSkillResult(raw)];
     case "read":
@@ -223,6 +225,21 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     default:
       return assertNever(raw);
   }
+}
+
+function formatPlanResult(
+  raw: Extract<ToolRawResult, { kind: "update_plan"; ok: true }>,
+): string[] {
+  const lines: string[] = [];
+  if (raw.explanation !== undefined) {
+    lines.push(`${raw.explanation}\n`);
+  }
+  for (const step of raw.plan) {
+    const symbol =
+      step.status === "completed" ? "✓" : step.status === "in_progress" ? "→" : "•";
+    lines.push(`  ${symbol} ${step.step}\n`);
+  }
+  return lines;
 }
 
 function formatSkillResult(raw: Extract<ToolRawResult, { kind: "skill" }>): string {

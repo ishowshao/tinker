@@ -11,7 +11,7 @@ import type {
 } from "../model/model-context-profile";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "../tools/bash-task";
 import { countPatchChanges } from "../tools/file-diff";
-import type { DiffHunk, ToolRawResult } from "../tools/types";
+import type { DiffHunk, PlanStep, ToolRawResult } from "../tools/types";
 import {
   defaultTuiProjectionPolicy,
   type TuiProjectionPolicy,
@@ -33,6 +33,10 @@ export type TimelineItem = {
   diffTruncated?: boolean;
   bash?: BashDisplayDetail;
   userPrompt?: UserPromptProjection;
+  plan?: {
+    explanation?: string;
+    steps: readonly PlanStep[];
+  };
 };
 
 export type TuiTurnProjection = {
@@ -747,11 +751,12 @@ export function toolCallStartedProjection(input: {
 export function toolRawResultProjection(
   input: { name: string; args: unknown },
   raw: ToolRawResult,
-): Pick<TimelineItem, "text" | "bash" | "diff" | "diffTruncated"> {
+): Pick<TimelineItem, "text" | "bash" | "diff" | "diffTruncated" | "plan"> {
   return {
     text: toolRawResultSummary(input.name, input.args, raw),
     ...toolRawResultDiff(raw),
     ...toolRawResultBashDetail(raw),
+    ...toolRawResultPlanDetail(raw),
   };
 }
 
@@ -888,6 +893,13 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
           : `${base} -> running ${raw.outputFilePath}`;
       }
       return raw.exitCode === undefined ? base : `${base} -> exit ${raw.exitCode}`;
+    case "update_plan": {
+      if (!raw.ok) {
+        return base;
+      }
+      const completed = raw.plan.filter((step) => step.status === "completed").length;
+      return `${base} -> ${completed}/${raw.plan.length} completed`;
+    }
     case "mcp":
     case "generic":
       return base;
@@ -929,6 +941,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "delete":
     case "glob":
     case "grep":
+    case "update_plan":
     case "task_list":
     case "task_stop":
     case "web_search":
@@ -964,6 +977,7 @@ function toolRawResultDiff(
     case "glob":
     case "grep":
     case "bash":
+    case "update_plan":
     case "task_list":
     case "task_output":
     case "task_input":
@@ -979,6 +993,18 @@ function toolRawResultDiff(
     default:
       return assertNever(raw);
   }
+}
+
+function toolRawResultPlanDetail(raw: ToolRawResult): Pick<TimelineItem, "plan"> {
+  if (raw.kind !== "update_plan" || !raw.ok) {
+    return {};
+  }
+  return {
+    plan: {
+      ...(raw.explanation === undefined ? {} : { explanation: raw.explanation }),
+      steps: raw.plan.map((step) => ({ ...step })),
+    },
+  };
 }
 
 function upsertBackgroundTask(

@@ -4842,6 +4842,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "glob",
       "grep",
       "bash",
+      "update_plan",
       "task_list",
       "task_output",
       "task_input",

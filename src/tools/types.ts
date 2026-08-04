@@ -144,6 +144,24 @@ export type TaskListRawResult = {
   error?: string;
 };
 
+export type PlanStepStatus = "pending" | "in_progress" | "completed";
+
+export type PlanStep = {
+  step: string;
+  status: PlanStepStatus;
+};
+
+export type UpdatePlanRawResult =
+  | {
+      ok: true;
+      explanation?: string;
+      plan: PlanStep[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 export type TaskOutputRawResult = {
   ok: boolean;
   taskId: string;
@@ -355,6 +373,7 @@ export type ToolRawResultByKind = {
   glob: GlobRawResult;
   grep: GrepRawResult;
   bash: BashRawResult;
+  update_plan: UpdatePlanRawResult;
   task_list: TaskListRawResult;
   task_output: TaskOutputRawResult;
   task_input: TaskInputRawResult;

@@ -16,6 +16,7 @@ import type {
   TaskOutputRawResult,
   TaskStopRawResult,
   ToolRawResult,
+  UpdatePlanRawResult,
   WebFetchRawResult,
   WebSearchRawResult,
   WriteFileRawResult,
@@ -48,6 +49,8 @@ export class ObservationBuilder {
         return { content: renderDeleteObservation(input.raw) };
       case "bash":
         return { content: renderBashObservation(input.raw) };
+      case "update_plan":
+        return { content: renderUpdatePlanObservation(input.raw) };
       case "task_list":
         return { content: renderTaskListObservation(input.raw) };
       case "task_output":
@@ -68,6 +71,10 @@ export class ObservationBuilder {
         return assertNever(input.raw);
     }
   }
+}
+
+function renderUpdatePlanObservation(raw: UpdatePlanRawResult): string {
+  return raw.ok ? "Plan updated." : `UpdatePlan failed: ${raw.error}`;
 }
 
 function assertNever(value: never): never {

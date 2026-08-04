@@ -5,6 +5,7 @@ import type { AssistantStreamSectionItem } from "../tui-projection-store";
 import { AssistantMarkdown } from "./assistant-markdown";
 import { BashResultView } from "./bash-result-view";
 import { DiffView } from "./diff-view";
+import { PlanView } from "./plan-view";
 
 export type TimelineProps = {
   items: readonly TimelineItem[];
@@ -42,6 +43,7 @@ export function TimelineRow(props: { item: TimelineItem }) {
         )}
         {renderItemBash(item)}
         {renderItemDiff(item)}
+        {renderItemPlan(item)}
       </Fragment>
     );
   }
@@ -51,6 +53,7 @@ export function TimelineRow(props: { item: TimelineItem }) {
       <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
       {renderItemBash(item)}
       {renderItemDiff(item)}
+      {renderItemPlan(item)}
     </Fragment>
   );
 }
@@ -103,6 +106,10 @@ function renderItemBash(item: TimelineItem) {
   }
 
   return <BashResultView detail={item.bash} />;
+}
+
+function renderItemPlan(item: TimelineItem) {
+  return item.plan === undefined ? null : <PlanView plan={item.plan} />;
 }
 
 function formatTimelineItem(item: TimelineItem): string {
