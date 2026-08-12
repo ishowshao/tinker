@@ -19,17 +19,8 @@ import type {
   ChatCompletionContentPart,
   ChatCompletionTool,
 } from "openai/resources/chat/completions";
-import {
-  parseImageAssetId,
-  validateUserMessage,
-  type ImageAssetId,
-} from "../image/image-types";
-
-const IMAGE_ASSET_URL_MARKER = Symbol("tinker.image-asset-url-marker");
-
-export type ImageAssetUrlMarker = {
-  readonly [IMAGE_ASSET_URL_MARKER]: ImageAssetId;
-};
+import { validateUserMessage, type ImageAssetId } from "../image/image-types";
+import { imageAssetUrlMarker } from "./openai-image-mapping";
 
 type DeepSeekAssistantMessageParam = ChatCompletionAssistantMessageParam & {
   reasoning_content?: string | null;
@@ -106,19 +97,6 @@ export function toOpenAIUserContent(
     ]),
     { type: "text", text: message.content },
   ];
-}
-
-export function imageAssetUrlMarker(assetId: ImageAssetId): ImageAssetUrlMarker {
-  parseImageAssetId(assetId);
-  return Object.freeze({ [IMAGE_ASSET_URL_MARKER]: assetId });
-}
-
-export function parseImageAssetUrlMarker(value: unknown): ImageAssetId | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const assetId = (value as Partial<ImageAssetUrlMarker>)[IMAGE_ASSET_URL_MARKER];
-  return typeof assetId === "string" ? parseImageAssetId(assetId) : undefined;
 }
 
 function requireMaterializedImage(

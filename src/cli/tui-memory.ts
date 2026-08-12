@@ -37,6 +37,7 @@ export async function initializeTuiMemory(input: {
         return createModelClient(
           {
             modelName: profile.model,
+            api: profile.api,
             apiKey: profile.apiKey,
             apiBase: profile.apiBase,
             includeReasoningContent: profile.includeReasoningContent,

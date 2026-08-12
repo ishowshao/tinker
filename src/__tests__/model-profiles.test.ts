@@ -43,6 +43,7 @@ describe("parseModelProfiles", () => {
     expect(deepseek).toMatchObject({
       name: "deepseek",
       model: "deepseek-chat",
+      api: "chat-completions",
       apiBase: "https://api.deepseek.com/v1",
       apiKey: "sk-deepseek",
       contextWindowTokens: 128000,
@@ -58,6 +59,27 @@ describe("parseModelProfiles", () => {
       model: "gpt-4o",
       includeReasoningContent: true,
     });
+  });
+
+  test("selects the Responses adapter explicitly", () => {
+    const json = JSON.parse(VALID_JSON) as {
+      profiles: { deepseek: { api?: string } };
+    };
+    json.profiles.deepseek.api = "responses";
+    const result = parseModelProfiles(JSON.stringify(json), "/test/models.json");
+
+    expect(result.profiles.get("deepseek")?.api).toBe("responses");
+  });
+
+  test("rejects unknown model APIs", () => {
+    const json = JSON.parse(VALID_JSON) as {
+      profiles: { deepseek: { api?: string } };
+    };
+    json.profiles.deepseek.api = "vendor-magic";
+
+    expect(() => parseModelProfiles(JSON.stringify(json), "/test/models.json")).toThrow(
+      '"chat-completions", "responses"',
+    );
   });
 
   test("strictly parses the optional atomic-memory configuration", () => {

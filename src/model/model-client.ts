@@ -29,8 +29,14 @@ export class ModelRequestMediaAggregateError extends Error {
   }
 }
 
+export const MODEL_MESSAGE_PROTOCOL_ADAPTERS = [
+  "openai-chat",
+  "openai-responses",
+  "fake",
+] as const;
+
 export type ModelMessageProtocol = {
-  adapter: "openai-chat" | "fake";
+  adapter: (typeof MODEL_MESSAGE_PROTOCOL_ADAPTERS)[number];
   serializationVersion: string;
 };
 

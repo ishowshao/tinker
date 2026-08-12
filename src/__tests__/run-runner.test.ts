@@ -41,6 +41,7 @@ function testRunnerConfig(input: {
 }): RunnerConfig {
   return {
     ...input,
+    api: "chat-completions",
     apiKey: "test-key",
     apiBase: "https://api.example.test/v1",
     maxIterations: 512,

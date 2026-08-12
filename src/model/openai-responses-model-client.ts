@@ -1,15 +1,15 @@
 import OpenAI from "openai";
 import type {
-  ChatCompletionCreateParamsNonStreaming,
-  ChatCompletionCreateParamsStreaming,
-} from "openai/resources/chat/completions";
+  ResponseCreateParamsNonStreaming,
+  ResponseCreateParamsStreaming,
+} from "openai/resources/responses/responses";
 import type { AssistantMessage } from "../agent/types";
 import {
   IMAGE_INPUT_POLICY,
   IMAGE_INPUT_POLICY_VERSION,
 } from "../image/image-input-policy";
-import type { ModelContextBudget } from "./model-context-profile";
 import type { InputTokenEstimator } from "./input-token-estimator";
+import type { ModelContextBudget } from "./model-context-profile";
 import { ProviderResponseError } from "./model-client";
 import type {
   MaterializedModelRequest,
@@ -22,12 +22,7 @@ import type {
   PreparedModelRequest,
   PreparedPromptSegment,
 } from "./model-client";
-import {
-  fromOpenAIChatCompletion,
-  toOpenAIChatMessages,
-  toOpenAIChatTools,
-} from "./openai-chat-mapping";
-import { OpenAIChatCompletionStreamAccumulator } from "./openai-chat-stream";
+import { MoonshotInputTokenEstimator } from "./moonshot-input-token-estimator";
 import {
   deepFreeze,
   imageUserSegment,
@@ -36,31 +31,37 @@ import {
   sanitizedProviderError,
   segmentKind,
 } from "./openai-model-utils";
-import { MoonshotInputTokenEstimator } from "./moonshot-input-token-estimator";
+import {
+  fromOpenAIResponse,
+  toOpenAIResponsesInput,
+  toOpenAIResponsesItems,
+  toOpenAIResponsesTools,
+} from "./openai-responses-mapping";
+import { OpenAIResponsesStreamAccumulator } from "./openai-responses-stream";
+import { responsesPayloadForChatTokenEstimator } from "./openai-responses-token-estimator";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
-const OPENAI_CHAT_SERIALIZATION_VERSION = "openai-chat-v2";
-const OPENAI_CHAT_TIMEOUT_MS = 30 * 60 * 1_000;
+const OPENAI_RESPONSES_SERIALIZATION_VERSION = "openai-responses-v1";
+const OPENAI_RESPONSES_TIMEOUT_MS = 30 * 60 * 1_000;
 
-export class OpenAIChatModelClient implements ModelClient {
+export class OpenAIResponsesModelClient implements ModelClient {
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
-    adapter: "openai-chat",
-    serializationVersion: OPENAI_CHAT_SERIALIZATION_VERSION,
+    adapter: "openai-responses",
+    serializationVersion: OPENAI_RESPONSES_SERIALIZATION_VERSION,
   });
   readonly inputTokenEstimator?: InputTokenEstimator;
+  readonly inputModalities: readonly ("text" | "image")[];
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
   private readonly materializedRequests = new WeakSet<object>();
   private readonly provider: string;
   private readonly stream: boolean;
-  readonly inputModalities: readonly ("text" | "image")[];
 
   constructor(
     private readonly options: {
       apiKey: string;
       contextBudget: ModelContextBudget;
       baseURL?: string;
-      includeReasoningContent?: boolean;
       inputModalities?: readonly ("text" | "image")[];
       tokenEstimator?: {
         kind: "moonshot-estimate-token-count-v1";
@@ -77,22 +78,20 @@ export class OpenAIChatModelClient implements ModelClient {
       fetch?: typeof fetch;
     },
   ) {
-    this.provider = options.providerName ?? "openai-compatible";
+    this.provider = options.providerName ?? "responses-compatible";
     this.stream = options.stream ?? true;
     this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
     const supportsImages = this.inputModalities.includes("image");
     if (!this.inputModalities.includes("text")) {
-      throw new Error('OpenAI chat input modalities must include "text".');
+      throw new Error('OpenAI Responses input modalities must include "text".');
     }
     if (supportsImages && options.tokenEstimator === undefined) {
-      throw new Error("Image-capable OpenAI chat requires a token estimator.");
+      throw new Error("Image-capable OpenAI Responses requires a token estimator.");
     }
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
-      timeout: options.timeoutMs ?? OPENAI_CHAT_TIMEOUT_MS,
-      // Retries are orchestrated by the agent loop so they surface as
-      // cancellable, observable runtime events instead of hidden SDK waits.
+      timeout: options.timeoutMs ?? OPENAI_RESPONSES_TIMEOUT_MS,
       maxRetries: 0,
       fetch: options.fetch,
     });
@@ -103,26 +102,25 @@ export class OpenAIChatModelClient implements ModelClient {
         model: options.tokenEstimator.model,
         timeoutMs: options.tokenEstimator.timeoutMs,
         fetch: options.fetch,
+        payloadMapper: responsesPayloadForChatTokenEstimator,
       });
     }
   }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {
-    const messages = toOpenAIChatMessages(input.messages, {
-      includeReasoningContent: this.options.includeReasoningContent,
-    });
-    const tools = input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined;
+    const itemsByMessage = input.messages.map((message) =>
+      toOpenAIResponsesItems(message),
+    );
+    const items = toOpenAIResponsesInput(input.messages);
+    const tools =
+      input.tools.length > 0 ? toOpenAIResponsesTools(input.tools) : undefined;
     const payload = deepFreeze({
       model: this.options.model,
-      messages,
+      input: items,
       ...(tools === undefined ? {} : { tools, tool_choice: "auto" as const }),
-      max_completion_tokens: this.options.contextBudget.requestMaxOutputTokens,
-      ...(this.stream
-        ? {
-            stream: true as const,
-            stream_options: { include_usage: true as const },
-          }
-        : {}),
+      max_output_tokens: this.options.contextBudget.requestMaxOutputTokens,
+      store: false as const,
+      ...(this.stream ? { stream: true as const } : {}),
     });
     const toolSegments = (tools ?? []).map(
       (tool): PreparedPromptSegment => ({
@@ -136,7 +134,7 @@ export class OpenAIChatModelClient implements ModelClient {
           ? imageUserSegment(message)
           : {
               kind: segmentKind(message.role),
-              normalizedText: stableJsonStringify(messages[index]),
+              normalizedText: stableJsonStringify(itemsByMessage[index]),
             },
     );
     const mediaOccurrenceCount = messageSegments.reduce(
@@ -150,10 +148,9 @@ export class OpenAIChatModelClient implements ModelClient {
         endpoint: normalizedEndpointPolicy(this.options.baseURL),
         model: this.options.model,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
-        includeReasoningContent: this.options.includeReasoningContent === true,
         stream: this.stream,
         inputModalities: this.inputModalities,
-        requestPolicy: { toolChoice: "auto" },
+        requestPolicy: { store: false, toolChoice: "auto" },
         imagePolicy: {
           version: IMAGE_INPUT_POLICY_VERSION,
           ...IMAGE_INPUT_POLICY,
@@ -202,12 +199,10 @@ export class OpenAIChatModelClient implements ModelClient {
     if (prepared.mediaOccurrenceCount > 0 && !this.materializedRequests.has(prepared)) {
       throw new Error("Image request must be materialized before provider dispatch.");
     }
-
     const response = this.stream
       ? await this.requestStreaming(prepared, options)
       : await this.requestNonStreaming(prepared, options.signal);
-
-    return fromOpenAIChatCompletion(response, {
+    return fromOpenAIResponse(response, {
       identity: options.identity,
       provider: this.provider,
       model: this.options.model,
@@ -217,18 +212,18 @@ export class OpenAIChatModelClient implements ModelClient {
   private async requestStreaming(
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
-  ): Promise<Record<string, unknown>> {
-    const accumulator = new OpenAIChatCompletionStreamAccumulator({
+  ): Promise<unknown> {
+    const accumulator = new OpenAIResponsesStreamAccumulator({
       provider: this.provider,
       model: this.options.model,
     });
     try {
-      const stream = await this.client.chat.completions.create(
-        prepared.payload as ChatCompletionCreateParamsStreaming,
+      const stream = await this.client.responses.create(
+        prepared.payload as ResponseCreateParamsStreaming,
         { signal: options.signal },
       );
-      for await (const chunk of stream) {
-        const content = accumulator.push(chunk);
+      for await (const event of stream) {
+        const content = accumulator.push(event);
         if (content !== undefined && content !== "") {
           options.onTextDelta?.(content);
         }
@@ -245,10 +240,10 @@ export class OpenAIChatModelClient implements ModelClient {
   private async requestNonStreaming(
     prepared: PreparedModelRequest,
     signal: AbortSignal,
-  ) {
+  ): Promise<unknown> {
     try {
-      return await this.client.chat.completions.create(
-        prepared.payload as ChatCompletionCreateParamsNonStreaming,
+      return await this.client.responses.create(
+        prepared.payload as ResponseCreateParamsNonStreaming,
         { signal },
       );
     } catch (error) {
@@ -257,16 +252,14 @@ export class OpenAIChatModelClient implements ModelClient {
   }
 
   private assistantReplaySegments(message: AssistantMessage): PreparedPromptSegment[] {
-    const [mapped] = toOpenAIChatMessages([message], {
-      includeReasoningContent: this.options.includeReasoningContent,
-    });
-    if (mapped === undefined) {
-      throw new Error("OpenAI assistant replay mapping produced no message.");
+    const items = toOpenAIResponsesItems(message);
+    if (items.length === 0) {
+      throw new Error("OpenAI Responses assistant replay mapping produced no items.");
     }
     return [
       {
         kind: "assistant",
-        normalizedText: stableJsonStringify(mapped),
+        normalizedText: stableJsonStringify(items),
       },
     ];
   }
@@ -277,7 +270,7 @@ export class OpenAIChatModelClient implements ModelClient {
       !this.materializedRequests.has(prepared)
     ) {
       throw new Error(
-        `OpenAI chat request was not prepared by this client (provider=${this.provider}, model=${this.options.model}).`,
+        `OpenAI Responses request was not prepared by this client (provider=${this.provider}, model=${this.options.model}).`,
       );
     }
     if (
@@ -287,10 +280,8 @@ export class OpenAIChatModelClient implements ModelClient {
         this.options.contextBudget.requestMaxOutputTokens
     ) {
       throw new Error(
-        "Prepared OpenAI chat request configuration does not match client.",
+        "Prepared OpenAI Responses request configuration does not match client.",
       );
     }
   }
 }
-
-export { exactJsonBodyBytes } from "./openai-model-utils";

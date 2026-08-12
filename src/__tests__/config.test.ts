@@ -7,7 +7,7 @@ import {
   deriveRunnerConfig,
   resolvePublicConfig,
 } from "../cli/config";
-import { RUNTIME_INSTRUCTIONS } from "../cli/runner-dependencies";
+import { RUNTIME_INSTRUCTIONS, createModelClient } from "../cli/runner-dependencies";
 import type { SessionId } from "../ids/runtime-id";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
@@ -78,6 +78,9 @@ describe("public config contract", () => {
       MODEL_PROFILE_FIELDS.find((field) => field.name === "stream")?.defaultValue,
     ).toBe(true);
     expect(
+      MODEL_PROFILE_FIELDS.find((field) => field.name === "api")?.defaultValue,
+    ).toBe("chat-completions");
+    expect(
       MEMORY_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
     ).toEqual(["embedding"]);
   });
@@ -108,6 +111,7 @@ describe("public environment parser", () => {
       workspaceRoot: path.join(TEST_CWD, "workspace"),
       maxIterations: 512,
       modelName: "test-model",
+      api: "chat-completions",
       includeReasoningContent: false,
       stream: true,
       tooling: DEFAULT_PUBLIC_TOOLING_CONFIG,
@@ -123,6 +127,18 @@ describe("public environment parser", () => {
       triggerTokens: 157_286,
       triggerRatio: 0.8,
     });
+  });
+
+  test("selects and validates the env-mode model API", () => {
+    const environment = parsePublicEnvironment(
+      envMode({ TINKER_API: "responses" }),
+      TEST_CWD,
+    );
+    expect(environment.mode === "env" && environment.api).toBe("responses");
+
+    expect(() =>
+      parsePublicEnvironment(envMode({ TINKER_API: "vendor-magic" }), TEST_CWD),
+    ).toThrow('"chat-completions", "responses"');
   });
 
   test("accepts every documented boolean alias case-insensitively", () => {
@@ -260,6 +276,35 @@ describe("public environment parser", () => {
       webFetchRefineThreshold: 7,
       ripgrepPath: "/diagnostic/rg",
     });
+  });
+});
+
+describe("model client composition", () => {
+  test("selects the configured OpenAI API adapter", () => {
+    const responsesConfig = deriveRunnerConfig(
+      createResolvedPublicConfig(
+        parsePublicEnvironment(
+          envMode({
+            TINKER_API: "responses",
+            TINKER_INCLUDE_REASONING_CONTENT: "true",
+          }),
+          TEST_CWD,
+        ),
+      ),
+      { sessionId: TEST_SESSION_ID },
+    );
+    const chatConfig = deriveRunnerConfig(
+      createResolvedPublicConfig(parsePublicEnvironment(envMode(), TEST_CWD)),
+      { sessionId: TEST_SESSION_ID },
+    );
+
+    expect(createModelClient(responsesConfig, {}).messageProtocol.adapter).toBe(
+      "openai-responses",
+    );
+    expect(responsesConfig.includeReasoningContent).toBe(false);
+    expect(createModelClient(chatConfig, {}).messageProtocol.adapter).toBe(
+      "openai-chat",
+    );
   });
 });
 

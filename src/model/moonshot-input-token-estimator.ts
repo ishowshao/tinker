@@ -14,6 +14,7 @@ export class MoonshotInputTokenEstimator implements InputTokenEstimator {
       model: string;
       timeoutMs: number;
       fetch?: typeof fetch;
+      payloadMapper?: (payload: unknown) => unknown;
     },
   ) {
     const base = new URL(
@@ -39,7 +40,10 @@ export class MoonshotInputTokenEstimator implements InputTokenEstimator {
     request: MaterializedModelRequest,
     options: { signal: AbortSignal },
   ): Promise<InputTokenEstimate> {
-    const chatPayload = requireRecord(request.payload, "materialized chat payload");
+    const chatPayload = requireRecord(
+      this.options.payloadMapper?.(request.payload) ?? request.payload,
+      "materialized chat payload",
+    );
     if (!Array.isArray(chatPayload.messages)) {
       throw new Error("Materialized request has no token estimator messages.");
     }

@@ -3,7 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runtimeIdFactory } from "../ids/runtime-id";
+import { MODEL_MESSAGE_PROTOCOL_ADAPTERS } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import {
   createSessionCompatibilityContract,
   SessionStore,
@@ -17,6 +19,65 @@ import {
 } from "./test-runtime";
 
 describe("runtime compatibility boundary", () => {
+  test("accepts every model-layer message protocol adapter", () => {
+    for (const adapter of MODEL_MESSAGE_PROTOCOL_ADAPTERS) {
+      expect(
+        createSessionCompatibilityContract({
+          modelName: "test-model",
+          includeReasoningContent: false,
+          contextProfile: TEST_CONTEXT_PROFILE,
+          messageProtocol: {
+            adapter,
+            serializationVersion: "test-protocol-v1",
+          },
+        }).messageProtocol.adapter,
+      ).toBe(adapter);
+    }
+  });
+
+  test("round-trips the Responses message protocol through session storage", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-responses-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const client = new OpenAIResponsesModelClient({
+      apiKey: "test-key",
+      model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
+      fetch: stubFetch(),
+    });
+    let store = await SessionStore.createNew({
+      workspaceRoot: workspace,
+      sessionId,
+      modelName: "test-model",
+      systemPrompt: "system",
+      idFactory: runtimeIdFactory,
+    });
+    try {
+      finalizeTestSessionStore(store, {
+        systemPrompt: "system",
+        modelName: "test-model",
+        profileName: "responses",
+        modelClient: client,
+      });
+      await store.close("tui_exit");
+      store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
+
+      expect(() =>
+        store.assertSessionCompatibility(
+          createSessionCompatibilityContract({
+            modelName: "test-model",
+            profileName: "responses",
+            includeReasoningContent: false,
+            contextProfile: TEST_CONTEXT_PROFILE,
+            messageProtocol: client.messageProtocol,
+          }),
+        ),
+      ).not.toThrow();
+    } finally {
+      await store.close("tui_exit").catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("stores only history-protocol compatibility fields and compares them exactly", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-contract-"));
     const sessionId = runtimeIdFactory.createSessionId();

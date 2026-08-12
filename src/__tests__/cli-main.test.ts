@@ -389,6 +389,7 @@ function runnerConfig(): RunnerConfig {
     sessionId: "main-session" as SessionId,
     workspaceRoot: "/workspace",
     modelName: "test-model",
+    api: "chat-completions",
     apiKey: "test-key",
     apiBase: "https://api.example.test/v1",
     maxIterations: 8,

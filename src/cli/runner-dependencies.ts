@@ -2,6 +2,7 @@ import { renderRecallRetirementContract } from "../context/recall-retirement-con
 import { FakeModelClient } from "../model/fake-model-client";
 import type { ModelClient } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import type { RunnerConfig } from "./config";
 
@@ -53,6 +54,7 @@ export function createModelClient(
   config: Pick<
     RunnerConfig,
     | "modelName"
+    | "api"
     | "includeReasoningContent"
     | "stream"
     | "contextBudget"
@@ -79,10 +81,9 @@ export function createModelClient(
     });
   }
 
-  return new OpenAIChatModelClient({
+  const common = {
     apiKey: config.apiKey,
     baseURL: config.apiBase,
-    includeReasoningContent: config.includeReasoningContent,
     model: config.modelName,
     stream: config.stream,
     contextBudget: config.contextBudget,
@@ -90,6 +91,13 @@ export function createModelClient(
     ...(config.tokenEstimator === undefined
       ? {}
       : { tokenEstimator: config.tokenEstimator }),
+  };
+  if (config.api === "responses") {
+    return new OpenAIResponsesModelClient(common);
+  }
+  return new OpenAIChatModelClient({
+    ...common,
+    includeReasoningContent: config.includeReasoningContent,
   });
 }
 

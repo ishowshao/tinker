@@ -17,11 +17,11 @@ import {
 import type { MaterializedModelRequest } from "../model/model-client";
 import type { InputTokenEstimator } from "../model/input-token-estimator";
 import { MoonshotInputTokenEstimator } from "../model/moonshot-input-token-estimator";
+import { toOpenAIUserContent } from "../model/openai-chat-mapping";
 import {
   imageAssetUrlMarker,
   parseImageAssetUrlMarker,
-  toOpenAIUserContent,
-} from "../model/openai-chat-mapping";
+} from "../model/openai-image-mapping";
 import {
   exactJsonBodyBytes,
   OpenAIChatModelClient,

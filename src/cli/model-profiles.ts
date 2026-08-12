@@ -3,6 +3,7 @@ import {
   createModelContextProfile,
   type ModelContextProfile,
 } from "../model/model-context-profile";
+import { parseModelApi, type ModelApi } from "../model/model-api";
 import {
   MEMORY_CONFIG_FIELDS,
   MEMORY_EMBEDDING_FIELDS,
@@ -17,6 +18,7 @@ import type { MemoryEmbeddingConfig } from "../memory/contracts";
 export type ModelProfile = {
   readonly name: string;
   readonly model: string;
+  readonly api: ModelApi;
   readonly apiBase: string;
   readonly apiKey: string;
   readonly contextWindowTokens: number;
@@ -249,6 +251,7 @@ function parseProfile(
   );
 
   const model = parseProfileString(value, "model", where);
+  const api = parseProfileApi(value, where);
   const apiBase = parseProfileString(value, "apiBase", where);
   const apiKey = parseProfileString(value, "apiKey", where);
 
@@ -292,6 +295,7 @@ function parseProfile(
   return Object.freeze({
     name: profileName,
     model,
+    api,
     apiBase,
     apiKey,
     contextWindowTokens,
@@ -469,6 +473,12 @@ function parseProfileString(
     throw new Error(`Model profile field ${name} has an invalid contract kind.`);
   }
   return requireString(value[name], `${where}: ${JSON.stringify(name)}`);
+}
+
+function parseProfileApi(value: Record<string, unknown>, where: string): ModelApi {
+  const field = modelProfileField("api");
+  const configured = value.api ?? field.defaultValue;
+  return parseModelApi(configured, `${where}: "api"`);
 }
 
 function parseProfilePositiveInteger(

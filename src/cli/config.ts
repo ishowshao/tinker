@@ -6,6 +6,7 @@ import {
   type ModelContextBudget,
   type ModelContextProfile,
 } from "../model/model-context-profile";
+import type { ModelApi } from "../model/model-api";
 import {
   loadModelProfiles,
   persistDefaultProfile,
@@ -27,6 +28,7 @@ export type RunnerConfig = {
   readonly sessionId: SessionId;
   readonly workspaceRoot: string;
   readonly modelName: string;
+  readonly api: ModelApi;
   readonly apiKey: string;
   readonly apiBase: string;
   readonly maxIterations: number;
@@ -166,10 +168,12 @@ function runnerConfigTemplateFromProfile(
   return Object.freeze({
     workspaceRoot: environment.workspaceRoot,
     modelName: profile.model,
+    api: profile.api,
     apiKey: profile.apiKey,
     apiBase: profile.apiBase,
     maxIterations: environment.maxIterations,
-    includeReasoningContent: profile.includeReasoningContent,
+    includeReasoningContent:
+      profile.api === "chat-completions" && profile.includeReasoningContent,
     stream: profile.stream,
     contextProfile,
     contextBudget: deriveModelContextBudget(contextProfile),
@@ -193,10 +197,12 @@ function runnerConfigTemplateFromEnvironment(
   return Object.freeze({
     workspaceRoot: environment.workspaceRoot,
     modelName: environment.modelName,
+    api: environment.api,
     apiKey: environment.apiKey,
     apiBase: environment.apiBase,
     maxIterations: environment.maxIterations,
-    includeReasoningContent: environment.includeReasoningContent,
+    includeReasoningContent:
+      environment.api === "chat-completions" && environment.includeReasoningContent,
     stream: environment.stream,
     contextProfile,
     contextBudget: deriveModelContextBudget(contextProfile),

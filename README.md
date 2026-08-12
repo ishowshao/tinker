@@ -140,12 +140,13 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `TINKER_MODELS` | Model | All modes | No | Non-empty string | — | No | Optional model profiles JSON path. Relative paths resolve from the process cwd. |
 | `TINKER_MODEL` | Model | Env mode | Env mode | Non-empty string | — | No | Model name used when model profiles are not configured. |
-| `TINKER_BASE_URL` | Model | Env mode | Env mode | Non-empty string | — | No | OpenAI-compatible Chat Completions API base URL. |
+| `TINKER_API` | Model | Env mode | No | Non-empty string | `"chat-completions"` | No | Model API adapter: "chat-completions" or "responses". |
+| `TINKER_BASE_URL` | Model | Env mode | Env mode | Non-empty string | — | No | OpenAI-compatible API root URL; do not append /chat/completions or /responses. |
 | `TINKER_API_KEY` | Model | Env mode | Env mode | Non-empty string | — | Yes | API credential for the configured model endpoint. |
 | `TINKER_CONTEXT_WINDOW_TOKENS` | Model | Env mode | Env mode | Positive integer | — | No | Model context-window size in tokens. |
 | `TINKER_MAX_SUPPORTED_OUTPUT_TOKENS` | Model | Env mode | Env mode | Positive integer | — | No | Maximum output-token count supported by the model; must not exceed the context window. |
-| `TINKER_INCLUDE_REASONING_CONTENT` | Model | Env mode | No | Boolean | `false` | No | Include provider reasoning content in the model response mapping. |
-| `TINKER_STREAM` | Model | Env mode | No | Boolean | `true` | No | Use streaming Chat Completions transport. |
+| `TINKER_INCLUDE_REASONING_CONTENT` | Model | Env mode | No | Boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
+| `TINKER_STREAM` | Model | Env mode | No | Boolean | `true` | No | Use streaming transport for the selected model API. |
 | `TINKER_WEBFETCH_REFINE_MODEL` | Model | Env mode | No | Non-empty string | — | No | Optional WebFetch refiner model; currently must match TINKER_MODEL. |
 | `TINKER_WORKSPACE` | Workspace | All modes | No | Non-empty string | Process cwd | No | Workspace path. Relative paths resolve from the process cwd. |
 | `TINKER_MAX_ITERATIONS` | Workspace | All modes | No | Positive integer | `512` | No | Maximum agent-loop iterations per turn. |
@@ -180,12 +181,13 @@ Profile fields:
 | Field | Required | Type / constraint | Default | Secret | Description |
 | --- | --- | --- | --- | --- | --- |
 | `model` | Yes | Non-empty string | — | No | Provider model name. |
-| `apiBase` | Yes | Non-empty string | — | No | OpenAI-compatible API base URL. |
+| `api` | No | Non-empty string | `"chat-completions"` | No | Model API adapter: "chat-completions" or "responses". |
+| `apiBase` | Yes | Non-empty string | — | No | OpenAI-compatible API root URL; do not append /chat/completions or /responses. |
 | `apiKey` | Yes | Non-empty string | — | Yes | API credential for this profile. |
 | `contextWindowTokens` | Yes | Positive integer | — | No | Model context-window size in tokens. |
 | `maxSupportedOutputTokens` | Yes | Positive integer | — | No | Maximum output-token count supported by the model; must not exceed contextWindowTokens. |
-| `includeReasoningContent` | No | JSON boolean | `false` | No | Include provider reasoning content in response mapping. |
-| `stream` | No | JSON boolean | `true` | No | Use streaming Chat Completions transport. |
+| `includeReasoningContent` | No | JSON boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
+| `stream` | No | JSON boolean | `true` | No | Use streaming transport for the selected model API. |
 | `inputModalities` | No | Normalized modality array | `["text"]` | No | Accepted model input modalities; normalizes to ["text"] or ["text", "image"]. |
 | `tokenEstimator` | With image | Object | — | Yes | Independent token estimator required for image profiles. |
 
@@ -306,6 +308,12 @@ Atomic-memory profile example:
 }
 ```
 <!-- END GENERATED: MODEL PROFILE FIELDS -->
+
+Set `api` to `"responses"` to use the standard Responses API. Keep `apiBase`
+at the API root—such as `https://api.openai.com/v1`—because Tinker appends the
+`/responses` route. Responses requests use the stateless common subset
+(`store: false` with complete input history), so the same adapter works with
+OpenAI and compatible providers that do not implement stored response chaining.
 
 You can also select profiles explicitly for the TUI or one-shot command:
 

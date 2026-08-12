@@ -28,7 +28,10 @@ import {
   createModelContextProfile,
   type ModelContextProfile,
 } from "../model/model-context-profile";
-import type { ModelMessageProtocol } from "../model/model-client";
+import {
+  MODEL_MESSAGE_PROTOCOL_ADAPTERS,
+  type ModelMessageProtocol,
+} from "../model/model-client";
 import type { InputTokenEstimatorCompatibility } from "../model/input-token-estimator";
 import type { ToolDefinition, ToolRawResult } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
@@ -3608,7 +3611,7 @@ export function createSessionCompatibilityContract(input: {
     throw new Error("Session compatibility reasoning replay flag must be boolean.");
   }
   if (
-    !["openai-chat", "fake"].includes(input.messageProtocol.adapter) ||
+    !MODEL_MESSAGE_PROTOCOL_ADAPTERS.includes(input.messageProtocol.adapter) ||
     input.messageProtocol.serializationVersion.trim() === ""
   ) {
     throw new Error("Session compatibility message protocol is invalid.");
@@ -5473,7 +5476,7 @@ function decodeSessionCompatibilityContract(
   const protocol: ModelMessageProtocol = Object.freeze({
     adapter: enumFromSql(
       messageProtocol.adapter,
-      ["openai-chat", "fake"] as const,
+      MODEL_MESSAGE_PROTOCOL_ADAPTERS,
       "compatibility message adapter",
     ),
     serializationVersion: stringFromSql(

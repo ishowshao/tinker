@@ -1,5 +1,6 @@
 import path from "node:path";
 import { rgPath } from "@vscode/ripgrep";
+import { parseModelApi, type ModelApi } from "../model/model-api";
 
 export type PublicConfigValueKind = "non-empty-string" | "positive-integer" | "boolean";
 
@@ -40,13 +41,24 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     description: "Model name used when model profiles are not configured.",
   }),
   publicField({
+    name: "TINKER_API",
+    valueKind: "non-empty-string",
+    requiredIn: "never",
+    appliesIn: "env-mode",
+    defaultValue: "chat-completions",
+    secret: false,
+    section: "model",
+    description: 'Model API adapter: "chat-completions" or "responses".',
+  }),
+  publicField({
     name: "TINKER_BASE_URL",
     valueKind: "non-empty-string",
     requiredIn: "env-mode",
     appliesIn: "env-mode",
     secret: false,
     section: "model",
-    description: "OpenAI-compatible Chat Completions API base URL.",
+    description:
+      "OpenAI-compatible API root URL; do not append /chat/completions or /responses.",
   }),
   publicField({
     name: "TINKER_API_KEY",
@@ -84,7 +96,8 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     defaultValue: false,
     secret: false,
     section: "model",
-    description: "Include provider reasoning content in the model response mapping.",
+    description:
+      "Replay provider reasoning_content in Chat Completions history; ignored by Responses.",
   }),
   publicField({
     name: "TINKER_STREAM",
@@ -94,7 +107,7 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     defaultValue: true,
     secret: false,
     section: "model",
-    description: "Use streaming Chat Completions transport.",
+    description: "Use streaming transport for the selected model API.",
   }),
   publicField({
     name: "TINKER_WEBFETCH_REFINE_MODEL",
@@ -249,11 +262,20 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     description: "Provider model name.",
   }),
   profileField({
+    name: "api",
+    valueKind: "non-empty-string",
+    required: false,
+    defaultValue: "chat-completions",
+    secret: false,
+    description: 'Model API adapter: "chat-completions" or "responses".',
+  }),
+  profileField({
     name: "apiBase",
     valueKind: "non-empty-string",
     required: true,
     secret: false,
-    description: "OpenAI-compatible API base URL.",
+    description:
+      "OpenAI-compatible API root URL; do not append /chat/completions or /responses.",
   }),
   profileField({
     name: "apiKey",
@@ -283,7 +305,8 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     required: false,
     defaultValue: false,
     secret: false,
-    description: "Include provider reasoning content in response mapping.",
+    description:
+      "Replay provider reasoning_content in Chat Completions history; ignored by Responses.",
   }),
   profileField({
     name: "stream",
@@ -291,7 +314,7 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     required: false,
     defaultValue: true,
     secret: false,
-    description: "Use streaming Chat Completions transport.",
+    description: "Use streaming transport for the selected model API.",
   }),
   profileField({
     name: "inputModalities",
@@ -502,6 +525,7 @@ export type ParsedPublicEnvironment =
   | (ParsedCommonEnvironment & {
       readonly mode: "env";
       readonly modelName: string;
+      readonly api: ModelApi;
       readonly apiBase: string;
       readonly apiKey: string;
       readonly contextWindowTokens: number;
@@ -615,6 +639,7 @@ export function parsePublicEnvironment(
     ...common,
     mode,
     modelName,
+    api: parseModelApi(requiredStringValue(values, "TINKER_API"), "TINKER_API"),
     apiBase: requiredStringValue(values, "TINKER_BASE_URL"),
     apiKey: requiredStringValue(values, "TINKER_API_KEY"),
     contextWindowTokens: requiredNumberValue(values, "TINKER_CONTEXT_WINDOW_TOKENS"),
