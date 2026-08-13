@@ -361,4 +361,227 @@ low, high, max
 
 这也是本文优先推荐 Responses API 的主要原因。
 
+## Kimi
+
+本节仅覆盖 Kimi 当前最新模型：
+
+- `kimi-k3`
+
+Kimi 官方公开 API 当前主要提供 OpenAI-compatible Chat Completions，并在 API 端点列表中
+列出 `/v1/chat/completions`，未提供 `/v1/responses`。因此 K3 在 Tinker 中应使用
+`chat-completions` adapter。
+
+### 推荐配置
+
+Kimi K3 原生支持文本和图片输入。图片 profile 在 Tinker 中必须同时配置 Moonshot 官方
+Token 估算接口：
+
+```json
+{
+  "default": "kimi-k3",
+  "profiles": {
+    "kimi-k3": {
+      "model": "kimi-k3",
+      "api": "chat-completions",
+      "apiBase": "https://api.moonshot.cn/v1",
+      "apiKey": "your-moonshot-api-key",
+      "contextWindowTokens": 1048576,
+      "maxSupportedOutputTokens": 1048576,
+      "reasoning": {
+        "supportedEfforts": ["low", "high", "max"],
+        "defaultEffort": "max"
+      },
+      "includeReasoningContent": true,
+      "stream": true,
+      "inputModalities": ["text", "image"],
+      "tokenEstimator": {
+        "kind": "moonshot-estimate-token-count-v1",
+        "model": "kimi-k3",
+        "apiBase": "https://api.moonshot.cn/v1",
+        "apiKey": "your-moonshot-api-key",
+        "timeoutMs": 30000,
+        "maxRetries": 0
+      }
+    }
+  }
+}
+```
+
+启动时指向该文件：
+
+```bash
+export TINKER_MODELS=.tinker/models.json
+tinker
+```
+
+请保护配置文件权限。Tinker 当前不会在 `models.json` 的字符串值内自动展开
+`$MOONSHOT_API_KEY` 一类环境变量；主模型和 Token estimator 的 `apiKey` 都必须填写实际
+凭据。
+
+如果不需要图片输入，可以把：
+
+```json
+"inputModalities": ["text", "image"]
+```
+
+改为：
+
+```json
+"inputModalities": ["text"]
+```
+
+并删除整个 `tokenEstimator` 对象。
+
+### API adapter
+
+K3 应配置为：
+
+```json
+"api": "chat-completions"
+```
+
+Kimi 官方 API 概述当前公开的模型推理端点是：
+
+```text
+POST /v1/chat/completions
+```
+
+官方端点列表未列出 `/v1/responses`，K3 文档和示例也都使用 Chat Completions。因此不要
+为 K3 profile 配置 Tinker 的 `responses` adapter。
+
+Tinker 的 Chat Completions adapter 会发送 K3 官方要求的顶层字段：
+
+```json
+{
+  "reasoning_effort": "max"
+}
+```
+
+并在流式请求中发送 `stream_options.include_usage: true`，以取得完整 usage。
+
+### Reasoning effort
+
+Kimi K3 始终启用推理，并且 Preserved Thinking 始终开启。它不支持关闭 Thinking，也不
+应传入旧模型使用的 `thinking` 参数。
+
+官方 `reasoning_effort` 只有三档：
+
+```text
+low, high, max
+```
+
+默认值是 `max`，没有额外的兼容映射。因此 Tinker 应直接配置：
+
+```json
+{
+  "reasoning": {
+    "supportedEfforts": ["low", "high", "max"],
+    "defaultEffort": "max"
+  }
+}
+```
+
+Tinker 会把 `/reasoning` 当前选择原样发送到 Chat Completions 请求顶层：
+
+```text
+/reasoning low  -> reasoning_effort: "low"
+/reasoning high -> reasoning_effort: "high"
+/reasoning max  -> reasoning_effort: "max"
+```
+
+Kimi 官方说明，切换 reasoning effort 会破坏前缀缓存命中。因此可以使用
+`/reasoning` 切换档位，但为了保持缓存稳定，宜在会话开始前确定所需档位。
+
+### Preserved Thinking 与 `includeReasoningContent`
+
+K3 的多轮对话和工具调用必须把 API 返回的完整 assistant message 原样加入后续
+`messages`，其中包括：
+
+- `content`
+- `reasoning_content`
+- 存在工具调用时的 `tool_calls`
+
+因此 K3 profile 必须配置：
+
+```json
+"includeReasoningContent": true
+```
+
+Tinker 会解析 Kimi 返回的 `reasoning_content`，并在后续 Chat Completions 历史中回传。
+如果省略该字段，它在 Tinker profile 中默认是 `false`，不符合 K3 Preserved Thinking 的
+官方上下文要求。
+
+### 上下文与最大输出
+
+Kimi K3 的上下文窗口为 1M tokens，在 Tinker 中按 `1024 * 1024` 配置：
+
+```json
+"contextWindowTokens": 1048576
+```
+
+Kimi 官方 Chat Completions schema 说明：
+
+- `max_completion_tokens` 默认是 `131072`；
+- 最大可设置为 `1048576`；
+- input tokens 与 `max_completion_tokens` 之和不能超过 1M context window。
+
+因此模型能力字段配置为：
+
+```json
+"maxSupportedOutputTokens": 1048576
+```
+
+Tinker 当前产品级单次输出预算上限也是 `128 * 1024 = 131072` tokens，所以实际发送给
+K3 的 `max_completion_tokens` 为 `131072`，与 K3 官方默认值一致。这里仍填写 provider
+支持的最大值 `1048576`，而不是 Tinker 当前的请求上限。
+
+### 输入模态与 Token estimator
+
+K3 原生支持视觉理解。Tinker 当前 profile 只表达 `text` 和 `image`，因此配置为：
+
+```json
+"inputModalities": ["text", "image"]
+```
+
+Kimi K3 还支持视频，但 Tinker 当前没有 `video` input modality，不能在 profile 中声明或
+通过 Tinker 附加视频。
+
+Tinker 的图片输入是 base64 data URL，属于 Kimi 官方支持的图片传输方式。Tinker 接受
+PNG、JPEG 和静态 WebP；这是 Kimi 支持格式的安全子集。公网图片 URL 不在 Tinker 图片
+附件流程内，而 Kimi 官方也要求视觉输入使用 base64 或其文件服务，不支持直接传公网
+图片 URL。
+
+图片会动态消耗 tokens，所以 Tinker 要求 image profile 配置独立 estimator：
+
+```json
+{
+  "tokenEstimator": {
+    "kind": "moonshot-estimate-token-count-v1",
+    "model": "kimi-k3",
+    "apiBase": "https://api.moonshot.cn/v1",
+    "apiKey": "your-moonshot-api-key",
+    "timeoutMs": 30000,
+    "maxRetries": 0
+  }
+}
+```
+
+它会调用 Moonshot 官方端点：
+
+```text
+POST /v1/tokenizers/estimate-token-count
+```
+
+并读取响应中的 `data.total_tokens`。估算请求使用同一个 `kimi-k3` 模型名，并携带实际
+messages 与 tools，从而覆盖图片在内的完整请求输入。
+
+### 其他与 Tinker 相关的官方约束
+
+- K3 支持 streaming；本文配置使用 `"stream": true`。
+- K3 的 `temperature=1.0`、`top_p=0.95`、`n=1`、
+  `presence_penalty=0`、`frequency_penalty=0` 是固定值。Tinker 不发送这些字段，符合官方
+  建议。
+- K3 支持 `tool_choice` 的 `auto`、`none` 和 `required`。Tinker 的普通 Agent 请求使用
+  `auto`，属于官方支持范围。
+- K3 的 reasoning tokens 和最终 `content` 共同受 `max_completion_tokens` 限制。
 
