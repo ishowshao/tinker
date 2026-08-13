@@ -488,7 +488,6 @@ src/__tests__/config.test.ts
 可选修改：
 
 ```text
-docs/agent-loop-mvp-tech-plan.md
 docs/bash-tool-design.md
 ```
 

@@ -7,7 +7,6 @@
 - 实施日期：2026-07-11
 - 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F1
 - 相关设计：
-  - [`runtime-architecture-optimization.md`](runtime-architecture-optimization.md)
   - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
   - [`turn-cancellation-design.md`](turn-cancellation-design.md)
   - [`infinite-context-technical-design-a.md`](infinite-context-technical-design-a.md)

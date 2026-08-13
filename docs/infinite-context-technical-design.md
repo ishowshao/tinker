@@ -5,12 +5,8 @@
 - 状态：目标架构，按 roadmap 分阶段实施
 - 首版日期：2026-07-11
 - 方向修订：2026-07-16，引入 Recall-first 冷前缀退休，checkpoint 改为证据驱动的可选后备
-- 讨论基础：
-  - [`context-research.md`](context-research.md)
-  - [`context-research-commentary.md`](context-research-commentary.md)
 - 相关既有设计：
   - [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
-  - [`runtime-architecture-optimization.md`](runtime-architecture-optimization.md)
   - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
   - [`session-turn-iteration-identity-design.md`](session-turn-iteration-identity-design.md)
 

@@ -12,7 +12,7 @@ structured checkpoint、跨 session 记忆、多 agent 或云同步。
 
 ## 阶段一：公共契约与发布收口
 
-独立实施方案：[`product-hardening-phase-one-design.md`](product-hardening-phase-one-design.md)。
+该阶段已完成；当前公共契约以 CLI 与配置源码、README 和发布验证脚本为事实来源。
 
 ### 目标
 
