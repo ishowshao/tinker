@@ -585,3 +585,242 @@ messages 与 tools，从而覆盖图片在内的完整请求输入。
   `auto`，属于官方支持范围。
 - K3 的 reasoning tokens 和最终 `content` 共同受 `max_completion_tokens` 限制。
 
+## OpenAI
+
+本节使用 OpenAI 当前 GPT-5.6 系列作为配置示例：
+
+- `gpt-5.6`：指向 GPT-5.6 Sol 的稳定别名
+- `gpt-5.6-terra`
+- `gpt-5.6-luna`
+
+三款模型都支持 Chat Completions 和 Responses API。Tinker 推荐使用 Responses API。
+
+### 推荐配置
+
+```json
+{
+  "default": "openai-gpt-5.6",
+  "profiles": {
+    "openai-gpt-5.6": {
+      "model": "gpt-5.6",
+      "api": "responses",
+      "apiBase": "https://api.openai.com/v1",
+      "apiKey": "your-openai-api-key",
+      "contextWindowTokens": 1050000,
+      "maxSupportedOutputTokens": 128000,
+      "reasoning": {
+        "supportedEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      },
+      "stream": true,
+      "inputModalities": ["text"]
+    },
+    "openai-gpt-5.6-terra": {
+      "model": "gpt-5.6-terra",
+      "api": "responses",
+      "apiBase": "https://api.openai.com/v1",
+      "apiKey": "your-openai-api-key",
+      "contextWindowTokens": 1050000,
+      "maxSupportedOutputTokens": 128000,
+      "reasoning": {
+        "supportedEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      },
+      "stream": true,
+      "inputModalities": ["text"]
+    },
+    "openai-gpt-5.6-luna": {
+      "model": "gpt-5.6-luna",
+      "api": "responses",
+      "apiBase": "https://api.openai.com/v1",
+      "apiKey": "your-openai-api-key",
+      "contextWindowTokens": 1050000,
+      "maxSupportedOutputTokens": 128000,
+      "reasoning": {
+        "supportedEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      },
+      "stream": true,
+      "inputModalities": ["text"]
+    }
+  }
+}
+```
+
+启动时指向配置文件：
+
+```bash
+export TINKER_MODELS=.tinker/models.json
+tinker
+```
+
+请保护配置文件权限。Tinker 当前不会在 `models.json` 的字符串值内自动展开
+`$OPENAI_API_KEY`，`apiKey` 必须填写实际凭据。
+
+### API adapter
+
+推荐配置：
+
+```json
+"api": "responses"
+```
+
+Tinker 会通过 OpenAI SDK 调用 `/v1/responses`，发送完整输入历史并使用 `store: false`。
+这不依赖 OpenAI 服务端保存 response，也不需要 `previous_response_id`。
+
+如果使用只支持 Chat Completions 的其他 OpenAI 模型，也可以把 adapter 改为：
+
+```json
+"api": "chat-completions"
+```
+
+### Reasoning effort
+
+GPT-5.6 Sol、Terra 和 Luna 使用相同的 reasoning effort 枚举：
+
+```text
+none, low, medium, high, xhigh, max
+```
+
+默认值均为 `medium`，没有 provider 映射。因此推荐原样配置全部六档：
+
+```json
+{
+  "reasoning": {
+    "supportedEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+    "defaultEffort": "medium"
+  }
+}
+```
+
+Tinker 的 `/reasoning` 会直接选择 Responses 请求中的 `reasoning.effort`。如果改用其他
+OpenAI 模型，应按该模型实际支持的枚举和默认值调整这两个字段，不能直接沿用 GPT-5.6
+配置。
+
+### 上下文与最大输出
+
+GPT-5.6 Sol、Terra 和 Luna 的配置均为：
+
+```json
+"contextWindowTokens": 1050000,
+"maxSupportedOutputTokens": 128000
+```
+
+这里使用 OpenAI 给出的准确十进制 token 数值，不把 `1.05M` 或 `128K` 按 1024 重新
+换算。Tinker 当前产品级输出上限是 131072 tokens，因此对这些模型实际发送的
+`max_output_tokens` 是模型上限 128000。
+
+### 输入模态
+
+本文推荐配置使用：
+
+```json
+"inputModalities": ["text"]
+```
+
+GPT-5.6 系列支持图片输入，Tinker 的 Chat Completions 和 Responses adapter 也可以发送
+用户附加的本地图片。不过 Tinker 的 image profile 当前必须配置独立
+`tokenEstimator`，现有 estimator 是 Moonshot 协议，不是 OpenAI 官方 Token 估算接口。
+因此纯 OpenAI profile 建议先保持 text-only，避免为了输入预算估算把完整请求额外发送给
+另一个 provider。
+
+Tinker 当前的工具结果以文本 Observation 返回。即使工具自身产生截图或其他媒体，也不会
+作为多模态 tool result 发送给模型；这不影响普通文本工具调用。
+
+## Azure OpenAI
+
+Azure OpenAI v1 API 可以直接使用 Tinker 当前的 OpenAI SDK adapter。推荐使用支持
+Responses API 的 Azure OpenAI 模型部署和 API key 鉴权。
+
+### 推荐配置
+
+下面假设 Azure 中已部署 GPT-5.6，并将 deployment 命名为 `my-gpt-5-6`：
+
+```json
+{
+  "default": "azure-openai-gpt-5.6",
+  "profiles": {
+    "azure-openai-gpt-5.6": {
+      "model": "my-gpt-5-6",
+      "api": "responses",
+      "apiBase": "https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/",
+      "apiKey": "your-azure-openai-api-key",
+      "contextWindowTokens": 1050000,
+      "maxSupportedOutputTokens": 128000,
+      "reasoning": {
+        "supportedEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
+        "defaultEffort": "medium"
+      },
+      "stream": true,
+      "inputModalities": ["text"]
+    }
+  }
+}
+```
+
+也可以使用 Foundry resource endpoint：
+
+```text
+https://YOUR-RESOURCE-NAME.services.ai.azure.com/openai/v1/
+```
+
+### `model` 使用 deployment name
+
+Azure OpenAI profile 的 `model` 必须填写 Azure 中的模型 deployment name，不一定等于
+底层 OpenAI model ID。例如部署名称是 `my-gpt-5-6`，就应配置：
+
+```json
+"model": "my-gpt-5-6"
+```
+
+不要因为底层模型是 GPT-5.6 就自动改成 `"gpt-5.6"`。只有 deployment 本身也使用这个
+名称时，两者才相同。
+
+### `apiBase` 使用 Azure v1 endpoint
+
+Azure OpenAI Responses profile 应使用：
+
+```text
+https://YOUR-RESOURCE-NAME.openai.azure.com/openai/v1/
+```
+
+不要添加 `/responses`，Tinker 的 SDK adapter 会自动添加 endpoint route。v1 inference
+endpoint 也不需要在 URL 中配置旧式日期版本的 `api-version`。
+
+### 模型能力配置
+
+`contextWindowTokens`、`maxSupportedOutputTokens`、`supportedEfforts` 和
+`defaultEffort` 应按 Azure deployment 对应的底层模型填写。上面的示例部署 GPT-5.6，
+所以与 OpenAI 官方 GPT-5.6 profile 使用相同的能力值。
+
+Azure 的模型版本、region 和 deployment 必须支持 Responses API。如果所部署模型只支持
+Chat Completions，可以将 profile 的 adapter 改为：
+
+```json
+"api": "chat-completions"
+```
+
+### 鉴权
+
+本文配置使用 Azure OpenAI API key：
+
+```json
+"apiKey": "your-azure-openai-api-key"
+```
+
+Azure v1 endpoint 可以由标准 OpenAI SDK 使用该凭据。Tinker 的 `models.json` 当前要求
+`apiKey` 是静态字符串，因此本文不配置 Microsoft Entra ID token provider 或 managed
+identity。
+
+### 输入模态
+
+Azure OpenAI 示例同样使用：
+
+```json
+"inputModalities": ["text"]
+```
+
+如果 deployment 支持图片，Tinker transport 可以发送用户图片，但 image profile 仍需要
+Tinker 支持的独立 `tokenEstimator`。在没有与 Azure deployment 对应的 estimator 配置
+前，建议保持 text-only。
+
