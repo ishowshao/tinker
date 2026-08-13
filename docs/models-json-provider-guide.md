@@ -322,65 +322,6 @@ DeepSeek 官方 Responses API 目前不支持实际图片或文件输入；`inpu
 这是 Tinker 的 Chat Completions 兼容选项，Responses adapter 会忽略它。使用本文推荐
 配置时可以直接省略。
 
-### Flash 与 Pro 如何选择
-
-| Profile             | 官方定位                                                    | 建议用途                                 |
-| ------------------- | ----------------------------------------------------------- | ---------------------------------------- |
-| `deepseek-v4-flash` | 更小、更快、更经济；简单 Agent 任务接近 Pro                 | 高频日常操作、简单代码任务、成本敏感场景 |
-| `deepseek-v4-pro`   | 更强的世界知识、复杂推理、数学、STEM、编程与 Agentic Coding | 默认主力模型、复杂仓库任务、困难推理     |
-
-如果只配置一个模型：
-
-- 更看重复杂任务质量：选择 Pro；
-- 更看重速度和成本：选择 Flash。
-
-两者的 `supportedEfforts` 和 `defaultEffort` 无需区别配置。
-
-### 不推荐的配置
-
-#### 把 `xhigh` 当作最高档
-
-```json
-{
-  "supportedEfforts": ["low", "high", "xhigh"],
-  "defaultEffort": "xhigh"
-}
-```
-
-该配置会把默认请求映射到 DeepSeek 的 `high`，而不是 `max`。如果希望默认使用最高档，
-应明确配置：
-
-```json
-{
-  "supportedEfforts": ["low", "high", "max"],
-  "defaultEffort": "max"
-}
-```
-
-#### 省略 `reasoning`
-
-省略整个 `reasoning` 对象时，Tinker 不发送 effort 参数，并禁用该 profile 的
-`/reasoning` 命令。DeepSeek 会使用自己的默认行为，即 Thinking 开启、effort 为
-`high`，但 Tinker 用户无法在 session 中切换档位。
-
-#### 使用 Chat Completions 却期待 `none` 自动关闭 Thinking
-
-Tinker 的 Chat Completions adapter 只会发送：
-
-```json
-{ "reasoning_effort": "none" }
-```
-
-而 DeepSeek Chat Completions 官方使用独立的专有字段：
-
-```json
-{ "thinking": { "type": "disabled" } }
-```
-
-当前 `models.json` 没有 provider-specific `extra_body` 配置用于注入该字段。因此，如果
-需要在 Tinker 中通过 `/reasoning none` 可靠关闭 DeepSeek Thinking，应使用本文推荐的
-Responses adapter。
-
 ### 如果必须使用 Chat Completions
 
 DeepSeek Chat Completions 的官方原生 reasoning effort 为：
