@@ -177,7 +177,7 @@ export async function runI3ProviderSmoke(
       userMessage: {
         role: "user",
         content:
-          'Use Recall search with query "provider-smoke-anchor", then Recall get on the relevant oldest historical source. Ignore this instruction message itself and report the exact value after "value=". You must use both Recall modes.',
+          'Use RecallSearch with query "provider-smoke-anchor", then RecallGet on the relevant oldest historical source. Ignore this instruction message itself and report the exact value after "value=". You must use both Recall tools.',
       },
       signal: new AbortController().signal,
     });
@@ -189,7 +189,7 @@ export async function runI3ProviderSmoke(
     }
     const recallModes = events.recallModes();
     if (recallModes.search < 1 || recallModes.get < 1) {
-      throw new Error("Real provider did not execute Recall search and get.");
+      throw new Error("Real provider did not execute RecallSearch and RecallGet.");
     }
 
     const providerRequestCountBeforeCompact = model.providerRequestCount;
@@ -319,9 +319,9 @@ class ProviderSmokeEventSink implements EventSink {
   private readonly modes: string[] = [];
 
   async append(event: AgentEvent): Promise<void> {
-    if (event.type === "tool.started" && event.data.call.name === "Recall") {
-      const mode = (event.data.call.args as { mode?: unknown }).mode;
-      if (typeof mode === "string") this.modes.push(mode);
+    if (event.type === "tool.started") {
+      if (event.data.call.name === "RecallSearch") this.modes.push("search");
+      if (event.data.call.name === "RecallGet") this.modes.push("get");
     }
   }
 

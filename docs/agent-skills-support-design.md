@@ -730,7 +730,7 @@ name=pdf-processing
 source=ctx://message/<message-id>
 activation=The full historical instructions were promoted out of this tool observation.
 current=Consult the current active_agent_skills system section; absence means inactive.
-historical=Use Recall get with source to recover the original activation observation.
+historical=Use RecallGet with source to recover the original activation observation.
 ```
 
 未 dispatched 或 resume 时已经不可用的 activation 生成 rejected override：
@@ -741,7 +741,7 @@ name=pdf-processing
 source=ctx://message/<message-id>
 status=not_dispatched
 current=This skill was not added to the active system surface.
-historical=Use Recall get with source to recover the original activation observation.
+historical=Use RecallGet with source to recover the original activation observation.
 ```
 
 receipt 使用现有 `ctx://message/<id>` source 和 original content hash。所有 processed activation

@@ -38,7 +38,7 @@ RuntimeSession
 
 - 在中点释放并 resume 同一个 session；
 - 执行一个受控取消 turn，并验证后续 turn 仍可继续；
-- 最后通过 Recall search -> get 找回第一轮的稳定 marker；
+- 最后通过 RecallSearch -> get 找回第一轮的稳定 marker；
 - 定期记录 RSS、heap、数据库大小、message 数和 TUI 可见项数量；
 - 记录 active request 构建、provider serialization、TUI projection 和总耗时。
 
@@ -56,7 +56,7 @@ contract，再批量插入确定性 canonical messages。它不再手工构造 `
 - SQLite 与 FTS 空间增量；
 - schema、SQLite integrity 和 Recall index 打开校验时间；
 - 稀疏 trigram、密集 trigram 与单字符 substring 查询的 p50/p95；
-- 20,000-byte `Recall get` 的采样内存；
+- 20,000-byte `RecallGet` 的采样内存；
 - Recall index rebuild + verify 时间。
 
 ## 四、本地历史 session 的使用边界
@@ -94,7 +94,7 @@ G0 完成后必须满足：
 
 - 50 个普通 workload turns，加 1 个取消 turn 和 1 个 Recall turn，共落库 52 turns、
   208 messages、156 frames 和 52 tool results。
-- 中点 resume、取消后继续、Recall search -> get 均通过；schema 为 v4。
+- 中点 resume、取消后继续、RecallSearch -> get 均通过；schema 为 v4。
 - 最终 measured context 为 194,579 tokens；最大 request 为 207 messages、218 prompt
   segments。
 - request build 共 158 次，p50/p95 为 1.33/9.44ms，最大 11.24ms；model prepare

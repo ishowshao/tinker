@@ -22,15 +22,14 @@ import {
   type ToolExecutor,
 } from "./types";
 
-export const RECALL_TOOL_DEFINITION: ToolDefinition = Object.freeze({
-  name: "Recall",
+export const RECALL_SEARCH_TOOL_DEFINITION: ToolDefinition = Object.freeze({
+  name: "RecallSearch",
   description:
-    "Search or retrieve immutable model-visible history from the current session. Search matches literal substrings: use a short distinctive anchor such as a path, symbol, project, command fragment, or error text, not a whole natural-language question. Results are historical snapshots and may differ from the current workspace. Use search to find a source, get to retrieve exact content, and Read/Grep for current files.",
+    "Search immutable model-visible history from the current session. Matches literal substrings: use a short distinctive anchor such as a path, symbol, project, command fragment, or error text, not a whole natural-language question. Results are historical snapshots and may differ from the current workspace. Use RecallGet with a returned source to retrieve exact content, and Read/Grep for current files.",
   parameters: {
     type: "object",
     additionalProperties: false,
     properties: {
-      mode: { type: "string", enum: ["search", "get"] },
       query: { type: "string", maxLength: 1024 },
       roles: {
         type: "array",
@@ -50,6 +49,19 @@ export const RECALL_TOOL_DEFINITION: ToolDefinition = Object.freeze({
       limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
       offset: { type: "integer", minimum: 0, default: 0 },
       snapshot_through_ordinal: { type: "integer", minimum: 1 },
+    },
+    required: ["query"],
+  },
+});
+
+export const RECALL_GET_TOOL_DEFINITION: ToolDefinition = Object.freeze({
+  name: "RecallGet",
+  description:
+    "Retrieve exact immutable model-visible historical content from the current session using a ctx://message/<UUID> source returned by RecallSearch. Results are historical snapshots and may differ from the current workspace; use Read/Grep for current files.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
       source: { type: "string" },
       byte_offset: { type: "integer", minimum: 0, default: 0 },
       byte_limit: {
@@ -59,9 +71,14 @@ export const RECALL_TOOL_DEFINITION: ToolDefinition = Object.freeze({
         default: 12_000,
       },
     },
-    required: ["mode"],
+    required: ["source"],
   },
 });
+
+export const RECALL_TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze([
+  RECALL_SEARCH_TOOL_DEFINITION,
+  RECALL_GET_TOOL_DEFINITION,
+]);
 
 type RecallSearchArgs = {
   mode: "search";
@@ -93,18 +110,32 @@ type ParseResult =
       error: string;
     };
 
-export function createRecallToolExecutor(options: {
+export function createRecallSearchToolExecutor(options: {
   historyReader: SessionHistoryReader;
 }): ToolExecutor {
+  return createRecallToolExecutor("search", options);
+}
+
+export function createRecallGetToolExecutor(options: {
+  historyReader: SessionHistoryReader;
+}): ToolExecutor {
+  return createRecallToolExecutor("get", options);
+}
+
+function createRecallToolExecutor(
+  mode: "search" | "get",
+  options: { historyReader: SessionHistoryReader },
+): ToolExecutor {
   return defineToolExecutor("recall", {
-    definition: RECALL_TOOL_DEFINITION,
+    definition:
+      mode === "search" ? RECALL_SEARCH_TOOL_DEFINITION : RECALL_GET_TOOL_DEFINITION,
     async execute(
       args,
       _call,
       context: ToolExecutionContext,
     ): Promise<RecallRawResult> {
       throwIfTurnCancelled(context.signal);
-      const parsed = parseRecallArgs(args);
+      const parsed = mode === "search" ? parseSearchArgs(args) : parseGetArgs(args);
       if (!parsed.ok) {
         return recallFailure(parsed.mode, parsed.errorCode, parsed.error);
       }
@@ -167,20 +198,11 @@ export function createRecallToolExecutor(options: {
   });
 }
 
-function parseRecallArgs(args: unknown): ParseResult {
+function parseSearchArgs(args: unknown): ParseResult {
   if (!isRecord(args)) {
-    return argsFailure("search", "Recall arguments must be an object.");
+    return argsFailure("search", "RecallSearch arguments must be an object.");
   }
-  const mode = args.mode === "get" ? "get" : "search";
-  if (args.mode !== "search" && args.mode !== "get") {
-    return argsFailure(mode, 'Recall.mode must be "search" or "get".');
-  }
-  return args.mode === "search" ? parseSearchArgs(args) : parseGetArgs(args);
-}
-
-function parseSearchArgs(args: Record<string, unknown>): ParseResult {
   const allowed = new Set([
-    "mode",
     "query",
     "roles",
     "tool_names",
@@ -194,7 +216,7 @@ function parseSearchArgs(args: Record<string, unknown>): ParseResult {
   if (unexpected !== undefined) {
     return argsFailure(
       "search",
-      `Recall search received unexpected field: ${unexpected}.`,
+      `RecallSearch received unexpected field: ${unexpected}.`,
     );
   }
   if (
@@ -204,7 +226,7 @@ function parseSearchArgs(args: Record<string, unknown>): ParseResult {
   ) {
     return argsFailure(
       "search",
-      "Recall search query must be non-empty and at most 1024 UTF-8 bytes.",
+      "RecallSearch query must be non-empty and at most 1024 UTF-8 bytes.",
     );
   }
 
@@ -223,15 +245,15 @@ function parseSearchArgs(args: Record<string, unknown>): ParseResult {
   ) {
     return argsFailure(
       "search",
-      "Recall.tool_names requires roles to be omitted or contain only tool.",
+      "RecallSearch.tool_names requires roles to be omitted or contain only tool.",
     );
   }
 
-  const turnFrom = optionalInteger(args.turn_from, "Recall.turn_from", 1);
+  const turnFrom = optionalInteger(args.turn_from, "RecallSearch.turn_from", 1);
   if (!turnFrom.ok) {
     return argsFailure("search", turnFrom.error);
   }
-  const turnTo = optionalInteger(args.turn_to, "Recall.turn_to", 1);
+  const turnTo = optionalInteger(args.turn_to, "RecallSearch.turn_to", 1);
   if (!turnTo.ok) {
     return argsFailure("search", turnTo.error);
   }
@@ -240,19 +262,19 @@ function parseSearchArgs(args: Record<string, unknown>): ParseResult {
     turnTo.value !== undefined &&
     turnFrom.value > turnTo.value
   ) {
-    return argsFailure("search", "Recall.turn_from must not exceed turn_to.");
+    return argsFailure("search", "RecallSearch.turn_from must not exceed turn_to.");
   }
-  const limit = optionalInteger(args.limit, "Recall.limit", 1, 20);
+  const limit = optionalInteger(args.limit, "RecallSearch.limit", 1, 20);
   if (!limit.ok) {
     return argsFailure("search", limit.error);
   }
-  const offset = optionalInteger(args.offset, "Recall.offset", 0);
+  const offset = optionalInteger(args.offset, "RecallSearch.offset", 0);
   if (!offset.ok) {
     return argsFailure("search", offset.error);
   }
   const snapshot = optionalInteger(
     args.snapshot_through_ordinal,
-    "Recall.snapshot_through_ordinal",
+    "RecallSearch.snapshot_through_ordinal",
     1,
   );
   if (!snapshot.ok) {
@@ -277,14 +299,17 @@ function parseSearchArgs(args: Record<string, unknown>): ParseResult {
   };
 }
 
-function parseGetArgs(args: Record<string, unknown>): ParseResult {
-  const allowed = new Set(["mode", "source", "byte_offset", "byte_limit"]);
+function parseGetArgs(args: unknown): ParseResult {
+  if (!isRecord(args)) {
+    return argsFailure("get", "RecallGet arguments must be an object.");
+  }
+  const allowed = new Set(["source", "byte_offset", "byte_limit"]);
   const unexpected = Object.keys(args).find((key) => !allowed.has(key));
   if (unexpected !== undefined) {
-    return argsFailure("get", `Recall get received unexpected field: ${unexpected}.`);
+    return argsFailure("get", `RecallGet received unexpected field: ${unexpected}.`);
   }
   if (typeof args.source !== "string") {
-    return sourceFailure("Recall.source must be a string.");
+    return sourceFailure("RecallGet.source must be a string.");
   }
   let source: MessageSource;
   try {
@@ -296,11 +321,16 @@ function parseGetArgs(args: Record<string, unknown>): ParseResult {
     }
     throw error;
   }
-  const byteOffset = optionalInteger(args.byte_offset, "Recall.byte_offset", 0);
+  const byteOffset = optionalInteger(args.byte_offset, "RecallGet.byte_offset", 0);
   if (!byteOffset.ok) {
     return argsFailure("get", byteOffset.error);
   }
-  const byteLimit = optionalInteger(args.byte_limit, "Recall.byte_limit", 256, 20_000);
+  const byteLimit = optionalInteger(
+    args.byte_limit,
+    "RecallGet.byte_limit",
+    256,
+    20_000,
+  );
   if (!byteLimit.ok) {
     return argsFailure("get", byteLimit.error);
   }
@@ -332,7 +362,7 @@ function parseRoles(
     return {
       ok: false,
       error:
-        "Recall.roles must be a non-empty, unique list of user, assistant, or tool.",
+        "RecallSearch.roles must be a non-empty, unique list of user, assistant, or tool.",
     };
   }
   return { ok: true, value: value as RecallRole[] };
@@ -353,7 +383,8 @@ function parseToolNames(
   ) {
     return {
       ok: false,
-      error: "Recall.tool_names must contain 1 to 16 unique, non-empty tool names.",
+      error:
+        "RecallSearch.tool_names must contain 1 to 16 unique, non-empty tool names.",
     };
   }
   return { ok: true, value: value as string[] };

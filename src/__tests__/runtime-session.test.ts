@@ -310,8 +310,8 @@ class FatalRecallModel extends TestModelClient {
         {
           ...runtimeSession.createToolCall(iteration, 1),
           providerToolCallId: "provider-recall",
-          name: "Recall",
-          args: { mode: "search", query: "history" },
+          name: "RecallSearch",
+          args: { query: "history" },
         },
         {
           ...runtimeSession.createToolCall(iteration, 2),
@@ -730,7 +730,7 @@ describe("RuntimeSession lifecycle", () => {
               );
             },
             get() {
-              throw new Error("Unexpected Recall get.");
+              throw new Error("Unexpected RecallGet.");
             },
           };
           const tooling = createDefaultTooling({
@@ -754,7 +754,7 @@ describe("RuntimeSession lifecycle", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(FatalAgentTurnError);
-    expect(executedTools).toEqual(["Recall"]);
+    expect(executedTools).toEqual(["RecallSearch"]);
     expect(() =>
       session.executeTurn({
         userMessage: { role: "user", content: "after fault" },

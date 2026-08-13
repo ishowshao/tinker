@@ -83,6 +83,9 @@ class HistoricalReadModel extends TestModelClient {
       throw new Error("Expected runtime identity.");
     }
     const input = testModelRequestInput(prepared);
+    expect(
+      input.tools.map((tool) => tool.name).filter((name) => name.startsWith("Recall")),
+    ).toEqual(["RecallSearch", "RecallGet"]);
     const lastUserIndex = lastMessageIndex(input.messages, "user");
     const user = input.messages[lastUserIndex];
     if (user?.role !== "user") {
@@ -98,8 +101,7 @@ class HistoricalReadModel extends TestModelClient {
 
     if (user.content.startsWith("resume")) {
       if (latestTool === undefined) {
-        return this.toolCall(prepared, options, "Recall", {
-          mode: "get",
+        return this.toolCall(prepared, options, "RecallGet", {
           source: requireString(this.source, "historical source"),
         });
       }
@@ -130,8 +132,7 @@ class HistoricalReadModel extends TestModelClient {
           new_string: "version-two-marker",
         });
       case 2:
-        return this.toolCall(prepared, options, "Recall", {
-          mode: "search",
+        return this.toolCall(prepared, options, "RecallSearch", {
           query: "version-one-marker",
           roles: ["tool"],
           tool_names: ["Read"],
@@ -139,8 +140,7 @@ class HistoricalReadModel extends TestModelClient {
       case 3:
         this.source = metadata(latestTool!.content, "source");
         this.originalHash = metadata(latestTool!.content, "contentSha256");
-        return this.toolCall(prepared, options, "Recall", {
-          mode: "get",
+        return this.toolCall(prepared, options, "RecallGet", {
           source: this.source,
         });
       case 4:
@@ -149,7 +149,7 @@ class HistoricalReadModel extends TestModelClient {
           requireString(this.originalObservation, "original observation"),
         );
         if (metadata(latestTool!.content, "contentSha256") !== this.originalHash) {
-          throw new Error("Recall get hash changed from the search hit hash.");
+          throw new Error("RecallGet hash changed from the search hit hash.");
         }
         return this.toolCall(prepared, options, "Read", {
           file_path: "version.ts",
@@ -231,7 +231,7 @@ function expectHistoricalGet(content: string, originalObservation: string): void
     !content.startsWith("Recall retrieved historical session data.\nhistorical=true") ||
     !content.includes(originalObservation)
   ) {
-    throw new Error("Recall get did not return the exact historical observation.");
+    throw new Error("RecallGet did not return the exact historical observation.");
   }
 }
 

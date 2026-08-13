@@ -18,7 +18,7 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { deriveModelContextBudget } from "../model/model-context-profile";
-import { RECALL_TOOL_DEFINITION } from "../tools/recall";
+import { RECALL_TOOL_DEFINITIONS } from "../tools/recall";
 import {
   collectingEventSink,
   prepareTestModelRequest,
@@ -382,14 +382,14 @@ describe("I4 automatic context maintenance", () => {
   test("enables both modes only for the qualified Recall contract and tool", () => {
     const prepared = prepareTestModelRequest({
       messages: [{ role: "system", content: "system" }],
-      tools: [RECALL_TOOL_DEFINITION],
+      tools: [...RECALL_TOOL_DEFINITIONS],
     });
     const surface = createContextSurface({
       surfaceId: runtimeIdFactory.createContextSurfaceId(),
       sessionId: runtimeIdFactory.createSessionId(),
       systemPrompt: "system",
       recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-      toolDefinitions: [RECALL_TOOL_DEFINITION],
+      toolDefinitions: [...RECALL_TOOL_DEFINITIONS],
       prepared,
       createdAt: "2026-07-18T00:00:00.000Z",
     });
@@ -419,19 +419,19 @@ describe("I4 automatic context maintenance", () => {
     });
 
     const changedRecall = {
-      ...RECALL_TOOL_DEFINITION,
-      description: `${RECALL_TOOL_DEFINITION.description} changed`,
+      ...RECALL_TOOL_DEFINITIONS[0],
+      description: `${RECALL_TOOL_DEFINITIONS[0].description} changed`,
     };
     const changedPrepared = prepareTestModelRequest({
       messages: [{ role: "system", content: "system" }],
-      tools: [changedRecall],
+      tools: [changedRecall, RECALL_TOOL_DEFINITIONS[1]],
     });
     const changedSurface = createContextSurface({
       surfaceId: runtimeIdFactory.createContextSurfaceId(),
       sessionId: runtimeIdFactory.createSessionId(),
       systemPrompt: "system",
       recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-      toolDefinitions: [changedRecall],
+      toolDefinitions: [changedRecall, RECALL_TOOL_DEFINITIONS[1]],
       prepared: changedPrepared,
       createdAt: "2026-07-18T00:00:00.000Z",
     });

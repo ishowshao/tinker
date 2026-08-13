@@ -212,7 +212,7 @@ describe("ContextSwapRenderer", () => {
           `contentSha256=${message.contentSha256}`,
           `tool=${stableJsonStringify(rendererCase.name)}`,
           `metadata=${stableJsonStringify(rendererCase.metadata)}`,
-          "historical=Use Recall get with source to recover the original observation.",
+          "historical=Use RecallGet with source to recover the original observation.",
           `current=${rendererCase.current}`,
         ].join("\n"),
       );
@@ -645,7 +645,7 @@ function planningFixture() {
       observation: "a".repeat(8_191),
     },
     {
-      name: "Recall",
+      name: "RecallSearch",
       raw: {
         kind: "recall",
         ok: false,

@@ -442,7 +442,9 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       WHERE role IN ('user', 'assistant', 'tool')
         AND content IS NOT NULL
         AND length(content) > 0
-        AND NOT (role = 'tool' AND name = 'Recall')`,
+        AND NOT (
+          role = 'tool' AND name IN ('Recall', 'RecallSearch', 'RecallGet')
+        )`,
   },
   {
     type: "table",
@@ -462,7 +464,9 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       WHEN NEW.role IN ('user', 'assistant', 'tool')
         AND NEW.content IS NOT NULL
         AND length(NEW.content) > 0
-        AND NOT (NEW.role = 'tool' AND NEW.name = 'Recall')
+        AND NOT (
+          NEW.role = 'tool' AND NEW.name IN ('Recall', 'RecallSearch', 'RecallGet')
+        )
       BEGIN
         INSERT INTO message_fts(rowid, content)
         VALUES (NEW.rowid, NEW.content);
@@ -849,6 +853,67 @@ export const SESSION_SCHEMA_V9_FINGERPRINT = sha256(
     },
   }),
 );
+
+const PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT =
+  "27c61d806778689f88211b6eaa6dd9dc3a730dfd4133c862006140576b2ecd10";
+
+export function upgradeRecallIndexContract(database: Database): boolean {
+  const applicationId = Number(singlePragmaValue(database, "PRAGMA application_id"));
+  const userVersion = Number(singlePragmaValue(database, "PRAGMA user_version"));
+  if (
+    applicationId !== SESSION_APPLICATION_ID ||
+    userVersion !== SESSION_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  const meta = database
+    .query(
+      `SELECT schema_version, schema_fingerprint
+       FROM session_meta WHERE singleton = 1`,
+    )
+    .get() as { schema_version: unknown; schema_fingerprint: unknown } | null;
+  if (
+    meta === null ||
+    Number(meta.schema_version) !== SESSION_SCHEMA_VERSION ||
+    meta.schema_fingerprint !== PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT
+  ) {
+    return false;
+  }
+  const recallView = schemaDefinitions.find(
+    (definition) =>
+      definition.type === "view" && definition.name === "recall_documents",
+  );
+  const recallTrigger = schemaDefinitions.find(
+    (definition) =>
+      definition.type === "trigger" && definition.name === "messages_recall_index",
+  );
+  const metadataTrigger = schemaDefinitions.find(
+    (definition) =>
+      definition.type === "trigger" &&
+      definition.name === "session_meta_monotonic_update",
+  );
+  if (
+    recallView === undefined ||
+    recallTrigger === undefined ||
+    metadataTrigger === undefined
+  ) {
+    throw new Error("Recall index schema definitions are missing.");
+  }
+  database.exec("DROP TRIGGER messages_recall_index");
+  database.exec("DROP VIEW recall_documents");
+  database.exec(recallView.sql);
+  database.exec(recallTrigger.sql);
+  rebuildRecallIndex(database);
+  database.exec("DROP TRIGGER session_meta_monotonic_update");
+  database
+    .query(
+      `UPDATE session_meta SET schema_fingerprint = ?
+       WHERE singleton = 1 AND schema_fingerprint = ?`,
+    )
+    .run(SESSION_SCHEMA_V9_FINGERPRINT, PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT);
+  database.exec(metadataTrigger.sql);
+  return true;
+}
 
 export function configureWritableDatabase(database: Database): void {
   database.exec("PRAGMA foreign_keys = ON");

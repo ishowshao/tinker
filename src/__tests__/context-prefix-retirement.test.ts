@@ -32,6 +32,7 @@ import {
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import type { ToolDefinition } from "../tools/types";
+import { RECALL_TOOL_DEFINITIONS } from "../tools/recall";
 import {
   finalizeTestSessionStore,
   prepareTestModelRequest,
@@ -48,11 +49,7 @@ const recallTools: readonly ToolDefinition[] = [
     description: "Read a file",
     parameters: { type: "object", properties: {} },
   },
-  {
-    name: "Recall",
-    description: "Search or retrieve historical session messages",
-    parameters: { type: "object", properties: {} },
-  },
+  ...RECALL_TOOL_DEFINITIONS,
 ];
 
 describe("I3 Recall-first prefix retirement", () => {

@@ -947,7 +947,7 @@ export function formatContextRetirementNotice(result: ContextRetirementResult): 
   const before = result.guardedTokensBefore.toLocaleString("en-US");
   const after = result.guardedTokensAfter.toLocaleString("en-US");
   if (result.outcome === "retirement_floor") {
-    return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens; target ${result.targetTokens.toLocaleString("en-US")} was not reached. Run /compact first when retained tool output is still eligible. Older history remains available through Recall.`;
+    return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens; target ${result.targetTokens.toLocaleString("en-US")} was not reached. Run /compact first when retained tool output is still eligible. Older history remains available through RecallSearch and RecallGet.`;
   }
   const reduction =
     result.guardedTokensBefore === 0
@@ -957,7 +957,7 @@ export function formatContextRetirementNotice(result: ContextRetirementResult): 
             result.guardedTokensBefore) *
           100
         ).toFixed(1);
-  return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens (-${reduction}%). Older history remains available through Recall.`;
+  return `Context prefix retired: revision ${result.previousRevisionNumber} -> ${result.revisionNumber}, ${result.retiredTurnCount} turns removed from the active request, ${before} -> ${after} estimated tokens (-${reduction}%). Older history remains available through RecallSearch and RecallGet.`;
 }
 
 export function formatContextRetirementFailureNotice(error: unknown): string {

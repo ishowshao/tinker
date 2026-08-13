@@ -57,7 +57,7 @@ prefix retirement 的显式资格。
     `deepseek-v4-flash` 作为行为下限；它通过后，当前已配置的更高能力 profile 继承行为资格。
     这不是从相似 model name 猜测，而是本产品对当前 profile 集合的显式策略。
 13. 资格绑定 manifest、grader、fixture、policy、正负 holdout report、Recall contract 文本和
-    Recall tool definition 的 hash。runtime 对 contract/tool 漂移 fast-fail 到 automation off；
+    RecallSearch/RecallGet definitions 的组合 hash。runtime 对 contract/tool 漂移 fast-fail 到 automation off；
     checked-in report 与编译门禁的 hash 由测试互相校验。手动 `/compact` 和
     `/compact retire` 始终不依赖资格。
 14. 自动 revision 只在完整 turn 已提交、session 空闲的边界重新规划并提交；不能复用旧 shadow
@@ -90,9 +90,9 @@ I4 所说的主动 Recall，指模型在当前任务存在历史依赖、而 act
 
 ```text
 模型是否意识到需要历史
-  -> 是否发出合理的 Recall search
+  -> 是否发出合理的 RecallSearch
   -> search 是否出现正确 source
-  -> 是否 Recall get 必要原文
+  -> 是否 RecallGet 必要原文
   -> 是否把历史原文用于正确任务结果
 ```
 
@@ -141,7 +141,7 @@ qualification。
 - `full_history`、`swap_only`、`recall_only_retirement` 三种隔离运行模式。
 - 显式历史提示、隐式早期约束、词面线索改写、旧失败防重复、历史/当前版本区分五类题目。
 - 每类至少一组反事实 pair，以及不需要 Recall 的 negative controls。
-- required source 是否真正退休、provider payload 是否不含原文、Recall search/get 轨迹、
+- required source 是否真正退休、provider payload 是否不含原文、RecallSearch/RecallGet 轨迹、
   workspace mutation、command trace、usage、latency 和 cache 的结构化采集。
 - fake model 基础设施测试和真实 provider/profile qualification runner。
 - calibration report、冻结的 evaluation policy、holdout qualification report 和机器可读资格文件。
@@ -178,7 +178,7 @@ qualification。
 | `ContextManager.compact()` | 接受 `runtime_pressure`，复用确定性 `SwapPlanner` | 已接 automatic coordinator；正常支持 `below_trigger` no-op |
 | `ContextManager.retirePrefix()` | 完整 transaction/fault 语义 | 已接受 production `runtime_pressure`，只在行为资格通过时调度 |
 | `RuntimeSession` | iteration preflight 执行 shadow planning | 已在 turn commit/skill settlement 后及 pressured resume 后重新规划；每 cycle 最多一次 swap、一次 retirement |
-| `ContextSurface` | 保存 system prompt、tool definitions、request config 及 hash | automation gate 精确校验当前 Recall contract 文本与 Recall definition hash |
+| `ContextSurface` | 保存 system prompt、tool definitions、request config 及 hash | automation gate 精确校验当前 Recall contract 文本与 RecallSearch/RecallGet definitions 组合 hash |
 | `ModelProfile` | profile name、model、context budget、reasoning/stream 配置 | 当前配置集合按 DeepSeek floor policy 继承；无 profile 时 automation off |
 | `Recall` | session-local FTS5/substring search、稳定 source、精确 get | 已有三视图行为 recorder；检索存储语义未改 |
 | revision events | 手动 swap/retirement 的 bounded 生命周期事件 | 已支持 `reason=runtime_pressure` 与 bounded qualification ID |
@@ -270,7 +270,7 @@ case 的有效性只能根据 full-history、fixture 和 oracle 决定。禁止�
 
 ### 5.5 改写强度必须匹配当前 Recall 能力
 
-当前 `Recall search` 是 literal FTS5 trigram/substring，不是 embedding search。改写题用于测试
+当前 `RecallSearch` 是 literal FTS5 trigram/substring，不是 embedding search。改写题用于测试
 模型能否构造和迭代合理 query，而不是测试尚不存在的检索算法。
 
 有效改写至少保留一个稳定锚点：
@@ -520,7 +520,7 @@ qualification。
 - provider request 数和总 iteration 数；
 - prompt/completion/total/reasoning tokens；
 - prompt cache hit/miss tokens；
-- Recall search/get 调用数和 observation bytes；
+- RecallSearch/RecallGet 调用数和 observation bytes；
 - 首 token 指标不可得时的总 request latency，以及 end-to-end duration；
 - revision planning/validation/transaction/activation duration；
 - full-history、swap-only、Recall-only 的 terminal payload tokens；
@@ -634,7 +634,7 @@ checked-in qualification 绑定：
 - frozen policy version/hash；
 - positive/negative holdout report hash；
 - Recall contract 文本 hash；
-- model-visible Recall definition hash；
+- model-visible RecallSearch/RecallGet definitions 组合 hash；
 - qualification 中所有真实响应的唯一 resolved model identity。
 
 stream adapter 会保留并校验每个 chunk 的 `model` 字段；同一 stream 出现冲突 identity 立即
@@ -647,7 +647,7 @@ fast-fail。qualification 观察到的唯一值是 `deepseek-v4-flash`。
 
 runtime 不在启动时扫描任意本地目录猜资格，而是使用 checked-in qualification 的 bounded hash
 和 aggregate。测试重新计算两份 report hash，保证编译门禁不能与证据悄悄分叉。当前 surface 的
-Recall contract 或 Recall definition 任一漂移，自动 swap/retirement 都关闭；手动路径不受影响。
+Recall contract 或 RecallSearch/RecallGet definitions 任一漂移，自动 swap/retirement 都关闭；手动路径不受影响。
 
 ## 十二、两道独立自动化门禁
 
@@ -918,12 +918,12 @@ grader。第二次 calibration 结果：
 
 | 视图 | task success | provider requests | total tokens | latency |
 | --- | ---: | ---: | ---: | ---: |
-| full-history | 10/10 | 18 | 582,296 | 30.13s |
-| swap-only | 10/10 | 19 | 517,852 | 32.17s |
-| Recall-only retirement | 9/10 | 25 | 672,287 | 44.42s |
+| full-history | 10/10 | 14 | 463,409 | 36.19s |
+| swap-only | 10/10 | 13 | 362,853 | 29.71s |
+| Recall-only retirement | 10/10 | 21 | 582,109 | 41.80s |
 
-Recall-only 主动 Recall 9/10、search -> get 4/10；唯一失败是一个隐式 serialization variant
-完全没有查历史。三个 calibration negative controls 全部完成，unnecessary Recall 为 0/3。随后
+Recall-only 主动 Recall 10/10、search -> get 1/10；所有任务均通过且 invalid Recall 为 0。
+三个 calibration negative controls 全部完成，unnecessary Recall 为 0/3。随后
 冻结第 10.2 节的 policy，未再修改 case、grader 或门槛。
 
 ### 18.2 独立 holdout qualification
@@ -934,28 +934,28 @@ trial。另有三个 negative control 在退休视图各跑 3 次。manifest has
 
 | 指标 | 实测 | 门槛 |
 | --- | ---: | ---: |
-| full-history task success | 30/30 = 100% | >= 95% |
-| swap-only task success | 30/30 = 100% | >= 95% |
-| Recall-only task success | 29/30 = 96.67% | >= 90% |
-| Recall-only active Recall | 29/30 = 96.67% | >= 90% |
-| search -> get success | 9/30 = 30% | >= 30% |
-| 最差反事实组 task success | 5/6 = 83.33% | >= 2/3 |
-| invalid Recall / retirement trial | 1/30 = 3.33% | <= 20% |
+| full-history task success | 29/30 = 96.67% | >= 95% |
+| swap-only task success | 29/30 = 96.67% | >= 95% |
+| Recall-only task success | 30/30 = 100% | >= 90% |
+| Recall-only active Recall | 30/30 = 100% | >= 90% |
+| search -> get success | 10/30 = 33.33% | >= 30% |
+| 最差反事实组 task success | 6/6 = 100% | >= 2/3 |
+| invalid Recall / retirement trial | 0/30 = 0% | <= 20% |
 | negative unnecessary Recall | 0/9 = 0% | <= 1/3 |
-| token ratio，retirement / full | 1.1555x | <= 3x |
-| latency ratio，retirement / full | 1.365x | <= 3x |
+| token ratio，retirement / full | 1.3739x | <= 3x |
+| latency ratio，retirement / full | 1.207x | <= 3x |
 
-唯一 task failure 仍是隐式 checksum variant 的一次 trial：模型未调用 Recall，猜成另一个常见
-算法；同一反事实组其余 5/5 通过。一次 invalid Recall 是正确 search 后发出无效 get，但模型从
-search excerpt 得到正确命令，task 仍通过。没有 repeat-failure 或 historical/current 混淆失败。
+Recall-only 30 次任务全部通过，没有 invalid Recall。full-history 和 swap-only 各有一次
+prior-failure command 场景失败：模型把命令执行结果说明混入了只允许精确命令字符串的
+JSON answer；这两次失败都不涉及 Recall 工具协议。没有 historical/current 混淆失败。
 
 正例 provider 明细：
 
 | 视图 | requests | total tokens | cache hit / miss | latency |
 | --- | ---: | ---: | ---: | ---: |
-| full-history | 61 | 1,976,504 | 999,040 / 971,536 | 108.53s |
-| swap-only | 54 | 1,474,199 | 652,288 / 816,181 | 95.20s |
-| Recall-only retirement | 85 | 2,283,829 | 1,462,016 / 812,779 | 148.15s |
+| full-history | 44 | 1,460,045 | 463,360 / 990,200 | 140.40s |
+| swap-only | 45 | 1,259,937 | 418,944 / 834,944 | 117.04s |
+| Recall-only retirement | 72 | 2,005,931 | 1,155,968 / 839,584 | 169.46s |
 
 全部真实 response/chunk 只解析到 `deepseek-v4-flash`。qualification 的 12 道机器门全部通过；
 详细证据见
@@ -977,7 +977,7 @@ search excerpt 得到正确命令，task 仍通过。没有 repeat-failure 或 h
   durable revision 与 runtime fault 语义。
 - resume 的初始 snapshot 已处于 pressure 时，在接受新 prompt 前运行同一 coordinator；集成测试验证
   swap 与 retirement 均完成且 provider request 数保持为零。
-- checked-in report hash、policy hash、Recall contract 文本 hash 和 Recall definition hash 由测试
+- checked-in report hash、policy hash、Recall contract 文本 hash 和 Recall tool-definitions hash 由测试
   锁定。runner 从当前真实 contract/definition 计算 hash，qualifier 逐项校验冻结的 10 个正例、3 个
   negative、view 与 trial matrix；无 profile 或 Recall surface 漂移时 automation off。
 - DeepSeek floor 通过后，当前已配置 profile 的 `automaticSwapOnly` 与
@@ -994,7 +994,7 @@ search excerpt 得到正确命令，task 仍通过。没有 repeat-failure 或 h
   retirement、payload 退出验证和 revision/provider-request 不变量。
 - 10,000-message Recall benchmark 通过；trigram search p50/p95 为 0.19/0.22ms。
 - 最终 Recall contract/tool 版本上的真实 `deepseek-v4-flash` provider smoke 通过：退休 revision
-  自身没有增加 provider request，模型完成 Recall search -> get 并恢复旧 marker，随后 append
+  自身没有增加 provider request，模型完成 RecallSearch -> get 并恢复旧 marker，随后 append
   命中 prompt cache。
 - 真实 TUI PTY 使用 `deepseek-v4-flash` 完成普通 turn，精确返回 `I4-PTY-OK`，没有调用工具，
   `/quit` 以状态 0 退出。

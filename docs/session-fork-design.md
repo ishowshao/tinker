@@ -556,7 +556,7 @@ final rename 成功后，clone 已是独立、完整、可 resume 的 session。
 - active compiled provider-neutral messages 在 clone 前后相同；
 - measured anchor 在完全相同 request 下 exact restore；
 - activation 产生 surface change 时 anchor 按现有规则清除；
-- Recall get/search 在 source 与 clone 中返回相同共同历史；
+- RecallGet/search 在 source 与 clone 中返回相同共同历史；
 - clone 任何一边追加新消息后，另一边 Recall 不可见该消息。
 
 ### 11.3 诊断文件

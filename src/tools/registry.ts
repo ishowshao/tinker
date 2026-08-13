@@ -6,7 +6,7 @@ import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
 import { createGrepToolExecutor } from "./grep";
 import { createReadToolExecutor } from "./read";
-import { createRecallToolExecutor } from "./recall";
+import { createRecallGetToolExecutor, createRecallSearchToolExecutor } from "./recall";
 import { createTaskListToolExecutor } from "./task-list";
 import { createTaskInputToolExecutor } from "./task-input";
 import { createTaskOutputToolExecutor } from "./task-output-tool";
@@ -206,7 +206,12 @@ export function createDefaultTooling(options: {
       maxContentBytes: options.maxReadContentBytes,
     }),
   );
-  registry.register(createRecallToolExecutor({ historyReader: options.historyReader }));
+  registry.register(
+    createRecallSearchToolExecutor({ historyReader: options.historyReader }),
+  );
+  registry.register(
+    createRecallGetToolExecutor({ historyReader: options.historyReader }),
+  );
   if (options.memorySearch !== undefined) {
     registry.register(options.memorySearch);
   }

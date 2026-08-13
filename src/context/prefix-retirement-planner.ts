@@ -351,14 +351,16 @@ function validatePlanningInput(input: PrefixRetirementPlanningInput): void {
     fail("recall_contract_mismatch", "Active Recall contract is not current.");
   }
   if (
-    input.tools.filter((tool) => tool.name === "Recall").length !== 1 ||
+    input.tools.filter(
+      (tool) => tool.name === "RecallSearch" || tool.name === "RecallGet",
+    ).length !== 2 ||
     stableJsonStringify(input.tools) !==
       stableJsonStringify(input.surface.toolDefinitions) ||
     input.activePrepared.toolSchemaHash !== input.surface.toolSchemaSha256
   ) {
     fail(
       "recall_tool_mismatch",
-      "Active tool surface does not contain the required Recall definition.",
+      "Active tool surface does not contain the required RecallSearch and RecallGet definitions.",
     );
   }
   if (

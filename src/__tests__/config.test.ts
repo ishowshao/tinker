@@ -511,12 +511,12 @@ describe("system prompt", () => {
     expect(prompt).toContain(
       "Do not send passwords, tokens, or other secrets through TaskInput",
     );
-    expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v1");
+    expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v2");
     expect(prompt).toContain(renderRecallRetirementContract());
-    expect(prompt).toContain("use Recall search and then Recall get");
+    expect(prompt).toContain("use RecallSearch and then RecallGet");
     expect(prompt).toContain("Recall is historical session state");
     expect(prompt).toContain(
-      "An empty Recall search does not prove that information does not exist.",
+      "An empty RecallSearch does not prove that information does not exist.",
     );
   });
 });

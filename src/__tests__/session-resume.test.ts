@@ -11,6 +11,8 @@ import {
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type {
   ModelRequestInput,
+  ModelClient,
+  ModelRequestOptions,
   ModelRequestOutput,
   PreparedModelRequest,
 } from "../model/model-client";
@@ -45,6 +47,40 @@ class ResumeModel extends TestModelClient {
       role: "assistant",
       content: `answer-${this.inputs.length}`,
     });
+  }
+}
+
+class LegacyRecallModel extends TestModelClient {
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    const input = testModelRequestInput(prepared);
+    const last = input.messages.at(-1);
+    if (last?.role === "user") {
+      if (options.identity === undefined) throw new Error("Missing runtime identity.");
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "legacy-recall-call",
+            name: "Recall",
+            args: { mode: "search", query: "legacy" },
+          },
+        ],
+      });
+    }
+    if (last?.role === "tool" && last.name === "Recall") {
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "legacy Recall turn completed",
+      });
+    }
+    throw new Error("Unexpected legacy Recall model context.");
   }
 }
 
@@ -331,6 +367,102 @@ describe("RuntimeSession resume", () => {
     }
   });
 
+  test("keeps legacy Recall frames intact while refreshing to the split tool surface", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-runtime-recall-split-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    const sink = collectingEventSink();
+    let legacyEnabled = true;
+    const legacyRecall: ToolExecutor = {
+      definition: {
+        name: "Recall",
+        description: "Legacy combined Recall contract",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { mode: { type: "string" }, query: { type: "string" } },
+          required: ["mode"],
+        },
+      },
+      async execute() {
+        return {
+          kind: "generic",
+          ok: false,
+          toolName: "Recall",
+          error: "legacy fixture result",
+        };
+      },
+    };
+    const dependencies = {
+      loadMcpConfig: async () =>
+        legacyEnabled
+          ? { servers: new Map([["legacy", { command: "unused", args: [], env: {} }]]) }
+          : undefined,
+      createMcpManager: async () => ({
+        executors: [legacyRecall],
+        inventory: { servers: [{ name: "legacy", tools: ["Recall"] }] },
+        async dispose() {},
+      }),
+    };
+
+    try {
+      let session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, new LegacyRecallModel(), sink, "new"),
+        dependencies,
+      );
+      expect(
+        (
+          await session.executeTurn({
+            userMessage: { role: "user", content: "create a legacy Recall frame" },
+            signal: new AbortController().signal,
+          })
+        ).status,
+      ).toBe("completed");
+      await session.dispose({ type: "tui_exit" });
+
+      legacyEnabled = false;
+      const resumedModel = new ResumeModel();
+      session = await createRuntimeSession(
+        sessionInput(workspace, sessionId, resumedModel, sink, "resume"),
+        dependencies,
+      );
+      await session.executeTurn({
+        userMessage: { role: "user", content: "continue after the Recall split" },
+        signal: new AbortController().signal,
+      });
+      const input = resumedModel.inputs[0];
+      expect(
+        input.tools
+          .map((tool) => tool.name)
+          .filter((name) => name.startsWith("Recall")),
+      ).toEqual(["RecallSearch", "RecallGet"]);
+      expect(
+        input.messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.toolCalls?.some((call) => call.name === "Recall"),
+        ),
+      ).toBe(true);
+      expect(
+        input.messages.some(
+          (message) => message.role === "tool" && message.name === "Recall",
+        ),
+      ).toBe(true);
+      expect(
+        sink.events.some(
+          (event) =>
+            event.type === "context.revision.finished" &&
+            event.data.strategy === "surface_refresh" &&
+            event.data.changed.includes("tool_definitions"),
+        ),
+      ).toBe(true);
+      await session.dispose({ type: "tui_exit" });
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("keeps a committed surface revision when finished-event reporting fails", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-surface-event-"));
     const sessionId = runtimeIdFactory.createSessionId();
@@ -565,7 +697,7 @@ describe("RuntimeSession resume", () => {
 function sessionInput(
   workspaceRoot: string,
   sessionId: ReturnType<typeof runtimeIdFactory.createSessionId>,
-  modelClient: ResumeModel,
+  modelClient: ModelClient,
   sink: ReturnType<typeof collectingEventSink>,
   mode: "new" | "resume",
   newSession: {

@@ -1326,8 +1326,8 @@ message_fts
 
 因此：
 
-- `Recall get source=ctx://message/...` 返回原 observation 和原 hash；
-- `Recall search` 仍搜索原文，不搜索 placeholder；
+- `RecallGet source=ctx://message/...` 返回原 observation 和原 hash；
+- `RecallSearch` 仍搜索原文，不搜索 placeholder；
 - `/resume` 恢复 active placeholder，但 Recall 仍指向 canonical body；
 - Read/Grep/Bash 继续表示当前 workspace/external state。
 
@@ -1515,8 +1515,8 @@ production 隐藏配置。
 
 ### 19.9 Recall 集成
 
-- compact 前后 `Recall get` 对 selected source 返回同一 content/hash。
-- `Recall search` 命中 canonical body 中只存在于原文、placeholder 不含的字符串。
+- compact 前后 `RecallGet` 对 selected source 返回同一 content/hash。
+- `RecallSearch` 命中 canonical body 中只存在于原文、placeholder 不含的字符串。
 - Recall result 追加到尾部，不改写旧 ordinal。
 - Recall tool result 不成为下一次 compact candidate。
 - Read v1 -> Edit v2 -> compact -> Recall v1 -> Read v2。
@@ -1536,7 +1536,7 @@ production 隐藏配置。
 5. 中点 close/resume，验证相同 active revision、placeholder bytes 和 Recall；
 6. 追加新的 eligible observation 后执行第二次 benchmark-only manual compact；
 7. 验证 revision 3 继承旧 overrides，只新增 row；
-8. 保留受控取消、Recall search -> get 和最终 provider request count 断言。
+8. 保留受控取消、RecallSearch -> get 和最终 provider request count 断言。
 
 正式输出至少包括：
 
@@ -1740,7 +1740,7 @@ I2 只有同时满足以下条件才算完成：
 11. COMMIT 后崩溃/resume 恢复 new active revision，measurement 从 full estimate 开始。
 12. compact 后同 revision append-only prefix audit 通过，首次 cache rewrite 成本有真实记录。
 13. canonical messages/tool results/FTS rows 在 compact 前后逐项不变。
-14. Recall search/get 在 compact、继续追加和 resume 后都返回相同原文/hash。
+14. RecallSearch/RecallGet 在 compact、继续追加和 resume 后都返回相同原文/hash。
 15. `/compact` 只在 idle turn 状态可用，与 session operations 串行，真实 PTY 可继续下一 turn
     和退出。
 16. events/notices 不泄露正文、placeholder、path、URL、query、command 或 candidate IDs。

@@ -348,7 +348,10 @@ export async function runLongSessionBenchmark(
 
     const recallStartedAt = performance.now();
     const recallResult = await session.executeTurn({
-      userMessage: { role: "user", content: "benchmark Recall search and get turn" },
+      userMessage: {
+        role: "user",
+        content: "benchmark RecallSearch and RecallGet turn",
+      },
       signal: new AbortController().signal,
     });
     turnDurations.push(performance.now() - recallStartedAt);
@@ -538,7 +541,7 @@ class BenchmarkModelClient implements ModelClient {
       this.cancellationRequestResolve();
       return waitForAbort(options.signal);
     }
-    if (userPrompt === "benchmark Recall search and get turn") {
+    if (userPrompt === "benchmark RecallSearch and RecallGet turn") {
       return this.recallResponse(input, prepared, options);
     }
     return this.workloadResponse(input, prepared, options, userPrompt);
@@ -595,7 +598,8 @@ class BenchmarkModelClient implements ModelClient {
       (
         message,
       ): message is Extract<ModelRequestInput["messages"][number], { role: "tool" }> =>
-        message.role === "tool" && message.name === "Recall",
+        message.role === "tool" &&
+        (message.name === "RecallSearch" || message.name === "RecallGet"),
     );
     const latest = recallMessages.at(-1);
     if (latest === undefined) {
@@ -604,8 +608,7 @@ class BenchmarkModelClient implements ModelClient {
         {
           role: "assistant",
           toolCalls: [
-            benchmarkCall(options, "Recall", "recall-search", {
-              mode: "search",
+            benchmarkCall(options, "RecallSearch", "recall-search", {
               query: historicalMarker,
               limit: 5,
               offset: 0,
@@ -620,15 +623,14 @@ class BenchmarkModelClient implements ModelClient {
         /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
       )?.[1];
       if (source === undefined) {
-        throw new Error("Benchmark Recall search returned no stable source.");
+        throw new Error("Benchmark RecallSearch returned no stable source.");
       }
       return outputWithUsage(
         prepared,
         {
           role: "assistant",
           toolCalls: [
-            benchmarkCall(options, "Recall", "recall-get", {
-              mode: "get",
+            benchmarkCall(options, "RecallGet", "recall-get", {
               source,
               byte_offset: 0,
               byte_limit: 12_000,
@@ -639,7 +641,7 @@ class BenchmarkModelClient implements ModelClient {
       );
     }
     if (!latest.content.includes(historicalMarker)) {
-      throw new Error("Benchmark Recall get returned the wrong historical content.");
+      throw new Error("Benchmark RecallGet returned the wrong historical content.");
     }
     return outputWithUsage(
       prepared,
@@ -839,7 +841,7 @@ class BenchmarkShadowController {
         contentHash(page.content) !== selected.originalContentSha256 ||
         page.content !== canonical.content
       ) {
-        throw new Error("Shadow selection did not round-trip through Recall get.");
+        throw new Error("Shadow selection did not round-trip through RecallGet.");
       }
     }
     this.recallVerified = true;

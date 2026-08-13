@@ -149,7 +149,12 @@ export function isRecallableMessage(input: {
     (input.role === "user" || input.role === "assistant" || input.role === "tool") &&
     input.content !== null &&
     input.content.length > 0 &&
-    !(input.role === "tool" && input.toolName === "Recall")
+    !(
+      input.role === "tool" &&
+      (input.toolName === "Recall" ||
+        input.toolName === "RecallSearch" ||
+        input.toolName === "RecallGet")
+    )
   );
 }
 

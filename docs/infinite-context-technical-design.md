@@ -61,7 +61,7 @@ Tinker 不应该把「无限上下文」实现成更激进的摘要，也不应�
 1. 长 session 的原始历史可以持续增长，不受单次模型 context window 限制。
 2. 当前模型输入保持在配置预算内，并能说明 token 主要消耗在哪里。
 3. 旧的大体积 tool observation 可以无模型调用地换出。
-4. 模型可以通过一个 `Recall` 工具搜索或精确取回当前 session 的历史。
+4. 模型可以通过 `RecallSearch` 与 `RecallGet` 搜索并精确取回当前 session 的历史。
 5. 连续的完整旧前缀可以不留逐条 placeholder 地退出 active context，而 canonical
    history、FTS 和精确 source 始终保留。
 6. `/compact` 与自动 compaction 使用同一条实现路径，失败时保留原活动视图。
@@ -822,7 +822,7 @@ status="completed"
 exitCode=0
 command="bun test"
 outputFilePath=".../.tinker/bash/019....log"
-historical=Use Recall with source for the original model-visible preview.
+historical=Use RecallGet with source for the original model-visible preview.
 fullOutput=Use Read on outputFilePath if the retained log still exists.
 ```
 
@@ -877,7 +877,7 @@ advisor 的任何失败都不能留下半个 revision。
 ### 10.1 为什么不用独立 `NEED_CONTEXT` 协议
 
 对于代码和当前 workspace，Read/Grep/Glob 已经是成熟的 page-in 工具。真正缺失的是
-session 自己的历史，因此只新增一个 `Recall` 工具，不要求模型输出特殊控制 token，也
+session 自己的历史，因此新增 `RecallSearch` 与 `RecallGet` 两个工具，不要求模型输出特殊控制 token，也
 不要求每个事实都带引用。
 
 更重要的是，Recall 结果始终作为新的 tool message 追加在上下文尾部：
@@ -894,26 +894,24 @@ Recall 直接查询 canonical history 和 FTS，不依赖旧位置仍有逐条�
 
 ### 10.2 工具接口
 
-第一版使用一个工具支持 search 和 get 两种模式：
+工具 surface 将搜索和精确读取拆开，两个 schema 都拒绝未知字段且不使用 `mode`：
 
 ```ts
-type RecallArgs =
-  | {
-      mode: "search";
-      query: string;
-      roles?: Array<"user" | "assistant" | "tool">;
-      tool_names?: string[];
-      turn_from?: number;
-      turn_to?: number;
-      limit?: number;
-      offset?: number;
-    }
-  | {
-      mode: "get";
-      sources: string[];
-      offset?: number;
-      limit?: number;
-    };
+type RecallSearchArgs = {
+  query: string;
+  roles?: Array<"user" | "assistant" | "tool">;
+  tool_names?: string[];
+  turn_from?: number;
+  turn_to?: number;
+  limit?: number;
+  offset?: number;
+};
+
+type RecallGetArgs = {
+  source: string;
+  byte_offset?: number;
+  byte_limit?: number;
+};
 ```
 
 `search` 返回有界命中：
@@ -990,7 +988,7 @@ goal 或半个 protocol frame。
 Older session content may be intentionally absent from the active context.
 Absence does not mean it never happened or does not exist. Before asserting
 that no prior decision, constraint, evidence, failure, or work exists—or before
-repeating work that may have happened earlier—use Recall search, then Recall get
+repeating work that may have happened earlier—use RecallSearch, then RecallGet
 for the relevant sources. Use Read/Grep for current workspace state.
 ```
 
@@ -1271,7 +1269,7 @@ Some older session content may be replaced by markers or intentionally omitted
 from the active context. Absence does not mean it never happened or does not
 exist. Before asserting that no prior decision, constraint, evidence, failure,
 or work exists—or before repeating work that may have happened earlier—use
-Recall search, then Recall get for the relevant sources. Use Read/Grep for
+RecallSearch, then RecallGet for the relevant sources. Use Read/Grep for
 current workspace state. Historical Recall data and current workspace data are
 not interchangeable.
 ```
@@ -1435,7 +1433,7 @@ src/context/checkpoint-compiler.ts
 - `src/tools/registry.ts`
   - 注入只读 SessionHistoryReader 并注册 Recall。
 - `src/observation/observation-builder.ts`
-  - 确定性渲染 Recall search/get 结果。
+  - 确定性渲染 RecallSearch/RecallGet 结果。
 - `src/events/types.ts`
   - 增加 context/session recovery 事件。
 - `src/cli/config.ts`
@@ -1488,7 +1486,7 @@ compact。
 实施：
 
 - FTS5 trigram 索引；
-- Recall search/get；
+- RecallSearch/RecallGet；
 - source URI、分页和 observation；
 - system prompt 的换出/检索规则。
 
@@ -1523,7 +1521,7 @@ revision 之后再次请求只追加尾部。
 - resume retirement revision。
 
 验收：退休区间只包含连续、完整的已结束 turn；活动视图不再渲染该区间的 message、
-protocol skeleton 或 placeholder；canonical history/FTS 原样保留，Recall search/get 能精确
+protocol skeleton 或 placeholder；canonical history/FTS 原样保留，RecallSearch/RecallGet 能精确
 取回；任一校验失败不改变活动视图。
 
 ### 阶段 F：主动 Recall 评测、自动化门槛与 TUI 有界化

@@ -7,35 +7,63 @@ import {
   RecallHistoryError,
   type SessionHistoryReader,
 } from "../session/session-history-reader";
-import { createRecallToolExecutor } from "../tools/recall";
+import {
+  createRecallGetToolExecutor,
+  createRecallSearchToolExecutor,
+} from "../tools/recall";
 import { ToolRegistry, ToolRuntime } from "../tools/registry";
 import { ToolExecutionFatalError } from "../tools/types";
 import { createTestRuntime } from "./test-runtime";
 
 const context = { signal: new AbortController().signal };
 
-describe("Recall tool", () => {
-  test("uses a flat schema and maps search/get success", async () => {
+describe("Recall tools", () => {
+  test("exposes separate strict schemas and maps search/get success", async () => {
     const fixture = historyReaderFixture();
     const registry = new ToolRegistry();
-    registry.register(createRecallToolExecutor({ historyReader: fixture.reader }));
+    registerRecallTools(registry, fixture.reader);
     const runtime = new ToolRuntime(registry);
     const identity = createTestRuntime();
-    const definition = registry.definitions()[0];
+    const [searchDefinition, getDefinition] = registry.definitions();
 
-    expect(definition.name).toBe("Recall");
-    expect(definition.parameters).not.toHaveProperty("oneOf");
-    expect(definition.parameters).toMatchObject({
+    expect(searchDefinition?.name).toBe("RecallSearch");
+    expect(searchDefinition?.parameters).toMatchObject({
       type: "object",
       additionalProperties: false,
-      required: ["mode"],
+      required: ["query"],
     });
+    expect(Object.keys(requireRecord(searchDefinition?.parameters.properties))).toEqual(
+      [
+        "query",
+        "roles",
+        "tool_names",
+        "turn_from",
+        "turn_to",
+        "limit",
+        "offset",
+        "snapshot_through_ordinal",
+      ],
+    );
+    expect(searchDefinition?.parameters.properties).not.toHaveProperty("mode");
+    expect(searchDefinition?.parameters.properties).not.toHaveProperty("byte_limit");
+    expect(getDefinition?.name).toBe("RecallGet");
+    expect(getDefinition?.parameters).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      required: ["source"],
+    });
+    expect(Object.keys(requireRecord(getDefinition?.parameters.properties))).toEqual([
+      "source",
+      "byte_offset",
+      "byte_limit",
+    ]);
+    expect(getDefinition?.parameters.properties).not.toHaveProperty("mode");
+    expect(getDefinition?.parameters.properties).not.toHaveProperty("query");
 
     const search = await runtime.execute(
       identity.toolCall({
-        name: "Recall",
+        name: "RecallSearch",
         args: {
-          mode: "search",
           query: "EACCES",
           roles: ["tool"],
           tool_names: ["Read"],
@@ -73,8 +101,8 @@ describe("Recall tool", () => {
 
     const get = await runtime.execute(
       identity.toolCall({
-        name: "Recall",
-        args: { mode: "get", source: fixture.source },
+        name: "RecallGet",
+        args: { source: fixture.source },
       }),
       context,
     );
@@ -99,14 +127,14 @@ describe("Recall tool", () => {
       );
     };
     const registry = new ToolRegistry();
-    registry.register(createRecallToolExecutor({ historyReader: fixture.reader }));
+    registerRecallTools(registry, fixture.reader);
     const runtime = new ToolRuntime(registry);
     const identity = createTestRuntime();
 
     const invalidArgs = await runtime.execute(
       identity.toolCall({
-        name: "Recall",
-        args: { mode: "search", query: "", source: fixture.source },
+        name: "RecallSearch",
+        args: { query: "", source: fixture.source },
       }),
       context,
     );
@@ -119,8 +147,8 @@ describe("Recall tool", () => {
 
     const invalidSource = await runtime.execute(
       identity.toolCall({
-        name: "Recall",
-        args: { mode: "get", source: "ctx://message/not-a-uuid" },
+        name: "RecallGet",
+        args: { source: "ctx://message/not-a-uuid" },
       }),
       context,
     );
@@ -133,8 +161,8 @@ describe("Recall tool", () => {
 
     const missing = await runtime.execute(
       identity.toolCall({
-        name: "Recall",
-        args: { mode: "get", source: fixture.source },
+        name: "RecallGet",
+        args: { source: fixture.source },
       }),
       context,
     );
@@ -146,21 +174,95 @@ describe("Recall tool", () => {
     });
   });
 
+  test("enforces mode-specific fields, boundaries, and defaults", async () => {
+    const fixture = historyReaderFixture();
+    const registry = new ToolRegistry();
+    registerRecallTools(registry, fixture.reader);
+    const runtime = new ToolRuntime(registry);
+    const identity = createTestRuntime();
+
+    for (const args of [
+      { query: "x", byte_limit: 4_000 },
+      { query: "x", mode: "search" },
+      { query: "x", roles: [] },
+      { query: "x", roles: ["tool", "tool"] },
+      { query: "x", roles: ["user"], tool_names: ["Read"] },
+      { query: "x", tool_names: [] },
+      { query: "x", turn_from: 2, turn_to: 1 },
+      { query: "x", limit: 0 },
+      { query: "x", limit: 21 },
+      { query: "x", offset: -1 },
+      { query: "x", snapshot_through_ordinal: 0 },
+      { query: "é".repeat(513) },
+    ]) {
+      expect(
+        await runtime.execute(
+          identity.toolCall({ name: "RecallSearch", args }),
+          context,
+        ),
+      ).toMatchObject({
+        kind: "recall",
+        ok: false,
+        mode: "search",
+        errorCode: "RECALL_ARGS_INVALID",
+      });
+    }
+
+    for (const args of [
+      { source: fixture.source, query: "x" },
+      { source: fixture.source, mode: "get" },
+      { source: fixture.source, byte_offset: -1 },
+      { source: fixture.source, byte_offset: Number.MAX_SAFE_INTEGER + 1 },
+      { source: fixture.source, byte_limit: 255 },
+      { source: fixture.source, byte_limit: 20_001 },
+    ]) {
+      expect(
+        await runtime.execute(identity.toolCall({ name: "RecallGet", args }), context),
+      ).toMatchObject({
+        kind: "recall",
+        ok: false,
+        mode: "get",
+        errorCode: "RECALL_ARGS_INVALID",
+      });
+    }
+
+    await runtime.execute(
+      identity.toolCall({
+        name: "RecallSearch",
+        args: { query: "x", limit: 20, offset: 0, turn_from: 1, turn_to: 1 },
+      }),
+      context,
+    );
+    await runtime.execute(
+      identity.toolCall({
+        name: "RecallGet",
+        args: { source: fixture.source, byte_offset: 0, byte_limit: 20_000 },
+      }),
+      context,
+    );
+    expect(fixture.searchInputs.at(-1)).toMatchObject({ limit: 20, offset: 0 });
+    expect(fixture.getInputs.at(-1)).toEqual({
+      source: fixture.source,
+      byteOffset: 0,
+      byteLimit: 20_000,
+    });
+  });
+
   test("rethrows required history failures through the fatal tool boundary", async () => {
     const fixture = historyReaderFixture();
     fixture.reader.search = () => {
       throw new SessionError("SESSION_READ_FAILED", "recall_search", "storage failed");
     };
     const registry = new ToolRegistry();
-    registry.register(createRecallToolExecutor({ historyReader: fixture.reader }));
+    registerRecallTools(registry, fixture.reader);
     const runtime = new ToolRuntime(registry);
     const identity = createTestRuntime();
 
     expect(
       runtime.execute(
         identity.toolCall({
-          name: "Recall",
-          args: { mode: "search", query: "history" },
+          name: "RecallSearch",
+          args: { query: "history" },
         }),
         context,
       ),
@@ -171,8 +273,8 @@ describe("Recall tool", () => {
     const fixture = historyReaderFixture();
     const identity = createTestRuntime();
     const call = identity.toolCall({
-      name: "Recall",
-      args: { mode: "search", query: "EACCES" },
+      name: "RecallSearch",
+      args: { query: "EACCES" },
     });
     const builder = new ObservationBuilder();
     const search = builder.build({
@@ -242,6 +344,21 @@ describe("Recall tool", () => {
     );
   });
 });
+
+function registerRecallTools(
+  registry: ToolRegistry,
+  historyReader: SessionHistoryReader,
+): void {
+  registry.register(createRecallSearchToolExecutor({ historyReader }));
+  registry.register(createRecallGetToolExecutor({ historyReader }));
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Expected schema properties object.");
+  }
+  return value as Record<string, unknown>;
+}
 
 function historyReaderFixture() {
   const sessionId = runtimeIdFactory.createSessionId();

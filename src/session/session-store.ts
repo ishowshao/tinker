@@ -109,6 +109,7 @@ import { SessionLease } from "./session-lock";
 import {
   SESSION_SCHEMA_V9_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
+  upgradeRecallIndexContract,
   configureWritableDatabase,
   createSessionSchema,
   dropSessionCloneTriggers,
@@ -567,8 +568,11 @@ export class SessionStore implements SessionLedgerCommitter {
     let database: Database | undefined;
     try {
       database = openWritableDatabase(databasePath);
-      verifySessionSchema(database, input.sessionId);
       verifySqliteIntegrity(database, input.sessionId);
+      const recallIndexContractUpgraded = runTransaction(database, () =>
+        upgradeRecallIndexContract(database!),
+      );
+      verifySessionSchema(database, input.sessionId);
       const store = new SessionStore(database, lease, {
         sessionId: input.sessionId,
         workspaceRoot,
@@ -576,6 +580,7 @@ export class SessionStore implements SessionLedgerCommitter {
         databasePath,
         clock,
       });
+      store.recallIndexRebuilt = recallIndexContractUpgraded;
       const meta = store.readMeta();
       if (meta.initializationState !== "ready" && input.allowIncomplete !== true) {
         throw new SessionError(

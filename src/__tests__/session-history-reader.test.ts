@@ -7,12 +7,26 @@ import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
 import { formatMessageSource } from "../context/context-source";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
-import { RecallHistoryError } from "../session/session-history-reader";
+import {
+  isRecallableMessage,
+  RecallHistoryError,
+} from "../session/session-history-reader";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
 
 describe("SessionHistoryReader", () => {
+  test("excludes legacy and split Recall observations from the index allowlist", () => {
+    for (const toolName of ["Recall", "RecallSearch", "RecallGet"]) {
+      expect(
+        isRecallableMessage({ role: "tool", content: "recursive", toolName }),
+      ).toBe(false);
+    }
+    expect(
+      isRecallableMessage({ role: "tool", content: "file", toolName: "Read" }),
+    ).toBe(true);
+  });
+
   test("gets exact allowlisted content with stable UTF-8 byte pages", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-history-get-"));
     let first: HistoryFixture | undefined;
@@ -376,8 +390,8 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
     toolCallId: runtimeIdFactory.createToolCallId(),
     toolCallNumber: 1,
     providerToolCallId: "provider-recall",
-    name: "Recall",
-    args: { mode: "search", query: "x" },
+    name: "RecallSearch",
+    args: { query: "x" },
   };
   const recallPending = ledger.beginTurn({
     turn: recallTurn,
@@ -397,7 +411,7 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
       raw: {
         kind: "generic",
         ok: false,
-        toolName: "Recall",
+        toolName: "RecallSearch",
         error: "fixture",
       },
       observation: "recursive-secret must never be indexed",
@@ -405,7 +419,9 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
   ]);
   const recallToolMessage = store
     .loadProtocolView()
-    .messages.find((message) => message.role === "tool" && message.name === "Recall");
+    .messages.find(
+      (message) => message.role === "tool" && message.name === "RecallSearch",
+    );
   if (recallToolMessage?.role !== "tool") {
     throw new Error("Expected Recall tool message.");
   }

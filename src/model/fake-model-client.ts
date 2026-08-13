@@ -956,7 +956,7 @@ export class FakeModelClient implements ModelClient {
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): ModelRequestOutput {
-    requireTools(input, ["Read", "Recall"]);
+    requireTools(input, ["Read", "RecallSearch", "RecallGet"]);
     const prompt = lastUserMessage(input.messages);
     if (prompt === "PTY_CONTEXT_HEAVY") {
       const read = toolMessagesAfterLastUser(input.messages).find(
@@ -1156,7 +1156,8 @@ export class FakeModelClient implements ModelClient {
       .reverse()
       .find(
         (message): message is Extract<AgentMessage, { role: "tool" }> =>
-          message.role === "tool" && message.name === "Recall",
+          message.role === "tool" &&
+          (message.name === "RecallSearch" || message.name === "RecallGet"),
       );
     if (latestRecallResult === undefined) {
       return outputWithUsage(
@@ -1170,8 +1171,8 @@ export class FakeModelClient implements ModelClient {
                 1,
               ),
               providerToolCallId: "fake-recall-search-1",
-              name: "Recall",
-              args: { mode: "search", query: "recall-smoke-marker" },
+              name: "RecallSearch",
+              args: { query: "recall-smoke-marker" },
             },
           ],
         },
@@ -1183,7 +1184,7 @@ export class FakeModelClient implements ModelClient {
         /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
       )?.[1];
       if (source === undefined) {
-        throw new Error("Fake Recall search did not return a source.");
+        throw new Error("Fake RecallSearch did not return a source.");
       }
       return outputWithUsage(
         prepared,
@@ -1196,8 +1197,8 @@ export class FakeModelClient implements ModelClient {
                 1,
               ),
               providerToolCallId: "fake-recall-get-1",
-              name: "Recall",
-              args: { mode: "get", source },
+              name: "RecallGet",
+              args: { source },
             },
           ],
         },
@@ -1205,13 +1206,13 @@ export class FakeModelClient implements ModelClient {
       );
     }
     if (!latestRecallResult.content.includes("recall-smoke-marker")) {
-      throw new Error("Fake Recall get did not recover the expected marker.");
+      throw new Error("Fake RecallGet did not recover the expected marker.");
     }
     return outputWithUsage(
       prepared,
       {
         role: "assistant",
-        content: "Recall search and get completed.",
+        content: "RecallSearch and RecallGet completed.",
       },
       "stop",
     );
@@ -1489,11 +1490,12 @@ function recallMarker(
   finalText: string,
 ): ModelRequestOutput {
   const latestRecallResult = toolMessagesAfterLastUser(input.messages)
-    .filter((message) => message.name === "Recall")
+    .filter(
+      (message) => message.name === "RecallSearch" || message.name === "RecallGet",
+    )
     .at(-1);
   if (latestRecallResult === undefined) {
-    return toolCallOutput(prepared, options, "Recall", {
-      mode: "search",
+    return toolCallOutput(prepared, options, "RecallSearch", {
       query: marker,
     });
   }
@@ -1502,15 +1504,14 @@ function recallMarker(
       /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
     )?.[1];
     if (source === undefined) {
-      throw new Error("Fake PTY Recall search did not return a source.");
+      throw new Error("Fake PTY RecallSearch did not return a source.");
     }
-    return toolCallOutput(prepared, options, "Recall", {
-      mode: "get",
+    return toolCallOutput(prepared, options, "RecallGet", {
       source,
     });
   }
   if (!latestRecallResult.content.includes(marker)) {
-    throw new Error(`Fake PTY Recall get did not recover ${marker}.`);
+    throw new Error(`Fake PTY RecallGet did not recover ${marker}.`);
   }
   return textOutput(prepared, finalText);
 }

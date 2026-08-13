@@ -8,7 +8,7 @@ import {
 } from "./i4-active-recall-manifest";
 import { sha256, stableJsonStringify } from "../src/model/model-request-preflight";
 import { renderRecallRetirementContract } from "../src/context/recall-retirement-contract";
-import { RECALL_TOOL_DEFINITION } from "../src/tools/recall";
+import { RECALL_TOOL_DEFINITIONS } from "../src/tools/recall";
 import {
   I4_ACTIVE_RECALL_FIXTURE_V1,
   I4ActiveRecallReport,
@@ -262,7 +262,7 @@ function assertComparableReports(
   if (
     positive.recallContractSha256 !== sha256(renderRecallRetirementContract()) ||
     positive.recallToolDefinitionSha256 !==
-      sha256(stableJsonStringify(RECALL_TOOL_DEFINITION))
+      sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS))
   ) {
     throw new Error("I4 holdout report does not match the current Recall surface.");
   }

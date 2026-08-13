@@ -24,7 +24,7 @@
 I3 实现 Recall-first 冷前缀退休：当 swap-only 已无法消除 user、assistant、tool-call
 骨架和逐条 placeholder 形成的线性 token 地板时，允许一个连续、完整且足够旧的 turn
 前缀退出 active context。退出只改变模型请求的活动视图，不删除、改写或摘要 canonical
-history；退休历史仍由 `Recall search/get` 从原始消息和 FTS 索引中精确取回。
+history；退休历史仍由 `RecallSearch/RecallGet` 从原始消息和 FTS 索引中精确取回。
 
 本阶段采用以下决定：
 
@@ -47,7 +47,9 @@ history；退休历史仍由 `Recall search/get` 从原始消息和 FTS 索引�
 9. 退休过程不调用模型、不执行工具、不生成 checkpoint、不写自由文本摘要；只允许本地
    snapshot、编译、计量、校验和 SQLite transaction。
 10. active system surface 的 contract version 必须等于 current version（I3 阶段即
-    `recall-retirement-v1`），并包含 `Recall` tool definition；缺少任一条件时退休立即失败。
+    `recall-retirement-v1`），并包含当时的 `Recall` tool definition；当前 surface 已由
+    `recall-retirement-v2` 与 `RecallSearch`/`RecallGet` definitions 取代。缺少当前契约任一
+    条件时退休立即失败。
 11. I3 的 Recall 门槛只证明“显式要求查找历史时可以 search -> get 精确恢复原文”。模型能否
     在没有提醒时主动 Recall、任务质量是否足以允许自动退休，全部留给 I4。
 12. 任一 COMMIT 前失败都保持旧 active revision 和旧 measurement；COMMIT 后 revision
@@ -221,7 +223,7 @@ I3 实现必须同时保持以下不变量。
 3. retirement transaction 不得写入或删除 canonical/FTS 表。
 4. `canonical_sequence_sha256` 继续绑定 revision 创建时的完整 canonical prefix，而不是只
    绑定 active suffix。
-5. Recall search/get 的结果不受 active revision 和 `keepFromOrdinal` 影响。
+5. RecallSearch/RecallGet 的结果不受 active revision 和 `keepFromOrdinal` 影响。
 
 ### 5.2 revision 不变量
 
@@ -262,7 +264,8 @@ active view 的 canonical ordinal 集合只能是：
 
 1. active surface 的 contract version 必须等于 current version（I3 阶段即
    `recall-retirement-v1`）。
-2. active tool definitions 中恰好存在一个内建 `Recall`。
+2. active tool definitions 中恰好存在内建 `RecallSearch` 与 `RecallGet`，且不存在旧
+   `Recall` alias。
 3. Recall reader 仍使用 canonical `messages` / FTS，不读取 compiled entries。
 4. `ctx://message/<message-id>` 在退休前后返回相同 content 和 hash。
 5. Recall 自身的 tool observation 继续不进入 FTS，避免历史检索自我放大。
@@ -456,7 +459,7 @@ export const SUPPORTED_RECALL_RETIREMENT_CONTRACT_VERSIONS = [
 Older session content may be intentionally absent from the active context.
 Absence does not mean it never happened or does not exist. Before asserting
 that no prior decision, constraint, evidence, failure, or work exists, or before
-repeating work that may have happened earlier, use Recall search and then Recall
+repeating work that may have happened earlier, use RecallSearch and then Recall
 get for the relevant sources. Recall is historical session state; use Read/Grep
 and task tools to verify current workspace and process state.
 ```
@@ -471,11 +474,11 @@ and task tools to verify current workspace and process state.
 - schema v7 不存在没有 contract version 的合法 surface。
 - 新建或 surface refresh 后的新 surface 必须使用 current version；revision chain 中的历史
   surface 可以使用 supported allowlist 内的旧版本，未知版本 fast-fail。
-- retirement planner 只接受 active surface 的 version、system prompt、Recall definition 和
+- retirement planner 只接受 active surface 的 version、system prompt、Recall tool definitions 和
   prepared tool schema 全部一致的 snapshot。
 
 如果只调整 contract 文案但语义版本仍为 v1，system prompt/surface hash 会变化，现有
-`surface_refresh` 会记录新 surface；I4 还会重新匹配当前 contract 文本和 Recall definition hash，
+`surface_refresh` 会记录新 surface；I4 还会重新匹配当前 contract 文本和 Recall tool-definitions hash，
 无需升级 session schema。只有 contract 语义或 renderer contract 发生不兼容变化时才发布 v2；
 发布时把 v2 设为 current，同时继续保留 v1 decoder，直到没有受支持 revision 再引用它。
 
@@ -984,9 +987,9 @@ pressure 仍只产生 I1 swap shadow 事件。
 
 对一条明确位于退休前缀中的 marker：
 
-1. retirement 前 `Recall search` 命中 source；
+1. retirement 前 `RecallSearch` 命中 source；
 2. retirement 后相同 search 仍命中相同 source；
-3. `Recall get` 返回相同正文、字节分页和 content hash；
+3. `RecallGet` 返回相同正文、字节分页和 content hash；
 4. 继续追加 turns 后仍相同；
 5. close/reopen 与 `/resume` 后仍相同；
 6. compiled/provider payload 中不存在 marker、对应 frame、tool skeleton 或 placeholder。
@@ -1091,7 +1094,7 @@ I3 不以以下结果作为自动化资格：
 - database/WAL 增量；
 - request build p50/p95 与 RSS/heap；
 - provider request/tool execution count；
-- Recall search/get 一致性。
+- RecallSearch/RecallGet 一致性。
 
 ### 17.2 cache/protocol smoke
 
@@ -1102,7 +1105,7 @@ I3 不以以下结果作为自动化资格：
 3. payload 不包含退休 marker；
 4. 第一次 prefix rewrite 的 cache miss/hit 有实际 usage 记录；
 5. 同 revision 继续追加后的 cache prefix 行为稳定；
-6. Recall search -> get 后能继续完成 turn。
+6. RecallSearch -> get 后能继续完成 turn。
 
 这些数据是回归事实，不是自动 retirement 资格。自动化资格仍由 I4 按 profile/snapshot、system
 prompt hash 和 Recall tool schema hash 单独评估。
@@ -1184,10 +1187,11 @@ I3 只有同时满足以下条件才算完成：
 4. active ordinals 恰好为 `{1} U [keep, tail]`，退休区间无 message、tool skeleton 或
    placeholder 残留。
 5. retirement 前后 canonical messages、frames、tool results 和 FTS 逐项不变。
-6. retired history 的 Recall search/get 在 retirement、append、swap、surface refresh、再次
+6. retired history 的 RecallSearch/RecallGet 在 retirement、append、swap、surface refresh、再次
    retirement 和 resume 后返回相同 source/content/hash。
 7. 退休 override 留在数据库审计链中，但不进入 active manifest；后续 swap 只作用于 suffix。
-8. active surface 使用 current `recall-retirement-v1`；历史 surface version 必须在 supported
+8. active surface 使用 current `recall-retirement-v2`；历史 `recall-retirement-v1` surface
+   version 必须在 supported
    allowlist 内，Recall tool/schema 缺失或漂移时 fast-fail。
 9. manual/benchmark planner 不发 model request、不执行工具、不生成摘要或 checkpoint。
 10. candidate raw/guarded tokens 都严格下降；选择达到 target 的最小退休前缀，或明确报告
@@ -1235,7 +1239,7 @@ I3 按本文边界交付时，automatic retirement 仍未启用：
   guarded token 35,746 -> 30,853，database + WAL 再增加 32,960 bytes。
 - provider request 保持精确的 104 次；retirement 两次均为零 provider request。最终数据库有
   52 turns、208 messages、156 frames、5 revisions、28 条历史 override 和 0 条 active
-  override；resume、取消、退休 payload marker 缺席及 Recall search/get 均通过。
+  override；resume、取消、退休 payload marker 缺席及 RecallSearch/RecallGet 均通过。
 - request build p50/p95 为 2.44/12.40ms；本轮观测 RSS/heap 增量为
   242,106,368/63,061,314 bytes，仅作为回归事实，不作为稳定 SLA。
 
@@ -1247,7 +1251,7 @@ I3 按本文边界交付时，automatic retirement 仍未启用：
 - `deepseek-v4-flash` 真实 provider smoke 中，retirement 前后 provider request count 保持
   1 -> 1；首个 post-retirement payload 不含退休 marker。pre-retirement、第一次 rewrite、
   同 revision append 的 cache hit/miss 分别为 0/3,322、0/3,267、3,200/91 tokens；随后
-  真实模型各执行一次 Recall search/get 并恢复 marker。该可复跑入口为
+  真实模型各执行一次 RecallSearch/RecallGet 并恢复 marker。该可复跑入口为
   `bun run bench:i3-provider-smoke -- deepseek-v4-flash`。
 - 真实 TUI PTY 中 `/compact retire` 将 10,103 降到 4,105 estimated tokens（下降 59.4%），
   revision 1 -> 2；随后通过直接 `/resume <UUID>` 恢复同一退休 revision，Recall
@@ -1267,7 +1271,7 @@ Cold prefix retirement is deterministic, manual, atomic, and resumable
 Canonical history and Recall remain exact across retirement revisions
 Retired frames and placeholders are absent from the provider payload
 The active token floor is bounded by system/tools plus a fixed recent suffix
-Explicit Recall search -> get works after retirement
+Explicit RecallSearch -> get works after retirement
 Automatic revision commit is still disabled
 ```
 

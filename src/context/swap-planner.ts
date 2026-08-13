@@ -585,7 +585,11 @@ function basicExclusionReason(input: {
   if (input.result.completion.kind !== "returned") {
     return "synthetic_completion";
   }
-  if (input.message.name === "Recall") {
+  if (
+    input.message.name === "Recall" ||
+    input.message.name === "RecallSearch" ||
+    input.message.name === "RecallGet"
+  ) {
     return "recall_tool";
   }
   if (input.protectedTurns.has(input.message.turnId)) {

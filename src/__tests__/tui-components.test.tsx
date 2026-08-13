@@ -1102,7 +1102,7 @@ describe("tui components", () => {
     expect(lastFrame()).toContain("17 turns removed from the active request");
     expect(lastFrame()).toContain("86,073 -> 41,220");
     expect(lastFrame()).toContain("estimated tokens (-52.1%)");
-    expect(lastFrame()).toContain("available through Recall");
+    expect(lastFrame()).toContain("available through RecallSearch and RecallGet");
     expect(retireCalls).toBe(1);
     expect(runCalls).toBe(0);
     cleanup();

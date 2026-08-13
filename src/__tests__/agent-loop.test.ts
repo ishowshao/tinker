@@ -23,7 +23,7 @@ import {
   RecallHistoryError,
   type SessionHistoryReader,
 } from "../session/session-history-reader";
-import { createRecallToolExecutor } from "../tools/recall";
+import { createRecallSearchToolExecutor } from "../tools/recall";
 import { createDefaultTooling } from "../tools/registry";
 import { ToolRegistry, ToolRuntime } from "../tools/registry";
 import type { ToolExecutor } from "../tools/types";
@@ -140,8 +140,8 @@ class RecallBatchModel extends TestModelClient {
         {
           ...runtime.createToolCall(iteration, 1),
           providerToolCallId: "provider-recall",
-          name: "Recall",
-          args: { mode: "search", query: "history" },
+          name: "RecallSearch",
+          args: { query: "history" },
         },
         {
           ...runtime.createToolCall(iteration, 2),
@@ -1095,7 +1095,7 @@ describe("runAgent", () => {
       );
     });
     const registry = new ToolRegistry();
-    registry.register(createRecallToolExecutor({ historyReader: reader }));
+    registry.register(createRecallSearchToolExecutor({ historyReader: reader }));
     registry.register(
       testTool("Second", () => {
         secondCalls += 1;
@@ -1143,7 +1143,7 @@ describe("runAgent", () => {
       throw new RecallHistoryError("RECALL_SOURCE_NOT_FOUND", "ordinary history miss");
     });
     const registry = new ToolRegistry();
-    registry.register(createRecallToolExecutor({ historyReader: reader }));
+    registry.register(createRecallSearchToolExecutor({ historyReader: reader }));
     registry.register(
       testTool("Second", () => {
         secondCalls += 1;
@@ -1249,7 +1249,7 @@ function testHistoryReader(
     sessionId,
     search,
     get() {
-      throw new Error("Unexpected Recall get.");
+      throw new Error("Unexpected RecallGet.");
     },
   };
 }

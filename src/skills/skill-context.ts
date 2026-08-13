@@ -298,7 +298,7 @@ export function renderSkillActivationReceipt(input: {
           `source=${source}`,
           "activation=The full historical instructions were promoted out of this tool observation.",
           "current=Consult the current active_agent_skills system section; absence means inactive.",
-          "historical=Use Recall get with source to recover the original activation observation.",
+          "historical=Use RecallGet with source to recover the original activation observation.",
         ].join("\n")
       : [
           "[Tinker Agent Skill activation rejected]",
@@ -306,7 +306,7 @@ export function renderSkillActivationReceipt(input: {
           `source=${source}`,
           `status=${input.outcome === "unavailable" ? "unavailable" : "not_dispatched"}`,
           "current=This skill was not added to the active system surface.",
-          "historical=Use Recall get with source to recover the original activation observation.",
+          "historical=Use RecallGet with source to recover the original activation observation.",
         ].join("\n");
   const originalBytes = Buffer.byteLength(input.message.content, "utf8");
   const renderedBytes = Buffer.byteLength(renderedContent, "utf8");

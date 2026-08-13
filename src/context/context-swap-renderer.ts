@@ -73,7 +73,7 @@ export class ContextSwapRenderer {
       `contentSha256=${message.contentSha256}`,
       `tool=${stableJsonStringify(compactExternalString(message.name))}`,
       `metadata=${metadata}`,
-      "historical=Use Recall get with source to recover the original observation.",
+      "historical=Use RecallGet with source to recover the original observation.",
       `current=${currentGuidance(raw.kind)}`,
     ].join("\n");
     const originalBytes = utf8Bytes(message.content);

@@ -90,7 +90,9 @@ test(
           timeoutMs: 10_000,
         });
         expect(harness.screenText()).toContain("Older history");
-        expect(harness.screenText()).toContain("remains available through Recall.");
+        expect(harness.screenText()).toContain(
+          "remains available through RecallSearch and RecallGet.",
+        );
         await submitPrompt(harness, "/status");
         await harness.waitForScreen("Measurement");
 
@@ -462,7 +464,7 @@ function assertCanonicalRecall(
           `SELECT COUNT(*) AS count
            FROM tool_results
            JOIN messages ON messages.message_id = tool_results.tool_message_id
-           WHERE messages.name = 'Recall'`,
+           WHERE messages.name IN ('RecallSearch', 'RecallGet')`,
         )
         .get(),
     ).toEqual({ count: 2 });

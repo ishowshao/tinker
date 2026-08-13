@@ -1,12 +1,12 @@
 {
   "schemaVersion": "active-recall-report-v1",
-  "createdAt": "2026-07-18T08:57:40.840Z",
+  "createdAt": "2026-08-12T16:18:39.198Z",
   "suite": "calibration",
   "manifestVersion": "active-recall-manifest-v1",
   "manifestHash": "093679e221e02b71ba5acf54693faa7a299d05dd25f6faabbeb84645d4db4d2d",
   "graderVersion": "active-recall-deterministic-grader-v1",
-  "recallContractSha256": "c75108d351ed3223928ebeb52c7258a6f95033287a8e560fb5b2efff8e084c9b",
-  "recallToolDefinitionSha256": "60caf87f313ea35e74e278ab8b30337cc8af1cc83d82d957a73857a764f3e3d9",
+  "recallContractSha256": "3b6d1a452efea1db5920eb13542571b038667ef4f635551bea375bda6562a39f",
+  "recallToolDefinitionSha256": "e63ada7cdf9591d1e933cf5e190ea30586e02bbf73aeb5e648db449d75aae009",
   "profile": "deepseek-v4-flash",
   "model": "deepseek-v4-flash",
   "stream": true,
@@ -34,14 +34,14 @@
     "unnecessaryRecallRate": 0,
     "invalidRecallCallCount": 0,
     "providerRequestCount": 4,
-    "providerLatencyMs": 4853.0558,
+    "providerLatencyMs": 6839.0937,
     "providerUsage": {
-      "promptTokens": 105465,
-      "completionTokens": 152,
-      "totalTokens": 105617,
-      "promptCacheHitTokens": 26368,
-      "promptCacheMissTokens": 79097,
-      "reasoningTokens": 76
+      "promptTokens": 108711,
+      "completionTokens": 158,
+      "totalTokens": 108869,
+      "promptCacheHitTokens": 27008,
+      "promptCacheMissTokens": 81703,
+      "reasoningTokens": 85
     }
   },
   "trials": [
@@ -74,14 +74,14 @@
       },
       "provider": {
         "requestCount": 1,
-        "latencyMs": 1416.7925,
+        "latencyMs": 2189.8116,
         "usage": {
-          "promptTokens": 26323,
-          "completionTokens": 26,
-          "totalTokens": 26349,
+          "promptTokens": 27133,
+          "completionTokens": 36,
+          "totalTokens": 27169,
           "promptCacheHitTokens": 0,
-          "promptCacheMissTokens": 26323,
-          "reasoningTokens": 20
+          "promptCacheMissTokens": 27133,
+          "reasoningTokens": 29
         },
         "resolvedModels": [
           "deepseek-v4-flash"
@@ -129,14 +129,14 @@
       },
       "provider": {
         "requestCount": 2,
-        "latencyMs": 2245.6813,
+        "latencyMs": 2767.5402,
         "usage": {
-          "promptTokens": 52810,
-          "completionTokens": 95,
-          "totalTokens": 52905,
-          "promptCacheHitTokens": 26368,
-          "promptCacheMissTokens": 26442,
-          "reasoningTokens": 40
+          "promptTokens": 54437,
+          "completionTokens": 83,
+          "totalTokens": 54520,
+          "promptCacheHitTokens": 27008,
+          "promptCacheMissTokens": 27429,
+          "reasoningTokens": 28
         },
         "resolvedModels": [
           "deepseek-v4-flash"
@@ -184,14 +184,14 @@
       },
       "provider": {
         "requestCount": 1,
-        "latencyMs": 1190.582,
+        "latencyMs": 1881.7419,
         "usage": {
-          "promptTokens": 26332,
-          "completionTokens": 31,
-          "totalTokens": 26363,
+          "promptTokens": 27141,
+          "completionTokens": 39,
+          "totalTokens": 27180,
           "promptCacheHitTokens": 0,
-          "promptCacheMissTokens": 26332,
-          "reasoningTokens": 16
+          "promptCacheMissTokens": 27141,
+          "reasoningTokens": 28
         },
         "resolvedModels": [
           "deepseek-v4-flash"

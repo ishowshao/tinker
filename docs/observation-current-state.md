@@ -612,7 +612,7 @@ content:
 可恢复失败带稳定 error code：
 
 ```text
-Recall get failed (RECALL_SOURCE_NOT_FOUND): Historical source was not found.
+RecallGet failed (RECALL_SOURCE_NOT_FOUND): Historical source was not found.
 ```
 
 error code 包括 `RECALL_ARGS_INVALID`、`RECALL_SOURCE_INVALID`、

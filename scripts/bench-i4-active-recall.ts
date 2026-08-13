@@ -34,7 +34,7 @@ import type {
 import { estimatePromptSegments } from "../src/model/token-estimator";
 import { stableJsonStringify, sha256 } from "../src/model/model-request-preflight";
 import { renderRecallRetirementContract } from "../src/context/recall-retirement-contract";
-import { RECALL_TOOL_DEFINITION } from "../src/tools/recall";
+import { RECALL_TOOL_DEFINITIONS } from "../src/tools/recall";
 import type { RecallRawResult } from "../src/tools/types";
 import { createUuidV7 } from "../src/ids/uuid-v7";
 import type { SessionId } from "../src/ids/runtime-id";
@@ -200,7 +200,7 @@ export async function runI4ActiveRecallEvaluation(input: {
     manifestHash: ACTIVE_RECALL_MANIFEST_HASH,
     graderVersion: ACTIVE_RECALL_GRADER_VERSION,
     recallContractSha256: sha256(renderRecallRetirementContract()),
-    recallToolDefinitionSha256: sha256(stableJsonStringify(RECALL_TOOL_DEFINITION)),
+    recallToolDefinitionSha256: sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS)),
     ...(config.profileName === undefined ? {} : { profile: config.profileName }),
     model: config.modelName,
     stream: config.stream,
@@ -539,12 +539,21 @@ class ActiveRecallRecorder implements EventSink {
     if (!this.terminal) return;
     if (event.type === "tool.started") {
       this.toolCallCount += 1;
-      if (event.data.call.name !== "Recall") {
+      if (
+        event.data.call.name !== "RecallSearch" &&
+        event.data.call.name !== "RecallGet" &&
+        event.data.call.name !== "Recall"
+      ) {
         this.nonRecallCallCount += 1;
         return;
       }
       this.recallCallCount += 1;
-      const mode = (event.data.call.args as { mode?: unknown }).mode;
+      const mode =
+        event.data.call.name === "RecallSearch"
+          ? "search"
+          : event.data.call.name === "RecallGet"
+            ? "get"
+            : "invalid";
       if (mode === "search") {
         this.searchCount += 1;
         const query = (event.data.call.args as { query?: unknown }).query;
@@ -555,7 +564,8 @@ class ActiveRecallRecorder implements EventSink {
     }
     if (
       event.type !== "tool.raw_result" ||
-      event.data.call.name !== "Recall" ||
+      (event.data.call.name !== "RecallSearch" &&
+        event.data.call.name !== "RecallGet") ||
       event.data.raw.kind !== "recall"
     ) {
       return;

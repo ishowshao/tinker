@@ -447,7 +447,7 @@ source=ctx://message/<message-id>
 contentSha256=<canonical-content-hash>
 tool=<tool-name>
 metadata=<stable-json-allowlisted-metadata>
-historical=Use Recall get with source to recover the original observation.
+historical=Use RecallGet with source to recover the original observation.
 current=<static-tool-specific-guidance>
 ```
 
@@ -823,7 +823,7 @@ parity 测试稳定后，删除测试内的 legacy 路径，不在生产保留�
 - provider 收到的 payload 完全一致；
 - final answer、tool call 和 tool side effect 次数一致；
 - cancellation 和 failure 结果一致；
-- Recall search/get 结果一致；
+- RecallSearch/RecallGet 结果一致；
 - active revision 和 canonical rows 一致；
 - blocked preflight 仍然 blocked；
 - shadow diagnostic failure 会被记录，但不会替换 active request。
@@ -934,7 +934,7 @@ I1 已按上述边界落地；活动请求仍使用 schema v4 的唯一 `initial
   benchmark smoke 全部成功；`bun run bench:recall` 也通过，10,000-message fixture 的
   schema 仍是 v4，稀疏 trigram p50/p95 为 0.19/0.20ms。
 - 50-turn formal benchmark 仍落库 52 turns、208 messages、156 frames 和 52 tool
-  results；resume、取消与 Recall search -> get 全部通过。provider request 精确为 104
+  results；resume、取消与 RecallSearch -> get 全部通过。provider request 精确为 104
   次，shadow 没有增加任何 provider request。
 - benchmark-only 的 `targetTokens = 0` 在第 12 回合强制规划一次，结果为
   `insufficient_candidates`。11 条已结束 observation 中，7 条落在最近 8 turns 保护区，

@@ -60,7 +60,7 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 3. 所有 provider 请求在发送前通过预算与 tool-call 协议校验。
 4. 换出、前缀退休和 checkpoint 失败时，旧活动视图继续有效。
 5. `/resume` 恢复同一份 canonical history，而不是只恢复一段自由文本摘要。
-6. 退出 active context 的历史仍可由 `Recall search/get` 检索原文；“未出现在当前
+6. 退出 active context 的历史仍可由 `RecallSearch/RecallGet` 检索原文；“未出现在当前
    请求中”不能被解读为“session 中不存在”。
 
 ### 2.2 当前不做
@@ -265,8 +265,8 @@ Tinker 最终应提供一个逻辑上持续增长、可精确寻址的 session �
 实施范围：
 
 - 定义稳定 `ctx://message/<message-id>` 来源和只读 `SessionHistoryReader`。
-- `Recall get` 按 source 精确返回正文、哈希和分页信息。
-- `Recall search` 使用 session 内 FTS5 trigram；短查询使用显式 substring fallback。
+- `RecallGet` 按 source 精确返回正文、哈希和分页信息。
+- `RecallSearch` 使用 session 内 FTS5 trigram；短查询使用显式 substring fallback。
 - 搜索只覆盖允许返回的 user、assistant 和 tool observation，不默认暴露 reasoning 或
   provider raw response。
 - observation 明确标记为历史数据；历史 Read/Grep/Bash 与当前 workspace 的
@@ -432,7 +432,7 @@ revision 失败时旧视图保持活动。I2 不启用自动 prefix retirement�
   已结束 turn，不能留下半个 tool exchange。
 - active view 只保留固定 system/kernel、必选 Recall tool 和近期完整 suffix；退休区间
   不留每条 placeholder。
-- canonical message、tool result 和 FTS 索引不变；`Recall search/get` 必须继续命中
+- canonical message、tool result 和 FTS 索引不变；`RecallSearch/RecallGet` 必须继续命中
   已退休历史。
 - 在 F5 已有 Recall rule 上增强并长期保留一条常量成本的契约：active context 中缺席
   只表示未加载，不表示 session 中不存在；在重复旧工作、否定历史证据或依赖早期决策
@@ -445,7 +445,8 @@ placeholder，协议骨架完整，resume 恢复同一 active revision，并且�
 
 实际结果：
 
-- SessionStore 已切换到 schema v7；新增版本化 `recall-retirement-v1` surface contract、
+- SessionStore 已切换到 schema v7；新增版本化 Recall retirement surface contract（当前为
+  `recall-retirement-v2`，并支持历史 `recall-retirement-v1`）、
   独立 `prefix_retirement` revision、active override manifest 和 `{1} U [keep, tail]`
   compiler。v6 不迁移、不 dual-read，直接 fast-fail。
 - 50-turn formal benchmark 在两次 swap 后提交 retirement revision 4/5。第一次 keep
@@ -458,7 +459,7 @@ placeholder，协议骨架完整，resume 恢复同一 active revision，并且�
   activation fault 保留新 revision。
 - 真实 provider smoke 的 retirement request count 为 1 -> 1；首个新 payload 不含 marker，
   cache hit/miss 从第一次 rewrite 的 0/3,267 变为同 revision append 的 3,200/91 tokens，
-  随后真实模型完成 Recall search -> get。真实 TUI PTY 将 10,103 降到 4,105 estimated
+  随后真实模型完成 RecallSearch -> get。真实 TUI PTY 将 10,103 降到 4,105 estimated
   tokens，直接 `/resume` 后取回 9,020-byte 退休消息，再 `/compact` 并正常 `/quit`。
 - schema v7 的 10,000-message Recall benchmark trigram p95 为 0.27ms；formal benchmark、
   fault matrix、component tests、真实 PTY、provider cache/protocol/Recall smoke 和

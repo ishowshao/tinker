@@ -129,6 +129,65 @@ describe("session schema identity", () => {
     }
   });
 
+  test("upgrades the pre-split Recall index contract without changing canonical history", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-recall-index-upgrade-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    try {
+      const store = await createReadyStore(workspace, sessionId);
+      const databasePath = store.databasePath;
+      const messagesBefore = store.loadProtocolView().messages;
+      await store.close("tui_exit");
+
+      const database = new Database(databasePath, { readwrite: true });
+      const metadataTrigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_meta_monotonic_update'",
+        )
+        .get() as { sql: string };
+      database.exec("DROP TRIGGER messages_recall_index");
+      database.exec("DROP VIEW recall_documents");
+      database.exec(`CREATE VIEW recall_documents AS
+        SELECT rowid AS docid, content
+        FROM messages
+        WHERE role IN ('user', 'assistant', 'tool')
+          AND content IS NOT NULL
+          AND length(content) > 0
+          AND NOT (role = 'tool' AND name = 'Recall')`);
+      database.exec(`CREATE TRIGGER messages_recall_index
+        AFTER INSERT ON messages
+        WHEN NEW.role IN ('user', 'assistant', 'tool')
+          AND NEW.content IS NOT NULL
+          AND length(NEW.content) > 0
+          AND NOT (NEW.role = 'tool' AND NEW.name = 'Recall')
+        BEGIN
+          INSERT INTO message_fts(rowid, content)
+          VALUES (NEW.rowid, NEW.content);
+        END`);
+      database.query("INSERT INTO message_fts(message_fts) VALUES ('rebuild')").run();
+      database.exec("DROP TRIGGER session_meta_monotonic_update");
+      database
+        .query("UPDATE session_meta SET schema_fingerprint = ? WHERE singleton = 1")
+        .run("27c61d806778689f88211b6eaa6dd9dc3a730dfd4133c862006140576b2ecd10");
+      database.exec(metadataTrigger.sql);
+      database.close();
+
+      const upgraded = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+      });
+      expect(upgraded.loadProtocolView().messages).toEqual(messagesBefore);
+      expect(upgraded.readMeta().schemaFingerprint).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
+      expect(
+        upgraded.recoverInterruptedState(runtimeIdFactory).recallIndexRebuilt,
+      ).toBe(true);
+      await upgraded.close("tui_exit");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("rebuilds index-only corruption from verified canonical history", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-rebuild-"));
     const sessionId = runtimeIdFactory.createSessionId();
