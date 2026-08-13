@@ -23,6 +23,7 @@ import {
   MEMORY_CONFIG_FIELDS,
   MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
+  MODEL_REASONING_FIELDS,
   MODEL_TOKEN_ESTIMATOR_FIELDS,
   PUBLIC_CONFIG_FIELDS,
 } from "../cli/public-config-contract";
@@ -47,6 +48,7 @@ describe("public contract documentation rendering", () => {
     const rendered = renderModelProfileFields();
     for (const field of [
       ...MODEL_PROFILE_FIELDS,
+      ...MODEL_REASONING_FIELDS,
       ...MODEL_TOKEN_ESTIMATOR_FIELDS,
       ...MEMORY_CONFIG_FIELDS,
       ...MEMORY_EMBEDDING_FIELDS,
@@ -64,6 +66,7 @@ describe("public contract documentation rendering", () => {
       parseModelProfiles(example ?? "", `README example ${index + 1}`);
     }
     expect(examples[0]).toContain('"inputModalities": [');
+    expect(examples[0]).toContain('"supportedEfforts": [');
     expect(examples[1]).toContain('"tokenEstimator": {');
     expect(examples[2]).toContain('"memory": {');
   });

@@ -18,6 +18,7 @@ import {
   unknownProfileError,
 } from "./model-profiles";
 import type { MemoryEmbeddingConfig } from "../memory/contracts";
+import type { ReasoningEffortConfig } from "../model/reasoning-effort";
 import {
   parsePublicEnvironment,
   type ParsedPublicEnvironment,
@@ -32,6 +33,7 @@ export type RunnerConfig = {
   readonly apiKey: string;
   readonly apiBase: string;
   readonly maxIterations: number;
+  readonly reasoning?: ReasoningEffortConfig;
   readonly includeReasoningContent: boolean;
   readonly stream: boolean;
   readonly contextProfile: ModelContextProfile;
@@ -172,6 +174,7 @@ function runnerConfigTemplateFromProfile(
     apiKey: profile.apiKey,
     apiBase: profile.apiBase,
     maxIterations: environment.maxIterations,
+    ...(profile.reasoning === undefined ? {} : { reasoning: profile.reasoning }),
     includeReasoningContent:
       profile.api === "chat-completions" && profile.includeReasoningContent,
     stream: profile.stream,

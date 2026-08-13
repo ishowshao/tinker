@@ -330,6 +330,13 @@ function fakeRuntime(
     recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
     skills: () => ({ skills: [], shadowedNames: [] }),
     mcp: () => ({ servers: [] }),
+    reasoningEffort: () => undefined,
+    setReasoningEffort: () => {
+      throw new Error("not used");
+    },
+    resetReasoningEffort: () => {
+      throw new Error("not used");
+    },
     supportsImageInput: () => false,
     importImage: async () => {
       throw new Error("not used");

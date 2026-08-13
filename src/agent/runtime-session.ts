@@ -114,6 +114,7 @@ import {
   type ContextAutomationDecision,
 } from "../context/context-automation-policy";
 import type { SkillCatalogSnapshot } from "../skills/skill-loader";
+import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import {
   activeSkillManifestEntry,
   createSkillCatalogSnapshot,
@@ -151,6 +152,9 @@ export type RuntimeSession = {
   skills(): RuntimeSkillsSnapshot;
   mcp(): McpInventorySnapshot;
   supportsImageInput(): boolean;
+  reasoningEffort(): ReasoningEffortSnapshot | undefined;
+  setReasoningEffort(effort: string): ReasoningEffortSnapshot;
+  resetReasoningEffort(): ReasoningEffortSnapshot;
   importImage(
     sourcePath: string,
     signal: AbortSignal,
@@ -963,6 +967,36 @@ class DefaultRuntimeSession implements RuntimeSession {
 
   supportsImageInput(): boolean {
     return this.input.modelClient.inputModalities?.includes("image") === true;
+  }
+
+  reasoningEffort(): ReasoningEffortSnapshot | undefined {
+    return this.input.modelClient.reasoningEffort?.snapshot();
+  }
+
+  setReasoningEffort(effort: string): ReasoningEffortSnapshot {
+    if (this.state !== "ready" || this.activeTurn !== undefined) {
+      throw new Error(
+        `Cannot change reasoning effort while RuntimeSession is ${this.state}.`,
+      );
+    }
+    const reasoningEffort = this.input.modelClient.reasoningEffort;
+    if (reasoningEffort === undefined) {
+      throw new Error("Current model profile does not configure reasoning effort.");
+    }
+    return reasoningEffort.set(effort);
+  }
+
+  resetReasoningEffort(): ReasoningEffortSnapshot {
+    if (this.state !== "ready" || this.activeTurn !== undefined) {
+      throw new Error(
+        `Cannot change reasoning effort while RuntimeSession is ${this.state}.`,
+      );
+    }
+    const reasoningEffort = this.input.modelClient.reasoningEffort;
+    if (reasoningEffort === undefined) {
+      throw new Error("Current model profile does not configure reasoning effort.");
+    }
+    return reasoningEffort.reset();
   }
 
   bashGuard(): BashGuardSnapshot {

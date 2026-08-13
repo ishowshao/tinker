@@ -40,6 +40,9 @@ export async function initializeTuiMemory(input: {
             api: profile.api,
             apiKey: profile.apiKey,
             apiBase: profile.apiBase,
+            ...(profile.reasoning === undefined
+              ? {}
+              : { reasoning: profile.reasoning }),
             includeReasoningContent: profile.includeReasoningContent,
             stream: profile.stream,
             contextBudget: memoryConfig.contextBudget,

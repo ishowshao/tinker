@@ -30,6 +30,10 @@ const TEST_PROFILES_JSON = JSON.stringify({
       apiKey: "sk-deepseek",
       contextWindowTokens: 256 * 1024,
       maxSupportedOutputTokens: 64 * 1024,
+      reasoning: {
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
     },
     glm: {
       model: "glm-4.6",
@@ -329,6 +333,10 @@ describe("profile resolution", () => {
       apiKey: "sk-deepseek",
       apiBase: "https://api.deepseek.com/v1",
       stream: true,
+      reasoning: {
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
     });
     expect(
       deriveRunnerConfig(resolved, {

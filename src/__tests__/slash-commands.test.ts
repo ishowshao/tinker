@@ -178,6 +178,22 @@ describe("parseSlashCommand", () => {
     expect(() => parseSlashCommand("/model a b")).toThrow("Usage: /model");
   });
 
+  test("parses session-runtime reasoning effort controls", () => {
+    expect(parseSlashCommand("/reasoning")).toEqual({
+      type: "reasoning_status",
+    });
+    expect(parseSlashCommand("/reasoning high")).toEqual({
+      type: "reasoning_set",
+      effort: "high",
+    });
+    expect(parseSlashCommand("/reasoning reset")).toEqual({
+      type: "reasoning_reset",
+    });
+    expect(() => parseSlashCommand("/reasoning high extra")).toThrow(
+      "Usage: /reasoning [effort|reset]",
+    );
+  });
+
   test("rejects invalid IDs, extra arguments, and missing confirmation", () => {
     expect(() => parseSlashCommand("/resume not-an-id")).toThrow("Invalid session ID");
     expect(() => parseSlashCommand("/resume a b")).toThrow("Usage: /resume");

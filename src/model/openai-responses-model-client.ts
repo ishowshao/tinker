@@ -39,6 +39,7 @@ import {
 } from "./openai-responses-mapping";
 import { OpenAIResponsesStreamAccumulator } from "./openai-responses-stream";
 import { responsesPayloadForChatTokenEstimator } from "./openai-responses-token-estimator";
+import type { ReasoningEffortController } from "./reasoning-effort";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
 const OPENAI_RESPONSES_SERIALIZATION_VERSION = "openai-responses-v1";
@@ -51,6 +52,7 @@ export class OpenAIResponsesModelClient implements ModelClient {
   });
   readonly inputTokenEstimator?: InputTokenEstimator;
   readonly inputModalities: readonly ("text" | "image")[];
+  readonly reasoningEffort?: ReasoningEffortController;
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
   private readonly materializedRequests = new WeakSet<object>();
@@ -73,6 +75,7 @@ export class OpenAIResponsesModelClient implements ModelClient {
       };
       model: string;
       providerName?: string;
+      reasoningEffort?: ReasoningEffortController;
       stream?: boolean;
       timeoutMs?: number;
       fetch?: typeof fetch;
@@ -80,6 +83,7 @@ export class OpenAIResponsesModelClient implements ModelClient {
   ) {
     this.provider = options.providerName ?? "responses-compatible";
     this.stream = options.stream ?? true;
+    this.reasoningEffort = options.reasoningEffort;
     this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
     const supportsImages = this.inputModalities.includes("image");
     if (!this.inputModalities.includes("text")) {
@@ -114,10 +118,14 @@ export class OpenAIResponsesModelClient implements ModelClient {
     const items = toOpenAIResponsesInput(input.messages);
     const tools =
       input.tools.length > 0 ? toOpenAIResponsesTools(input.tools) : undefined;
+    const reasoningEffort = this.reasoningEffort?.snapshot().effort;
     const payload = deepFreeze({
       model: this.options.model,
       input: items,
       ...(tools === undefined ? {} : { tools, tool_choice: "auto" as const }),
+      ...(reasoningEffort === undefined
+        ? {}
+        : { reasoning: { effort: reasoningEffort } }),
       max_output_tokens: this.options.contextBudget.requestMaxOutputTokens,
       store: false as const,
       ...(this.stream ? { stream: true as const } : {}),

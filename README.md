@@ -186,10 +186,20 @@ Profile fields:
 | `apiKey` | Yes | Non-empty string | — | Yes | API credential for this profile. |
 | `contextWindowTokens` | Yes | Positive integer | — | No | Model context-window size in tokens. |
 | `maxSupportedOutputTokens` | Yes | Positive integer | — | No | Maximum output-token count supported by the model; must not exceed contextWindowTokens. |
+| `reasoning` | No | Object | — | No | Provider-specific reasoning efforts and the default for each new session runtime. |
 | `includeReasoningContent` | No | JSON boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
 | `stream` | No | JSON boolean | `true` | No | Use streaming transport for the selected model API. |
 | `inputModalities` | No | Normalized modality array | `["text"]` | No | Accepted model input modalities; normalizes to ["text"] or ["text", "image"]. |
 | `tokenEstimator` | With image | Object | — | Yes | Independent token estimator required for image profiles. |
+
+`reasoning` fields:
+
+| Field | Type / constraint | Description |
+| --- | --- | --- |
+| `supportedEfforts` | Non-empty unique string array | Provider-supported effort values exposed by the /reasoning command. |
+| `defaultEffort` | Non-empty string listed above | Effort used whenever a session runtime is created or reopened. |
+
+The optional `reasoning` object declares provider-specific effort values. Efforts must be unique non-whitespace strings, `reset` is reserved by the TUI command, and `defaultEffort` must appear in `supportedEfforts`. Omitting `reasoning` sends no effort parameter and disables `/reasoning` for that profile.
 
 `tokenEstimator` fields:
 
@@ -214,6 +224,14 @@ Text-only profile example:
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
       "maxSupportedOutputTokens": 8192,
+      "reasoning": {
+        "supportedEfforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium"
+      },
       "includeReasoningContent": false,
       "stream": true,
       "inputModalities": [
@@ -236,6 +254,14 @@ Image-capable profile example:
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
       "maxSupportedOutputTokens": 8192,
+      "reasoning": {
+        "supportedEfforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium"
+      },
       "includeReasoningContent": false,
       "stream": true,
       "inputModalities": [
@@ -287,6 +313,14 @@ Atomic-memory profile example:
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
       "maxSupportedOutputTokens": 8192,
+      "reasoning": {
+        "supportedEfforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "defaultEffort": "medium"
+      },
       "includeReasoningContent": false,
       "stream": true,
       "inputModalities": [
@@ -361,6 +395,7 @@ complete fixed policy and persistence contract.
 | `/view <path>` | View a local UTF-8 text file |
 | `/copy` | Copy the last response as Markdown |
 | `/model [profile-name]` | Switch model profile (new session) |
+| `/reasoning [effort\|reset]` | Show or change reasoning effort for this session runtime |
 | `/resume [session-id]` | Choose or resume a session |
 | `/session delete <session-id> --confirm` | Manage stored sessions |
 | `/quit` | Exit the TUI |
@@ -371,6 +406,16 @@ must remain inside the workspace; absolute paths may point outside it. `/compact
 swaps eligible historical tool output, while `/compact retire` retires a complete
 cold prefix whose original history remains available through `Recall`. `/copy`
 copies the last completed assistant response as raw Markdown.
+
+Profiles that declare `reasoning` expose `/reasoning` as a session-runtime
+control. `/reasoning <effort>` temporarily selects one of the profile's
+`supportedEfforts`, and `/reasoning reset` restores `defaultEffort`. The
+selection is not written to configuration or canonical history: `/clear`,
+`/fork`, `/model`, `/resume`, and a TUI restart create a new runtime from the
+profile default. Responses requests send `reasoning.effort`; Chat Completions
+requests send `reasoning_effort`. When configured, the TUI information line
+shows the live effort immediately after the model name, for example
+`gpt-5.6-sol max`.
 
 ### Project Custom Slash Commands
 

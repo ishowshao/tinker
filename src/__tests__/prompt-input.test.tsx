@@ -64,6 +64,21 @@ describe("prompt input", () => {
     cleanup();
   });
 
+  test("renders reasoning effort directly after the model name", () => {
+    const { lastFrame, cleanup } = render(
+      <PromptInput
+        modelName="gpt-5.6-sol"
+        reasoningEffort="max"
+        workspaceRoot={WORKSPACE_ROOT}
+        onSubmit={() => true}
+      />,
+    );
+
+    const lines = stripAnsi(lastFrame()).split("\n");
+    expect(lines[3]).toBe("gpt-5.6-sol max · ~/htdocs/tinker");
+    cleanup();
+  });
+
   test("appends the Git branch to the information line", () => {
     const { lastFrame, cleanup } = render(
       <PromptInput

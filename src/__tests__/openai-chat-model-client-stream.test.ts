@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ProviderResponseError, type ModelRequestInput } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { RuntimeReasoningEffort } from "../model/reasoning-effort";
 import { TEST_CONTEXT_BUDGET } from "./test-runtime";
 
 const INPUT: ModelRequestInput = {
@@ -154,6 +155,34 @@ describe("OpenAIChatModelClient streaming", () => {
     expect(prepared.payload).toMatchObject({
       stream: true,
       stream_options: { include_usage: true },
+    });
+  });
+
+  test("maps mutable reasoning effort without changing prompt identity", () => {
+    const reasoningEffort = new RuntimeReasoningEffort({
+      supportedEfforts: ["minimal", "balanced", "deep"],
+      defaultEffort: "balanced",
+    });
+    const configured = new OpenAIChatModelClient({
+      apiKey: "test-key",
+      model: "test-model",
+      contextBudget: TEST_CONTEXT_BUDGET,
+      fetch: stubFetch(),
+      reasoningEffort,
+    });
+
+    const initial = configured.prepare(INPUT);
+    expect(initial.payload).toMatchObject({ reasoning_effort: "balanced" });
+
+    reasoningEffort.set("deep");
+    const updated = configured.prepare(INPUT);
+    expect(updated.payload).toMatchObject({ reasoning_effort: "deep" });
+    expect(initial.payload).toMatchObject({ reasoning_effort: "balanced" });
+    expect(updated.requestConfigHash).toBe(initial.requestConfigHash);
+
+    reasoningEffort.reset();
+    expect(configured.prepare(INPUT).payload).toMatchObject({
+      reasoning_effort: "balanced",
     });
   });
 

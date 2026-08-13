@@ -17,6 +17,7 @@ import {
 } from "../context/context-manager";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { ModelRequestMediaAggregateError } from "../model/model-client";
+import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import type { SessionId } from "../ids/runtime-id";
 import { readLastAssistantResponse } from "../session/session-last-response-reader";
 import type { PromptHistory } from "./prompt-history";
@@ -180,12 +181,16 @@ export function App(props: AppProps) {
     state.activeTurn === undefined &&
     props.profiles !== undefined &&
     props.profiles.profiles.size > 1;
+  const reasoningEffort = binding.reasoningEffort?.();
+  const hasReasoningEffort = reasoningEffort !== undefined;
   const activeResumePicker =
     resumePicker?.ownerSessionId === binding.sessionId ? resumePicker : undefined;
 
-  const builtInCommands = canSwitchModel
-    ? SLASH_COMMANDS
-    : SLASH_COMMANDS.filter((command) => command.name !== "model");
+  const builtInCommands = SLASH_COMMANDS.filter(
+    (command) =>
+      (command.name !== "model" || canSwitchModel) &&
+      (command.name !== "reasoning" || hasReasoningEffort),
+  );
   const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
   const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
@@ -660,6 +665,42 @@ export function App(props: AppProps) {
           exit();
           return true;
         }
+        if (
+          command.type === "reasoning_status" ||
+          command.type === "reasoning_reset" ||
+          command.type === "reasoning_set"
+        ) {
+          const current = binding.reasoningEffort?.();
+          if (current === undefined) {
+            setNotice("Current model profile does not configure reasoning effort.");
+            return false;
+          }
+          try {
+            if (command.type === "reasoning_status") {
+              setNotice(formatReasoningEffortStatus(current));
+            } else if (command.type === "reasoning_reset") {
+              const reset = binding.resetReasoningEffort?.();
+              if (reset === undefined) {
+                throw new Error("Reasoning effort control is unavailable.");
+              }
+              setNotice(
+                `Reasoning effort reset to profile default ${JSON.stringify(reset.defaultEffort)}.`,
+              );
+            } else {
+              const updated = binding.setReasoningEffort?.(command.effort);
+              if (updated === undefined) {
+                throw new Error("Reasoning effort control is unavailable.");
+              }
+              setNotice(
+                `Reasoning effort set to ${JSON.stringify(updated.effort)} for this session runtime (profile default: ${JSON.stringify(updated.defaultEffort)}).`,
+              );
+            }
+          } catch (error) {
+            setNotice(errorMessage(error));
+            return false;
+          }
+          return true;
+        }
         if (command.type === "model" || command.type === "model_switch") {
           if (!canSwitchModel) {
             setNotice(
@@ -821,6 +862,7 @@ export function App(props: AppProps) {
               ) : (
                 <PromptInput
                   modelName={binding.modelName}
+                  reasoningEffort={reasoningEffort?.effort}
                   workspaceRoot={binding.workspaceRoot}
                   gitBranch={gitBranch}
                   contextUsage={state.contextUsage}
@@ -848,6 +890,14 @@ export function App(props: AppProps) {
       </Box>
     </AssistantMarkdownProvider>
   );
+}
+
+function formatReasoningEffortStatus(snapshot: ReasoningEffortSnapshot): string {
+  const source =
+    snapshot.source === "profile_default"
+      ? "profile default"
+      : `session override; profile default: ${snapshot.defaultEffort}`;
+  return `Reasoning effort: ${snapshot.effort} (${source}). Available: ${snapshot.supportedEfforts.join(", ")}.`;
 }
 
 function errorMessage(error: unknown): string {

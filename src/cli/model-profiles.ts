@@ -9,11 +9,13 @@ import {
   MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_PROFILES_DOCUMENT_FIELDS,
+  MODEL_REASONING_FIELDS,
   MODEL_TOKEN_ESTIMATOR_FIELDS,
   type ModelTokenEstimatorKind,
   type ModelTokenEstimatorMaxRetries,
 } from "./public-config-contract";
 import type { MemoryEmbeddingConfig } from "../memory/contracts";
+import type { ReasoningEffortConfig } from "../model/reasoning-effort";
 
 export type ModelProfile = {
   readonly name: string;
@@ -23,6 +25,7 @@ export type ModelProfile = {
   readonly apiKey: string;
   readonly contextWindowTokens: number;
   readonly maxSupportedOutputTokens: number;
+  readonly reasoning?: ReasoningEffortConfig;
   readonly includeReasoningContent: boolean;
   readonly stream: boolean;
   readonly inputModalities: readonly ModelInputModality[];
@@ -266,6 +269,11 @@ function parseProfile(
     where,
   );
 
+  const reasoning =
+    value.reasoning === undefined
+      ? undefined
+      : parseReasoning(value.reasoning, `${where}: "reasoning"`);
+
   const includeReasoningContent = parseProfileBoolean(
     value,
     "includeReasoningContent",
@@ -300,10 +308,50 @@ function parseProfile(
     apiKey,
     contextWindowTokens,
     maxSupportedOutputTokens,
+    ...(reasoning === undefined ? {} : { reasoning }),
     includeReasoningContent,
     stream,
     inputModalities,
     ...(tokenEstimator === undefined ? {} : { tokenEstimator }),
+  });
+}
+
+function parseReasoning(value: unknown, where: string): ReasoningEffortConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${where} must be an object.`);
+  }
+  assertKnownKeys(
+    value,
+    MODEL_REASONING_FIELDS.map((field) => field.name),
+    where,
+  );
+  if (!Array.isArray(value.supportedEfforts) || value.supportedEfforts.length === 0) {
+    throw new Error(`${where}.supportedEfforts must be a non-empty array.`);
+  }
+  const supportedEfforts = value.supportedEfforts.map((entry, index) => {
+    const effort = requireString(entry, `${where}.supportedEfforts[${index}]`);
+    if (effort !== effort.trim() || /\s/u.test(effort)) {
+      throw new Error(
+        `${where}.supportedEfforts[${index}] must not contain whitespace.`,
+      );
+    }
+    if (effort === "reset") {
+      throw new Error(
+        `${where}.supportedEfforts[${index}] must not use the reserved value "reset".`,
+      );
+    }
+    return effort;
+  });
+  if (new Set(supportedEfforts).size !== supportedEfforts.length) {
+    throw new Error(`${where}.supportedEfforts must not contain duplicates.`);
+  }
+  const defaultEffort = requireString(value.defaultEffort, `${where}.defaultEffort`);
+  if (!supportedEfforts.includes(defaultEffort)) {
+    throw new Error(`${where}.defaultEffort must be listed in supportedEfforts.`);
+  }
+  return Object.freeze({
+    supportedEfforts: Object.freeze(supportedEfforts),
+    defaultEffort,
   });
 }
 

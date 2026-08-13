@@ -48,6 +48,7 @@ import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 import { clipboardWriterForEnvironment } from "../tui/clipboard";
 import { initializeTuiMemory } from "./tui-memory";
 import { prepareShikiHighlighter } from "../tui/shiki-highlighter";
+import { createReasoningEffortController } from "../model/reasoning-effort";
 
 export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
@@ -82,10 +83,12 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       sessionId: SessionId,
       sink: EventSink & AssistantTextDeltaSink,
     ): Promise<RuntimeSession> => {
+      const reasoningEffort = createReasoningEffortController(sessionConfig.reasoning);
       const modelClient = createRunnerModelClient(
         sessionConfig,
         undefined,
         options.env,
+        reasoningEffort,
       );
       const projectInstructions = await loadProjectInstructions(workspaceRoot);
       const skillCatalog = await loadSkillCatalog({ workspaceRoot });
@@ -107,7 +110,11 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         skillCatalog,
         presentationSinks: [sink],
         assistantTextDeltaSink: sink,
-        webFetchRefiner: createWebFetchRefiner(sessionConfig, options.env),
+        webFetchRefiner: createWebFetchRefiner(
+          sessionConfig,
+          options.env,
+          reasoningEffort,
+        ),
         toolingConfig: options.publicConfig.tooling,
         enableTurnUndo: true,
         bashGuard: {

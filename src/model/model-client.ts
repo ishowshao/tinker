@@ -4,11 +4,13 @@ import type { ToolDefinition } from "../tools/types";
 import type { ImageAssetStore } from "../image/image-asset-store";
 import type { CodePointRange, ImageAssetId, ImageMimeType } from "../image/image-types";
 import type { InputTokenEstimator } from "./input-token-estimator";
+import type { ReasoningEffortController } from "./reasoning-effort";
 
 export interface ModelClient {
   readonly messageProtocol: ModelMessageProtocol;
   readonly inputTokenEstimator?: InputTokenEstimator;
   readonly inputModalities?: readonly ("text" | "image")[];
+  readonly reasoningEffort?: ReasoningEffortController;
   prepare(input: ModelRequestInput): PreparedModelRequest;
   materialize?(
     prepared: PreparedModelRequest,

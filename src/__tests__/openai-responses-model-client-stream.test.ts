@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ProviderResponseError, type ModelRequestInput } from "../model/model-client";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
+import { RuntimeReasoningEffort } from "../model/reasoning-effort";
 import { TEST_CONTEXT_BUDGET } from "./test-runtime";
 
 const INPUT: ModelRequestInput = {
@@ -122,6 +123,32 @@ describe("OpenAIResponsesModelClient streaming", () => {
     });
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(Object.isFrozen(prepared.payload)).toBe(true);
+  });
+
+  test("maps mutable reasoning effort without changing prompt identity", () => {
+    const reasoningEffort = new RuntimeReasoningEffort({
+      supportedEfforts: ["minimal", "balanced", "deep"],
+      defaultEffort: "balanced",
+    });
+    const client = responsesClient({ fetch: stubFetch(), reasoningEffort });
+
+    const initial = client.prepare(INPUT);
+    expect(initial.payload).toMatchObject({
+      reasoning: { effort: "balanced" },
+    });
+
+    reasoningEffort.set("deep");
+    const updated = client.prepare(INPUT);
+    expect(updated.payload).toMatchObject({ reasoning: { effort: "deep" } });
+    expect(initial.payload).toMatchObject({
+      reasoning: { effort: "balanced" },
+    });
+    expect(updated.requestConfigHash).toBe(initial.requestConfigHash);
+
+    reasoningEffort.reset();
+    expect(client.prepare(INPUT).payload).toMatchObject({
+      reasoning: { effort: "balanced" },
+    });
   });
 
   test("stream mode changes the request config identity", () => {

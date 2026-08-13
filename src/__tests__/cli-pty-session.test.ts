@@ -534,6 +534,103 @@ test(
   { timeout: 40_000 },
 );
 
+test(
+  "PTY-119: reasoning effort is temporary to one active session runtime",
+  async () => {
+    await withPtyTui(
+      {
+        fakeModel: "reasoning-effort",
+        rows: 60,
+        columns: 140,
+        environment: {
+          TINKER_MODELS: "models.json",
+          TINKER_TEST_FAKE_MODEL_REQUEST_LOG: "model-requests.jsonl",
+        },
+        workspaceFiles: { "models.json": modelProfilesJson() },
+      },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        const sourceId = currentSessionId(harness.screenText());
+        expect(harness.screenText()).toContain("alpha-model medium");
+
+        await submitPrompt(harness, "/reasoning");
+        await harness.waitForScreen(
+          "Reasoning effort: medium (profile default). Available: low, medium, high.",
+        );
+        await submitPrompt(harness, "/reasoning high");
+        await harness.waitForScreen(
+          'Reasoning effort set to "high" for this session runtime',
+        );
+        expect(harness.screenText()).toContain("alpha-model high");
+        await submitPrompt(harness, "PTY_REASONING_HIGH");
+        await harness.waitForScreen("Fake model received: PTY_REASONING_HIGH");
+
+        await submitPrompt(harness, "/clear");
+        await harness.waitForScreen("Previous session remains available via /resume.");
+        await submitPrompt(harness, "/reasoning");
+        await harness.waitForScreen(
+          "Reasoning effort: medium (profile default). Available: low, medium, high.",
+        );
+        expect(harness.screenText()).toContain("alpha-model medium");
+        await submitPrompt(harness, "PTY_REASONING_DEFAULT");
+        await harness.waitForScreen("Fake model received: PTY_REASONING_DEFAULT");
+
+        await submitPrompt(harness, `/resume ${sourceId}`);
+        await harness.waitForScreen(`Resumed session ${sourceId}.`, {
+          timeoutMs: 10_000,
+        });
+        await submitPrompt(harness, "/reasoning");
+        await harness.waitForScreen(
+          "Reasoning effort: medium (profile default). Available: low, medium, high.",
+        );
+        expect(harness.screenText()).toContain("alpha-model medium");
+        await submitPrompt(harness, "PTY_REASONING_RESUMED");
+        await harness.waitForScreen("Fake model received: PTY_REASONING_RESUMED");
+
+        await quitTui(harness);
+        const requests = (
+          await readFile(
+            path.join(harness.workspaceRoot, "model-requests.jsonl"),
+            "utf8",
+          )
+        )
+          .trim()
+          .split("\n")
+          .map((line): unknown => JSON.parse(line) as unknown);
+        expect(requests).toEqual([
+          {
+            mode: "reasoning-effort",
+            model: "alpha-model",
+            prompt: "PTY_REASONING_HIGH",
+            reasoningEffort: "high",
+            requestNumber: 1,
+          },
+          {
+            mode: "reasoning-effort",
+            model: "alpha-model",
+            prompt: "PTY_REASONING_DEFAULT",
+            reasoningEffort: "medium",
+            requestNumber: 1,
+          },
+          {
+            mode: "reasoning-effort",
+            model: "alpha-model",
+            prompt: "PTY_REASONING_RESUMED",
+            reasoningEffort: "medium",
+            requestNumber: 1,
+          },
+        ]);
+        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
+          "PTY_REASONING_HIGH",
+          "PTY_REASONING_DEFAULT",
+          "PTY_REASONING_RESUMED",
+        ]);
+      },
+    );
+  },
+  { timeout: 40_000 },
+);
+
 if (process.platform === "darwin" && process.env.TINKER_TEST_LIVE_CLIPBOARD === "1") {
   test(
     "PTY-108: copies canonical Markdown through the live macOS system clipboard",
@@ -590,6 +687,10 @@ function modelProfilesJson(): string {
     apiKey: "profile-placeholder",
     contextWindowTokens: 128 * 1_024,
     maxSupportedOutputTokens: 16 * 1_024,
+    reasoning: {
+      supportedEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    },
     includeReasoningContent: false,
     stream: false,
     inputModalities: ["text"],

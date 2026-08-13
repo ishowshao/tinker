@@ -66,6 +66,11 @@ export const SLASH_COMMANDS: readonly BuiltInSlashCommand[] = [
     description: "Switch model profile (new session)",
   },
   {
+    name: "reasoning",
+    usage: "/reasoning [effort|reset]",
+    description: "Show or change reasoning effort for this session runtime",
+  },
+  {
     name: "resume",
     usage: "/resume [session-id]",
     description: "Choose or resume a session",
@@ -95,6 +100,9 @@ export type ParsedSlashCommand =
   | { type: "quit" }
   | { type: "model" }
   | { type: "model_switch"; profileName: string }
+  | { type: "reasoning_status" }
+  | { type: "reasoning_reset" }
+  | { type: "reasoning_set"; effort: string }
   | { type: "resume_list" }
   | { type: "resume"; sessionId: SessionId }
   | { type: "session_delete"; sessionId: SessionId };
@@ -192,6 +200,18 @@ export function parseSlashCommand(input: string): ParsedSlashCommand {
       return { type: "model_switch", profileName: tokens[1] };
     }
     throw slashCommandUsageError("model");
+  }
+  if (command === "/reasoning") {
+    if (tokens.length === 1) {
+      return { type: "reasoning_status" };
+    }
+    if (tokens.length === 2 && tokens[1] === "reset") {
+      return { type: "reasoning_reset" };
+    }
+    if (tokens.length === 2) {
+      return { type: "reasoning_set", effort: tokens[1] };
+    }
+    throw slashCommandUsageError("reasoning");
   }
   if (command === "/resume") {
     if (tokens.length === 1) {

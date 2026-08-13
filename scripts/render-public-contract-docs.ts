@@ -8,9 +8,11 @@ import {
   MEMORY_CONFIG_FIELDS,
   MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
+  MODEL_REASONING_FIELDS,
   MODEL_TOKEN_ESTIMATOR_FIELDS,
   PUBLIC_CONFIG_FIELDS,
   type ModelProfileField,
+  type ModelReasoningField,
   type ModelTokenEstimatorField,
   type MemoryEmbeddingField,
   type PublicConfigField,
@@ -154,6 +156,11 @@ export function renderModelProfileFields(): string {
     field.secret ? "Yes" : "No",
     field.description,
   ]);
+  const reasoningRows = MODEL_REASONING_FIELDS.map((field) => [
+    `\`${field.name}\``,
+    reasoningConstraint(field),
+    field.description,
+  ]);
   const memoryRows = MEMORY_CONFIG_FIELDS.map((field) => [
     `\`${field.name}\``,
     field.required ? "Yes" : "No",
@@ -183,6 +190,12 @@ export function renderModelProfileFields(): string {
       ["Field", "Required", "Type / constraint", "Default", "Secret", "Description"],
       profileRows,
     ),
+    "",
+    "`reasoning` fields:",
+    "",
+    renderTable(["Field", "Type / constraint", "Description"], reasoningRows),
+    "",
+    "The optional `reasoning` object declares provider-specific effort values. Efforts must be unique non-whitespace strings, `reset` is reserved by the TUI command, and `defaultEffort` must appear in `supportedEfforts`. Omitting `reasoning` sends no effort parameter and disables `/reasoning` for that profile.",
     "",
     "`tokenEstimator` fields:",
     "",
@@ -371,6 +384,10 @@ function createProfileExample(image: boolean): Record<string, unknown> {
     apiKey: "your-model-api-key",
     contextWindowTokens: 128_000,
     maxSupportedOutputTokens: 8_192,
+    reasoning: {
+      supportedEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+    },
     includeReasoningContent: false,
     stream: true,
     inputModalities: image ? ["text", "image"] : ["text"],
@@ -477,9 +494,17 @@ function modelProfileValueKind(field: ModelProfileField): string {
       return "JSON boolean";
     case "input-modalities":
       return "Normalized modality array";
+    case "reasoning":
+      return "Object";
     case "token-estimator":
       return "Object";
   }
+}
+
+function reasoningConstraint(field: ModelReasoningField): string {
+  return field.valueKind === "non-empty-string-array"
+    ? "Non-empty unique string array"
+    : "Non-empty string listed above";
 }
 
 function modelProfileDefault(field: ModelProfileField): string {

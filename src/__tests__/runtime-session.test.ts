@@ -24,6 +24,7 @@ import type {
 } from "../model/model-client";
 import { toOpenAIChatMessages } from "../model/openai-chat-mapping";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { RuntimeReasoningEffort } from "../model/reasoning-effort";
 import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
 import type { SessionHistoryReader } from "../session/session-history-reader";
@@ -96,6 +97,13 @@ class WaitingModel extends TestModelClient {
       options.signal.addEventListener("abort", abort, { once: true });
     });
   }
+}
+
+class ReasoningWaitingModel extends WaitingModel {
+  readonly reasoningEffort = new RuntimeReasoningEffort({
+    supportedEfforts: ["low", "medium", "high"],
+    defaultEffort: "medium",
+  });
 }
 
 class BackgroundTaskModel extends TestModelClient {
@@ -1499,6 +1507,50 @@ describe("RuntimeSession lifecycle", () => {
       controller.abort();
       await turn;
       await session.dispose({ type: "tui_exit" });
+    }
+  });
+
+  test("changes reasoning effort only for the idle runtime activation", async () => {
+    const model = new ReasoningWaitingModel();
+    const input = createInput(model, collectingEventSink(), "runtime-reasoning-effort");
+    const session = await createRuntimeSession(input, {
+      loadMcpConfig: async () => undefined,
+    });
+    const controller = new AbortController();
+    try {
+      expect(session.reasoningEffort()).toEqual({
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+        effort: "medium",
+        source: "profile_default",
+      });
+      expect(session.setReasoningEffort("high")).toMatchObject({
+        effort: "high",
+        source: "session_override",
+      });
+      expect(() => session.setReasoningEffort("deep")).toThrow(
+        "Available efforts: low, medium, high",
+      );
+
+      const turn = session.executeTurn({
+        userMessage: { role: "user", content: "wait" },
+        signal: controller.signal,
+      });
+      await model.started;
+      expect(() => session.setReasoningEffort("low")).toThrow(
+        "Cannot change reasoning effort",
+      );
+      controller.abort();
+      await turn;
+
+      expect(session.resetReasoningEffort()).toMatchObject({
+        effort: "medium",
+        source: "profile_default",
+      });
+    } finally {
+      controller.abort();
+      await session.dispose({ type: "tui_exit" });
+      await rm(input.workspaceRoot, { recursive: true });
     }
   });
 

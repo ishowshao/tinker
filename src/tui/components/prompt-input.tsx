@@ -60,6 +60,7 @@ export type PromptSubmissionOutcome =
 
 export type PromptInputProps = {
   modelName: string;
+  reasoningEffort?: string;
   workspaceRoot: string;
   gitBranch?: string;
   contextUsage?: ContextUsageSnapshot;
@@ -736,7 +737,9 @@ export function PromptInput(props: PromptInputProps) {
       {showSuggestions ? null : (
         <Box>
           <Text dimColor>
-            {props.modelName} · {formatWorkspacePath(props.workspaceRoot)}
+            {props.modelName}
+            {props.reasoningEffort === undefined ? null : ` ${props.reasoningEffort}`} ·{" "}
+            {formatWorkspacePath(props.workspaceRoot)}
             {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
             {state.phase.kind === "idle" ? null : ` · ${phaseLabel(state.phase)}`}
           </Text>

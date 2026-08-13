@@ -20,6 +20,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
 import type { ModelUsage } from "../model/model-client";
+import { RuntimeReasoningEffort } from "../model/reasoning-effort";
 import {
   ContextManagerError,
   type ContextCompactionResult,
@@ -2246,6 +2247,10 @@ const TEST_PROFILES_JSON = JSON.stringify({
       apiKey: "sk-deepseek",
       contextWindowTokens: 256 * 1024,
       maxSupportedOutputTokens: 64 * 1024,
+      reasoning: {
+        supportedEfforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+      },
     },
     gpt4o: {
       model: "gpt-4o",
@@ -2269,7 +2274,18 @@ function createSessionControllerWithProfiles(
 ): TuiSessionController {
   const base = createSessionController(projectionStore, run);
   const baseBinding = base.getBinding();
-  const profileBinding = { ...baseBinding, profileName: "deepseek" };
+  const reasoningConfig = TEST_PROFILES.profiles.get("deepseek")?.reasoning;
+  if (reasoningConfig === undefined) {
+    throw new Error("Expected reasoning config for the deepseek test profile.");
+  }
+  const reasoningEffort = new RuntimeReasoningEffort(reasoningConfig);
+  const profileBinding = {
+    ...baseBinding,
+    profileName: "deepseek",
+    reasoningEffort: () => reasoningEffort.snapshot(),
+    setReasoningEffort: (effort: string) => reasoningEffort.set(effort),
+    resetReasoningEffort: () => reasoningEffort.reset(),
+  };
   return {
     ...base,
     switchModel,
@@ -2278,6 +2294,74 @@ function createSessionControllerWithProfiles(
 }
 
 describe("model switching", () => {
+  test("/reasoning changes only the active session runtime effort", async () => {
+    const projectionStore = createProjectionStore();
+    let runCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionControllerWithProfiles(
+          projectionStore,
+          async () => {
+            runCalls += 1;
+            return completedResult();
+          },
+          async () => undefined,
+        )}
+        profiles={TEST_PROFILES}
+      />,
+    );
+
+    expect(lastFrame()).toContain("model medium ·");
+
+    await submitInput(stdin, "/reasoning");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      "Reasoning effort: medium (profile default). Available: low, medium, high.",
+    );
+
+    await submitInput(stdin, "/reasoning high");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      'Reasoning effort set to "high" for this session runtime',
+    );
+    expect(lastFrame()).toContain("model high ·");
+
+    await submitInput(stdin, "/reasoning");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      "Reasoning effort: high (session override; profile default: medium).",
+    );
+
+    await submitInput(stdin, "/reasoning reset");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      'Reasoning effort reset to profile default "medium".',
+    );
+    expect(lastFrame()).toContain("model medium ·");
+    expect(runCalls).toBe(0);
+    cleanup();
+  });
+
+  test("/reasoning rejects values outside the active profile enumeration", async () => {
+    const { stdin, lastFrame, cleanup } = render(
+      <App
+        sessionController={createSessionControllerWithProfiles(
+          createProjectionStore(),
+          async () => completedResult(),
+          async () => undefined,
+        )}
+        profiles={TEST_PROFILES}
+      />,
+    );
+
+    await submitInput(stdin, "/reasoning deep");
+    await Bun.sleep(25);
+    expect(lastFrame()).toContain(
+      'Unsupported reasoning effort "deep". Available efforts: low, medium, high.',
+    );
+    cleanup();
+  });
+
   test("/model shows the picker on an empty session", async () => {
     const projectionStore = createProjectionStore();
     await projectionStore.append({

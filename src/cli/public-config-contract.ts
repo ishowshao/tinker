@@ -242,7 +242,11 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
 
 export type ModelProfileField = {
   readonly name: string;
-  readonly valueKind: PublicConfigValueKind | "input-modalities" | "token-estimator";
+  readonly valueKind:
+    | PublicConfigValueKind
+    | "input-modalities"
+    | "reasoning"
+    | "token-estimator";
   readonly required: boolean;
   readonly defaultValue?: string | number | boolean | readonly string[];
   readonly secret: boolean;
@@ -300,6 +304,14 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
       "Maximum output-token count supported by the model; must not exceed contextWindowTokens.",
   }),
   profileField({
+    name: "reasoning",
+    valueKind: "reasoning",
+    required: false,
+    secret: false,
+    description:
+      "Provider-specific reasoning efforts and the default for each new session runtime.",
+  }),
+  profileField({
     name: "includeReasoningContent",
     valueKind: "boolean",
     required: false,
@@ -331,6 +343,35 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     required: false,
     secret: true,
     description: "Independent token estimator required for image profiles.",
+  }),
+]);
+
+export type ModelReasoningField = {
+  readonly name: string;
+  readonly valueKind: "non-empty-string" | "non-empty-string-array";
+  readonly required: true;
+  readonly secret: false;
+  readonly description: string;
+};
+
+function reasoningField<const T extends ModelReasoningField>(field: T): Readonly<T> {
+  return Object.freeze(field);
+}
+
+export const MODEL_REASONING_FIELDS = Object.freeze([
+  reasoningField({
+    name: "supportedEfforts",
+    valueKind: "non-empty-string-array",
+    required: true,
+    secret: false,
+    description: "Provider-supported effort values exposed by the /reasoning command.",
+  }),
+  reasoningField({
+    name: "defaultEffort",
+    valueKind: "non-empty-string",
+    required: true,
+    secret: false,
+    description: "Effort used whenever a session runtime is created or reopened.",
   }),
 ]);
 

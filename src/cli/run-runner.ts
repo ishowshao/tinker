@@ -16,6 +16,7 @@ import {
   createWebFetchRefiner,
   RUNTIME_INSTRUCTIONS,
 } from "./runner-dependencies";
+import { createReasoningEffortController } from "../model/reasoning-effort";
 import type { PublicToolingConfig } from "./public-config-contract";
 import { realpath } from "node:fs/promises";
 import { loadSkillCatalog } from "../skills/skill-loader";
@@ -51,10 +52,12 @@ export async function runOneShot(
       runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
       projectInstructions,
     });
+    const reasoningEffort = createReasoningEffortController(config.reasoning);
     const modelClient = createRunnerModelClient(
       config,
       options.modelClient,
       options.env,
+      reasoningEffort,
     );
     session = await createRuntimeSession({
       selection: { mode: "new", sessionId: config.sessionId },
@@ -72,7 +75,7 @@ export async function runOneShot(
       presentationSinks: [new StdoutEventPrinter(stdout, stderr)],
       persistence:
         options.eventLogPath === false ? false : { eventLogPath: options.eventLogPath },
-      webFetchRefiner: createWebFetchRefiner(config, options.env),
+      webFetchRefiner: createWebFetchRefiner(config, options.env, reasoningEffort),
       toolingConfig: options.tooling,
       bashGuard: {
         mode: config.bashGuardMode,

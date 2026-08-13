@@ -71,6 +71,44 @@ describe("parseModelProfiles", () => {
     expect(result.profiles.get("deepseek")?.api).toBe("responses");
   });
 
+  test("parses a provider-specific reasoning effort contract", () => {
+    const result = parseModelProfiles(
+      profileJson({
+        reasoning: {
+          supportedEfforts: ["minimal", "balanced", "deep"],
+          defaultEffort: "balanced",
+        },
+      }),
+      "/test/models.json",
+    );
+
+    const reasoning = result.profiles.get("test")?.reasoning;
+    expect(reasoning).toEqual({
+      supportedEfforts: ["minimal", "balanced", "deep"],
+      defaultEffort: "balanced",
+    });
+    expect(Object.isFrozen(reasoning)).toBe(true);
+    expect(Object.isFrozen(reasoning?.supportedEfforts)).toBe(true);
+  });
+
+  test("strictly validates the reasoning effort contract", () => {
+    for (const reasoning of [
+      null,
+      {},
+      { supportedEfforts: [], defaultEffort: "medium" },
+      { supportedEfforts: ["low", "low"], defaultEffort: "low" },
+      { supportedEfforts: ["low effort"], defaultEffort: "low effort" },
+      { supportedEfforts: [" low"], defaultEffort: " low" },
+      { supportedEfforts: ["reset"], defaultEffort: "reset" },
+      { supportedEfforts: ["low", "high"], defaultEffort: "medium" },
+      { supportedEfforts: ["low"], defaultEffort: "low", extra: true },
+    ]) {
+      expect(() =>
+        parseModelProfiles(profileJson({ reasoning }), "/test/models.json"),
+      ).toThrow();
+    }
+  });
+
   test("rejects unknown model APIs", () => {
     const json = JSON.parse(VALID_JSON) as {
       profiles: { deepseek: { api?: string } };

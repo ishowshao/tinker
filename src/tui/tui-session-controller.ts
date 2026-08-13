@@ -18,6 +18,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { ModelProfile } from "../cli/model-profiles";
 import type { McpInventorySnapshot } from "../mcp/mcp-manager";
+import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
 import type { TuiProjectionStore } from "./tui-projection-store";
 
@@ -29,6 +30,9 @@ export type TuiSessionBinding = {
   projectionStore: TuiProjectionStore;
   skills(): RuntimeSkillsSnapshot;
   mcp(): McpInventorySnapshot;
+  reasoningEffort?: () => ReasoningEffortSnapshot | undefined;
+  setReasoningEffort?: (effort: string) => ReasoningEffortSnapshot;
+  resetReasoningEffort?: () => ReasoningEffortSnapshot;
   supportsImageInput?: () => boolean;
   importImage?: (
     sourcePath: string,
@@ -227,6 +231,9 @@ export function managedTuiBinding(input: {
     runtimeSession: input.runtimeSession,
     skills: () => input.runtimeSession.skills(),
     mcp: () => input.runtimeSession.mcp(),
+    reasoningEffort: () => input.runtimeSession.reasoningEffort(),
+    setReasoningEffort: (effort) => input.runtimeSession.setReasoningEffort(effort),
+    resetReasoningEffort: () => input.runtimeSession.resetReasoningEffort(),
     supportsImageInput: () => input.runtimeSession.supportsImageInput(),
     importImage: (sourcePath, signal, prospectiveMessageImageCount) =>
       input.runtimeSession.importImage(

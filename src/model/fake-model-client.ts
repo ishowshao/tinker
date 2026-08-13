@@ -6,6 +6,7 @@ import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
 import type { InputTokenEstimator } from "./input-token-estimator";
 import type { ModelContextBudget } from "./model-context-profile";
+import type { ReasoningEffortController } from "./reasoning-effort";
 import type {
   MaterializedModelRequest,
   ModelClient,
@@ -24,6 +25,7 @@ import { estimatePromptSegments } from "./token-estimator";
 export class FakeModelClient implements ModelClient {
   readonly inputModalities: readonly ("text" | "image")[];
   readonly inputTokenEstimator?: InputTokenEstimator;
+  readonly reasoningEffort?: ReasoningEffortController;
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
     adapter: "fake",
     serializationVersion: "fake-v1",
@@ -38,6 +40,7 @@ export class FakeModelClient implements ModelClient {
       model: string;
       contextBudget: ModelContextBudget;
       inputModalities?: readonly ("text" | "image")[];
+      reasoningEffort?: ReasoningEffortController;
       requestLogPath?: string;
       tokenEstimator?: {
         kind: "moonshot-estimate-token-count-v1";
@@ -48,6 +51,7 @@ export class FakeModelClient implements ModelClient {
       };
     },
   ) {
+    this.reasoningEffort = options.reasoningEffort;
     this.inputModalities = Object.freeze([
       ...(options.inputModalities ?? (["text"] as const)),
     ]);
@@ -100,6 +104,7 @@ export class FakeModelClient implements ModelClient {
       (total, segment) => total + (segment.media?.length ?? 0),
       0,
     );
+    const reasoningEffort = this.reasoningEffort?.snapshot().effort;
     const requestConfigHash = sha256(
       stableJsonStringify({
         adapter: this.messageProtocol.adapter,
@@ -120,6 +125,7 @@ export class FakeModelClient implements ModelClient {
         messages: Object.freeze([...input.messages]),
         tools: Object.freeze([...input.tools]),
         maxTokens: this.options.contextBudget.requestMaxOutputTokens,
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
       }),
       promptSegments: Object.freeze([...toolSegments, ...messageSegments]),
       requestConfigHash,
@@ -208,6 +214,9 @@ export class FakeModelClient implements ModelClient {
           mode: this.mode,
           model: this.options.model,
           prompt: lastUserMessage(input.messages),
+          ...(this.reasoningEffort === undefined
+            ? {}
+            : { reasoningEffort: this.reasoningEffort.snapshot().effort }),
           requestNumber: this.steps,
         })}\n`,
         "utf8",

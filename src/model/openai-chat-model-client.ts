@@ -37,6 +37,7 @@ import {
   segmentKind,
 } from "./openai-model-utils";
 import { MoonshotInputTokenEstimator } from "./moonshot-input-token-estimator";
+import type { ReasoningEffortController } from "./reasoning-effort";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
 const OPENAI_CHAT_SERIALIZATION_VERSION = "openai-chat-v2";
@@ -48,6 +49,7 @@ export class OpenAIChatModelClient implements ModelClient {
     serializationVersion: OPENAI_CHAT_SERIALIZATION_VERSION,
   });
   readonly inputTokenEstimator?: InputTokenEstimator;
+  readonly reasoningEffort?: ReasoningEffortController;
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
   private readonly materializedRequests = new WeakSet<object>();
@@ -72,6 +74,7 @@ export class OpenAIChatModelClient implements ModelClient {
       };
       model: string;
       providerName?: string;
+      reasoningEffort?: ReasoningEffortController;
       stream?: boolean;
       timeoutMs?: number;
       fetch?: typeof fetch;
@@ -79,6 +82,7 @@ export class OpenAIChatModelClient implements ModelClient {
   ) {
     this.provider = options.providerName ?? "openai-compatible";
     this.stream = options.stream ?? true;
+    this.reasoningEffort = options.reasoningEffort;
     this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
     const supportsImages = this.inputModalities.includes("image");
     if (!this.inputModalities.includes("text")) {
@@ -112,10 +116,12 @@ export class OpenAIChatModelClient implements ModelClient {
       includeReasoningContent: this.options.includeReasoningContent,
     });
     const tools = input.tools.length > 0 ? toOpenAIChatTools(input.tools) : undefined;
+    const reasoningEffort = this.reasoningEffort?.snapshot().effort;
     const payload = deepFreeze({
       model: this.options.model,
       messages,
       ...(tools === undefined ? {} : { tools, tool_choice: "auto" as const }),
+      ...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
       max_completion_tokens: this.options.contextBudget.requestMaxOutputTokens,
       ...(this.stream
         ? {

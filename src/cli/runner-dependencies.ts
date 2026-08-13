@@ -3,6 +3,10 @@ import { FakeModelClient } from "../model/fake-model-client";
 import type { ModelClient } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
+import {
+  createReasoningEffortController,
+  type ReasoningEffortController,
+} from "../model/reasoning-effort";
 import { createModelRefiner, type Refiner } from "../tools/web-fetch/refiner";
 import type { RunnerConfig } from "./config";
 
@@ -55,6 +59,7 @@ export function createModelClient(
     RunnerConfig,
     | "modelName"
     | "api"
+    | "reasoning"
     | "includeReasoningContent"
     | "stream"
     | "contextBudget"
@@ -64,13 +69,19 @@ export function createModelClient(
     | "tokenEstimator"
   >,
   env: NodeJS.ProcessEnv = process.env,
+  reasoningEffort?: ReasoningEffortController,
 ): ModelClient {
+  const activeReasoningEffort =
+    reasoningEffort ?? createReasoningEffortController(config.reasoning);
   const fakeMode = env.TINKER_TEST_FAKE_MODEL;
   if (fakeMode !== undefined && fakeMode !== "") {
     return new FakeModelClient(fakeMode, {
       model: config.modelName,
       contextBudget: config.contextBudget,
       inputModalities: config.inputModalities,
+      ...(activeReasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: activeReasoningEffort }),
       ...(config.tokenEstimator === undefined
         ? {}
         : { tokenEstimator: config.tokenEstimator }),
@@ -88,6 +99,9 @@ export function createModelClient(
     stream: config.stream,
     contextBudget: config.contextBudget,
     inputModalities: config.inputModalities,
+    ...(activeReasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: activeReasoningEffort }),
     ...(config.tokenEstimator === undefined
       ? {}
       : { tokenEstimator: config.tokenEstimator }),
@@ -105,16 +119,18 @@ export function createRunnerModelClient(
   config: Parameters<typeof createModelClient>[0],
   injected?: ModelClient,
   env?: NodeJS.ProcessEnv,
+  reasoningEffort?: ReasoningEffortController,
 ): ModelClient {
-  return injected ?? createModelClient(config, env);
+  return injected ?? createModelClient(config, env, reasoningEffort);
 }
 
 export function createWebFetchRefiner(
   config: Parameters<typeof createModelClient>[0],
   env?: NodeJS.ProcessEnv,
+  reasoningEffort?: ReasoningEffortController,
 ): Refiner {
   return createModelRefiner({
-    createModelClient: () => createModelClient(config, env),
+    createModelClient: () => createModelClient(config, env, reasoningEffort),
     contextBudget: config.contextBudget,
   });
 }
