@@ -85,9 +85,9 @@ describe("I3 Recall-first prefix retirement", () => {
         outcome: "retirement_floor",
         previousRevisionNumber: 1,
         revisionNumber: 2,
-        retiredTurnCount: 4,
-        retiredFrameCount: 8,
-        retiredMessageCount: 8,
+        retiredTurnCount: 11,
+        retiredFrameCount: 22,
+        retiredMessageCount: 22,
         activeOverrideCount: 0,
       });
       if (result.status !== "retired") {
@@ -97,13 +97,10 @@ describe("I3 Recall-first prefix retirement", () => {
       const compiled = new ContextRevisionCompiler().compileActive(snapshot);
       expect(snapshot.revision).toMatchObject({
         kind: "prefix_retirement",
-        keepFromOrdinal: 10,
-        retiredThroughOrdinal: 9,
+        keepFromOrdinal: 24,
+        retiredThroughOrdinal: 23,
       });
-      expect(compiled.entries.map((entry) => entry.ordinal)).toEqual([
-        1,
-        ...Array.from({ length: 16 }, (_, index) => index + 10),
-      ]);
+      expect(compiled.entries.map((entry) => entry.ordinal)).toEqual([1, 24, 25]);
       expect(
         compiled.entries.some((entry) =>
           JSON.stringify(entry.message).includes("retired-marker"),
@@ -153,7 +150,7 @@ describe("I3 Recall-first prefix retirement", () => {
     }
   });
 
-  test("returns no_complete_prefix when fewer than nine active turns exist", async () => {
+  test("retires closed turns without a fixed recent-turn floor", async () => {
     const fixture = await createFixture("tinker-i3-protected-");
     try {
       appendTextTurns(fixture, 8, (turnNumber) => `turn-${turnNumber}`);
@@ -171,11 +168,12 @@ describe("I3 Recall-first prefix retirement", () => {
         targetTokens: 1,
       });
       expect(result).toMatchObject({
-        status: "unchanged",
-        outcome: "no_complete_prefix",
-        keepFromOrdinal: 1,
+        status: "retired",
+        outcome: "retirement_floor",
+        retiredTurnCount: 7,
+        keepFromOrdinal: 16,
       });
-      expect(fixture.store.loadContextSnapshot().revision.revisionId).toBe(
+      expect(fixture.store.loadContextSnapshot().revision.revisionId).not.toBe(
         before.revision.revisionId,
       );
     } finally {
@@ -266,7 +264,7 @@ describe("I3 Recall-first prefix retirement", () => {
       });
       expect(firstRetirement).toMatchObject({
         status: "retired",
-        retiredTurnCount: 5,
+        retiredTurnCount: 12,
         activeOverrideCount: 0,
       });
       const firstKeep = fixture.store.loadContextSnapshot().revision.keepFromOrdinal;
@@ -450,7 +448,7 @@ describe("I3 Recall-first prefix retirement", () => {
         status: "retired",
         previousRevisionNumber: 1,
         revisionNumber: 2,
-        retiredTurnCount: 2,
+        retiredTurnCount: 9,
       });
       expect(model.requestCount).toBe(requestCountBefore);
       const revisionEvents = sink.events.filter((event) =>

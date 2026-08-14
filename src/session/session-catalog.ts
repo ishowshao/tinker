@@ -5,7 +5,7 @@ import { parseSessionId, type SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 import { inspectSessionLock } from "./session-lock";
 import { SessionStore } from "./session-store";
-import { verifySessionSchema } from "./session-schema";
+import { verifyReadableSessionSchema } from "./session-schema";
 
 export type SessionSummary = {
   sessionId: SessionId;
@@ -129,7 +129,7 @@ async function readSummary(
       strict: true,
       safeIntegers: true,
     });
-    verifySessionSchema(database, sessionId);
+    verifyReadableSessionSchema(database, sessionId);
     const meta = database.query("SELECT * FROM session_meta").all() as Array<
       Record<string, unknown>
     >;

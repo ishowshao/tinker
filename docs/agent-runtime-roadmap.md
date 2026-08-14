@@ -493,6 +493,31 @@ negative control 0/9 无效 Recall；retirement 相对 full-history 的 token/la
 long-session、10,000-message Recall、真实 DeepSeek provider smoke 和真实 TUI PTY 均通过。详细
 证据见 I4 设计文档及其 checked-in JSON reports。
 
+### I4.1：按消费水位维护 active context
+
+**状态：已完成（2026-08-14）。**
+
+真实大型任务证明固定保护最近 8 个 turns 不是可靠的安全边界：单个 active turn 本身就可能
+包含多轮 provider dispatch 和足以占满多个窗口的工具结果。当前策略因此改为：
+
+- 删除 swap 与 prefix retirement 的固定 recent-turn 数量保护；所有非 active closed turns
+  都是候选，由 token target 决定实际换出或退休多少。
+- 每次成功 provider request 记录本 turn 已消费到的 canonical ordinal。active turn 内只有不
+  晚于该水位、位于 closed tool frame 中的 observation 可以换出；尚未进入任何成功请求的
+  observation 必须保留。
+- 每批工具执行完成并关闭 iteration 后重新测量 active context。达到压力阈值时先提交
+  swap revision；若候选不足，再以当前 active turn 的 closed user frame 为锚点退休此前
+  closed turns。
+- active-turn revision 仍只在没有 open iteration、没有 open protocol frame 的边界提交；
+  canonical messages、tool results 与 Recall 索引不变，pending ledger 随 revision 激活同步
+  刷新。
+- schema 仍为 v9；旧 v9 session 在打开时只升级 context revision validation trigger 和
+  schema fingerprint，不修改 canonical history。
+
+核心回归覆盖 active turn 中“已消费 observation 换出、未消费 observation 保留”，以及以
+active-turn 起点退休此前全部 closed turns；原有 swap、retirement、resume、fault matrix 和
+Recall 不变量继续保留。
+
 ### I5：证据驱动的可选结构化 Checkpoint
 
 只有 I4 证明 Recall-only 在重要长会话 workload 中存在稳定、可重现的连续性缺口时，
@@ -520,6 +545,6 @@ Recall-only 显著改善主动恢复和任务成功率，否则不进入默认�
    injection；cache 假设需要真实 provider usage 验证。
 5. 每阶段完成后更新本路线图的状态和实际结果，再决定是否进入下一阶段。
 
-当前已完成 **I4：主动 Recall 评测与自动化门禁**。下一项不是默认进入 I5；本轮 30 个
+当前已完成 **I4.1：按消费水位维护 active context**。下一项不是默认进入 I5；本轮 30 个
 retirement holdout 只有一个随机的隐式依赖失败，没有形成稳定 checkpoint 需求。继续收集真实长
 会话证据；只有缺口稳定、可重现且 Recall/query 改进不能解决时，才设计 I5。

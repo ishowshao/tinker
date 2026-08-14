@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRuntimeSession } from "../agent/runtime-session";
-import type { AssistantMessage } from "../agent/types";
+import type { AgentMessage, AssistantMessage } from "../agent/types";
 import {
   I4_ACTIVE_RECALL_QUALIFICATION,
   I4_SWAP_ONLY_QUALIFICATION_ID,
@@ -71,7 +71,212 @@ class FailingModel extends TestModelClient {
   }
 }
 
+class MultiObservationModel extends TestModelClient {
+  requestCount = 0;
+  readonly requestedMessages: AgentMessage[][] = [];
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    const input = testModelRequestInput(prepared);
+    this.requestedMessages.push([...input.messages]);
+    if (this.requestCount <= 2) {
+      if (options.identity === undefined) {
+        throw new Error("Active-turn maintenance fixture has no model identity.");
+      }
+      const { iteration, runtimeSession } = options.identity;
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: `active-read-${this.requestCount}`,
+            name: "Read",
+            args: { file_path: "large.txt" },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "active turn complete",
+    });
+  }
+}
+
+class ActiveRetirementModel extends TestModelClient {
+  toolMode = false;
+  private activeRequestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    if (!this.toolMode) {
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "history-".repeat(3_750),
+      });
+    }
+    this.activeRequestCount += 1;
+    if (this.activeRequestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Active retirement fixture has no model identity.");
+      }
+      const { iteration, runtimeSession } = options.identity;
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: "active-retirement-read",
+            name: "Read",
+            args: { file_path: "large.txt" },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "retirement complete",
+    });
+  }
+}
+
 describe("I4 automatic context maintenance", () => {
+  test("swaps consumed observations before the active turn completes", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-active-turn-swap-"));
+    await writeFile(path.join(workspace, "large.txt"), "x".repeat(110 * 1_024));
+    const sink = collectingEventSink();
+    const model = new MultiObservationModel();
+    const contextProfile = {
+      contextWindowTokens: 128 * 1_024,
+      maxSupportedOutputTokens: 64 * 1_024,
+    } as const;
+    const session = await createRuntimeSession(
+      {
+        selection: { mode: "new", sessionId: runtimeIdFactory.createSessionId() },
+        workspaceRoot: workspace,
+        modelName: "test-model",
+        profileName: "test-profile",
+        maxIterations: 3,
+        includeReasoningContent: false,
+        contextProfile,
+        contextBudget: deriveModelContextBudget(contextProfile),
+        systemPrompt: "system",
+        modelClient: model,
+        presentationSinks: [sink],
+        persistence: false,
+      },
+      { loadMcpConfig: async () => undefined },
+    );
+
+    try {
+      const result = await session.executeTurn({
+        userMessage: { role: "user", content: "read the large file twice" },
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe("completed");
+      expect(model.requestCount).toBe(3);
+      const activeSwap = sink.events.find(
+        (event) =>
+          event.type === "context.revision.finished" &&
+          event.data.strategy === "swap" &&
+          event.data.reason === "runtime_pressure" &&
+          event.data.revisionNumber !== undefined,
+      );
+      expect(activeSwap?.data).toMatchObject({
+        strategy: "swap",
+        addedOverrideCount: 1,
+      });
+      const thirdRequestTools = model.requestedMessages[2]?.filter(
+        (message) => message.role === "tool",
+      );
+      expect(thirdRequestTools).toHaveLength(2);
+      expect(
+        thirdRequestTools?.filter(
+          (message) =>
+            message.role === "tool" &&
+            message.content.startsWith("[Tinker historical tool observation swapped]"),
+        ),
+      ).toHaveLength(1);
+      const turnFinished = sink.events.find((event) => event.type === "turn.finished");
+      expect(activeSwap?.eventSequence).toBeLessThan(turnFinished?.eventSequence ?? 0);
+    } finally {
+      await session.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("retires every eligible closed turn behind an active-turn anchor", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-active-turn-retire-"),
+    );
+    await writeFile(path.join(workspace, "large.txt"), "x".repeat(110 * 1_024));
+    const sink = collectingEventSink();
+    const model = new ActiveRetirementModel();
+    const contextProfile = {
+      contextWindowTokens: 128 * 1_024,
+      maxSupportedOutputTokens: 64 * 1_024,
+    } as const;
+    const session = await createRuntimeSession(
+      {
+        selection: { mode: "new", sessionId: runtimeIdFactory.createSessionId() },
+        workspaceRoot: workspace,
+        modelName: "test-model",
+        profileName: "test-profile",
+        maxIterations: 2,
+        includeReasoningContent: false,
+        contextProfile,
+        contextBudget: deriveModelContextBudget(contextProfile),
+        systemPrompt: "system",
+        modelClient: model,
+        presentationSinks: [sink],
+        persistence: false,
+      },
+      { loadMcpConfig: async () => undefined },
+    );
+
+    try {
+      for (let turn = 1; turn <= 3; turn += 1) {
+        expect(
+          (
+            await session.executeTurn({
+              userMessage: { role: "user", content: `history turn ${turn}` },
+              signal: new AbortController().signal,
+            })
+          ).status,
+        ).toBe("completed");
+      }
+      model.toolMode = true;
+      const result = await session.executeTurn({
+        userMessage: { role: "user", content: "start the active retirement turn" },
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe("completed");
+      const retirement = sink.events.find(
+        (event) =>
+          event.type === "context.revision.finished" &&
+          event.data.strategy === "retire_prefix" &&
+          event.data.reason === "runtime_pressure" &&
+          event.data.revisionNumber !== undefined,
+      );
+      expect(retirement?.data).toMatchObject({
+        strategy: "retire_prefix",
+        retiredTurnCount: 3,
+      });
+      const turnFinished = sink.events
+        .filter((event) => event.type === "turn.finished")
+        .at(-1);
+      expect(retirement?.eventSequence).toBeLessThan(turnFinished?.eventSequence ?? 0);
+    } finally {
+      await session.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("commits at most one swap and one retirement after a closed pressured turn", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-i4-auto-"));
     await writeFile(path.join(workspace, "large.txt"), "x".repeat(12 * 1_024));
@@ -149,7 +354,7 @@ describe("I4 automatic context maintenance", () => {
       expect(automaticFinished[1]?.data).toMatchObject({
         strategy: "retire_prefix",
         qualificationId: "deepseek-v4-flash-floor-v1",
-        retiredTurnCount: 2,
+        retiredTurnCount: 9,
       });
       expect(model.requestCount).toBe(20);
     } finally {
@@ -367,7 +572,7 @@ describe("I4 automatic context maintenance", () => {
           resumeMaintenance.map((event) =>
             event.type === "context.revision.finished" ? event.data.strategy : "",
           ),
-        ).toEqual(["swap", "retire_prefix"]);
+        ).toEqual(["swap"]);
         expect(resumedModel.requestCount).toBe(0);
         expect(resumed.canSwitchSession()).toBe(true);
       } finally {

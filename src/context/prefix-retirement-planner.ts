@@ -38,6 +38,12 @@ export type ClosedTurnBoundary = {
   readonly messageCount: number;
 };
 
+export type ActiveTurnBoundary = {
+  readonly turnId: TurnId;
+  readonly turnNumber: number;
+  readonly firstOrdinal: number;
+};
+
 export type PrefixRetirementPlanningTrigger =
   | "manual"
   | "runtime_pressure"
@@ -80,6 +86,7 @@ export type PrefixRetirementPlanningInput = {
   readonly activeOverrides: readonly SwapOverride[];
   readonly canonical: ProtocolContextView;
   readonly closedTurns: readonly ClosedTurnBoundary[];
+  readonly activeTurn?: ActiveTurnBoundary;
   readonly activePrepared: PreparedModelRequest;
   readonly activeUsage: ContextUsageSnapshot;
   readonly tools: readonly ToolDefinition[];
@@ -125,7 +132,7 @@ type ModelPreparer = Pick<ModelClient, "prepare">;
 
 type Projection = {
   readonly candidateIndex: number;
-  readonly boundary: ClosedTurnBoundary;
+  readonly boundary: ClosedTurnBoundary | ActiveTurnBoundary;
   readonly activeOverrides: readonly SwapOverride[];
   readonly compiled: CompiledRevisionContext;
   readonly prepared: PreparedModelRequest;
@@ -163,8 +170,13 @@ export class PrefixRetirementPlanner {
     const activeTurns = input.closedTurns.filter(
       (turn) => turn.firstOrdinal >= input.revision.keepFromOrdinal,
     );
-    const candidateCount = activeTurns.length - input.policy.protectedRecentTurnCount;
-    if (candidateCount < 1) {
+    const candidates: readonly (ClosedTurnBoundary | ActiveTurnBoundary)[] = [
+      ...activeTurns.slice(1),
+      ...(input.activeTurn === undefined || activeTurns.length === 0
+        ? []
+        : [input.activeTurn]),
+    ];
+    if (candidates.length === 0) {
       return Object.freeze({
         outcome: "no_complete_prefix",
         rawTokensBefore,
@@ -172,7 +184,6 @@ export class PrefixRetirementPlanner {
         targetTokens,
       });
     }
-    const candidates = activeTurns.slice(1, candidateCount + 1);
     const projections = new Map<number, Projection>();
     const project = (candidateIndex: number): Projection => {
       const cached = projections.get(candidateIndex);
@@ -373,6 +384,7 @@ function validatePlanningInput(input: PrefixRetirementPlanningInput): void {
     );
   }
   validateClosedTurns(input.closedTurns, input.canonical);
+  validateActiveTurn(input.activeTurn, input.closedTurns, input.canonical);
 }
 
 function validateClosedTurns(
@@ -401,10 +413,46 @@ function validateClosedTurns(
     }
     expectedOrdinal = turn.lastOrdinal + 1;
   }
-  if (expectedOrdinal !== canonical.messages.length + 1) {
+  const nextMessage = canonical.messages[expectedOrdinal - 1];
+  if (
+    expectedOrdinal !== canonical.messages.length + 1 &&
+    nextMessage?.role !== "user"
+  ) {
     throw new ContextRevisionError(
-      "Closed turn boundaries do not cover canonical history.",
+      "Closed turn boundaries do not end at a canonical turn boundary.",
     );
+  }
+}
+
+function validateActiveTurn(
+  activeTurn: ActiveTurnBoundary | undefined,
+  closedTurns: readonly ClosedTurnBoundary[],
+  canonical: ProtocolContextView,
+): void {
+  const coveredThrough = closedTurns.at(-1)?.lastOrdinal ?? 1;
+  if (activeTurn === undefined) {
+    if (coveredThrough !== canonical.messages.length) {
+      throw new ContextRevisionError(
+        "Canonical history has an active turn without an active retirement boundary.",
+      );
+    }
+    return;
+  }
+  const messages = canonical.messages.filter(
+    (message) => message.role !== "system" && message.turnId === activeTurn.turnId,
+  );
+  const frames = canonical.frames.filter((frame) => frame.turnId === activeTurn.turnId);
+  if (
+    activeTurn.turnNumber !== closedTurns.length + 1 ||
+    activeTurn.firstOrdinal !== coveredThrough + 1 ||
+    messages.length === 0 ||
+    messages[0]?.role !== "user" ||
+    messages[0]?.ordinal !== activeTurn.firstOrdinal ||
+    messages.at(-1)?.ordinal !== canonical.messages.length ||
+    frames.length === 0 ||
+    frames.some((frame) => frame.state !== "closed")
+  ) {
+    throw new ContextRevisionError("Active turn retirement boundary is invalid.");
   }
 }
 

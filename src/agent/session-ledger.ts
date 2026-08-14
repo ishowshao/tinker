@@ -111,6 +111,7 @@ export type AgentTurnLedger = {
     completions: readonly ToolCompletionInput[],
   ): readonly CommittedToolCompletion[];
   buildModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
+  activateContextSnapshot(snapshot: StoredContextSnapshotV8): void;
 };
 
 export type CommittedToolCompletion = {
@@ -188,9 +189,9 @@ export class InMemorySessionLedger implements SessionLedger {
   private readonly validator = new ContextProtocolValidator();
   private readonly contextBuilder: ContextBuilder;
   private readonly revisionCompiler: ContextRevisionCompiler;
-  private readonly revision: StoredContextRevisionV8;
-  private readonly surface: StoredContextSurfaceV8;
-  private readonly activeOverrides: readonly StoredContextOverrideV8[];
+  private revision: StoredContextRevisionV8;
+  private surface: StoredContextSurfaceV8;
+  private activeOverrides: readonly StoredContextOverrideV8[];
   private readonly clock: () => string;
 
   constructor(private readonly input: CreateInMemorySessionLedgerInput) {
@@ -352,6 +353,20 @@ export class InMemorySessionLedger implements SessionLedger {
 
   committedMessageCount(): number {
     return this.view.messages.length;
+  }
+
+  activateContextSnapshot(snapshot: StoredContextSnapshotV8): void {
+    this.requireHealthy("activate a context snapshot");
+    if (
+      snapshot.meta.sessionId !== this.input.sessionId ||
+      stableJsonStringify(snapshot.canonical) !== stableJsonStringify(this.view)
+    ) {
+      throw new Error("Activated context snapshot does not match canonical history.");
+    }
+    this.revisionCompiler.compileActive(snapshot);
+    this.revision = snapshot.revision;
+    this.surface = snapshot.surface;
+    this.activeOverrides = snapshot.activeOverrides;
   }
 
   snapshot(
@@ -766,6 +781,8 @@ class InMemoryPendingLedgerTurn implements PendingLedgerTurn {
       commitToolCompletions: (completions) =>
         this.ledger.commitToolCompletions(this, completions),
       buildModelRequest: (tools) => this.ledger.buildTurnModelRequest(this, tools),
+      activateContextSnapshot: (snapshot) =>
+        this.ledger.activateContextSnapshot(snapshot),
     };
   }
 

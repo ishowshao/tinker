@@ -599,7 +599,12 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
               AND pf.kind = 'user' AND pf.state = 'closed'
               AND pf.first_ordinal = NEW.keep_from_ordinal
               AND pf.last_ordinal = NEW.keep_from_ordinal
-              AND t.status <> 'open'
+              AND (
+                t.status <> 'open' OR (
+                  NOT EXISTS (SELECT 1 FROM iterations WHERE outcome = 'open') AND
+                  NOT EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'open')
+                )
+              )
           ) AND
           EXISTS (
             SELECT 1 FROM messages m
@@ -857,6 +862,55 @@ export const SESSION_SCHEMA_V9_FINGERPRINT = sha256(
 const PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT =
   "27c61d806778689f88211b6eaa6dd9dc3a730dfd4133c862006140576b2ecd10";
 
+const PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT =
+  "263a0415b343a922efc65aab4a3387a8b31de18e82245ce67b9296b7a02f4a26";
+
+const ACTIVE_TURN_RETIREMENT_TRIGGER_FRAGMENT = `AND (
+                t.status <> 'open' OR (
+                  NOT EXISTS (SELECT 1 FROM iterations WHERE outcome = 'open') AND
+                  NOT EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'open')
+                )
+              )`;
+
+const preActiveTurnRetirementSchemaDefinitions = replaceSchemaDefinitionSql(
+  schemaDefinitions,
+  "trigger",
+  "context_revisions_validate_insert",
+  (sql) =>
+    replaceExactSqlFragment(
+      sql,
+      ACTIVE_TURN_RETIREMENT_TRIGGER_FRAGMENT,
+      "AND t.status <> 'open'",
+    ),
+);
+
+const preSplitRecallSchemaDefinitions = replaceSchemaDefinitionSql(
+  replaceSchemaDefinitionSql(
+    preActiveTurnRetirementSchemaDefinitions,
+    "view",
+    "recall_documents",
+    () => `CREATE VIEW recall_documents AS
+      SELECT rowid AS docid, content
+      FROM messages
+      WHERE role IN ('user', 'assistant', 'tool')
+        AND content IS NOT NULL
+        AND length(content) > 0
+        AND NOT (role = 'tool' AND name = 'Recall')`,
+  ),
+  "trigger",
+  "messages_recall_index",
+  () => `CREATE TRIGGER messages_recall_index
+      AFTER INSERT ON messages
+      WHEN NEW.role IN ('user', 'assistant', 'tool')
+        AND NEW.content IS NOT NULL
+        AND length(NEW.content) > 0
+        AND NOT (NEW.role = 'tool' AND NEW.name = 'Recall')
+      BEGIN
+        INSERT INTO message_fts(rowid, content)
+        VALUES (NEW.rowid, NEW.content);
+      END`,
+);
+
 export function upgradeRecallIndexContract(database: Database): boolean {
   const applicationId = Number(singlePragmaValue(database, "PRAGMA application_id"));
   const userVersion = Number(singlePragmaValue(database, "PRAGMA user_version"));
@@ -910,7 +964,61 @@ export function upgradeRecallIndexContract(database: Database): boolean {
       `UPDATE session_meta SET schema_fingerprint = ?
        WHERE singleton = 1 AND schema_fingerprint = ?`,
     )
-    .run(SESSION_SCHEMA_V9_FINGERPRINT, PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT);
+    .run(
+      PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT,
+      PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT,
+    );
+  database.exec(metadataTrigger.sql);
+  return true;
+}
+
+export function upgradeActiveTurnRetirementContract(database: Database): boolean {
+  const applicationId = Number(singlePragmaValue(database, "PRAGMA application_id"));
+  const userVersion = Number(singlePragmaValue(database, "PRAGMA user_version"));
+  if (
+    applicationId !== SESSION_APPLICATION_ID ||
+    userVersion !== SESSION_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  const meta = database
+    .query(
+      `SELECT schema_version, schema_fingerprint
+       FROM session_meta WHERE singleton = 1`,
+    )
+    .get() as { schema_version: unknown; schema_fingerprint: unknown } | null;
+  if (
+    meta === null ||
+    Number(meta.schema_version) !== SESSION_SCHEMA_VERSION ||
+    meta.schema_fingerprint !== PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT
+  ) {
+    return false;
+  }
+  const revisionTrigger = schemaDefinitions.find(
+    (definition) =>
+      definition.type === "trigger" &&
+      definition.name === "context_revisions_validate_insert",
+  );
+  const metadataTrigger = schemaDefinitions.find(
+    (definition) =>
+      definition.type === "trigger" &&
+      definition.name === "session_meta_monotonic_update",
+  );
+  if (revisionTrigger === undefined || metadataTrigger === undefined) {
+    throw new Error("Active-turn retirement schema definitions are missing.");
+  }
+  database.exec("DROP TRIGGER context_revisions_validate_insert");
+  database.exec(revisionTrigger.sql);
+  database.exec("DROP TRIGGER session_meta_monotonic_update");
+  database
+    .query(
+      `UPDATE session_meta SET schema_fingerprint = ?
+       WHERE singleton = 1 AND schema_fingerprint = ?`,
+    )
+    .run(
+      SESSION_SCHEMA_V9_FINGERPRINT,
+      PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT,
+    );
   database.exec(metadataTrigger.sql);
   return true;
 }
@@ -958,7 +1066,61 @@ export function reinstallSessionCloneTriggers(database: Database): void {
   }
 }
 
+export function verifyReadableSessionSchema(
+  database: Database,
+  sessionId?: SessionId,
+): "current" | "migratable" {
+  verifySessionSchemaVersion(database, sessionId);
+  const meta = database
+    .query(
+      `SELECT schema_version, schema_fingerprint
+       FROM session_meta WHERE singleton = 1`,
+    )
+    .get() as { schema_version: unknown; schema_fingerprint: unknown } | null;
+  if (
+    meta === null ||
+    Number(meta.schema_version) !== SESSION_SCHEMA_VERSION ||
+    typeof meta.schema_fingerprint !== "string"
+  ) {
+    throw new SessionError(
+      "SESSION_SCHEMA_INVALID",
+      "verify_readable_schema",
+      "Session schema metadata is invalid.",
+      { sessionId },
+    );
+  }
+
+  let expectedDefinitions: readonly SchemaDefinition[];
+  let compatibility: "current" | "migratable";
+  if (meta.schema_fingerprint === SESSION_SCHEMA_V9_FINGERPRINT) {
+    expectedDefinitions = schemaDefinitions;
+    compatibility = "current";
+  } else if (
+    meta.schema_fingerprint === PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT
+  ) {
+    expectedDefinitions = preActiveTurnRetirementSchemaDefinitions;
+    compatibility = "migratable";
+  } else if (meta.schema_fingerprint === PRE_SPLIT_RECALL_SCHEMA_V9_FINGERPRINT) {
+    expectedDefinitions = preSplitRecallSchemaDefinitions;
+    compatibility = "migratable";
+  } else {
+    throw new SessionError(
+      "SESSION_SCHEMA_INVALID",
+      "verify_readable_schema",
+      "Session schema is neither current nor a recognized migration source.",
+      { sessionId },
+    );
+  }
+  verifySessionSchemaDefinitions(database, expectedDefinitions, sessionId);
+  return compatibility;
+}
+
 export function verifySessionSchema(database: Database, sessionId?: SessionId): void {
+  verifySessionSchemaVersion(database, sessionId);
+  verifySessionSchemaDefinitions(database, schemaDefinitions, sessionId);
+}
+
+function verifySessionSchemaVersion(database: Database, sessionId?: SessionId): void {
   const applicationId = Number(singlePragmaValue(database, "PRAGMA application_id"));
   const userVersion = Number(singlePragmaValue(database, "PRAGMA user_version"));
   if (
@@ -972,7 +1134,13 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
       { sessionId },
     );
   }
+}
 
+function verifySessionSchemaDefinitions(
+  database: Database,
+  expectedDefinitions: readonly SchemaDefinition[],
+  sessionId?: SessionId,
+): void {
   const actual = database
     .query(
       `SELECT type, name, sql FROM sqlite_schema
@@ -983,7 +1151,7 @@ export function verifySessionSchema(database: Database, sessionId?: SessionId): 
   const actualByName = new Map(
     actual.map((entry) => [`${entry.type}:${entry.name}`, normalizeSql(entry.sql)]),
   );
-  for (const expected of schemaDefinitions) {
+  for (const expected of expectedDefinitions) {
     const actualSql = actualByName.get(`${expected.type}:${expected.name}`);
     if (actualSql !== normalizeSql(expected.sql)) {
       throw new SessionError(
@@ -1117,4 +1285,35 @@ function singlePragmaValue(database: Database, sql: string): unknown {
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, " ").trim().replace(/;$/, "").toLowerCase();
+}
+
+function replaceSchemaDefinitionSql(
+  definitions: readonly SchemaDefinition[],
+  type: SchemaDefinition["type"],
+  name: string,
+  replace: (sql: string) => string,
+): readonly SchemaDefinition[] {
+  const target = definitions.find(
+    (definition) => definition.type === type && definition.name === name,
+  );
+  if (target === undefined) {
+    throw new Error(`Schema definition is missing: ${type} ${name}.`);
+  }
+  return definitions.map((definition) =>
+    definition === target
+      ? { ...definition, sql: replace(definition.sql) }
+      : definition,
+  );
+}
+
+function replaceExactSqlFragment(
+  sql: string,
+  currentFragment: string,
+  previousFragment: string,
+): string {
+  const replaced = sql.replace(currentFragment, previousFragment);
+  if (replaced === sql) {
+    throw new Error("Schema definition does not contain its historical fragment.");
+  }
+  return replaced;
 }

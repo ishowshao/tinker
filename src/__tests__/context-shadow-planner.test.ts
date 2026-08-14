@@ -285,14 +285,13 @@ describe("SwapPlanner", () => {
     const first = planner.plan(input);
     const second = planner.plan(input);
     expect(first.outcome).toBe("target_reached");
-    expect(first.eligibleCandidateCount).toBe(3);
+    expect(first.eligibleCandidateCount).toBe(11);
     expect(first.excludedByReason).toMatchObject({
       observation_too_small: 1,
       recall_tool: 1,
       raw_kind_not_allowlisted: 1,
       running_task: 1,
       synthetic_completion: 1,
-      protected_recent_turn: 8,
     });
     expect(first.plan?.addedOverrides).toHaveLength(1);
     expect(first.selectedByRawKind).toEqual({ grep: 1 });
@@ -413,6 +412,81 @@ describe("SwapPlanner", () => {
     expect(result.plan?.addedOverrides).toHaveLength(result.eligibleCandidateCount);
     expect(result.plan?.guardedTokensAfter).toBeGreaterThan(0);
     expect(result.plan?.guardedTokensAfter).toBeLessThan(result.guardedTokensBefore);
+  });
+
+  test("swaps only observations already consumed inside the active turn", () => {
+    const sessionId = runtimeIdFactory.createSessionId();
+    const ledger = new InMemorySessionLedger({
+      sessionId,
+      systemPrompt: "system",
+      idFactory: runtimeIdFactory,
+    });
+    const turn = nextTurn(sessionId, 1);
+    const pending = ledger.beginTurn({
+      turn,
+      userMessage: { role: "user", content: "active task" },
+    });
+    const appendObservation = (iterationNumber: number, marker: string) => {
+      const iteration: IterationIdentity = {
+        ...turn,
+        iterationId: runtimeIdFactory.createIterationId(),
+        iterationNumber,
+      };
+      const call: ToolCall = {
+        ...iteration,
+        toolCallId: runtimeIdFactory.createToolCallId(),
+        toolCallNumber: 1,
+        providerToolCallId: `active-${iterationNumber}`,
+        name: "Read",
+        args: {},
+      };
+      pending.agent.appendAssistant({
+        iteration,
+        message: { role: "assistant", toolCalls: [call] },
+        provider: "test",
+        model: "test-model",
+      });
+      return pending.agent.commitToolCompletions([
+        {
+          call,
+          kind: "returned",
+          raw: readRaw(marker),
+          observation: marker.repeat(12_000),
+        },
+      ])[0];
+    };
+    const consumed = appendObservation(1, "a");
+    const unseen = appendObservation(2, "b");
+    const built = pending.agent.buildModelRequest([]);
+    const model = new PreparingOnlyModel();
+    const activePrepared = model.prepare(built.request);
+    const activeUsage = new ContextMeter(TEST_CONTEXT_BUDGET).measure(activePrepared);
+    const result = new SwapPlanner(model).plan({
+      active: built.compiled,
+      revision: built.revision,
+      surface: built.surface,
+      activeOverrides: built.activeOverrides,
+      canonical: built.canonical,
+      activePrepared,
+      activeUsage,
+      tools: [],
+      policy: swapOnlyPolicyV1,
+      trigger: "benchmark_forced",
+      forcedTargetTokens: activeUsage.usedInputTokens - 1,
+      activeTurn: {
+        turnId: turn.turnId,
+        consumedThroughOrdinal: consumed.ordinal,
+      },
+    });
+
+    expect(result.eligibleCandidateCount).toBe(1);
+    expect(result.excludedByReason).toMatchObject({ active_turn_unconsumed: 1 });
+    expect(result.plan?.addedOverrides.map((entry) => entry.ordinal)).toEqual([
+      consumed.ordinal,
+    ]);
+    expect(result.plan?.addedOverrides.map((entry) => entry.ordinal)).not.toContain(
+      unseen.ordinal,
+    );
   });
 });
 

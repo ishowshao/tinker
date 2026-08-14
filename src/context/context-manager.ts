@@ -1,7 +1,7 @@
 import { ContextBuilder } from "../agent/context-builder";
 import type { ContextMeter, ContextUsageSnapshot } from "../agent/context-meter";
-import type { SessionLedger } from "../agent/session-ledger";
-import type { RuntimeIdFactory } from "../ids/runtime-id";
+import type { AgentTurnLedger, SessionLedger } from "../agent/session-ledger";
+import type { RuntimeIdFactory, TurnId } from "../ids/runtime-id";
 import {
   CommittedPrefixAuditError,
   type CommittedPrefixAuditor,
@@ -45,17 +45,25 @@ import {
   PrefixRetirementPlanner,
   PrefixRetirementPlanningError,
   PrefixRetirementPlanStaleError,
+  type ActiveTurnBoundary,
+  type ClosedTurnBoundary,
   type PrefixRetirementPlan,
 } from "./prefix-retirement-planner";
 
 export type ContextCompactionTrigger =
   | { kind: "manual" }
-  | { kind: "runtime_pressure" }
+  | {
+      kind: "runtime_pressure";
+      activeTurn?: {
+        turnId: TurnId;
+        consumedThroughOrdinal: number;
+      };
+    }
   | { kind: "benchmark_forced"; targetTokens: number };
 
 export type ContextRetirementTrigger =
   | { kind: "manual" }
-  | { kind: "runtime_pressure" }
+  | { kind: "runtime_pressure"; activeTurnId?: TurnId }
   | { kind: "benchmark_forced"; targetTokens: number };
 
 export type ContextCompactionResult =
@@ -246,15 +254,32 @@ export class ContextManager {
     this.retirementPlanner = new PrefixRetirementPlanner(input.model);
   }
 
-  async compact(trigger: ContextCompactionTrigger): Promise<ContextCompactionResult> {
+  measureCurrent(
+    activeTurnId?: TurnId,
+    activeLedger?: AgentTurnLedger,
+  ): ContextUsageSnapshot {
+    assertActiveLedger(activeTurnId, activeLedger);
+    this.input.store.assertContextRevisionBoundary(activeTurnId);
+    const tools = this.input.tools();
+    const built = buildCurrentRequest(this.input.ledger, activeLedger, tools);
+    const prepared = this.input.model.prepare(built.request);
+    this.input.committedPrefixAuditor.audit(built.compiled.revisionId, prepared);
+    return this.input.contextMeter.measure(prepared);
+  }
+
+  async compact(
+    trigger: ContextCompactionTrigger,
+    activeLedger?: AgentTurnLedger,
+  ): Promise<ContextCompactionResult> {
+    assertActiveLedger(activeTurnId(trigger), activeLedger);
     const startedAt = performance.now();
     let built;
     let activePrepared;
     let activeUsage;
     const tools = this.input.tools();
     try {
-      this.input.store.assertContextRevisionIdle();
-      built = this.input.ledger.buildCommittedModelRequest(tools);
+      this.input.store.assertContextRevisionBoundary(activeTurnId(trigger));
+      built = buildCurrentRequest(this.input.ledger, activeLedger, tools);
       activePrepared = this.input.model.prepare(built.request);
       activeUsage = this.input.contextMeter.measure(activePrepared);
     } catch (error) {
@@ -274,6 +299,9 @@ export class ContextManager {
         tools,
         policy: swapOnlyPolicyV1,
         trigger: trigger.kind,
+        ...(trigger.kind === "runtime_pressure" && trigger.activeTurn !== undefined
+          ? { activeTurn: trigger.activeTurn }
+          : {}),
         ...(trigger.kind === "benchmark_forced"
           ? { forcedTargetTokens: trigger.targetTokens }
           : {}),
@@ -357,7 +385,7 @@ export class ContextManager {
       candidatePrepared = this.input.model.prepare(candidate.request);
       assertCandidatePrepared(activePrepared, candidatePrepared, plan);
 
-      const current = this.input.ledger.buildCommittedModelRequest(tools);
+      const current = buildCurrentRequest(this.input.ledger, activeLedger, tools);
       const currentPrepared = this.input.model.prepare(current.request);
       assertPlanBaseCurrent(plan, {
         active: current.compiled,
@@ -365,7 +393,7 @@ export class ContextManager {
         activeOverrides: current.activeOverrides,
         activePrepared: currentPrepared,
       });
-      this.input.store.assertContextRevisionIdle();
+      this.input.store.assertContextRevisionBoundary(activeTurnId(trigger));
     } catch (error) {
       throw managerError("validate", error);
     }
@@ -394,6 +422,9 @@ export class ContextManager {
           candidateCompiled.entries,
           plan.baseCanonicalThroughOrdinal,
         ),
+        ...(activeTurnId(trigger) === undefined
+          ? {}
+          : { activeTurnId: activeTurnId(trigger) }),
       });
     } catch (error) {
       throw managerError("commit", error);
@@ -402,6 +433,7 @@ export class ContextManager {
 
     const activationStartedAt = performance.now();
     try {
+      activeLedger?.activateContextSnapshot(this.input.store.loadContextSnapshot());
       this.input.contextMeter.startRevision({
         reason: "context_rebuilt",
         requestConfigHash: candidatePrepared.requestConfigHash,
@@ -454,19 +486,26 @@ export class ContextManager {
 
   async retirePrefix(
     trigger: ContextRetirementTrigger,
+    activeLedger?: AgentTurnLedger,
   ): Promise<ContextRetirementResult> {
+    assertActiveLedger(activeTurnId(trigger), activeLedger);
     const startedAt = performance.now();
     const tools = this.input.tools();
     let built;
     let activePrepared;
     let activeUsage;
-    let closedTurns;
+    let closedTurns: readonly ClosedTurnBoundary[];
+    let activeTurn: ActiveTurnBoundary | undefined;
     try {
-      this.input.store.assertContextRevisionIdle();
-      built = this.input.ledger.buildCommittedModelRequest(tools);
+      this.input.store.assertContextRevisionBoundary(activeTurnId(trigger));
+      built = buildCurrentRequest(this.input.ledger, activeLedger, tools);
       activePrepared = this.input.model.prepare(built.request);
       activeUsage = this.input.contextMeter.measure(activePrepared);
-      closedTurns = this.input.store.loadClosedTurnBoundaries();
+      const boundaries = this.input.store.loadRetirementBoundaries(
+        activeTurnId(trigger),
+      );
+      closedTurns = boundaries.closedTurns;
+      activeTurn = boundaries.activeTurn;
     } catch (error) {
       throw managerError("snapshot", error);
     }
@@ -480,6 +519,7 @@ export class ContextManager {
         activeOverrides: built.activeOverrides,
         canonical: built.canonical,
         closedTurns,
+        ...(activeTurn === undefined ? {} : { activeTurn }),
         activePrepared,
         activeUsage,
         tools,
@@ -547,7 +587,7 @@ export class ContextManager {
       candidatePrepared = this.input.model.prepare(candidate.request);
       assertRetirementCandidatePrepared(activePrepared, candidatePrepared, plan);
 
-      const current = this.input.ledger.buildCommittedModelRequest(tools);
+      const current = buildCurrentRequest(this.input.ledger, activeLedger, tools);
       const currentPrepared = this.input.model.prepare(current.request);
       assertRetirementPlanBaseCurrent(plan, {
         active: current.compiled,
@@ -557,7 +597,7 @@ export class ContextManager {
         canonical: current.canonical,
         activePrepared: currentPrepared,
       });
-      this.input.store.assertContextRevisionIdle();
+      this.input.store.assertContextRevisionBoundary(activeTurnId(trigger));
     } catch (error) {
       throw managerError("validate", error);
     }
@@ -586,6 +626,9 @@ export class ContextManager {
         nextActiveOverrideManifestSha256: plan.nextActiveOverrideManifestSha256,
         canonicalSequenceSha256: plan.canonicalSequenceSha256,
         renderedMessageSha256: plan.renderedMessageSha256,
+        ...(activeTurnId(trigger) === undefined
+          ? {}
+          : { activeTurnId: activeTurnId(trigger) }),
       });
     } catch (error) {
       throw managerError("commit", error);
@@ -594,6 +637,7 @@ export class ContextManager {
 
     const activationStartedAt = performance.now();
     try {
+      activeLedger?.activateContextSnapshot(this.input.store.loadContextSnapshot());
       this.input.contextMeter.startRevision({
         reason: "context_rebuilt",
         requestConfigHash: candidatePrepared.requestConfigHash,
@@ -738,4 +782,36 @@ function errorCode(error: unknown): string {
 
 function elapsedMs(startedAt: number): number {
   return Math.round((performance.now() - startedAt) * 100) / 100;
+}
+
+function activeTurnId(
+  trigger: ContextCompactionTrigger | ContextRetirementTrigger,
+): TurnId | undefined {
+  if (trigger.kind !== "runtime_pressure") {
+    return undefined;
+  }
+  if ("activeTurnId" in trigger) {
+    return trigger.activeTurnId;
+  }
+  return (trigger as Extract<ContextCompactionTrigger, { kind: "runtime_pressure" }>)
+    .activeTurn?.turnId;
+}
+
+function assertActiveLedger(
+  activeTurnId: TurnId | undefined,
+  activeLedger: AgentTurnLedger | undefined,
+): void {
+  if ((activeTurnId === undefined) !== (activeLedger === undefined)) {
+    throw new Error("Active context maintenance requires its active turn ledger.");
+  }
+}
+
+function buildCurrentRequest(
+  ledger: SessionLedger,
+  activeLedger: AgentTurnLedger | undefined,
+  tools: readonly ToolDefinition[],
+) {
+  return activeLedger === undefined
+    ? ledger.buildCommittedModelRequest(tools)
+    : activeLedger.buildModelRequest(tools);
 }

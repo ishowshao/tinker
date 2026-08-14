@@ -77,6 +77,10 @@ export type SwapPlanningInput = {
   readonly tools: readonly ToolDefinition[];
   readonly policy: SwapOnlyPolicyV1;
   readonly trigger: SwapPlanningTrigger;
+  readonly activeTurn?: {
+    readonly turnId: TurnId;
+    readonly consumedThroughOrdinal: number;
+  };
   readonly forcedTargetTokens?: number;
 };
 
@@ -180,6 +184,7 @@ export class SwapPlanner {
       input.activeOverrides,
       input.policy,
       input.revision.keepFromOrdinal,
+      input.activeTurn,
     );
     if (scan.eligible.length === 0) {
       return {
@@ -351,6 +356,7 @@ export class SwapPlanner {
     activeOverrides: readonly SwapOverride[],
     policy: SwapOnlyPolicyV1,
     keepFromOrdinal: number,
+    activeTurn: SwapPlanningInput["activeTurn"],
   ): CandidateScan {
     const alreadySwapped = new Set(
       activeOverrides.map((override) => override.messageId),
@@ -362,10 +368,6 @@ export class SwapPlanner {
     );
     const resultsByMessage = new Map(
       canonical.toolResults.map((result) => [result.toolMessageId, result] as const),
-    );
-    const protectedTurns = protectedRecentTurns(
-      canonical,
-      policy.protectedRecentTurnCount,
     );
     const eligible: EligibleCandidate[] = [];
     const exclusions = new Map<string, number>();
@@ -386,7 +388,7 @@ export class SwapPlanner {
         message,
         result: resultsByMessage.get(message.messageId),
         closedFrames,
-        protectedTurns,
+        activeTurn,
         minimumObservationBytes: policy.minimumObservationBytes,
       });
       if (reason !== undefined) {
@@ -493,6 +495,20 @@ function validatePlanningInput(input: SwapPlanningInput): void {
       "Active swap planning input contains a retired override.",
     );
   }
+  if (input.activeTurn !== undefined) {
+    const activeMessages = input.canonical.messages.filter(
+      (message) =>
+        message.role !== "system" && message.turnId === input.activeTurn?.turnId,
+    );
+    if (
+      activeMessages.length === 0 ||
+      !Number.isSafeInteger(input.activeTurn.consumedThroughOrdinal) ||
+      input.activeTurn.consumedThroughOrdinal < 1 ||
+      input.activeTurn.consumedThroughOrdinal > input.canonical.messages.length
+    ) {
+      throw new ContextRevisionError("Active-turn swap boundary is invalid.");
+    }
+  }
   if (
     input.forcedTargetTokens !== undefined &&
     (!Number.isSafeInteger(input.forcedTargetTokens) || input.forcedTargetTokens < 0)
@@ -571,7 +587,7 @@ function basicExclusionReason(input: {
   message: Extract<CanonicalMessageRecord, { role: "tool" }>;
   result: ToolResultRecord | undefined;
   closedFrames: ReadonlySet<string>;
-  protectedTurns: ReadonlySet<TurnId>;
+  activeTurn: SwapPlanningInput["activeTurn"];
   minimumObservationBytes: number;
 }): string | undefined {
   if (!input.closedFrames.has(input.message.frameId)) {
@@ -592,8 +608,12 @@ function basicExclusionReason(input: {
   ) {
     return "recall_tool";
   }
-  if (input.protectedTurns.has(input.message.turnId)) {
-    return "protected_recent_turn";
+  if (
+    input.activeTurn !== undefined &&
+    input.message.turnId === input.activeTurn.turnId &&
+    input.message.ordinal > input.activeTurn.consumedThroughOrdinal
+  ) {
+    return "active_turn_unconsumed";
   }
   if (
     Buffer.byteLength(input.message.content, "utf8") < input.minimumObservationBytes
@@ -620,24 +640,6 @@ function basicExclusionReason(input: {
     );
   }
   return undefined;
-}
-
-function protectedRecentTurns(
-  canonical: ProtocolContextView,
-  count: number,
-): ReadonlySet<TurnId> {
-  const turns = new Set<TurnId>();
-  for (let index = canonical.messages.length - 1; index >= 0; index -= 1) {
-    const message = canonical.messages[index];
-    if (message === undefined || message.role === "system") {
-      continue;
-    }
-    turns.add(message.turnId);
-    if (turns.size === count) {
-      break;
-    }
-  }
-  return turns;
 }
 
 function compareCandidates(left: EligibleCandidate, right: EligibleCandidate): number {

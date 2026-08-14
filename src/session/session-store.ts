@@ -48,7 +48,6 @@ import {
   ContextRevisionCompiler,
   createInitialContextRevision,
 } from "../context/context-revision-compiler";
-import { recallFirstRetirementPolicyV1 } from "../context/context-policy";
 import {
   ContextSwapRenderer,
   SWAP_OBSERVATION_FORMAT,
@@ -93,7 +92,10 @@ import { ImageAssetStore } from "../image/image-asset-store";
 import type { MeasuredContextAnchor } from "../agent/context-meter";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
 import { SUPPORTED_RECALL_RETIREMENT_CONTRACT_VERSIONS } from "../context/recall-retirement-contract";
-import type { ClosedTurnBoundary } from "../context/prefix-retirement-planner";
+import type {
+  ActiveTurnBoundary,
+  ClosedTurnBoundary,
+} from "../context/prefix-retirement-planner";
 import {
   AdmissionStaleError,
   InMemorySessionLedger,
@@ -109,12 +111,14 @@ import { SessionLease } from "./session-lock";
 import {
   SESSION_SCHEMA_V9_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
+  upgradeActiveTurnRetirementContract,
   upgradeRecallIndexContract,
   configureWritableDatabase,
   createSessionSchema,
   dropSessionCloneTriggers,
   rebuildRecallIndex,
   reinstallSessionCloneTriggers,
+  verifyReadableSessionSchema,
   verifyRecallIndex,
   verifySessionSchema,
   verifySqliteIntegrity,
@@ -235,6 +239,7 @@ export type CommitSwapRevisionInput = {
   nextActiveOverrideManifestSha256: string;
   canonicalSequenceSha256: string;
   renderedMessageSha256: string;
+  activeTurnId?: TurnId;
 };
 
 export type CommitSwapRevisionFaultStage =
@@ -292,6 +297,7 @@ export type CommitPrefixRetirementRevisionInput = {
   nextActiveOverrideManifestSha256: string;
   canonicalSequenceSha256: string;
   renderedMessageSha256: string;
+  activeTurnId?: TurnId;
 };
 
 export type CommitPrefixRetirementRevisionFaultStage =
@@ -569,9 +575,11 @@ export class SessionStore implements SessionLedgerCommitter {
     try {
       database = openWritableDatabase(databasePath);
       verifySqliteIntegrity(database, input.sessionId);
+      verifyReadableSessionSchema(database, input.sessionId);
       const recallIndexContractUpgraded = runTransaction(database, () =>
         upgradeRecallIndexContract(database!),
       );
+      runTransaction(database, () => upgradeActiveTurnRetirementContract(database!));
       verifySessionSchema(database, input.sessionId);
       const store = new SessionStore(database, lease, {
         sessionId: input.sessionId,
@@ -934,25 +942,38 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   assertContextRevisionIdle(): void {
+    this.assertContextRevisionBoundary();
+  }
+
+  assertContextRevisionBoundary(activeTurnId?: TurnId): void {
     this.requireOpen();
     const row = this.database
       .query(
         `SELECT
           (SELECT COUNT(*) FROM turns WHERE status = 'open') AS open_turns,
+          (SELECT turn_id FROM turns WHERE status = 'open' LIMIT 1) AS open_turn_id,
           (SELECT COUNT(*) FROM iterations WHERE outcome = 'open') AS open_iterations,
           (SELECT COUNT(*) FROM protocol_frames WHERE state = 'open') AS open_frames`,
       )
       .get() as Record<string, unknown> | null;
+    const openTurnCount =
+      row === null ? -1 : numberFromSql(row.open_turns, "open_turns");
+    const openTurnId =
+      row === null
+        ? null
+        : (nullableStringFromSql(row.open_turn_id, "open_turn_id") as TurnId | null);
     if (
       row === null ||
-      numberFromSql(row.open_turns, "open_turns") !== 0 ||
+      (activeTurnId === undefined
+        ? openTurnCount !== 0
+        : openTurnCount !== 1 || openTurnId !== activeTurnId) ||
       numberFromSql(row.open_iterations, "open_iterations") !== 0 ||
       numberFromSql(row.open_frames, "open_frames") !== 0
     ) {
       throw new SessionError(
         "SESSION_INTEGRITY_FAILED",
-        "assert_context_revision_idle",
-        "Context revision requires a fully idle session store.",
+        "assert_context_revision_boundary",
+        "Context revision requires an idle store or a closed active-turn iteration boundary.",
         { sessionId: this.sessionId },
       );
     }
@@ -963,16 +984,35 @@ export class SessionStore implements SessionLedgerCommitter {
     this.assertContextRevisionIdle();
     const canonical = this.loadProtocolView();
     this.validator.validate(canonical, { fullIntegrity: true });
-    return this.readClosedTurnBoundaries(canonical);
+    return this.readRetirementBoundaries(canonical).closedTurns;
   }
 
-  private readClosedTurnBoundaries(
+  loadRetirementBoundaries(activeTurnId?: TurnId): {
+    readonly closedTurns: readonly ClosedTurnBoundary[];
+    readonly activeTurn?: ActiveTurnBoundary;
+  } {
+    this.requireOpen();
+    this.assertContextRevisionBoundary(activeTurnId);
+    const canonical = this.loadProtocolView();
+    this.validator.validate(canonical, {
+      allowOpenTail: activeTurnId !== undefined,
+      fullIntegrity: true,
+    });
+    return this.readRetirementBoundaries(canonical, activeTurnId);
+  }
+
+  private readRetirementBoundaries(
     canonical: ProtocolContextView,
-  ): readonly ClosedTurnBoundary[] {
+    activeTurnId?: TurnId,
+  ): {
+    readonly closedTurns: readonly ClosedTurnBoundary[];
+    readonly activeTurn?: ActiveTurnBoundary;
+  } {
     const rows = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
     const boundaries: ClosedTurnBoundary[] = [];
+    let activeTurn: ActiveTurnBoundary | undefined;
     let expectedOrdinal = 2;
     for (let index = 0; index < rows.length; index += 1) {
       const row = requireItem(rows, index, "turn row");
@@ -980,8 +1020,8 @@ export class SessionStore implements SessionLedgerCommitter {
       const turnNumber = numberFromSql(row.turn_number, "turn_number");
       const status = enumFromSql(
         row.status,
-        ["completed", "failed", "cancelled", "interrupted"] as const,
-        "closed turn status",
+        ["open", "completed", "failed", "cancelled", "interrupted"] as const,
+        "turn status",
       );
       const frames = canonical.frames.filter((frame) => frame.turnId === turnId);
       const messages = canonical.messages.filter(
@@ -989,6 +1029,29 @@ export class SessionStore implements SessionLedgerCommitter {
       );
       const firstMessage = messages[0];
       const lastMessage = messages.at(-1);
+      if (status === "open") {
+        if (
+          activeTurnId === undefined ||
+          turnId !== activeTurnId ||
+          index !== rows.length - 1 ||
+          turnNumber !== index + 1 ||
+          messages.length < 1 ||
+          frames.length < 1 ||
+          firstMessage?.role !== "user" ||
+          firstMessage.ordinal !== expectedOrdinal ||
+          lastMessage?.ordinal !== canonical.messages.length ||
+          frames.some((frame) => frame.state !== "closed")
+        ) {
+          throw new Error(`Turn ${turnId} has an invalid active boundary.`);
+        }
+        activeTurn = Object.freeze({
+          turnId,
+          turnNumber,
+          firstOrdinal: expectedOrdinal,
+        });
+        expectedOrdinal = canonical.messages.length + 1;
+        continue;
+      }
       let nextFrameOrdinal = expectedOrdinal;
       for (const frame of frames) {
         if (
@@ -1027,7 +1090,13 @@ export class SessionStore implements SessionLedgerCommitter {
     if (expectedOrdinal !== canonical.messages.length + 1) {
       throw new Error("Closed turn boundaries do not cover canonical history.");
     }
-    return Object.freeze(boundaries);
+    if ((activeTurnId === undefined) !== (activeTurn === undefined)) {
+      throw new Error("Active retirement boundary does not match the open turn.");
+    }
+    return Object.freeze({
+      closedTurns: Object.freeze(boundaries),
+      ...(activeTurn === undefined ? {} : { activeTurn }),
+    });
   }
 
   commitSwapRevision(
@@ -1051,7 +1120,7 @@ export class SessionStore implements SessionLedgerCommitter {
         ) {
           throw new Error("Context revision commit base is stale.");
         }
-        this.assertContextRevisionIdle();
+        this.assertContextRevisionBoundary(input.activeTurnId);
 
         const active = this.revisionCompiler.compileActive(snapshot);
         const candidateOverrides = [
@@ -1237,25 +1306,27 @@ export class SessionStore implements SessionLedgerCommitter {
         ) {
           throw new Error("Prefix retirement commit base is stale.");
         }
-        this.assertContextRevisionIdle();
-        const closedTurns = this.readClosedTurnBoundaries(snapshot.canonical);
+        this.assertContextRevisionBoundary(input.activeTurnId);
+        const retirementBoundaries = this.readRetirementBoundaries(
+          snapshot.canonical,
+          input.activeTurnId,
+        );
+        const closedTurns = retirementBoundaries.closedTurns;
         const activeTurns = closedTurns.filter(
           (turn) => turn.firstOrdinal >= baseRevision.keepFromOrdinal,
         );
-        const nextBoundary = activeTurns.find(
-          (turn) => turn.firstOrdinal === input.nextKeepFromOrdinal,
-        );
-        const retainedTurns = activeTurns.filter(
-          (turn) => turn.firstOrdinal >= input.nextKeepFromOrdinal,
-        );
+        const nextBoundary = [
+          ...activeTurns,
+          ...(retirementBoundaries.activeTurn === undefined
+            ? []
+            : [retirementBoundaries.activeTurn]),
+        ].find((turn) => turn.firstOrdinal === input.nextKeepFromOrdinal);
         const retiredTurns = activeTurns.filter(
           (turn) => turn.lastOrdinal < input.nextKeepFromOrdinal,
         );
         if (
           nextBoundary === undefined ||
           input.nextKeepFromOrdinal <= baseRevision.keepFromOrdinal ||
-          retainedTurns.length <
-            recallFirstRetirementPolicyV1.protectedRecentTurnCount ||
           retiredTurns.length !== input.retiredTurnCount ||
           retiredTurns.reduce((total, turn) => total + turn.frameCount, 0) !==
             input.retiredFrameCount ||

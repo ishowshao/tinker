@@ -93,6 +93,7 @@ import { FatalAgentTurnError, runAgent, type RunAgentInput } from "./loop";
 import {
   AdmissionStaleError,
   SessionLedgerWriteError,
+  type AgentTurnLedger,
   type AdmissionBaseToken,
   type SessionLedger,
 } from "./session-ledger";
@@ -221,6 +222,11 @@ export type RuntimeSessionContext = {
     iteration: IterationIdentity;
     built: BuiltContextRequest;
   }): void;
+  maintainContextAfterIteration?(input: {
+    turn: TurnIdentity;
+    consumedThroughOrdinal: number;
+    ledger: AgentTurnLedger;
+  }): Promise<void>;
 };
 
 export type ContextSurfaceRefreshSummary = {
@@ -486,6 +492,8 @@ class DefaultRuntimeSession implements RuntimeSession {
       onToolCompletionsCommitted: (completion) =>
         this.onToolCompletionsCommitted(completion),
       prepareModelDispatch: (dispatch) => this.prepareModelDispatch(dispatch),
+      maintainContextAfterIteration: (maintenance) =>
+        this.performActiveTurnContextMaintenance(maintenance),
     };
   }
 
@@ -2042,6 +2050,129 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (swap === undefined) return;
       if (automation.automaticPrefixRetirement && automaticSwapNeedsRetirement(swap)) {
         await this.performAutomaticRetirement(qualificationId);
+      }
+    } finally {
+      if (this.state === "maintaining_context") {
+        this.state = "executing";
+      }
+    }
+  }
+
+  private async performActiveTurnContextMaintenance(input: {
+    turn: TurnIdentity;
+    consumedThroughOrdinal: number;
+    ledger: AgentTurnLedger;
+  }): Promise<void> {
+    const automation = this.requireContextAutomation();
+    if (!automation.automaticSwapOnly) return;
+    if (this.state !== "executing") {
+      throw new Error(
+        `Cannot maintain active-turn context while RuntimeSession is ${this.state}.`,
+      );
+    }
+    const manager = this.requireContextManager();
+    const usage = manager.measureCurrent(input.turn.turnId, input.ledger);
+    if (usage.pressure === "normal") return;
+
+    const qualificationId = requireAutomationQualificationId(automation);
+    const compactionTrigger = {
+      kind: "runtime_pressure",
+      activeTurn: {
+        turnId: input.turn.turnId,
+        consumedThroughOrdinal: input.consumedThroughOrdinal,
+      },
+    } as const;
+    this.pendingAutomaticContextMaintenance = false;
+    this.state = "maintaining_context";
+    try {
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "swap",
+          reason: "runtime_pressure",
+          policyVersion: "swap-only-v1",
+          rendererFormat: "swap-observation-v1",
+          qualificationId,
+        },
+      });
+      let swap: ContextCompactionResult;
+      try {
+        swap = await manager.compact(compactionTrigger, input.ledger);
+        await this.append({
+          type: "context.revision.finished",
+          sessionId: this.sessionId,
+          data: contextRevisionFinishedData(swap, "runtime_pressure", qualificationId),
+        });
+      } catch (error) {
+        const failure = automaticContextFailure(error, "compaction");
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "swap",
+            reason: "runtime_pressure",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Automatic context compaction failed at ${failure.stage}.`,
+            qualificationId,
+          },
+        }).catch(() => undefined);
+        if (failure.fatal) throw error;
+        return;
+      }
+
+      if (
+        !automation.automaticPrefixRetirement ||
+        !automaticSwapNeedsRetirement(swap)
+      ) {
+        return;
+      }
+
+      await this.append({
+        type: "context.revision.started",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "retire_prefix",
+          reason: "runtime_pressure",
+          policyVersion: "recall-first-retirement-v1",
+          baseRevisionNumber: this.store.loadContextSnapshot().revision.revisionNumber,
+          qualificationId,
+        },
+      });
+      try {
+        const retirement = await manager.retirePrefix(
+          {
+            kind: "runtime_pressure",
+            activeTurnId: input.turn.turnId,
+          },
+          input.ledger,
+        );
+        await this.append({
+          type: "context.revision.finished",
+          sessionId: this.sessionId,
+          data: contextRetirementFinishedData(
+            retirement,
+            "runtime_pressure",
+            qualificationId,
+          ),
+        });
+      } catch (error) {
+        const failure = automaticContextFailure(error, "retirement");
+        await this.append({
+          type: "context.revision.failed",
+          sessionId: this.sessionId,
+          data: {
+            strategy: "retire_prefix",
+            reason: "runtime_pressure",
+            stage: failure.stage,
+            errorCode: boundedContextErrorCode(failure.code),
+            error: `Automatic context retirement failed at ${failure.stage}.`,
+            committed: failure.committed,
+            qualificationId,
+          },
+        }).catch(() => undefined);
+        if (failure.fatal) throw error;
       }
     } finally {
       if (this.state === "maintaining_context") {

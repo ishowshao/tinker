@@ -93,6 +93,7 @@ const MODEL_REQUEST_MAX_ATTEMPTS =
 
 export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
   let lastIteration: IterationIdentity | undefined;
+  let consumedThroughOrdinal = 1;
   const committedPrefixAuditor =
     input.committedPrefixAuditor ?? new CommittedPrefixAuditor();
 
@@ -154,6 +155,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       built,
       prepared,
       preflight,
+      consumedThroughOrdinal,
     });
     try {
       input.contextMeter.assertWithinBudget(preflight);
@@ -365,6 +367,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       },
     });
     const measured = input.contextMeter.recordProviderUsage(request, modelOutput);
+    consumedThroughOrdinal = built.canonical.messages.length;
     await input.runtimeSession.append({
       type: "context.usage.updated",
       ...iteration,
@@ -501,6 +504,11 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       data: { outcome: "continue", toolCallCount: toolCalls.length },
     });
     input.runtimeSession.finishIterationForContinuation(iteration);
+    await input.runtimeSession.maintainContextAfterIteration?.({
+      turn: input.turn,
+      consumedThroughOrdinal,
+      ledger: input.ledger,
+    });
   }
 
   if (lastIteration === undefined) {
@@ -520,6 +528,7 @@ async function runShadowPlanning(input: {
   built: BuiltContextRequest;
   prepared: PreparedModelRequest;
   preflight: ReturnType<ContextMeter["measure"]>;
+  consumedThroughOrdinal: number;
 }): Promise<void> {
   const shadowPlanning = input.input.shadowPlanning;
   if (shadowPlanning === undefined) {
@@ -547,6 +556,10 @@ async function runShadowPlanning(input: {
       tools: input.input.tools.definitions(),
       policy: swapOnlyPolicyV1,
       trigger: decision.trigger,
+      activeTurn: {
+        turnId: input.input.turn.turnId,
+        consumedThroughOrdinal: input.consumedThroughOrdinal,
+      },
       ...(decision.forcedTargetTokens === undefined
         ? {}
         : { forcedTargetTokens: decision.forcedTargetTokens }),

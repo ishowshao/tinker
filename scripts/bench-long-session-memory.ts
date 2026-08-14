@@ -729,6 +729,8 @@ class TimedPendingLedgerTurn implements PendingLedgerTurn {
         const startedAt = performance.now();
         return metrics.record(startedAt, inner.agent.buildModelRequest(tools));
       },
+      activateContextSnapshot: (snapshot) =>
+        inner.agent.activateContextSnapshot(snapshot),
     };
   }
 

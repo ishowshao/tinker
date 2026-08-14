@@ -5,6 +5,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type { IterationIdentity, TurnIdentity } from "../agent/types";
+import { SessionCatalog } from "../session/session-catalog";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
@@ -136,6 +137,7 @@ describe("session schema identity", () => {
     const sessionId = runtimeIdFactory.createSessionId();
     try {
       const store = await createReadyStore(workspace, sessionId);
+      appendTextTurn(store);
       const databasePath = store.databasePath;
       const messagesBefore = store.loadProtocolView().messages;
       await store.close("tui_exit");
@@ -146,6 +148,16 @@ describe("session schema identity", () => {
           "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_meta_monotonic_update'",
         )
         .get() as { sql: string };
+      const revisionTrigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'context_revisions_validate_insert'",
+        )
+        .get() as { sql: string };
+      const previousRevisionTriggerSql = revisionTrigger.sql.replace(
+        `AND (\n                t.status <> 'open' OR (\n                  NOT EXISTS (SELECT 1 FROM iterations WHERE outcome = 'open') AND\n                  NOT EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'open')\n                )\n              )`,
+        "AND t.status <> 'open'",
+      );
+      expect(previousRevisionTriggerSql).not.toBe(revisionTrigger.sql);
       database.exec("DROP TRIGGER messages_recall_index");
       database.exec("DROP VIEW recall_documents");
       database.exec(`CREATE VIEW recall_documents AS
@@ -166,12 +178,22 @@ describe("session schema identity", () => {
           VALUES (NEW.rowid, NEW.content);
         END`);
       database.query("INSERT INTO message_fts(message_fts) VALUES ('rebuild')").run();
+      database.exec("DROP TRIGGER context_revisions_validate_insert");
+      database.exec(previousRevisionTriggerSql);
       database.exec("DROP TRIGGER session_meta_monotonic_update");
       database
         .query("UPDATE session_meta SET schema_fingerprint = ? WHERE singleton = 1")
         .run("27c61d806778689f88211b6eaa6dd9dc3a730dfd4133c862006140576b2ecd10");
       database.exec(metadataTrigger.sql);
       database.close();
+
+      expect(
+        await new SessionCatalog({ workspaceRoot: workspace }).get(sessionId),
+      ).toMatchObject({
+        status: "resumable",
+        turnCount: 1,
+        modelName: "test-model",
+      });
 
       const upgraded = await SessionStore.openExisting({
         workspaceRoot: workspace,
@@ -183,6 +205,106 @@ describe("session schema identity", () => {
         upgraded.recoverInterruptedState(runtimeIdFactory).recallIndexRebuilt,
       ).toBe(true);
       await upgraded.close("tui_exit");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("upgrades the active-turn retirement trigger without changing history", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-active-retirement-upgrade-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    try {
+      const store = await createReadyStore(workspace, sessionId);
+      appendTextTurn(store);
+      const databasePath = store.databasePath;
+      const messagesBefore = store.loadProtocolView().messages;
+      await store.close("tui_exit");
+
+      const database = new Database(databasePath, { readwrite: true });
+      const revisionTrigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'context_revisions_validate_insert'",
+        )
+        .get() as { sql: string };
+      const metadataTrigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_meta_monotonic_update'",
+        )
+        .get() as { sql: string };
+      const previousTriggerSql = revisionTrigger.sql.replace(
+        `AND (\n                t.status <> 'open' OR (\n                  NOT EXISTS (SELECT 1 FROM iterations WHERE outcome = 'open') AND\n                  NOT EXISTS (SELECT 1 FROM protocol_frames WHERE state = 'open')\n                )\n              )`,
+        "AND t.status <> 'open'",
+      );
+      expect(previousTriggerSql).not.toBe(revisionTrigger.sql);
+      database.exec("DROP TRIGGER context_revisions_validate_insert");
+      database.exec(previousTriggerSql);
+      database.exec("DROP TRIGGER session_meta_monotonic_update");
+      database
+        .query("UPDATE session_meta SET schema_fingerprint = ? WHERE singleton = 1")
+        .run("263a0415b343a922efc65aab4a3387a8b31de18e82245ce67b9296b7a02f4a26");
+      database.exec(metadataTrigger.sql);
+      database.close();
+
+      expect(
+        await new SessionCatalog({ workspaceRoot: workspace }).get(sessionId),
+      ).toMatchObject({
+        status: "resumable",
+        turnCount: 1,
+        modelName: "test-model",
+      });
+
+      const upgraded = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+      });
+      expect(upgraded.loadProtocolView().messages).toEqual(messagesBefore);
+      expect(upgraded.readMeta().schemaFingerprint).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
+      await upgraded.close("tui_exit");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("does not trust a migratable fingerprint without its exact legacy schema", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-false-migration-source-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    try {
+      const store = await createReadyStore(workspace, sessionId);
+      appendTextTurn(store);
+      const databasePath = store.databasePath;
+      await store.close("tui_exit");
+
+      const database = new Database(databasePath, { readwrite: true });
+      const metadataTrigger = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_meta_monotonic_update'",
+        )
+        .get() as { sql: string };
+      database.exec("DROP TRIGGER session_meta_monotonic_update");
+      database
+        .query("UPDATE session_meta SET schema_fingerprint = ? WHERE singleton = 1")
+        .run("263a0415b343a922efc65aab4a3387a8b31de18e82245ce67b9296b7a02f4a26");
+      database.exec(metadataTrigger.sql);
+      database.close();
+
+      const summary = await new SessionCatalog({ workspaceRoot: workspace }).get(
+        sessionId,
+      );
+      expect(summary.status).toBe("unavailable");
+      expect(summary.statusDetail).toBe(
+        "Session schema definition does not match: trigger context_revisions_validate_insert.",
+      );
+
+      const error = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(SessionError);
+      expect((error as SessionError).code).toBe("SESSION_SCHEMA_INVALID");
     } finally {
       await rm(workspace, { recursive: true });
     }
