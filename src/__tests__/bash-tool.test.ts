@@ -13,6 +13,7 @@ import type { ShellTaskManager, ShellTaskSnapshot } from "../tools/bash-task";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import { MAX_PREVIEW_BYTES } from "../tools/bounded-output-preview";
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -465,6 +466,42 @@ describe("Bash tool", () => {
       } finally {
         await tooling.dispose();
       }
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("bounds a long single-line preview without changing the complete output", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
+
+    try {
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const command =
+        'python3 -c \'import sys; middle="".join(map(chr,[77,73,68,68,76,69,95,83,69,67,82,69,84])); sys.stdout.write("HEAD-" + "x" * 524288 + middle + "y" * 524288 + "-TAIL\\n")\'';
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_long_line",
+        name: "Bash",
+        args: { command },
+      });
+      const raw = asBashRawResult(await tooling.runtime.execute(call));
+      const completeOutput = await readFile(raw.outputFilePath);
+      const observation = new ObservationBuilder().build({ call, raw });
+
+      expect(raw.ok).toBe(true);
+      expect(raw.outputBytes).toBe(completeOutput.byteLength);
+      expect(raw.outputLines).toBe(1);
+      expect(raw.truncated).toBe(true);
+      expect(raw.omittedLines).toBeUndefined();
+      expect(raw.preview.startsWith("HEAD-")).toBe(true);
+      expect(raw.preview.endsWith("-TAIL")).toBe(true);
+      expect(raw.preview).toContain("UTF-8 bytes omitted from this line");
+      expect(raw.preview).not.toContain("MIDDLE_SECRET");
+      expect(Buffer.byteLength(raw.preview, "utf8")).toBeLessThanOrEqual(
+        MAX_PREVIEW_BYTES,
+      );
+      expect(completeOutput.toString("utf8")).toContain("MIDDLE_SECRET");
+      expect(observation.content).not.toContain("MIDDLE_SECRET");
+      expect(observation.content).toContain(`preview:\n${raw.preview}`);
     } finally {
       await rm(workspace, { recursive: true });
     }

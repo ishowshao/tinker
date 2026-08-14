@@ -348,7 +348,9 @@ preview:
 returnCodeInterpretation=No matches found.
 ```
 
-preview 超过 200 行时保留前 100 行和后 100 行，并提供：
+非 PTY preview 先按逻辑行选择前后窗口，再把每条候选输出行限制在 `8 KiB`
+UTF-8，最终整体限制在 `32 KiB` UTF-8。超过 200 行时先保留前 100 行和后
+100 行，并提供：
 
 ```text
 truncated=true
@@ -359,8 +361,16 @@ preview:
 <lines 138-237>
 ```
 
-省略提示给出完整的 1-based 行范围。模型可以直接用 `Read` 对
-`outputFilePath` 设置 `offset=101, limit=37`，只补读缺失部分。
+仅触发行数窗口时，省略提示给出完整的 1-based 行范围。若候选行仍超过总 byte
+上限，则 preview 进一步只保留能够完整容纳的头尾有界行，并改用：
+
+```text
+... output omitted to fit the 32768-byte preview limit. Full output is available at outputFilePath.
+```
+
+超长单行自身保留 UTF-8 安全的头尾，并在行内写明省略 byte 数。行内、行数或总量
+截断任一发生时 `truncated=true`；`omittedLines` 只统计完全缺失的逻辑行。完整输出、
+`outputBytes` 和 `outputLines` 仍以 `outputFilePath` 中的日志为准。
 
 显式后台运行：
 
@@ -437,9 +447,11 @@ preview:
 server ready
 ```
 
-输出超过 200 行时同样保留前 100 行和后 100 行，并通过
-`... output omitted: lines <start>-<end> (<count> lines). ...` 明确缺失范围；
-`omittedLines` 保存缺失行数。未知 task ID 或参数错误为：
+非 PTY task 使用与 Bash 完成结果相同的有界 preview：最多 200 个候选逻辑行、
+每条候选输出行最多 `8 KiB` UTF-8、整体最多 `32 KiB` UTF-8。只触发行数窗口时，
+通过 `... output omitted: lines <start>-<end> (<count> lines). ...` 明确缺失范围；
+总 byte 窗口使用通用 byte-limit 省略标记。`omittedLines` 保存完全缺失的逻辑行数。
+未知 task ID 或参数错误为：
 
 ```text
 TaskOutput failed for missing-task: Unknown task ID: missing-task
@@ -685,9 +697,10 @@ mcp__browser__click failed: timeout
    message 返回，让模型继续推理。只有明确的 fatal storage/runtime 问题会终止 turn。
 4. **副作用不做虚假保证。** 工具被取消、fatal failure 或进程中断时，合成文本会
    提醒模型先检查当前状态再重试。
-5. **截断策略不统一。** Read 按 bytes；pipe Bash/TaskOutput 按行预览；PTY
-   Bash/TaskOutput/TaskInput 返回固定 `80×24` screen；MCP 按 characters；Grep 同时可能受
-   分页和 ripgrep 输出上限影响；WebFetch 对大正文采用 refiner，而不是简单截断。
+5. **截断策略不统一。** Read 按 bytes；pipe Bash/TaskOutput 使用行数、单行 bytes 和
+   总 bytes 共同约束的 preview；PTY Bash/TaskOutput/TaskInput 返回固定 `80×24`
+   screen；MCP 按 characters；Grep 同时可能受分页和 ripgrep 输出上限影响；WebFetch
+   对大正文采用 refiner，而不是简单截断。
 6. **`call` 当前不参与文案生成。** `ObservationBuilder.build` 接收 `call`，但现有
    renderer 都只根据带 kind 的 raw result 生成内容。tool call 身份由 ledger 和协议
    message 元数据保存，不重复写进 Observation 文本。

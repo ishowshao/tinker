@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolCall } from "../agent/types";
@@ -12,6 +12,7 @@ import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { TurnCancelledError } from "../agent/turn-cancellation";
+import { MAX_PREVIEW_BYTES } from "../tools/bounded-output-preview";
 import { createDefaultTooling as createDefaultToolingBase } from "../tools/registry";
 import type {
   BashRawResult,
@@ -492,6 +493,78 @@ describe("background task management", () => {
     }
   });
 
+  test("bounds running and completed TaskOutput with the same preview as Bash", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tasks-"));
+    const tooling = createDefaultTooling({ workspaceRoot: workspace });
+    const releaseFileName = "release-long-output";
+    const python =
+      'import sys; sys.stdout.write("HEAD-" + "x" * 1048576 + "-TAIL"); sys.stdout.flush()';
+    const backgroundCommand = `python3 -c '${python}'; while [ ! -f ${releaseFileName} ]; do sleep 0.01; done; printf '\\n'`;
+    const foregroundCommand = `python3 -c '${python}'; printf '\\n'`;
+
+    try {
+      const background = asBash(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_long_background",
+          name: "Bash",
+          args: {
+            command: backgroundCommand,
+            run_in_background: true,
+          },
+        }),
+      );
+      const running = await waitForOutput(tooling, background.taskId, "-TAIL");
+
+      expect(running.status).toBe("running");
+      expect(running.truncated).toBe(true);
+      expect(running.outputLines).toBe(1);
+      expect(running.preview).toStartWith("HEAD-");
+      expect(running.preview).toEndWith("-TAIL");
+      expect(Buffer.byteLength(running.preview ?? "", "utf8")).toBeLessThanOrEqual(
+        MAX_PREVIEW_BYTES,
+      );
+
+      await writeFile(path.join(workspace, releaseFileName), "", "utf8");
+      await waitForStatus(tooling, background.taskId, "completed");
+
+      const outputCall = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_long_task_output",
+        name: "TaskOutput",
+        args: { task_id: background.taskId },
+      });
+      const completedOutput = asTaskOutput(await tooling.runtime.execute(outputCall));
+      const foreground = asBash(
+        await tooling.runtime.execute({
+          providerToolCallId: "call_long_foreground",
+          name: "Bash",
+          args: { command: foregroundCommand },
+        }),
+      );
+      const completeLog = await readFile(background.outputFilePath, "utf8");
+      const observation = new ObservationBuilder().build({
+        call: outputCall,
+        raw: completedOutput,
+      });
+
+      expect(completedOutput.status).toBe("completed");
+      expect(completedOutput.outputBytes).toBe(Buffer.byteLength(completeLog, "utf8"));
+      expect(completedOutput.outputLines).toBe(1);
+      expect(completedOutput.truncated).toBe(true);
+      expect(completedOutput.omittedLines).toBeUndefined();
+      expect(completeLog).toBe(`HEAD-${"x".repeat(1024 * 1024)}-TAIL\n`);
+      expect(
+        Buffer.byteLength(completedOutput.preview ?? "", "utf8"),
+      ).toBeLessThanOrEqual(MAX_PREVIEW_BYTES);
+      expect(completedOutput.preview).toBe(foreground.preview);
+      expect(completedOutput.truncated).toBe(foreground.truncated);
+      expect(completedOutput.omittedLines).toBe(foreground.omittedLines);
+      expect(observation.content).toContain(`preview:\n${completedOutput.preview}`);
+    } finally {
+      await tooling.dispose();
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("marks a foreground timeout as a background task", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tasks-"));
     const tooling = createDefaultTooling({
@@ -866,9 +939,11 @@ function asTaskList(raw: ToolRawResult): TaskListRawResult {
   return raw as TaskListRawResult;
 }
 
-function asTaskOutput(raw: ToolRawResult): TaskOutputRawResult {
+function asTaskOutput(
+  raw: ToolRawResult,
+): Extract<ToolRawResult, { kind: "task_output" }> {
   expect("taskId" in raw).toBe(true);
-  return raw as TaskOutputRawResult;
+  return raw as Extract<ToolRawResult, { kind: "task_output" }>;
 }
 
 function asTaskInput(raw: ToolRawResult): TaskInputRawResult {

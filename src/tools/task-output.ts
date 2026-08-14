@@ -2,6 +2,12 @@ import { mkdir } from "node:fs/promises";
 import { createWriteStream, type WriteStream } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import {
+  buildBoundedOutputPreview,
+  MAX_PREVIEW_LINES,
+  PREVIEW_EDGE_LINES,
+  type OutputPreviewSource,
+} from "./bounded-output-preview";
 
 export type TaskOutputSnapshot = {
   outputBytes: number;
@@ -10,9 +16,6 @@ export type TaskOutputSnapshot = {
   truncated: boolean;
   omittedLines?: number;
 };
-
-const maxPreviewLines = 200;
-const previewEdgeLines = 100;
 
 export class TaskOutput {
   private readonly decoder = new StringDecoder("utf8");
@@ -68,30 +71,23 @@ export class TaskOutput {
 
   snapshot(): TaskOutputSnapshot {
     const outputLines = this.outputLines + (this.pendingLine === "" ? 0 : 1);
-    const lines = this.previewLines();
+    const source: OutputPreviewSource =
+      this.fullPreviewLines === undefined
+        ? {
+            outputLines,
+            firstLines: this.firstLines,
+            lastLines: this.lastPreviewLines(),
+          }
+        : {
+            outputLines,
+            lines: this.previewLines(),
+          };
+    const bounded = buildBoundedOutputPreview(source);
 
-    if (outputLines <= maxPreviewLines) {
-      return {
-        outputBytes: this.outputBytes,
-        outputLines,
-        preview: lines.join("\n"),
-        truncated: false,
-      };
-    }
-
-    const omittedLines = outputLines - maxPreviewLines;
-    const omittedStartLine = previewEdgeLines + 1;
-    const omittedEndLine = outputLines - previewEdgeLines;
     return {
       outputBytes: this.outputBytes,
       outputLines,
-      preview: [
-        ...this.firstLines,
-        `... output omitted: lines ${omittedStartLine}-${omittedEndLine} (${omittedLines} ${omittedLines === 1 ? "line" : "lines"}). Full output is available at outputFilePath.`,
-        ...this.lastPreviewLines(),
-      ].join("\n"),
-      truncated: true,
-      omittedLines,
+      ...bounded,
     };
   }
 
@@ -113,18 +109,18 @@ export class TaskOutput {
   private pushLine(line: string): void {
     this.outputLines += 1;
 
-    if (this.firstLines.length < previewEdgeLines) {
+    if (this.firstLines.length < PREVIEW_EDGE_LINES) {
       this.firstLines.push(line);
     }
 
     this.lastLines.push(line);
-    if (this.lastLines.length > previewEdgeLines) {
+    if (this.lastLines.length > PREVIEW_EDGE_LINES) {
       this.lastLines.shift();
     }
 
     if (this.fullPreviewLines !== undefined) {
       this.fullPreviewLines.push(line);
-      if (this.fullPreviewLines.length > maxPreviewLines) {
+      if (this.fullPreviewLines.length > MAX_PREVIEW_LINES) {
         this.fullPreviewLines = undefined;
       }
     }
@@ -150,7 +146,7 @@ export class TaskOutput {
       lines.push(this.pendingLine);
     }
 
-    return lines.slice(-previewEdgeLines);
+    return lines.slice(-PREVIEW_EDGE_LINES);
   }
 }
 

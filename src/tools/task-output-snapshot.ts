@@ -1,35 +1,19 @@
 import { Buffer } from "node:buffer";
+import { buildBoundedOutputPreview } from "./bounded-output-preview";
 import type { TaskOutputSnapshot } from "./task-output";
-
-const maxPreviewLines = 200;
-const previewEdgeLines = 100;
 
 export function buildOutputSnapshotFromText(bytes: Buffer): TaskOutputSnapshot {
   const text = bytes.toString("utf8");
   const lines = splitLines(text);
+  const bounded = buildBoundedOutputPreview({
+    outputLines: lines.length,
+    lines,
+  });
 
-  if (lines.length <= maxPreviewLines) {
-    return {
-      outputBytes: bytes.byteLength,
-      outputLines: lines.length,
-      preview: lines.join("\n"),
-      truncated: false,
-    };
-  }
-
-  const omittedLines = lines.length - maxPreviewLines;
-  const omittedStartLine = previewEdgeLines + 1;
-  const omittedEndLine = lines.length - previewEdgeLines;
   return {
     outputBytes: bytes.byteLength,
     outputLines: lines.length,
-    preview: [
-      ...lines.slice(0, previewEdgeLines),
-      `... output omitted: lines ${omittedStartLine}-${omittedEndLine} (${omittedLines} ${omittedLines === 1 ? "line" : "lines"}). Full output is available at outputFilePath.`,
-      ...lines.slice(-previewEdgeLines),
-    ].join("\n"),
-    truncated: true,
-    omittedLines,
+    ...bounded,
   };
 }
 

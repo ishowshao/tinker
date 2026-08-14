@@ -219,14 +219,21 @@ schema 层建议真正校验最大值，不只是写在 description 里。
 输出策略：
 
 - stdout 和 stderr 都写入同一个文件。优先用同一个文件 fd 作为子进程 stdout/stderr，尽量保留实际出现顺序。
-- preview 按行生成，不按字符或 bytes 截断：
-  - 如果已捕获输出不超过 `200` 行，preview 使用完整已捕获输出。
-  - 如果已捕获输出超过 `200` 行，preview 使用前 `100` 行 + 最后 `100` 行。
+- 非 PTY preview 同时按逻辑行和 UTF-8 bytes 生成：
+  - 如果已捕获输出不超过 `200` 行，候选窗口包含全部逻辑行；超过 `200` 行时，
+    候选窗口使用前 `100` 行 + 最后 `100` 行。
+  - 每条候选输出行最多 `8 KiB` UTF-8，超长单行保留头尾并在行内写明省略的
+    UTF-8 byte 数。
+  - 整个 preview（包括省略标记）最多 `32 KiB` UTF-8；候选窗口仍超限时，
+    只保留能够完整容纳的头尾有界行。
   - 中间插入明确省略标记，例如：
 
     ```text
-    ... output omitted: 347 lines omitted. Full output is available at outputFilePath.
+    ... output omitted: lines 101-447 (347 lines). Full output is available at outputFilePath.
     ```
+
+  - 行内、行数或总 byte 上限任一触发时 `truncated=true`；`omittedLines` 只统计
+    完全未进入 preview 的逻辑行。
 
 - 内存里只保留生成 preview 所需的小状态：前 `100` 行、最后 `100` 行、行数统计和当前未结束行。
 - raw result 和 JSONL event 记录 `outputFilePath`、`outputBytes`、`outputLines`、`preview`、`truncated`、`omittedLines`。
@@ -345,10 +352,10 @@ outputFilePath=<path>
 outputBytes=<n>
 outputLines=<n>
 truncated=<true|false>
-omittedLines=<n, if truncated>
+omittedLines=<n, if complete logical lines were omitted>
 returnCodeInterpretation=<optional>
 preview:
-<full output if <=200 lines, otherwise first 100 lines, omission marker, last 100 lines>
+<at most 200 logical lines and 32 KiB UTF-8; each represented line is at most 8 KiB>
 ```
 
 后台命令：
@@ -481,9 +488,12 @@ registry.register(
 - 前台 timeout 后命令转后台而不是被 kill。
 - `cd subdir` 后下一次 Bash 的 cwd 变化。
 - 后台命令里的 `cd` 不影响全局 cwd。
-- 输出不超过 `200` 行时，preview 包含完整已捕获输出。
-- 输出超过 `200` 行时，preview 包含前 `100` 行、省略标记和最后 `100` 行，`truncated=true`，`omittedLines` 为中间省略行数。
-- 大输出不进入完整 observation，只落盘并提供行级 preview 和完整输出路径。
+- 同时满足行数、单行 `8 KiB` 和总量 `32 KiB` 限制时，preview 包含完整已捕获
+  输出。
+- 输出超过 `200` 行时，preview 包含前 `100` 行、省略标记和最后 `100` 行，
+  `truncated=true`，`omittedLines` 为完全省略的逻辑行数。
+- 少量超长行仍受单行和总 preview UTF-8 byte 上限约束，并同时保留输出头尾。
+- 大输出不进入完整 observation，只落盘并提供有界 preview 和完整输出路径。
 - `tty` 只接受 boolean，缺省时保持现有 pipe 行为。
 - Python REPL 可以通过 `TaskInput` 输入、读取 screen、发送 Ctrl-C 并退出。
 - PTY task 的 raw transcript 保留 ANSI，而模型和 TUI 使用 headless xterm screen。

@@ -3,10 +3,10 @@
 ## 文档状态
 
 - 日期：2026-08-14
-- 状态：待实施
+- 状态：已实施
 - 优先级：P0
-- 相关实现：`src/tools/task-output.ts`、`src/tools/task-output-snapshot.ts`、
-  `src/tools/bash.ts`、`src/tools/task-output-tool.ts`、
+- 相关实现：`src/tools/bounded-output-preview.ts`、`src/tools/task-output.ts`、
+  `src/tools/task-output-snapshot.ts`、`src/tools/bash.ts`、`src/tools/task-output-tool.ts`、
   `src/observation/observation-builder.ts`
 - 相关设计：[`bash-tool-design.md`](bash-tool-design.md)、
   [`background-task-management-design.md`](background-task-management-design.md)、
