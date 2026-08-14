@@ -585,6 +585,203 @@ messages 与 tools，从而覆盖图片在内的完整请求输入。
   `auto`，属于官方支持范围。
 - K3 的 reasoning tokens 和最终 `content` 共同受 `max_completion_tokens` 限制。
 
+## 智谱 GLM
+
+本节仅覆盖智谱普通模型 API 中已经正式提供调用文档和按量价格的：
+
+- `glm-5.2`
+
+本文不包含尚未正式开放普通模型 API 的后续模型，也不把 GLM Coding Plan 的套餐端点和
+兼容映射用于普通模型 API profile。Coding Plan API Key 与开放平台的普通 API Key 不是
+同一种凭据，配置时不能混用。
+
+### 推荐配置
+
+GLM-5.2 官方模型 API 使用 OpenAI-compatible Chat Completions，因此应配置 Tinker 的
+`chat-completions` adapter：
+
+```json
+{
+  "default": "zhipu-glm-5.2",
+  "profiles": {
+    "zhipu-glm-5.2": {
+      "model": "glm-5.2",
+      "api": "chat-completions",
+      "apiBase": "https://open.bigmodel.cn/api/paas/v4",
+      "apiKey": "your-zhipu-api-key",
+      "contextWindowTokens": 1048576,
+      "maxSupportedOutputTokens": 131072,
+      "reasoning": {
+        "supportedEfforts": ["none", "high", "max"],
+        "defaultEffort": "max"
+      },
+      "includeReasoningContent": true,
+      "stream": true,
+      "inputModalities": ["text"]
+    }
+  }
+}
+```
+
+启动时指向配置文件：
+
+```bash
+export TINKER_MODELS=.tinker/models.json
+tinker
+```
+
+也可以显式选择该 profile：
+
+```bash
+tinker --profile zhipu-glm-5.2
+```
+
+请保护配置文件权限。Tinker 当前不会在 `models.json` 的字符串值内自动展开
+`$ZHIPU_API_KEY` 一类环境变量，`apiKey` 必须填写实际凭据。
+
+### API adapter 与 endpoint
+
+GLM-5.2 的官方 HTTP、SDK 和 OpenAI SDK 示例均调用：
+
+```text
+POST https://open.bigmodel.cn/api/paas/v4/chat/completions
+```
+
+因此 profile 使用：
+
+```json
+{
+  "api": "chat-completions",
+  "apiBase": "https://open.bigmodel.cn/api/paas/v4"
+}
+```
+
+不要在 `apiBase` 末尾追加 `/chat/completions`；Tinker 使用的 OpenAI SDK 会自动补充具体
+route。普通模型 API 的这个地址也不要替换成 Coding Plan 专用的
+`https://open.bigmodel.cn/api/coding/paas/v4`。
+
+Tinker 的 Chat Completions adapter 会把当前 `/reasoning` 选择作为顶层字段发送：
+
+```json
+{
+  "reasoning_effort": "max"
+}
+```
+
+这与 GLM-5.2 官方 Chat Completions 的 reasoning 参数一致。
+
+不过，智谱官方 schema 当前记录的输出上限字段是 `max_tokens`，而 Tinker 的通用
+Chat Completions adapter 发送 OpenAI 新版字段 `max_completion_tokens`。官方兼容文档没有
+明确承诺后一个字段等价可用，所以在没有真实 API Key 冒烟测试的环境中，不能仅依据接口
+文档断言这项兼容性。如果服务端拒绝 `max_completion_tokens`，需要先在 Tinker adapter
+增加可配置的输出字段名，不能靠修改 `models.json` 解决。
+
+### Thinking 与 reasoning effort
+
+GLM-5.2 的 `thinking.type` 支持：
+
+```text
+enabled, disabled
+```
+
+默认值是 `enabled`。在 GLM-5.2 中，`enabled` 表示由模型动态判断是否需要思考，而不是
+强制每次请求都产生思维链。Tinker 当前不发送智谱专有的 `thinking` 对象，因此使用服务端
+默认的 `enabled`；关闭 Thinking 则通过 `reasoning_effort: "none"` 表达。
+
+普通模型 API 接受七个兼容值：
+
+```text
+none, minimal, low, medium, high, xhigh, max
+```
+
+但这些值不会产生七种独立行为。智谱官方映射为：
+
+| API 请求值 | GLM-5.2 实际行为 |
+| ----------- | ---------------- |
+| `none`      | 放弃思考         |
+| `minimal`   | 放弃思考         |
+| `low`       | 映射为 `high`    |
+| `medium`    | 映射为 `high`    |
+| `high`      | 增强推理         |
+| `xhigh`     | 映射为 `max`     |
+| `max`       | 深度推理         |
+
+默认值是 `max`。因此 Tinker 推荐只暴露三个语义不同的选项：
+
+```json
+{
+  "reasoning": {
+    "supportedEfforts": ["none", "high", "max"],
+    "defaultEffort": "max"
+  }
+}
+```
+
+对应的运行时选择为：
+
+```text
+/reasoning none -> reasoning_effort: "none"，放弃思考
+/reasoning high -> reasoning_effort: "high"，增强推理
+/reasoning max  -> reasoning_effort: "max"，深度推理
+```
+
+`/reasoning reset` 会恢复 `max`。不建议在默认菜单中暴露 `minimal`、`low`、`medium` 和
+`xhigh`，否则会让多个选项指向相同的服务端行为。尤其要注意，GLM-5.2 的 `low` 并不是
+低强度推理，而是会被普通模型 API 映射为 `high`。
+
+### 交错式思考与 `includeReasoningContent`
+
+GLM-5.2 支持在工具调用之间以及收到工具结果后继续推理。智谱官方要求在使用“交错式思考
++ 工具”时显式保留模型返回的 `reasoning_content`，并在提交工具结果的后续请求中完整、
+未修改且按原顺序回传。
+
+因此 Agent profile 应配置：
+
+```json
+"includeReasoningContent": true
+```
+
+Tinker 会收集 Chat Completions 响应中的 `reasoning_content`，并把它放回对应的历史
+assistant message。省略该配置时默认值是 `false`，普通聊天仍可工作，但不符合 GLM-5.2
+交错式思考加工具调用的官方要求。
+
+智谱 API 还提供 `thinking.clear_thinking` 来决定是否保留跨 turn 的历史思考，默认值是
+`true`。Tinker 当前 profile schema 不提供通用 `extra_body`，不会显式发送
+`clear_thinking: false`；这里配置 `includeReasoningContent: true` 的主要目的是保证同一轮
+Agent 工具循环所需的 reasoning replay，而不是承诺开启智谱完整的跨 turn Preserved
+Thinking 模式。
+
+### 上下文、最大输出与输入模态
+
+GLM-5.2 官方模型总览和迁移指南给出的能力是：
+
+```json
+{
+  "contextWindowTokens": 1048576,
+  "maxSupportedOutputTokens": 131072,
+  "inputModalities": ["text"]
+}
+```
+
+这里把官方的 1M 上下文按 `1024 * 1024` 配置，把 128K 最大输出按
+`128 * 1024` 配置。部分官方调用示例使用 `max_tokens: 65536`，那只是示例请求值；API
+schema 声明的模型最大输出是 `131072`，所以不应把 profile 的能力上限写成 `65536`。
+
+GLM-5.2 是文本模型，不要在这个 profile 中声明 `image`。需要图片输入时应另选智谱视觉
+模型，并为 Tinker 配置与该模型匹配的输入预算估算方案。
+
+### 其他与 Tinker 相关的能力
+
+- GLM-5.2 支持普通流式输出；本文配置使用 `"stream": true`。
+- GLM-5.2 支持 Function Calling，`tool_choice` 默认且仅支持 `auto`；Tinker 的 Agent 请求
+  使用 `auto`，属于官方支持范围。
+- 智谱另有 `tool_stream: true`，可流式返回工具参数。Tinker 当前不发送该 provider 专有
+  字段，但普通 Function Calling 仍可使用。
+- GLM-5.2 支持上下文缓存和 JSON 结构化输出；Tinker 当前的 provider-neutral Agent
+  请求不显式配置智谱缓存或 `response_format`。
+- 官方按量价格目前为输入 8 元/百万 tokens、输出 28 元/百万 tokens；缓存命中为
+  2 元/百万 tokens，缓存存储处于限时免费状态。价格可能变化，应以调用时的官方定价页为准。
+
 ## OpenAI
 
 本节使用 OpenAI 当前 GPT-5.6 系列作为配置示例：
