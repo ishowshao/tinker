@@ -157,7 +157,10 @@ test(
         expect(harness.transcriptSince(mark)).not.toContain(
           "PTY_INCREMENTAL_FINAL_SENTINEL",
         );
-        expect(harness.screenText()).toContain("Running");
+        await harness.waitForScreen("Running", {
+          timeoutMs: 1_000,
+          message: "the running status while incremental output remains unsettled",
+        });
 
         await harness.waitForTranscript("PTY_INCREMENTAL_FINAL_SENTINEL", {
           since: mark,
