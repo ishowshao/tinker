@@ -5,6 +5,15 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-08-15
+
+### Added
+
+- Allow text follow-up prompts to be queued while a turn is running. Follow-ups
+  are applied safely after a complete tool batch or handed off to a new turn
+  after a final response, while preserving canonical session history and TUI
+  continuity.
+
 ## [1.10.1] - 2026-08-15
 
 ### Added
@@ -199,7 +208,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/ishowshao/tinker/releases/tag/v1.11.0
 [1.10.1]: https://github.com/ishowshao/tinker/releases/tag/v1.10.1
 [1.9.0]: https://github.com/ishowshao/tinker/releases/tag/v1.9.0
 [1.8.0]: https://github.com/ishowshao/tinker/releases/tag/v1.8.0

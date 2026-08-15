@@ -4,7 +4,7 @@ type: software
 title: "Tinker"
 authors:
   - name: "ishowshao"
-version: 1.10.1
+version: 1.11.0
 date-released: 2026-08-15
 url: "https://github.com/ishowshao/tinker"
 repository-code: "https://github.com/ishowshao/tinker"

@@ -20,7 +20,7 @@ describe("CLI executable boundaries", () => {
   test("loads version from the installed package metadata source", async () => {
     expect(await loadPackageMetadata()).toMatchObject({
       name: "tinker-agent",
-      version: "1.10.1",
+      version: "1.11.0",
     });
   });
 
@@ -167,7 +167,7 @@ describe("CLI executable boundaries", () => {
       stderr: "pipe",
     });
     expect(version.exitCode).toBe(0);
-    expect(version.stdout.toString()).toBe("1.10.1\n");
+    expect(version.stdout.toString()).toBe("1.11.0\n");
     expect(version.stderr.toString()).toBe("");
 
     const help = Bun.spawnSync({
