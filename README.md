@@ -175,6 +175,10 @@ switch to another profile. If `TINKER_MODELS` is not set, Tinker falls back to
 the individual `TINKER_*` environment variables. A configured profiles file must
 exist and be valid; Tinker does not silently fall back when it cannot be loaded.
 
+For provider-specific examples and guidance on API adapters, model capabilities,
+reasoning efforts, and context limits, see the
+[`.tinker/models.json` provider configuration guide](docs/models-json-provider-guide.md).
+
 <!-- BEGIN GENERATED: MODEL PROFILE FIELDS -->
 Profile fields:
 
