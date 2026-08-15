@@ -5,7 +5,7 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
-## [1.10.0] - 2026-08-15
+## [1.10.1] - 2026-08-15
 
 ### Added
 
@@ -199,8 +199,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.10.0...HEAD
-[1.10.0]: https://github.com/ishowshao/tinker/releases/tag/v1.10.0
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/ishowshao/tinker/releases/tag/v1.10.1
 [1.9.0]: https://github.com/ishowshao/tinker/releases/tag/v1.9.0
 [1.8.0]: https://github.com/ishowshao/tinker/releases/tag/v1.8.0
 [1.7.0]: https://github.com/ishowshao/tinker/releases/tag/v1.7.0

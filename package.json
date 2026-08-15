@@ -1,6 +1,6 @@
 {
   "name": "tinker-agent",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "A personal coding agent with an interactive TUI and one-shot CLI.",
   "license": "Apache-2.0",
   "type": "module",

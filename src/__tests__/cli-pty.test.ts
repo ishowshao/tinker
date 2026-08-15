@@ -422,6 +422,10 @@ test(
 
         const pid = await readBackgroundPid(harness.workspaceRoot);
         await waitForProcessExit(pid);
+        await harness.waitForScreen("Background tasks · 0 running / 1 total", {
+          timeoutMs: 2_000,
+          message: "the background task panel to observe the stopped process",
+        });
         const screen = harness.screenText();
         expect(screen).toContain("TaskOutput");
         expect(screen).toContain("TaskStop");
