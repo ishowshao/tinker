@@ -821,9 +821,11 @@ test(
       async (harness) => {
         await waitForInitialFrame(harness);
         await submitPrompt(harness, "PTY_FAIL_FIRST");
-        await harness.waitForScreen("PTY_FAKE_PROVIDER_FAILURE");
-        await harness.waitForPromptReady();
-        expect(harness.screenText()).toContain("failed");
+        await harness.waitForScreen(
+          (screen) =>
+            screen.includes("PTY_FAKE_PROVIDER_FAILURE") && screen.includes("failed"),
+          { message: "settled provider failure" },
+        );
 
         await submitPrompt(harness, "PTY_FAIL_RECOVER");
         await harness.waitForScreen("PTY_FAIL_RECOVERED");
