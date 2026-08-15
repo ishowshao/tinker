@@ -557,9 +557,24 @@ test(
         await harness.waitForScreen(
           "Reasoning effort: medium (profile default). Available: low, medium, high.",
         );
-        await submitPrompt(harness, "/reasoning high");
+        await harness.press("ctrl_r");
         await harness.waitForScreen(
-          'Reasoning effort set to "high" for this session runtime',
+          'Reasoning effort cycled from "medium" to "high" (Ctrl+R).',
+        );
+        expect(harness.screenText()).toContain("alpha-model high");
+        await harness.press("ctrl_r");
+        await harness.waitForScreen(
+          'Reasoning effort cycled from "high" to "low" (Ctrl+R).',
+        );
+        expect(harness.screenText()).toContain("alpha-model low");
+        await harness.press("ctrl_r");
+        await harness.waitForScreen(
+          'Reasoning effort cycled from "low" to "medium" (Ctrl+R).',
+        );
+        expect(harness.screenText()).toContain("alpha-model medium");
+        await harness.press("ctrl_r");
+        await harness.waitForScreen(
+          'Reasoning effort cycled from "medium" to "high" (Ctrl+R).',
         );
         expect(harness.screenText()).toContain("alpha-model high");
         await submitPrompt(harness, "PTY_REASONING_HIGH");

@@ -20,6 +20,7 @@ export type PtyKey =
   | "ctrl_a"
   | "ctrl_d"
   | "ctrl_e"
+  | "ctrl_r"
   | "ctrl_u";
 
 export type StartPtyTuiInput = {
@@ -108,6 +109,7 @@ const KEY_SEQUENCES: Readonly<Record<PtyKey, string>> = Object.freeze({
   ctrl_a: "\x01",
   ctrl_d: "\x04",
   ctrl_e: "\x05",
+  ctrl_r: "\x12",
   ctrl_u: "\x15",
 });
 

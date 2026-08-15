@@ -82,6 +82,7 @@ export type PromptInputProps = {
     assets: readonly ImageAssetRef[],
     signal: AbortSignal,
   ) => Promise<void>;
+  onCycleReasoningEffort?: () => void;
   onSubmit: (
     submission: PromptSubmission,
     signal: AbortSignal,
@@ -604,6 +605,10 @@ export function PromptInput(props: PromptInputProps) {
         if (key.escape) {
           operation.current?.abort();
         }
+        return;
+      }
+      if (key.ctrl && input === "r") {
+        props.onCycleReasoningEffort?.();
         return;
       }
       const selectedFile = fileMatches[selectedIndex];

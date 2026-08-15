@@ -417,9 +417,10 @@ control. `/reasoning <effort>` temporarily selects one of the profile's
 selection is not written to configuration or canonical history: `/clear`,
 `/fork`, `/model`, `/resume`, and a TUI restart create a new runtime from the
 profile default. Responses requests send `reasoning.effort`; Chat Completions
-requests send `reasoning_effort`. When configured, the TUI information line
-shows the live effort immediately after the model name, for example
-`gpt-5.6-sol max`.
+requests send `reasoning_effort`. Press `Ctrl+R` while the prompt is idle to cycle
+through `supportedEfforts` in profile order, wrapping from the last effort to the
+first. When configured, the TUI information line shows the live effort immediately
+after the model name, for example `gpt-5.6-sol max`.
 
 ### Project Custom Slash Commands
 

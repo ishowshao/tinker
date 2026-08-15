@@ -194,6 +194,30 @@ export function App(props: AppProps) {
   const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
   const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
+  const cycleReasoningEffort = () => {
+    const current = binding.reasoningEffort?.();
+    if (current === undefined) {
+      return;
+    }
+    const currentIndex = current.supportedEfforts.indexOf(current.effort);
+    const nextIndex =
+      currentIndex < 0 ? 0 : (currentIndex + 1) % current.supportedEfforts.length;
+    const nextEffort = current.supportedEfforts[nextIndex];
+    if (nextEffort === undefined) {
+      return;
+    }
+    try {
+      const updated = binding.setReasoningEffort?.(nextEffort);
+      if (updated === undefined) {
+        throw new Error("Reasoning effort control is unavailable.");
+      }
+      setNotice(
+        `Reasoning effort cycled from ${JSON.stringify(current.effort)} to ${JSON.stringify(updated.effort)} (Ctrl+R).`,
+      );
+    } catch (error) {
+      setNotice(errorMessage(error));
+    }
+  };
 
   useEffect(() => {
     if (readGitBranch === undefined) {
@@ -877,6 +901,9 @@ export function App(props: AppProps) {
                   fileLister={props.fileLister}
                   importImage={binding.importImage}
                   verifyImageAssets={binding.verifyImageAssets}
+                  onCycleReasoningEffort={
+                    hasReasoningEffort ? cycleReasoningEffort : undefined
+                  }
                   onSubmit={onSubmit}
                   onMaintenance={onMaintenance}
                   placeholder='Enter a coding request, or "/" for commands'

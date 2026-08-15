@@ -56,6 +56,7 @@ test("encodes semantic PTY input with terminal-standard byte sequences", () => {
     "ctrl_a",
     "ctrl_d",
     "ctrl_e",
+    "ctrl_r",
     "ctrl_u",
   ];
 
@@ -74,6 +75,7 @@ test("encodes semantic PTY input with terminal-standard byte sequences", () => {
     "\x01",
     "\x04",
     "\x05",
+    "\x12",
     "\x15",
   ]);
   expect(bracketedPasteSequence("一\n二")).toBe("\x1b[200~一\n二\x1b[201~");
