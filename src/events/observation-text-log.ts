@@ -35,6 +35,10 @@ export function renderObservationLogEvent(event: AgentEvent): string | undefined
       ].join("\n");
     case "turn.started":
       return renderTurnStarted(event);
+    case "turn.steering.applied":
+      return ["## User follow-up", "", event.data.userPrompt.text, "", "---", ""].join(
+        "\n",
+      );
     case "assistant.progress":
       return renderAssistantProgress(event);
     case "tool.observation":

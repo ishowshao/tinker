@@ -100,6 +100,9 @@ export type PendingLedgerTurn = {
 };
 
 export type AgentTurnLedger = {
+  appendSteeringUserMessages(
+    messages: readonly UserMessage[],
+  ): readonly CanonicalMessageRecord[];
   appendAssistant(input: {
     iteration: IterationIdentity;
     message: AssistantMessage;
@@ -127,6 +130,13 @@ export type LedgerMutation =
       frame: ProtocolFrame;
       message: CanonicalMessageRecord;
       admissionBase?: AdmissionBaseToken;
+      next: ProtocolContextView;
+    }
+  | {
+      kind: "append_steering_users";
+      turn: TurnIdentity;
+      frames: readonly ProtocolFrame[];
+      messages: readonly CanonicalMessageRecord[];
       next: ProtocolContextView;
     }
   | {
@@ -394,6 +404,74 @@ export class InMemorySessionLedger implements SessionLedger {
     }
     this.pending?.markFaulted();
     this.pending = undefined;
+  }
+
+  appendSteeringUserMessages(
+    pending: InMemoryPendingLedgerTurn,
+    userMessages: readonly UserMessage[],
+  ): readonly CanonicalMessageRecord[] {
+    this.requirePending(pending, "append steering user messages");
+    this.assertNoOpenFrame();
+    if (userMessages.length === 0) {
+      return Object.freeze([]);
+    }
+    for (const userMessage of userMessages) {
+      validateUserMessage(userMessage);
+    }
+
+    const frames: ProtocolFrame[] = [];
+    const messages: CanonicalMessageRecord[] = [];
+    for (const userMessage of userMessages) {
+      const createdAt = this.clock();
+      const ordinal = this.view.messages.length + messages.length + 1;
+      const frameId = this.input.idFactory.createProtocolFrameId();
+      messages.push(
+        immutableRecord<CanonicalMessageRecord>({
+          messageId: this.input.idFactory.createMessageId(),
+          sessionId: this.input.sessionId,
+          frameId,
+          ordinal,
+          contentSha256: userMessageHash(userMessage),
+          createdAt,
+          role: "user",
+          turnId: pending.turn.turnId,
+          content: userMessage.content,
+          ...(userMessage.attachments === undefined
+            ? {}
+            : {
+                attachments: Object.freeze(
+                  immutableCanonicalClone(userMessage.attachments),
+                ),
+              }),
+          origin: "user",
+        }),
+      );
+      frames.push(
+        immutableRecord<ProtocolFrame>({
+          frameId,
+          sessionId: this.input.sessionId,
+          turnId: pending.turn.turnId,
+          kind: "user",
+          state: "closed",
+          firstOrdinal: ordinal,
+          lastOrdinal: ordinal,
+          createdAt,
+          closedAt: createdAt,
+        }),
+      );
+    }
+    const immutableFrames = Object.freeze(frames);
+    const immutableMessages = Object.freeze(messages);
+    const next = appendView(this.view, immutableFrames, immutableMessages, []);
+    this.validator.validate(next, { fullIntegrity: true });
+    this.commit({
+      kind: "append_steering_users",
+      turn: pending.turn,
+      frames: immutableFrames,
+      messages: immutableMessages,
+      next,
+    });
+    return immutableMessages;
   }
 
   appendAssistant(
@@ -776,6 +854,8 @@ class InMemoryPendingLedgerTurn implements PendingLedgerTurn {
     readonly turn: TurnIdentity,
   ) {
     this.agent = {
+      appendSteeringUserMessages: (messages) =>
+        this.ledger.appendSteeringUserMessages(this, messages),
       appendAssistant: (input) => this.ledger.appendAssistant(this, input),
       assertCanExecuteTool: (call) => this.ledger.assertCanExecuteTool(this, call),
       commitToolCompletions: (completions) =>

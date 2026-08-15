@@ -721,6 +721,8 @@ class TimedPendingLedgerTurn implements PendingLedgerTurn {
     metrics: LedgerMetrics,
   ) {
     this.agent = {
+      appendSteeringUserMessages: (messages) =>
+        inner.agent.appendSteeringUserMessages(messages),
       appendAssistant: (input) => inner.agent.appendAssistant(input),
       assertCanExecuteTool: (call) => inner.agent.assertCanExecuteTool(call),
       commitToolCompletions: (completions) =>

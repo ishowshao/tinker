@@ -37,6 +37,11 @@ export class StdoutEventPrinter implements EventSink {
           `turn.started turn=${event.turnNumber} turnId=${event.turnId}\n`,
         );
         break;
+      case "turn.steering.applied":
+        this.stdout.write(
+          `turn.steering.applied turn=${event.turnNumber} ordinal=${event.data.ordinal}\n`,
+        );
+        break;
       case "agent.iteration.started":
         this.stdout.write(
           `agent.iteration.started iteration=${event.iterationNumber} iterationId=${event.iterationId}\n`,

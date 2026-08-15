@@ -660,6 +660,9 @@ export class SessionStore implements SessionLedgerCommitter {
           case "begin_turn":
             this.commitBeginTurn(mutation, now);
             break;
+          case "append_steering_users":
+            this.commitSteeringUsers(mutation, now);
+            break;
           case "append_assistant":
             this.commitAssistant(mutation, now);
             break;
@@ -2846,6 +2849,32 @@ export class SessionStore implements SessionLedgerCommitter {
       )
       .run(mutation.turn.turnNumber + 1, now, mutation.turn.turnNumber);
     requireSingleChange(this.database, updated.changes, "advance turn counter");
+  }
+
+  private commitSteeringUsers(
+    mutation: Extract<LedgerMutation, { kind: "append_steering_users" }>,
+    now: string,
+  ): void {
+    const turn = this.requireTurnRow(mutation.turn.turnId);
+    if (turn.status !== "open") {
+      throw new Error(`Turn ${mutation.turn.turnId} is not open.`);
+    }
+    if (
+      mutation.frames.length === 0 ||
+      mutation.frames.length !== mutation.messages.length
+    ) {
+      throw new Error(
+        "Steering user mutation must contain matching frames and messages.",
+      );
+    }
+    for (let index = 0; index < mutation.frames.length; index += 1) {
+      insertFrame(this.database, requireItem(mutation.frames, index, "steering frame"));
+      insertMessage(
+        this.database,
+        requireItem(mutation.messages, index, "steering message"),
+      );
+    }
+    this.touch(now);
   }
 
   private commitAssistant(

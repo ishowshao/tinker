@@ -4,6 +4,7 @@ export type FooterProps = {
   status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
   workedForMs?: number;
   yolo?: boolean;
+  pendingFollowUps?: number;
 };
 
 export function Footer(props: FooterProps) {
@@ -26,7 +27,11 @@ export function Footer(props: FooterProps) {
   }
 
   if (props.status === "running") {
-    return <Spinner label={`Running${suffix}`} />;
+    const queued =
+      props.pendingFollowUps === undefined || props.pendingFollowUps === 0
+        ? ""
+        : ` · ${props.pendingFollowUps} follow-up${props.pendingFollowUps === 1 ? "" : "s"} queued`;
+    return <Spinner label={`Running${queued}${suffix}`} />;
   }
 
   if (props.status === "cancelling") {

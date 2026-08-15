@@ -108,6 +108,10 @@ const STATIC_HEADER = Symbol("tui-static-header");
 const LIVE_TIMELINE_MAX_ROWS = 8;
 const LIVE_TIMELINE_WITH_TASKS_MAX_ROWS = 3;
 const BACKGROUND_TASKS_MAX_ROWS = 12;
+const IDLE_PROMPT_SCHEDULER = Object.freeze({
+  state: "idle" as const,
+  pendingCount: 0,
+});
 
 export function App(props: AppProps) {
   const { exit } = useApp();
@@ -137,11 +141,23 @@ export function App(props: AppProps) {
     () => binding.bashGuard(),
     () => binding.bashGuard(),
   );
+  const promptScheduler = useSyncExternalStore(
+    (listener) => binding.subscribePromptScheduler?.(listener) ?? (() => undefined),
+    () => binding.promptScheduler?.() ?? IDLE_PROMPT_SCHEDULER,
+    () => binding.promptScheduler?.() ?? IDLE_PROMPT_SCHEDULER,
+  );
   const [isRunning, setIsRunning] = useState(false);
+  const executionRunning = isRunning || promptScheduler.state === "running";
   const [isSessionOperation, setIsSessionOperation] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(props.initialNotice);
+  const currentQueuedFollowUpNotice = `Follow-up queued for the active turn (${promptScheduler.pendingCount} pending).`;
+  const visibleNotice =
+    notice?.startsWith("Follow-up queued for the active turn (") === true &&
+    notice !== currentQueuedFollowUpNotice
+      ? undefined
+      : notice;
   const [showStatus, setShowStatus] = useState(false);
   const [showSkills, setShowSkills] = useState(false);
   const [showMcp, setShowMcp] = useState(false);
@@ -259,7 +275,7 @@ export function App(props: AppProps) {
       setIsCancelling(true);
       setNotice("Cancelling current turn...");
     },
-    { isActive: isRunning },
+    { isActive: executionRunning },
   );
 
   const closeResumePicker = () => {
@@ -449,6 +465,32 @@ export function App(props: AppProps) {
     submission: PromptSubmission,
     admissionSignal: AbortSignal,
   ): Promise<PromptSubmissionOutcome> => {
+    if (promptScheduler.state === "running") {
+      if (submission.userMessage.attachments !== undefined) {
+        setNotice("Active-turn follow-ups do not support image attachments.");
+        return false;
+      }
+      if (submission.userMessage.content.trimStart().startsWith("/")) {
+        setNotice("Slash commands cannot be queued while a turn is running.");
+        return false;
+      }
+      try {
+        const queued = binding.queueFollowUp?.(submission.userMessage);
+        if (queued === undefined) {
+          throw new Error("TUI session binding does not support follow-up queuing.");
+        }
+        void props.history?.append(submission.draft).catch((error: unknown) => {
+          setNotice(`Prompt history write failed: ${errorMessage(error)}`);
+        });
+        setNotice(
+          `Follow-up queued for the active turn (${queued.pendingCount} pending).`,
+        );
+        return true;
+      } catch (error) {
+        setNotice(`Follow-up was not queued: ${errorMessage(error)}`);
+        return false;
+      }
+    }
     if (isRunning) return false;
     setNotice(undefined);
     setIsCancelling(false);
@@ -555,6 +597,10 @@ export function App(props: AppProps) {
     setViewError(undefined);
     if (shouldRestoreViewport) {
       restoreStaticViewport();
+    }
+
+    if (promptScheduler.state === "running") {
+      return submitAgentPrompt(submission, signal);
     }
 
     if (userMessage.attachments === undefined && trimmed.startsWith("/")) {
@@ -856,9 +902,16 @@ export function App(props: AppProps) {
             </Box>
             <Box marginTop={1} flexShrink={0}>
               <Footer
-                status={isCancelling ? "cancelling" : state.status}
+                status={
+                  isCancelling
+                    ? "cancelling"
+                    : executionRunning
+                      ? "running"
+                      : state.status
+                }
                 workedForMs={state.workedForMs}
                 yolo={bashGuard.mode === "yolo"}
+                pendingFollowUps={promptScheduler.pendingCount}
               />
             </Box>
             <Box marginTop={1} flexDirection="column" flexShrink={0}>
@@ -891,26 +944,38 @@ export function App(props: AppProps) {
                   gitBranch={gitBranch}
                   contextUsage={state.contextUsage}
                   isDisabled={
-                    isRunning ||
                     isSessionOperation ||
                     isCopying ||
+                    isCancelling ||
                     bashGuard.pending !== undefined
                   }
                   history={props.history}
                   commands={availableCommands}
                   fileLister={props.fileLister}
-                  importImage={binding.importImage}
+                  importImage={
+                    promptScheduler.state === "running"
+                      ? undefined
+                      : binding.importImage
+                  }
                   verifyImageAssets={binding.verifyImageAssets}
                   onCycleReasoningEffort={
-                    hasReasoningEffort ? cycleReasoningEffort : undefined
+                    hasReasoningEffort && promptScheduler.state !== "running"
+                      ? cycleReasoningEffort
+                      : undefined
                   }
                   onSubmit={onSubmit}
                   onMaintenance={onMaintenance}
-                  placeholder='Enter a coding request, or "/" for commands'
+                  placeholder={
+                    promptScheduler.state === "running"
+                      ? "Send a follow-up for the active turn…"
+                      : 'Enter a coding request, or "/" for commands'
+                  }
                 />
               )}
               {viewError === undefined ? null : <Text color="red">{viewError}</Text>}
-              {notice === undefined ? null : <Text color="yellow">{notice}</Text>}
+              {visibleNotice === undefined ? null : (
+                <Text color="yellow">{visibleNotice}</Text>
+              )}
             </Box>
           </Box>
         )}

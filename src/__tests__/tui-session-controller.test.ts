@@ -356,6 +356,11 @@ function fakeRuntime(
       finalText: "done",
       lastIteration: createTestRuntime().iteration,
     }),
+    promptScheduler: () => ({ state: "idle", pendingCount: 0 }),
+    subscribePromptScheduler: () => () => undefined,
+    queueFollowUp: () => {
+      throw new Error("not used");
+    },
     compactContext: async () => {
       throw new Error("not used");
     },

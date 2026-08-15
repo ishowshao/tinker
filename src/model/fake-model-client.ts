@@ -241,6 +241,9 @@ export class FakeModelClient implements ModelClient {
     if (this.mode === "pty-incremental-output") {
       return this.ptyIncrementalOutput(input, prepared, options);
     }
+    if (this.mode === "pty-steering-notice") {
+      return this.ptySteeringNotice(input, prepared, options);
+    }
     if (this.mode === "pty-resume-layout") {
       return this.ptyResumeLayout(input, prepared, options);
     }
@@ -410,6 +413,32 @@ export class FakeModelClient implements ModelClient {
     await Bun.sleep(100);
     options.signal.throwIfAborted();
     return textOutput(prepared, chunks.join(""));
+  }
+
+  private async ptySteeringNotice(
+    input: ModelRequestInput,
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    requireTools(input, ["Bash"]);
+    const prompt = lastUserMessage(input.messages);
+    if (prompt === "PTY_STEERING_START") {
+      await Bun.sleep(600);
+      options.signal.throwIfAborted();
+      return toolCallOutput(prepared, options, "Bash", {
+        command: "printf 'PTY_STEERING_TOOL_DONE\\n'",
+        description: "Create steering boundary",
+      });
+    }
+    if (prompt === "PTY_STEERING_FOLLOWUP") {
+      requireToolMessage(input.messages, "Bash", "PTY_STEERING_TOOL_DONE");
+      await Bun.sleep(1_500);
+      options.signal.throwIfAborted();
+      return textOutput(prepared, "PTY_STEERING_FINAL");
+    }
+    throw new Error(
+      `Unexpected pty-steering-notice prompt: ${JSON.stringify(prompt)}.`,
+    );
   }
 
   private ptyResumeLayout(

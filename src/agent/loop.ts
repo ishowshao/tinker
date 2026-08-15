@@ -498,6 +498,10 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       }
     }
 
+    await input.runtimeSession.applyQueuedSteering?.({
+      turn: input.turn,
+      ledger: input.ledger,
+    });
     await input.runtimeSession.append({
       type: "agent.iteration.finished",
       ...iteration,

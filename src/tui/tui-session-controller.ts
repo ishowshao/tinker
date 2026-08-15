@@ -45,6 +45,9 @@ export type TuiSessionBinding = {
   ) => Promise<void>;
   admitTurn?: (userMessage: UserMessage, signal: AbortSignal) => Promise<AcceptedTurn>;
   executeTurn(userMessage: UserMessage, signal: AbortSignal): Promise<RunAgentResult>;
+  promptScheduler?: RuntimeSession["promptScheduler"];
+  subscribePromptScheduler?: RuntimeSession["subscribePromptScheduler"];
+  queueFollowUp?: RuntimeSession["queueFollowUp"];
   bashGuard(): BashGuardSnapshot;
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): void;
@@ -250,6 +253,10 @@ export function managedTuiBinding(input: {
         userMessage,
         signal,
       } satisfies ExecuteTurnInput),
+    promptScheduler: () => input.runtimeSession.promptScheduler(),
+    subscribePromptScheduler: (listener) =>
+      input.runtimeSession.subscribePromptScheduler(listener),
+    queueFollowUp: (userMessage) => input.runtimeSession.queueFollowUp(userMessage),
     bashGuard: () => input.runtimeSession.bashGuard(),
     subscribeBashGuard: (listener) => input.runtimeSession.subscribeBashGuard(listener),
     setYoloMode: (enabled) => input.runtimeSession.setYoloMode(enabled),

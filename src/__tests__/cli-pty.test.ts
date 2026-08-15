@@ -140,6 +140,40 @@ test(
 );
 
 test(
+  "PTY-012: clears the queued notice when an active-turn follow-up is applied",
+  async () => {
+    await withPtyTui(
+      { fakeModel: "pty-steering-notice", rows: 40, columns: 120 },
+      async (harness) => {
+        await waitForInitialFrame(harness);
+        await submitPrompt(harness, "PTY_STEERING_START");
+        await harness.waitForScreen("Send a follow-up for the active turn…", {
+          message: "active-turn follow-up input",
+        });
+        await harness.type("PTY_STEERING_FOLLOWUP");
+        await harness.waitForScreen("PTY_STEERING_FOLLOWUP");
+        await harness.press("enter");
+        const queuedNotice = "Follow-up queued for the active turn (1 pending).";
+        await harness.waitForScreen(queuedNotice);
+        await harness.waitForScreen(
+          (screen) =>
+            screen.includes("follow-up") &&
+            screen.includes("PTY_STEERING_FOLLOWUP") &&
+            !screen.includes(queuedNotice),
+          {
+            timeoutMs: 5_000,
+            message: "applied follow-up without stale queued notice",
+          },
+        );
+        await harness.waitForScreen("PTY_STEERING_FINAL", { timeoutMs: 5_000 });
+        await quitTui(harness);
+      },
+    );
+  },
+  { timeout: 20_000 },
+);
+
+test(
   "PTY-011: prints sealed assistant sections before request settlement without duplicates",
   async () => {
     await withPtyTui(
@@ -788,6 +822,7 @@ test(
         await waitForInitialFrame(harness);
         await submitPrompt(harness, "PTY_FAIL_FIRST");
         await harness.waitForScreen("PTY_FAKE_PROVIDER_FAILURE");
+        await harness.waitForPromptReady();
         expect(harness.screenText()).toContain("failed");
 
         await submitPrompt(harness, "PTY_FAIL_RECOVER");

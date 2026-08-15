@@ -307,6 +307,10 @@ export type AgentEventDataMap = {
   "session.interrupted_frame_recovered": InterruptedFrameRecoveredData;
   "session.finished": SessionFinishedData;
   "turn.started": { userPrompt: UserPromptProjection };
+  "turn.steering.applied": {
+    userPrompt: UserPromptProjection;
+    ordinal: number;
+  };
   "turn.finished": TurnFinishedData;
   "turn.failed": { error: string };
   "turn.cancelled": { cancellation: TurnCancellation };
@@ -411,7 +415,7 @@ export type AgentEventInput =
     >
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">
-  | TurnEventInput<"turn.started" | "turn.finished">
+  | TurnEventInput<"turn.started" | "turn.steering.applied" | "turn.finished">
   | (
       | TurnEventInput<"turn.failed" | "turn.cancelled">
       | IterationEventInput<"turn.failed" | "turn.cancelled">

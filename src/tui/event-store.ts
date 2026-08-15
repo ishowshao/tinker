@@ -155,6 +155,21 @@ export function reduceTuiProjection(
         },
       };
     }
+    case "turn.steering.applied": {
+      const userPrompt = truncateUserPromptProjection(
+        event.data.userPrompt,
+        MAX_TIMELINE_PROMPT_CODE_POINTS,
+      );
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `turn-${event.turnId}-steering-${event.eventSequence}`,
+          label: "follow-up",
+          text: userPrompt.text,
+          userPrompt,
+          status: "text",
+        }),
+      );
+    }
     case "model.request.started":
       return updateActiveTurn(state, event, policy, (turn) =>
         event.data.attemptNumber === 1
