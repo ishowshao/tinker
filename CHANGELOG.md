@@ -5,6 +5,30 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-08-15
+
+### Added
+
+- Add an OpenAI Responses API adapter selectable per model profile, including
+  stateless request mapping, streaming, reasoning output, tool calls, image
+  input, token estimation, and compatible encrypted reasoning items.
+- Add per-profile reasoning effort configuration and a session-runtime
+  `/reasoning` control. The TUI displays the active effort, and `Ctrl+R` cycles
+  through supported efforts in profile order without changing configuration or
+  canonical history.
+- Add a model provider configuration guide with ready-to-adapt examples for
+  OpenAI, Kimi K3, and Zhipu GLM-5.2.
+
+### Changed
+
+- Split historical session retrieval into `RecallSearch` and `RecallGet`, so the
+  agent can locate relevant history before retrieving exact bounded content.
+- Track active-turn tool-output consumption when maintaining context, allowing
+  already-consumed observations to be compacted safely during long-running
+  turns.
+- Bound Bash and background-task output previews while preserving complete
+  output in log files for paginated inspection.
+
 ## [1.9.0] - 2026-08-04
 
 ### Added
@@ -175,7 +199,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/ishowshao/tinker/releases/tag/v1.10.0
 [1.9.0]: https://github.com/ishowshao/tinker/releases/tag/v1.9.0
 [1.8.0]: https://github.com/ishowshao/tinker/releases/tag/v1.8.0
 [1.7.0]: https://github.com/ishowshao/tinker/releases/tag/v1.7.0
