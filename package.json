@@ -75,8 +75,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@assistant-ui/react-ink": "^0.0.35",
-    "@assistant-ui/react-ink-markdown": "^0.0.34",
+    "@assistant-ui/react-ink": "^0.0.37",
+    "@assistant-ui/react-ink-markdown": "^0.0.36",
     "@inkjs/ui": "^2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
@@ -91,10 +91,10 @@
     "glob": "^13.0.6",
     "ink": "^7.1.0",
     "linkedom": "^0.18.13",
-    "markdansi": "0.3.2",
+    "markdansi": "0.3.3",
     "marked": "^18.0.5",
     "openai": "^7.1.0",
-    "puppeteer-core": "25.4.0",
+    "puppeteer-core": "25.7.0",
     "react": "^19.2.7",
     "sharp": "^0.35.3",
     "shiki": "^4.3.1",
