@@ -10,9 +10,6 @@ import {
   MODEL_PROFILE_FIELDS,
   MODEL_PROFILES_DOCUMENT_FIELDS,
   MODEL_REASONING_FIELDS,
-  MODEL_TOKEN_ESTIMATOR_FIELDS,
-  type ModelTokenEstimatorKind,
-  type ModelTokenEstimatorMaxRetries,
 } from "./public-config-contract";
 import type { MemoryEmbeddingConfig } from "../memory/contracts";
 import type { ReasoningEffortConfig } from "../model/reasoning-effort";
@@ -29,19 +26,9 @@ export type ModelProfile = {
   readonly includeReasoningContent: boolean;
   readonly stream: boolean;
   readonly inputModalities: readonly ModelInputModality[];
-  readonly tokenEstimator?: ModelTokenEstimatorProfile;
 };
 
 export type ModelInputModality = "text" | "image";
-
-export type ModelTokenEstimatorProfile = {
-  readonly kind: ModelTokenEstimatorKind;
-  readonly model: string;
-  readonly apiBase: string;
-  readonly apiKey: string;
-  readonly timeoutMs: number;
-  readonly maxRetries: ModelTokenEstimatorMaxRetries;
-};
 
 export type ModelProfiles = {
   readonly defaultProfile: string;
@@ -285,16 +272,6 @@ function parseProfile(
     value.inputModalities,
     `${where}: "inputModalities"`,
   );
-  const tokenEstimator =
-    value.tokenEstimator === undefined
-      ? undefined
-      : parseTokenEstimator(value.tokenEstimator, `${where}: "tokenEstimator"`);
-  if (inputModalities.includes("image") && tokenEstimator === undefined) {
-    throw new Error(
-      `${where}: image input requires a complete "tokenEstimator" configuration.`,
-    );
-  }
-
   createModelContextProfile({
     contextWindowTokens,
     maxSupportedOutputTokens,
@@ -312,7 +289,6 @@ function parseProfile(
     includeReasoningContent,
     stream,
     inputModalities,
-    ...(tokenEstimator === undefined ? {} : { tokenEstimator }),
   });
 }
 
@@ -434,54 +410,7 @@ function parseInputModalities(
   );
 }
 
-function parseTokenEstimator(value: unknown, name: string): ModelTokenEstimatorProfile {
-  if (!isRecord(value)) {
-    throw new Error(`${name} must be an object.`);
-  }
-  assertKnownKeys(
-    value,
-    MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => field.name),
-    name,
-  );
-  const kindField = tokenEstimatorField("kind");
-  if (value.kind !== kindField.literalValue) {
-    throw new Error(`${name}.kind must be ${JSON.stringify(kindField.literalValue)}.`);
-  }
-  const model = parseTokenEstimatorString(value, "model", name);
-  const apiBase = parseTokenEstimatorString(value, "apiBase", name);
-  const apiKey = parseTokenEstimatorString(value, "apiKey", name);
-  const timeoutField = tokenEstimatorField("timeoutMs");
-  if (timeoutField.valueKind !== "positive-integer") {
-    throw new Error("Token estimator timeoutMs contract kind is invalid.");
-  }
-  const timeoutMs = requirePositiveInteger(value.timeoutMs, `${name}.timeoutMs`);
-  if (
-    timeoutField.minimum === undefined ||
-    timeoutField.maximum === undefined ||
-    timeoutMs < timeoutField.minimum ||
-    timeoutMs > timeoutField.maximum
-  ) {
-    throw new Error(
-      `${name}.timeoutMs must be between ${timeoutField.minimum} and ${timeoutField.maximum}.`,
-    );
-  }
-  const maxRetriesField = tokenEstimatorField("maxRetries");
-  if (value.maxRetries !== maxRetriesField.literalValue) {
-    throw new Error(`${name}.maxRetries must be ${maxRetriesField.literalValue}.`);
-  }
-  return Object.freeze({
-    kind: kindField.literalValue,
-    model,
-    apiBase,
-    apiKey,
-    timeoutMs,
-    maxRetries: maxRetriesField.literalValue,
-  });
-}
-
 type ModelProfileFieldName = (typeof MODEL_PROFILE_FIELDS)[number]["name"];
-type ModelTokenEstimatorFieldName =
-  (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number]["name"];
 
 function modelProfileField<Name extends ModelProfileFieldName>(
   name: Name,
@@ -492,21 +421,6 @@ function modelProfileField<Name extends ModelProfileFieldName>(
   }
   return field as Extract<
     (typeof MODEL_PROFILE_FIELDS)[number],
-    { readonly name: Name }
-  >;
-}
-
-function tokenEstimatorField<Name extends ModelTokenEstimatorFieldName>(
-  name: Name,
-): Extract<(typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number], { readonly name: Name }> {
-  const field = MODEL_TOKEN_ESTIMATOR_FIELDS.find(
-    (candidate) => candidate.name === name,
-  );
-  if (field === undefined) {
-    throw new Error(`Missing token estimator field contract for ${name}.`);
-  }
-  return field as Extract<
-    (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number],
     { readonly name: Name }
   >;
 }
@@ -553,18 +467,6 @@ function parseProfileBoolean(
   return value[name] === undefined
     ? field.defaultValue
     : parseBoolean(value[name], `${where}: ${JSON.stringify(name)}`);
-}
-
-function parseTokenEstimatorString(
-  value: Record<string, unknown>,
-  name: "model" | "apiBase" | "apiKey",
-  where: string,
-): string {
-  const field = tokenEstimatorField(name);
-  if (field.valueKind !== "non-empty-string") {
-    throw new Error(`Token estimator field ${name} has an invalid contract kind.`);
-  }
-  return requireString(value[name], `${where}.${name}`);
 }
 
 function assertKnownKeys(

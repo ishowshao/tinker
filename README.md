@@ -194,7 +194,6 @@ Profile fields:
 | `includeReasoningContent` | No | JSON boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
 | `stream` | No | JSON boolean | `true` | No | Use streaming transport for the selected model API. |
 | `inputModalities` | No | Normalized modality array | `["text"]` | No | Accepted model input modalities; normalizes to ["text"] or ["text", "image"]. |
-| `tokenEstimator` | With image | Object | — | Yes | Independent token estimator required for image profiles. |
 
 `reasoning` fields:
 
@@ -204,17 +203,6 @@ Profile fields:
 | `defaultEffort` | Non-empty string listed above | Effort used whenever a session runtime is created or reopened. |
 
 The optional `reasoning` object declares provider-specific effort values. Efforts must be unique non-whitespace strings, `reset` is reserved by the TUI command, and `defaultEffort` must appear in `supportedEfforts`. Omitting `reasoning` sends no effort parameter and disables `/reasoning` for that profile.
-
-`tokenEstimator` fields:
-
-| Field | Type / constraint | Secret | Description |
-| --- | --- | --- | --- |
-| `kind` | Literal `"moonshot-estimate-token-count-v1"` | No | Estimator protocol discriminator. |
-| `model` | Non-empty string | No | Estimator model name. |
-| `apiBase` | Non-empty string | No | Estimator API base URL. |
-| `apiKey` | Non-empty string | Yes | Estimator API credential. |
-| `timeoutMs` | Integer 1000–60000 | No | Estimator request timeout in milliseconds. |
-| `maxRetries` | Literal `0` | No | Estimator retry count; retries are disabled. |
 
 Text-only profile example:
 
@@ -271,15 +259,7 @@ Image-capable profile example:
       "inputModalities": [
         "text",
         "image"
-      ],
-      "tokenEstimator": {
-        "kind": "moonshot-estimate-token-count-v1",
-        "model": "example-token-estimator",
-        "apiBase": "https://estimator.example.com/v1",
-        "apiKey": "your-estimator-api-key",
-        "timeoutMs": 30000,
-        "maxRetries": 0
-      }
+      ]
     }
   }
 }
@@ -370,7 +350,7 @@ configured profile.
 ### Image Input
 
 Image attachment is enabled only for a profile whose `inputModalities` explicitly
-includes `image` and which supplies a valid `tokenEstimator`. In the interactive
+includes `image`. In the interactive
 TUI, type `@` and select a file that is inside the workspace and visible to the
 workspace search rules. One-shot commands, clipboard image bytes, remote URLs, and
 files outside or ignored by the workspace search are not supported.
@@ -378,7 +358,11 @@ files outside or ignored by the workspace search are not supported.
 Tinker accepts PNG (not APNG), JPEG, and static WebP. It rejects GIF, animated
 WebP, and other formats. A message and provider request may contain at most eight
 images; each image may be at most 20 MiB, 4096 pixels on either edge, and 8,847,360
-pixels in total. See the
+pixels in total. Provider requests preserve smaller images and proportionally
+downscale larger images to a maximum 2048-pixel long edge. Context planning uses
+fixed local token buckets derived from the materialized dimensions and performs no
+independent token-estimator request. See the
+[`image token bucket design`](docs/image-token-bucket-estimation-design.md) and
 [`multimodal image input design`](docs/multimodal-image-input-design.md) for the
 complete fixed policy and persistence contract.
 

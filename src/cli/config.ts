@@ -14,7 +14,6 @@ import {
   type ModelInputModality,
   type ModelProfile,
   type ModelProfiles,
-  type ModelTokenEstimatorProfile,
   unknownProfileError,
 } from "./model-profiles";
 import type { MemoryEmbeddingConfig } from "../memory/contracts";
@@ -40,7 +39,6 @@ export type RunnerConfig = {
   readonly contextBudget: ModelContextBudget;
   readonly profileName?: string;
   readonly inputModalities: readonly ModelInputModality[];
-  readonly tokenEstimator?: ModelTokenEstimatorProfile;
   readonly bashGuardMode: "guard" | "yolo";
   readonly bashGuardSource: "default" | "environment" | "cli";
 };
@@ -184,9 +182,6 @@ function runnerConfigTemplateFromProfile(
     inputModalities: profile.inputModalities,
     bashGuardMode: environment.bashGuardMode,
     bashGuardSource: environment.bashGuardSource,
-    ...(profile.tokenEstimator === undefined
-      ? {}
-      : { tokenEstimator: profile.tokenEstimator }),
   });
 }
 

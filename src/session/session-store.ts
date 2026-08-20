@@ -32,7 +32,6 @@ import {
   MODEL_MESSAGE_PROTOCOL_ADAPTERS,
   type ModelMessageProtocol,
 } from "../model/model-client";
-import type { InputTokenEstimatorCompatibility } from "../model/input-token-estimator";
 import type { ToolDefinition, ToolRawResult } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import {
@@ -149,7 +148,16 @@ export type SessionImageInputCompatibility = {
   readonly policyVersion: string;
   readonly policySha256: string;
   readonly inputModalities: readonly ("text" | "image")[];
-  readonly tokenEstimator?: InputTokenEstimatorCompatibility;
+  readonly tokenEstimator?: LegacyInputTokenEstimatorCompatibility;
+};
+
+type LegacyInputTokenEstimatorCompatibility = {
+  readonly kind: "moonshot-estimate-token-count-v1";
+  readonly coverageVersion: "full-request-v1";
+  readonly model: string;
+  readonly endpoint: string;
+  readonly timeoutMs: number;
+  readonly maxRetries: 0;
 };
 
 export type CompletedTurnMessageSnapshot =
@@ -3704,7 +3712,6 @@ export function createSessionCompatibilityContract(input: {
   contextProfile: ModelContextProfile;
   messageProtocol: ModelMessageProtocol;
   inputModalities?: readonly ("text" | "image")[];
-  tokenEstimator?: InputTokenEstimatorCompatibility;
 }): SessionCompatibilityContract {
   if (input.modelName.trim() === "") {
     throw new Error("Session compatibility model name must not be empty.");
@@ -3722,14 +3729,6 @@ export function createSessionCompatibilityContract(input: {
     throw new Error("Session compatibility message protocol is invalid.");
   }
   const inputModalities = normalizeInputModalities(input.inputModalities ?? ["text"]);
-  if (inputModalities.includes("image") && input.tokenEstimator === undefined) {
-    throw new Error(
-      "Session compatibility image input requires a token estimator identity.",
-    );
-  }
-  if (input.tokenEstimator !== undefined) {
-    validateTokenEstimatorCompatibility(input.tokenEstimator);
-  }
   return Object.freeze({
     modelName: input.modelName,
     ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
@@ -3745,9 +3744,6 @@ export function createSessionCompatibilityContract(input: {
         }),
       ),
       inputModalities,
-      ...(input.tokenEstimator === undefined
-        ? {}
-        : { tokenEstimator: immutableCanonicalClone(input.tokenEstimator) }),
     }),
   });
 }
@@ -3764,9 +3760,6 @@ function normalizeSessionCompatibilityContract(
     contextProfile: contract.contextProfile,
     messageProtocol: contract.messageProtocol,
     inputModalities: contract.imageInput.inputModalities,
-    ...(contract.imageInput.tokenEstimator === undefined
-      ? {}
-      : { tokenEstimator: contract.imageInput.tokenEstimator }),
   });
 }
 
@@ -3787,7 +3780,7 @@ function normalizeInputModalities(
 }
 
 function validateTokenEstimatorCompatibility(
-  estimator: InputTokenEstimatorCompatibility,
+  estimator: LegacyInputTokenEstimatorCompatibility,
 ): void {
   if (
     estimator.kind !== "moonshot-estimate-token-count-v1" ||
@@ -5594,9 +5587,6 @@ function decodeSessionCompatibilityContract(
       enumFromSql(value, ["text", "image"] as const, "compatibility input modality"),
     ),
   );
-  if (modalities.includes("image") && tokenEstimator === undefined) {
-    throw new Error("Stored image input compatibility has no token estimator.");
-  }
   const policyVersion = stringFromSql(
     imageInput.policyVersion,
     "compatibility image policyVersion",
@@ -5625,7 +5615,7 @@ function decodeSessionCompatibilityContract(
 
 function decodeTokenEstimatorCompatibility(
   value: unknown,
-): InputTokenEstimatorCompatibility {
+): LegacyInputTokenEstimatorCompatibility {
   const record = recordFromSql(value, "session compatibility token estimator");
   assertObjectKeys(
     record,
@@ -5633,7 +5623,7 @@ function decodeTokenEstimatorCompatibility(
     ["kind", "coverageVersion", "model", "endpoint", "timeoutMs", "maxRetries"],
     "session compatibility token estimator",
   );
-  const estimator: InputTokenEstimatorCompatibility = {
+  const estimator: LegacyInputTokenEstimatorCompatibility = {
     kind: enumFromSql(
       record.kind,
       ["moonshot-estimate-token-count-v1"] as const,

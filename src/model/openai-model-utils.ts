@@ -1,7 +1,12 @@
 import OpenAI from "openai";
 import type { UserMessage } from "../agent/types";
-import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
+import {
+  IMAGE_INPUT_POLICY,
+  imagePlanningTokens,
+  providerImageDimensions,
+} from "../image/image-input-policy";
 import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
+import { materializeProviderImage, type ProviderImage } from "../image/provider-image";
 import {
   ModelRequestMediaAggregateError,
   ProviderResponseError,
@@ -28,26 +33,22 @@ export async function materializeOpenAIRequest(
   }
 
   const assets = distinctPreparedAssets(prepared.promptSegments);
-  const lowerLengths = new Map<ImageAssetId, number>();
-  for (const asset of assets.values()) {
-    lowerLengths.set(asset.assetId, dataUrlLength(asset));
-  }
   const markerCount = countImageMarkers(prepared.payload);
   if (markerCount !== prepared.mediaOccurrenceCount) {
     throw new Error("Prepared image marker count does not match media descriptors.");
   }
-  const lowerBodyBytes = exactJsonBodyBytes(prepared.payload, lowerLengths);
-  assertBodyLimit(lowerBodyBytes, prepared.mediaOccurrenceCount);
-
   const dataUrls = new Map<ImageAssetId, string>();
+  const providerImages = new Map<ImageAssetId, ProviderImage>();
   for (const asset of assets.values()) {
     options.signal.throwIfAborted();
     const bytes = await options.assetStore.readVerified(asset, {
       signal: options.signal,
     });
+    const image = await materializeProviderImage(bytes, asset.mimeType);
+    providerImages.set(asset.assetId, image);
     dataUrls.set(
       asset.assetId,
-      `data:${asset.mimeType};base64,${bytes.toString("base64")}`,
+      `data:${image.mimeType};base64,${image.bytes.toString("base64")}`,
     );
     await yieldToEventLoop();
   }
@@ -56,9 +57,14 @@ export async function materializeOpenAIRequest(
     [...dataUrls].map(([assetId, value]) => [assetId, value.length] as const),
   );
   const bodyBytes = exactJsonBodyBytes(prepared.payload, exactLengths);
-  assertBodyLimit(bodyBytes, prepared.mediaOccurrenceCount);
+  assertOpenAIRequestBodyLimit(bodyBytes, prepared.mediaOccurrenceCount);
   const payload = deepFreeze(materializePayload(prepared.payload, dataUrls));
-  return Object.freeze({ ...prepared, payload, bodyBytes });
+  return Object.freeze({
+    ...prepared,
+    payload,
+    promptSegments: materializedPromptSegments(prepared.promptSegments, providerImages),
+    bodyBytes,
+  });
 }
 
 export function exactJsonBodyBytes(
@@ -119,19 +125,21 @@ export function exactJsonBodyBytes(
 }
 
 export function imageUserSegment(message: UserMessage): PreparedPromptSegment {
-  const media = message.attachments!.map(
-    (attachment): PreparedMediaDescriptor =>
-      Object.freeze({
-        assetId: attachment.assetId,
-        label: attachment.label,
-        range: Object.freeze({ ...attachment.range }),
-        mimeType: attachment.mimeType,
-        byteLength: attachment.byteLength,
-        width: attachment.width,
-        height: attachment.height,
-        planningTokens: IMAGE_INPUT_POLICY.planningTokensPerImage,
-      }),
-  );
+  const media = message.attachments!.map((attachment): PreparedMediaDescriptor => {
+    const dimensions = providerImageDimensions(attachment.width, attachment.height);
+    return Object.freeze({
+      assetId: attachment.assetId,
+      label: attachment.label,
+      range: Object.freeze({ ...attachment.range }),
+      mimeType: attachment.mimeType,
+      byteLength: attachment.byteLength,
+      sourceWidth: attachment.width,
+      sourceHeight: attachment.height,
+      width: dimensions.width,
+      height: dimensions.height,
+      planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+    });
+  });
   return Object.freeze({
     kind: "user",
     normalizedText: message.content,
@@ -204,8 +212,8 @@ function distinctPreparedAssets(
         assetId: media.assetId,
         mimeType: media.mimeType,
         byteLength: media.byteLength,
-        width: media.width,
-        height: media.height,
+        width: media.sourceWidth,
+        height: media.sourceHeight,
       });
       const existing = assets.get(media.assetId);
       if (
@@ -265,16 +273,46 @@ function countImageMarkers(value: unknown): number {
   return 0;
 }
 
-function dataUrlLength(asset: ImageAssetRef): number {
-  return `data:${asset.mimeType};base64,`.length + 4 * Math.ceil(asset.byteLength / 3);
-}
-
-function assertBodyLimit(bodyBytes: number, imageCount: number): void {
+export function assertOpenAIRequestBodyLimit(
+  bodyBytes: number,
+  imageCount: number,
+): void {
   if (bodyBytes > IMAGE_INPUT_POLICY.maxRequestBodyBytes) {
     throw new ModelRequestMediaAggregateError(
       `Model request is ${bodyBytes} UTF-8 bytes with ${imageCount} images; maximum is ${IMAGE_INPUT_POLICY.maxRequestBodyBytes}.`,
     );
   }
+}
+
+function materializedPromptSegments(
+  segments: readonly PreparedPromptSegment[],
+  images: ReadonlyMap<ImageAssetId, ProviderImage>,
+): readonly PreparedPromptSegment[] {
+  return Object.freeze(
+    segments.map((segment) =>
+      segment.media === undefined
+        ? segment
+        : Object.freeze({
+            ...segment,
+            media: Object.freeze(
+              segment.media.map((media) => {
+                const image = images.get(media.assetId);
+                if (image === undefined) {
+                  throw new Error(
+                    `Image ${media.assetId.slice(0, 12)}… was not materialized.`,
+                  );
+                }
+                return Object.freeze({
+                  ...media,
+                  width: image.width,
+                  height: image.height,
+                  planningTokens: image.planningTokens,
+                });
+              }),
+            ),
+          }),
+    ),
+  );
 }
 
 function yieldToEventLoop(): Promise<void> {

@@ -2,9 +2,13 @@ import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
 import { cancellationError } from "../agent/turn-cancellation";
-import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
+import {
+  IMAGE_INPUT_POLICY,
+  imagePlanningTokens,
+  providerImageDimensions,
+} from "../image/image-input-policy";
 import type { ImageAssetId, ImageAssetRef } from "../image/image-types";
-import type { InputTokenEstimator } from "./input-token-estimator";
+import { materializeProviderImage } from "../image/provider-image";
 import type { ModelContextBudget } from "./model-context-profile";
 import type { ReasoningEffortController } from "./reasoning-effort";
 import type {
@@ -24,7 +28,6 @@ import { estimatePromptSegments } from "./token-estimator";
 
 export class FakeModelClient implements ModelClient {
   readonly inputModalities: readonly ("text" | "image")[];
-  readonly inputTokenEstimator?: InputTokenEstimator;
   readonly reasoningEffort?: ReasoningEffortController;
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
     adapter: "fake",
@@ -42,13 +45,6 @@ export class FakeModelClient implements ModelClient {
       inputModalities?: readonly ("text" | "image")[];
       reasoningEffort?: ReasoningEffortController;
       requestLogPath?: string;
-      tokenEstimator?: {
-        kind: "moonshot-estimate-token-count-v1";
-        model: string;
-        apiBase: string;
-        timeoutMs: number;
-        maxRetries: 0;
-      };
     },
   ) {
     this.reasoningEffort = options.reasoningEffort;
@@ -57,38 +53,6 @@ export class FakeModelClient implements ModelClient {
     ]);
     if (!this.inputModalities.includes("text")) {
       throw new Error('Fake model input modalities must include "text".');
-    }
-    if (
-      this.inputModalities.includes("image") &&
-      options.tokenEstimator === undefined
-    ) {
-      throw new Error("Image-capable fake model requires a token estimator.");
-    }
-    if (options.tokenEstimator !== undefined) {
-      const estimator = options.tokenEstimator;
-      const endpoint = tokenEstimatorEndpoint(estimator.apiBase);
-      this.inputTokenEstimator = Object.freeze({
-        kind: estimator.kind,
-        compatibility: Object.freeze({
-          kind: estimator.kind,
-          coverageVersion: "full-request-v1",
-          model: estimator.model,
-          endpoint,
-          timeoutMs: estimator.timeoutMs,
-          maxRetries: estimator.maxRetries,
-        }),
-        async estimate(
-          request: MaterializedModelRequest,
-          estimateOptions: { signal: AbortSignal },
-        ) {
-          estimateOptions.signal.throwIfAborted();
-          return Object.freeze({
-            inputTokens: estimatePromptSegments(request.promptSegments).totalTokens,
-            source: "provider_estimated" as const,
-            coverage: "full_request" as const,
-          });
-        },
-      });
     }
   }
 
@@ -113,9 +77,6 @@ export class FakeModelClient implements ModelClient {
         model: this.options.model,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
         inputModalities: this.inputModalities,
-        ...(this.inputTokenEstimator === undefined
-          ? {}
-          : { tokenEstimator: this.inputTokenEstimator.compatibility }),
       }),
     );
     const prepared: PreparedModelRequest = Object.freeze({
@@ -167,6 +128,9 @@ export class FakeModelClient implements ModelClient {
     const materializedAssets: Array<{
       readonly assetId: ImageAssetId;
       readonly byteLength: number;
+      readonly width: number;
+      readonly height: number;
+      readonly planningTokens: number;
       readonly bytesSha256: string;
     }> = [];
     for (const asset of assets.values()) {
@@ -174,11 +138,15 @@ export class FakeModelClient implements ModelClient {
       const bytes = await options.assetStore.readVerified(asset, {
         signal: options.signal,
       });
+      const image = await materializeProviderImage(bytes, asset.mimeType);
       materializedAssets.push(
         Object.freeze({
           assetId: asset.assetId,
-          byteLength: bytes.byteLength,
-          bytesSha256: createHash("sha256").update(bytes).digest("hex"),
+          byteLength: image.bytes.byteLength,
+          width: image.width,
+          height: image.height,
+          planningTokens: image.planningTokens,
+          bytesSha256: createHash("sha256").update(image.bytes).digest("hex"),
         }),
       );
     }
@@ -191,6 +159,10 @@ export class FakeModelClient implements ModelClient {
     const materialized = Object.freeze({
       ...prepared,
       payload,
+      promptSegments: materializedFakePromptSegments(
+        prepared.promptSegments,
+        materializedAssets,
+      ),
       bodyBytes: Buffer.byteLength(stableJsonStringify(payload), "utf8"),
     });
     this.preparedInputs.set(materialized, input);
@@ -1455,19 +1427,21 @@ function lastMessageIndex(
 
 function toPromptSegment(message: AgentMessage): PreparedPromptSegment {
   if (message.role === "user" && message.attachments !== undefined) {
-    const media = message.attachments.map(
-      (attachment): PreparedMediaDescriptor =>
-        Object.freeze({
-          assetId: attachment.assetId,
-          label: attachment.label,
-          range: Object.freeze({ ...attachment.range }),
-          mimeType: attachment.mimeType,
-          byteLength: attachment.byteLength,
-          width: attachment.width,
-          height: attachment.height,
-          planningTokens: IMAGE_INPUT_POLICY.planningTokensPerImage,
-        }),
-    );
+    const media = message.attachments.map((attachment): PreparedMediaDescriptor => {
+      const dimensions = providerImageDimensions(attachment.width, attachment.height);
+      return Object.freeze({
+        assetId: attachment.assetId,
+        label: attachment.label,
+        range: Object.freeze({ ...attachment.range }),
+        mimeType: attachment.mimeType,
+        byteLength: attachment.byteLength,
+        sourceWidth: attachment.width,
+        sourceHeight: attachment.height,
+        width: dimensions.width,
+        height: dimensions.height,
+        planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+      });
+    });
     return Object.freeze({
       kind: "user",
       normalizedText: message.content,
@@ -1495,8 +1469,8 @@ function distinctPreparedAssets(
         assetId: media.assetId,
         mimeType: media.mimeType,
         byteLength: media.byteLength,
-        width: media.width,
-        height: media.height,
+        width: media.sourceWidth,
+        height: media.sourceHeight,
       });
       const existing = assets.get(media.assetId);
       if (
@@ -1511,13 +1485,39 @@ function distinctPreparedAssets(
   return assets;
 }
 
-function tokenEstimatorEndpoint(apiBase: string): string {
-  const base = new URL(apiBase.endsWith("/") ? apiBase : `${apiBase}/`);
-  base.username = "";
-  base.password = "";
-  base.search = "";
-  base.hash = "";
-  return new URL("tokenizers/estimate-token-count", base).toString();
+function materializedFakePromptSegments(
+  segments: readonly PreparedPromptSegment[],
+  images: readonly {
+    assetId: ImageAssetId;
+    width: number;
+    height: number;
+    planningTokens: number;
+  }[],
+): readonly PreparedPromptSegment[] {
+  const byId = new Map(images.map((image) => [image.assetId, image] as const));
+  return Object.freeze(
+    segments.map((segment) =>
+      segment.media === undefined
+        ? segment
+        : Object.freeze({
+            ...segment,
+            media: Object.freeze(
+              segment.media.map((media) => {
+                const image = byId.get(media.assetId);
+                if (image === undefined) {
+                  throw new Error(`Fake image ${media.assetId} was not materialized.`);
+                }
+                return Object.freeze({
+                  ...media,
+                  width: image.width,
+                  height: image.height,
+                  planningTokens: image.planningTokens,
+                });
+              }),
+            ),
+          }),
+    ),
+  );
 }
 
 function recallMarker(

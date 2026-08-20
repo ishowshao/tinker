@@ -3,7 +3,6 @@ import type { ModelContextBudget } from "./model-context-profile";
 
 export type ContextUsageSource =
   | "estimated_full"
-  | "provider_estimated"
   | "provider_measured"
   | "measured_plus_estimated_delta";
 

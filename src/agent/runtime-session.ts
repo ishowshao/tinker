@@ -581,11 +581,6 @@ class DefaultRuntimeSession implements RuntimeSession {
         contextProfile: input.contextProfile,
         messageProtocol: input.modelClient.messageProtocol,
         inputModalities: input.modelClient.inputModalities ?? ["text"],
-        ...(input.modelClient.inputTokenEstimator === undefined
-          ? {}
-          : {
-              tokenEstimator: input.modelClient.inputTokenEstimator.compatibility,
-            }),
       });
       if (input.selection.mode === "resume") {
         store.assertSessionCompatibility(compatibility);
@@ -1641,24 +1636,6 @@ class DefaultRuntimeSession implements RuntimeSession {
         { assetStore: this.assetStore, signal: controller.signal },
       );
       admissionSnapshot = this.contextMeter.measure(admissionPrepared);
-      if (
-        prepared.mediaOccurrenceCount > 0 &&
-        admissionSnapshot.source !== "measured_plus_estimated_delta"
-      ) {
-        const estimator = this.input.modelClient.inputTokenEstimator;
-        if (estimator === undefined) {
-          throw new Error("Image model request has no input token estimator.");
-        }
-        const estimate = await this.contextMeter.estimateProviderInput(
-          admissionPrepared,
-          estimator,
-          { signal: controller.signal },
-        );
-        admissionSnapshot = this.contextMeter.applyProviderEstimate(
-          admissionPrepared,
-          estimate,
-        );
-      }
       this.contextMeter.assertWithinBudget(admissionSnapshot);
       controller.signal.throwIfAborted();
       const turn = this.stageTurn(input.userMessage);

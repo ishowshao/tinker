@@ -191,7 +191,7 @@ describe("parseModelProfiles", () => {
     );
   });
 
-  test("rejects unknown top-level and estimator fields", () => {
+  test("rejects unknown top-level and legacy estimator fields", () => {
     expect(() =>
       parseModelProfiles(
         JSON.stringify({
@@ -204,7 +204,6 @@ describe("parseModelProfiles", () => {
     expect(() =>
       parseModelProfiles(
         profileJson({
-          inputModalities: ["text", "image"],
           tokenEstimator: {
             kind: "moonshot-estimate-token-count-v1",
             model: "kimi-k3",
@@ -212,12 +211,11 @@ describe("parseModelProfiles", () => {
             apiKey: "estimator-key",
             timeoutMs: 30_000,
             maxRetries: 0,
-            unexpected: true,
           },
         }),
         "/test/models.json",
       ),
-    ).toThrow('unknown field "unexpected"');
+    ).toThrow('unknown field "tokenEstimator"');
   });
 
   test("rejects a missing default field", () => {
@@ -295,35 +293,19 @@ describe("parseModelProfiles", () => {
     );
   });
 
-  test("normalizes explicit image capability and its estimator contract", () => {
+  test("normalizes explicit image capability without a second endpoint", () => {
     const json = profileJson({
       inputModalities: ["image", "text"],
-      tokenEstimator: {
-        kind: "moonshot-estimate-token-count-v1",
-        model: "kimi-k3",
-        apiBase: "https://api.moonshot.test/v1",
-        apiKey: "estimator-key",
-        timeoutMs: 30_000,
-        maxRetries: 0,
-      },
     });
 
     expect(
       parseModelProfiles(json, "/test/models.json").profiles.get("test"),
     ).toMatchObject({
       inputModalities: ["text", "image"],
-      tokenEstimator: {
-        kind: "moonshot-estimate-token-count-v1",
-        model: "kimi-k3",
-        apiBase: "https://api.moonshot.test/v1",
-        apiKey: "estimator-key",
-        timeoutMs: 30_000,
-        maxRetries: 0,
-      },
     });
   });
 
-  test("rejects invalid modality sets and image profiles without estimators", () => {
+  test("rejects invalid modality sets", () => {
     for (const inputModalities of [
       [],
       ["text", "text"],
@@ -334,15 +316,9 @@ describe("parseModelProfiles", () => {
         parseModelProfiles(profileJson({ inputModalities }), "/test/models.json"),
       ).toThrow();
     }
-    expect(() =>
-      parseModelProfiles(
-        profileJson({ inputModalities: ["text", "image"] }),
-        "/test/models.json",
-      ),
-    ).toThrow('requires a complete "tokenEstimator"');
   });
 
-  test("rejects profile-level image policy overrides and estimator retries", () => {
+  test("rejects profile-level image policy and legacy estimator overrides", () => {
     expect(() =>
       parseModelProfiles(
         profileJson({ imageInput: { maxImages: 99 } }),
@@ -364,31 +340,7 @@ describe("parseModelProfiles", () => {
         }),
         "/test/models.json",
       ),
-    ).toThrow("maxRetries must be 0");
-  });
-
-  test("requires complete independent estimator routing and credentials", () => {
-    const estimator = {
-      kind: "moonshot-estimate-token-count-v1",
-      model: "kimi-k3",
-      apiBase: "https://api.moonshot.test/v1",
-      apiKey: "estimator-key",
-      timeoutMs: 30_000,
-      maxRetries: 0,
-    };
-    for (const field of ["model", "apiBase", "apiKey"] as const) {
-      const incomplete: Record<string, unknown> = { ...estimator };
-      delete incomplete[field];
-      expect(() =>
-        parseModelProfiles(
-          profileJson({
-            inputModalities: ["text", "image"],
-            tokenEstimator: incomplete,
-          }),
-          "/test/models.json",
-        ),
-      ).toThrow(field);
-    }
+    ).toThrow('unknown field "tokenEstimator"');
   });
 
   test("rejects a profile with invalid token counts", () => {

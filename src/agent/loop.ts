@@ -175,20 +175,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
             assetStore: input.assetStore,
             signal: input.signal,
           });
-          if (preflight.source === "measured_plus_estimated_delta") {
-            preflight = input.contextMeter.measure(request);
-          } else {
-            const estimator = input.model.inputTokenEstimator;
-            if (estimator === undefined) {
-              throw new Error("Image model request has no input token estimator.");
-            }
-            const estimate = await input.contextMeter.estimateProviderInput(
-              request as MaterializedModelRequest,
-              estimator,
-              { signal: input.signal },
-            );
-            preflight = input.contextMeter.applyProviderEstimate(request, estimate);
-          }
+          preflight = input.contextMeter.measure(request);
           input.contextMeter.assertWithinBudget(preflight);
           await input.runtimeSession.append({
             type: "context.usage.updated",

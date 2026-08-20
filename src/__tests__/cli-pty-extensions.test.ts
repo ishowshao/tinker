@@ -491,14 +491,6 @@ function imageModelProfilesJson(): string {
         includeReasoningContent: false,
         stream: false,
         inputModalities: ["text", "image"],
-        tokenEstimator: {
-          kind: "moonshot-estimate-token-count-v1",
-          model: "image-model",
-          apiBase: "https://api.example.test/v1",
-          apiKey: "estimator-placeholder",
-          timeoutMs: 30_000,
-          maxRetries: 0,
-        },
       },
     },
   })}\n`;

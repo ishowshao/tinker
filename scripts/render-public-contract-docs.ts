@@ -9,11 +9,9 @@ import {
   MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_REASONING_FIELDS,
-  MODEL_TOKEN_ESTIMATOR_FIELDS,
   PUBLIC_CONFIG_FIELDS,
   type ModelProfileField,
   type ModelReasoningField,
-  type ModelTokenEstimatorField,
   type MemoryEmbeddingField,
   type PublicConfigField,
 } from "../src/cli/public-config-contract";
@@ -144,15 +142,9 @@ export function renderPublicEnvironmentVariables(): string {
 export function renderModelProfileFields(): string {
   const profileRows = MODEL_PROFILE_FIELDS.map((field) => [
     `\`${field.name}\``,
-    field.name === "tokenEstimator" ? "With image" : field.required ? "Yes" : "No",
+    field.required ? "Yes" : "No",
     modelProfileValueKind(field),
     modelProfileDefault(field),
-    field.secret ? "Yes" : "No",
-    field.description,
-  ]);
-  const estimatorRows = MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => [
-    `\`${field.name}\``,
-    tokenEstimatorConstraint(field),
     field.secret ? "Yes" : "No",
     field.description,
   ]);
@@ -196,10 +188,6 @@ export function renderModelProfileFields(): string {
     renderTable(["Field", "Type / constraint", "Description"], reasoningRows),
     "",
     "The optional `reasoning` object declares provider-specific effort values. Efforts must be unique non-whitespace strings, `reset` is reserved by the TUI command, and `defaultEffort` must appear in `supportedEfforts`. Omitting `reasoning` sends no effort parameter and disables `/reasoning` for that profile.",
-    "",
-    "`tokenEstimator` fields:",
-    "",
-    renderTable(["Field", "Type / constraint", "Secret", "Description"], estimatorRows),
     "",
     "Text-only profile example:",
     "",
@@ -391,12 +379,9 @@ function createProfileExample(image: boolean): Record<string, unknown> {
     includeReasoningContent: false,
     stream: true,
     inputModalities: image ? ["text", "image"] : ["text"],
-    tokenEstimator: createTokenEstimatorExample(),
   });
   const profile = Object.fromEntries(
-    MODEL_PROFILE_FIELDS.filter(
-      (field) => field.name !== "tokenEstimator" || image,
-    ).map((field) => [field.name, profileValues[field.name]]),
+    MODEL_PROFILE_FIELDS.map((field) => [field.name, profileValues[field.name]]),
   );
   return {
     default: profileName,
@@ -404,21 +389,6 @@ function createProfileExample(image: boolean): Record<string, unknown> {
       [profileName]: profile,
     },
   };
-}
-
-function createTokenEstimatorExample(): Record<string, unknown> {
-  const values: Readonly<Record<string, unknown>> = Object.freeze({
-    model: "example-token-estimator",
-    apiBase: "https://estimator.example.com/v1",
-    apiKey: "your-estimator-api-key",
-    timeoutMs: 30_000,
-  });
-  return Object.fromEntries(
-    MODEL_TOKEN_ESTIMATOR_FIELDS.map((field) => [
-      field.name,
-      tokenEstimatorExampleValue(field, values),
-    ]),
-  );
 }
 
 function createMemoryExample(): Record<string, unknown> {
@@ -496,8 +466,6 @@ function modelProfileValueKind(field: ModelProfileField): string {
       return "Normalized modality array";
     case "reasoning":
       return "Object";
-    case "token-estimator":
-      return "Object";
   }
 }
 
@@ -511,16 +479,6 @@ function modelProfileDefault(field: ModelProfileField): string {
   return field.defaultValue === undefined ? "—" : codeValue(field.defaultValue);
 }
 
-function tokenEstimatorConstraint(field: ModelTokenEstimatorField): string {
-  if (field.literalValue !== undefined) {
-    return `Literal ${codeValue(field.literalValue)}`;
-  }
-  if (field.minimum !== undefined && field.maximum !== undefined) {
-    return `Integer ${field.minimum}–${field.maximum}`;
-  }
-  return publicValueKind(field.valueKind as PublicConfigField["valueKind"]);
-}
-
 function memoryEmbeddingConstraint(field: MemoryEmbeddingField): string {
   if (field.literalValue !== undefined) {
     return `Literal ${codeValue(field.literalValue)}`;
@@ -528,13 +486,6 @@ function memoryEmbeddingConstraint(field: MemoryEmbeddingField): string {
   return field.valueKind === "positive-integer"
     ? "Positive integer"
     : "Non-empty string";
-}
-
-function tokenEstimatorExampleValue(
-  field: ModelTokenEstimatorField,
-  values: Readonly<Record<string, unknown>>,
-): unknown {
-  return field.literalValue ?? values[field.name];
 }
 
 function codeValue(value: string | number | boolean | readonly string[]): string {

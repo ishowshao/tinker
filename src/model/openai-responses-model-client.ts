@@ -8,7 +8,6 @@ import {
   IMAGE_INPUT_POLICY,
   IMAGE_INPUT_POLICY_VERSION,
 } from "../image/image-input-policy";
-import type { InputTokenEstimator } from "./input-token-estimator";
 import type { ModelContextBudget } from "./model-context-profile";
 import { ProviderResponseError } from "./model-client";
 import type {
@@ -22,7 +21,6 @@ import type {
   PreparedModelRequest,
   PreparedPromptSegment,
 } from "./model-client";
-import { MoonshotInputTokenEstimator } from "./moonshot-input-token-estimator";
 import {
   deepFreeze,
   imageUserSegment,
@@ -38,7 +36,6 @@ import {
   toOpenAIResponsesTools,
 } from "./openai-responses-mapping";
 import { OpenAIResponsesStreamAccumulator } from "./openai-responses-stream";
-import { responsesPayloadForChatTokenEstimator } from "./openai-responses-token-estimator";
 import type { ReasoningEffortController } from "./reasoning-effort";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
@@ -50,7 +47,6 @@ export class OpenAIResponsesModelClient implements ModelClient {
     adapter: "openai-responses",
     serializationVersion: OPENAI_RESPONSES_SERIALIZATION_VERSION,
   });
-  readonly inputTokenEstimator?: InputTokenEstimator;
   readonly inputModalities: readonly ("text" | "image")[];
   readonly reasoningEffort?: ReasoningEffortController;
   private readonly client: OpenAI;
@@ -65,14 +61,6 @@ export class OpenAIResponsesModelClient implements ModelClient {
       contextBudget: ModelContextBudget;
       baseURL?: string;
       inputModalities?: readonly ("text" | "image")[];
-      tokenEstimator?: {
-        kind: "moonshot-estimate-token-count-v1";
-        model: string;
-        apiBase: string;
-        apiKey: string;
-        timeoutMs: number;
-        maxRetries: 0;
-      };
       model: string;
       providerName?: string;
       reasoningEffort?: ReasoningEffortController;
@@ -85,12 +73,8 @@ export class OpenAIResponsesModelClient implements ModelClient {
     this.stream = options.stream ?? true;
     this.reasoningEffort = options.reasoningEffort;
     this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
-    const supportsImages = this.inputModalities.includes("image");
     if (!this.inputModalities.includes("text")) {
       throw new Error('OpenAI Responses input modalities must include "text".');
-    }
-    if (supportsImages && options.tokenEstimator === undefined) {
-      throw new Error("Image-capable OpenAI Responses requires a token estimator.");
     }
     this.client = new OpenAI({
       apiKey: options.apiKey,
@@ -99,16 +83,6 @@ export class OpenAIResponsesModelClient implements ModelClient {
       maxRetries: 0,
       fetch: options.fetch,
     });
-    if (options.tokenEstimator !== undefined) {
-      this.inputTokenEstimator = new MoonshotInputTokenEstimator({
-        apiKey: options.tokenEstimator.apiKey,
-        baseURL: options.tokenEstimator.apiBase,
-        model: options.tokenEstimator.model,
-        timeoutMs: options.tokenEstimator.timeoutMs,
-        fetch: options.fetch,
-        payloadMapper: responsesPayloadForChatTokenEstimator,
-      });
-    }
   }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {
@@ -163,9 +137,6 @@ export class OpenAIResponsesModelClient implements ModelClient {
           version: IMAGE_INPUT_POLICY_VERSION,
           ...IMAGE_INPUT_POLICY,
         },
-        ...(this.inputTokenEstimator === undefined
-          ? {}
-          : { tokenEstimator: this.inputTokenEstimator.compatibility }),
       }),
     );
     const prepared: PreparedModelRequest = {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { runtimeIdFactory } from "../ids/runtime-id";
 import { MODEL_MESSAGE_PROTOCOL_ADAPTERS } from "../model/model-client";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
+import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import {
   createSessionCompatibilityContract,
   SessionStore,
@@ -72,6 +74,84 @@ describe("runtime compatibility boundary", () => {
           }),
         ),
       ).not.toThrow();
+    } finally {
+      await store.close("tui_exit").catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("decodes a v1 image contract but refuses to resume it under v2", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-image-v1-"));
+    const sessionId = runtimeIdFactory.createSessionId();
+    const client = openAiClient({ inputModalities: ["text", "image"] });
+    let store = await SessionStore.createNew({
+      workspaceRoot: workspace,
+      sessionId,
+      modelName: "test-model",
+      systemPrompt: "system",
+      idFactory: runtimeIdFactory,
+    });
+    try {
+      finalizeTestSessionStore(store, {
+        systemPrompt: "system",
+        modelName: "test-model",
+        profileName: "image",
+        modelClient: client,
+      });
+      const databasePath = store.databasePath;
+      await store.close("tui_exit");
+      const legacy: SessionCompatibilityContract = Object.freeze({
+        ...createSessionCompatibilityContract({
+          modelName: "test-model",
+          profileName: "image",
+          includeReasoningContent: false,
+          contextProfile: TEST_CONTEXT_PROFILE,
+          messageProtocol: client.messageProtocol,
+          inputModalities: ["text", "image"],
+        }),
+        imageInput: Object.freeze({
+          policyVersion: "image-input-policy-v1",
+          policySha256: "1".repeat(64),
+          inputModalities: Object.freeze(["text", "image"] as const),
+          tokenEstimator: Object.freeze({
+            kind: "moonshot-estimate-token-count-v1",
+            coverageVersion: "full-request-v1",
+            model: "kimi-k3",
+            endpoint: "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+          }),
+        }),
+      });
+      const json = stableJsonStringify(legacy);
+      const database = new Database(databasePath);
+      const triggerSql = database
+        .query(
+          "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'session_meta_monotonic_update'",
+        )
+        .get() as { sql: string };
+      database.exec("DROP TRIGGER session_meta_monotonic_update");
+      database
+        .query(
+          "UPDATE session_meta SET session_compatibility_json = ?, session_compatibility_sha256 = ? WHERE singleton = 1",
+        )
+        .run(json, sha256(json));
+      database.exec(triggerSql.sql);
+      database.close();
+
+      store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
+      expect(() =>
+        store.assertSessionCompatibility(
+          createSessionCompatibilityContract({
+            modelName: "test-model",
+            profileName: "image",
+            includeReasoningContent: false,
+            contextProfile: TEST_CONTEXT_PROFILE,
+            messageProtocol: client.messageProtocol,
+            inputModalities: ["text", "image"],
+          }),
+        ),
+      ).toThrow("imageInput");
     } finally {
       await store.close("tui_exit").catch(() => undefined);
       await rm(workspace, { recursive: true });
@@ -150,15 +230,6 @@ describe("runtime compatibility boundary", () => {
             imageInput: {
               ...current.imageInput,
               inputModalities: ["text", "image"],
-              tokenEstimator: {
-                kind: "moonshot-estimate-token-count-v1",
-                coverageVersion: "full-request-v1",
-                model: "kimi-k3",
-                endpoint:
-                  "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
-                timeoutMs: 30_000,
-                maxRetries: 0,
-              },
             },
           }),
         ],
@@ -231,46 +302,10 @@ describe("runtime compatibility boundary", () => {
       }).prepare(input).requestConfigHash,
     ).not.toBe(first.requestConfigHash);
 
-    const estimator = {
-      kind: "moonshot-estimate-token-count-v1" as const,
-      model: "kimi-k3",
-      apiBase: "https://api.moonshot.test/v1",
-      apiKey: "first-estimator-key",
-      timeoutMs: 30_000,
-      maxRetries: 0 as const,
-    };
     const imageFirst = openAiClient({
       inputModalities: ["text", "image"],
-      tokenEstimator: estimator,
     }).prepare(input);
-    const imageWithOtherCredential = openAiClient({
-      inputModalities: ["text", "image"],
-      tokenEstimator: { ...estimator, apiKey: "second-estimator-key" },
-    }).prepare(input);
-    expect(imageWithOtherCredential.requestConfigHash).toBe(
-      imageFirst.requestConfigHash,
-    );
-    expect(
-      openAiClient({
-        inputModalities: ["text", "image"],
-        tokenEstimator: {
-          ...estimator,
-          apiBase: "https://other.moonshot.test/v1",
-        },
-      }).prepare(input).requestConfigHash,
-    ).not.toBe(imageFirst.requestConfigHash);
-    expect(
-      openAiClient({
-        inputModalities: ["text", "image"],
-        tokenEstimator: { ...estimator, model: "other-estimator-model" },
-      }).prepare(input).requestConfigHash,
-    ).not.toBe(imageFirst.requestConfigHash);
-    expect(
-      openAiClient({
-        inputModalities: ["text", "image"],
-        tokenEstimator: { ...estimator, timeoutMs: 20_000 },
-      }).prepare(input).requestConfigHash,
-    ).not.toBe(imageFirst.requestConfigHash);
+    expect(imageFirst.requestConfigHash).not.toBe(first.requestConfigHash);
   });
 });
 
@@ -293,7 +328,6 @@ function compatibilityContract(
       serializationVersion: "test-model-v1",
     },
     inputModalities: overrides.imageInput?.inputModalities,
-    tokenEstimator: overrides.imageInput?.tokenEstimator,
   });
 }
 

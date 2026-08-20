@@ -5,6 +5,19 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+### Changed
+
+- Estimate image input locally with deterministic size buckets instead of a
+  provider-side token-estimation request. Images are normalized for orientation
+  and provider limits before estimation and upload, keeping preflight accounting
+  aligned with the payload sent to the model.
+
+### Removed
+
+- Remove the `tokenEstimator` model-profile setting. Existing image profiles must
+  delete that field; sessions created under the previous image policy remain
+  inspectable but cannot be resumed for execution.
+
 ## [1.11.0] - 2026-08-15
 
 ### Added

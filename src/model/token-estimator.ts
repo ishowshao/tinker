@@ -12,10 +12,15 @@ export type RawContextBreakdown = {
   toolTokens: number;
   toolSchemaTokens: number;
   protocolTokens: number;
+  textAndProtocolTokens: number;
+  imageTokens: number;
   totalTokens: number;
 };
 
-type BreakdownKey = Exclude<keyof RawContextBreakdown, "totalTokens">;
+type BreakdownKey = Exclude<
+  keyof RawContextBreakdown,
+  "totalTokens" | "textAndProtocolTokens" | "imageTokens"
+>;
 
 const breakdownKeys: BreakdownKey[] = [
   "kernelTokens",
@@ -37,13 +42,16 @@ export function estimatePromptSegments(
     toolSchemaTokens: 0,
     protocolTokens: segments.length * 8,
   };
+  let imageTokens = 0;
 
   for (const segment of segments) {
     exact[breakdownKey(segment.kind)] += estimateText(segment.normalizedText);
-    exact[breakdownKey(segment.kind)] += (segment.media ?? []).reduce(
+    const segmentImageTokens = (segment.media ?? []).reduce(
       (total, media) => total + media.planningTokens,
       0,
     );
+    exact[breakdownKey(segment.kind)] += segmentImageTokens;
+    imageTokens += segmentImageTokens;
   }
 
   const totalTokens = Math.ceil(
@@ -69,7 +77,12 @@ export function estimatePromptSegments(
     remaining -= 1;
   }
 
-  return { ...rounded, totalTokens };
+  return {
+    ...rounded,
+    textAndProtocolTokens: totalTokens - imageTokens,
+    imageTokens,
+    totalTokens,
+  };
 }
 
 export class RollingTokenCalibration {

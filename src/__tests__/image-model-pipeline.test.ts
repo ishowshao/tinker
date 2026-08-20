@@ -4,28 +4,25 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import type { UserMessage } from "../agent/types";
-import { ContextMeter } from "../agent/context-meter";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { ImageAssetStore } from "../image/image-asset-store";
-import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import {
   imageAssetIdForBytes,
   type ImageAssetId,
   type ImageAssetRef,
   type UserImageAttachment,
 } from "../image/image-types";
-import type { MaterializedModelRequest } from "../model/model-client";
-import type { InputTokenEstimator } from "../model/input-token-estimator";
-import { MoonshotInputTokenEstimator } from "../model/moonshot-input-token-estimator";
 import { toOpenAIUserContent } from "../model/openai-chat-mapping";
 import {
   imageAssetUrlMarker,
   parseImageAssetUrlMarker,
 } from "../model/openai-image-mapping";
 import {
+  assertOpenAIRequestBodyLimit,
   exactJsonBodyBytes,
   OpenAIChatModelClient,
 } from "../model/openai-chat-model-client";
+import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import { TEST_CONTEXT_BUDGET } from "./test-runtime";
 
 describe("OpenAI multimodal mapping and materialization", () => {
@@ -123,34 +120,6 @@ describe("OpenAI multimodal mapping and materialization", () => {
       const payloadText = JSON.stringify(materialized.payload);
       expect(payloadText.match(/data:image\/png;base64,/g)).toHaveLength(2);
       expect(payloadText).not.toContain(imported.asset.assetId);
-      let estimateCalls = 0;
-      const estimator: InputTokenEstimator = {
-        kind: "moonshot-estimate-token-count-v1",
-        compatibility: {
-          kind: "moonshot-estimate-token-count-v1",
-          coverageVersion: "full-request-v1",
-          model: "kimi-k3",
-          endpoint: "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
-          timeoutMs: 30_000,
-          maxRetries: 0,
-        },
-        async estimate() {
-          estimateCalls += 1;
-          return {
-            inputTokens: 100,
-            source: "provider_estimated",
-            coverage: "full_request",
-          };
-        },
-      };
-      const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
-      await meter.estimateProviderInput(materialized, estimator, {
-        signal: new AbortController().signal,
-      });
-      await meter.estimateProviderInput(Object.freeze({ ...materialized }), estimator, {
-        signal: new AbortController().signal,
-      });
-      expect(estimateCalls).toBe(1);
       await client.request(materialized, {
         signal: new AbortController().signal,
       });
@@ -183,7 +152,55 @@ describe("OpenAI multimodal mapping and materialization", () => {
     expect(fetchCount).toBe(0);
   });
 
-  test("rejects image count and lower-bound body limits before asset reads", async () => {
+  test("uses the same materialization policy for Responses payloads", async () => {
+    await withWorkspace(async (workspace) => {
+      const sourceBytes = await sharp({
+        create: {
+          width: 3000,
+          height: 1000,
+          channels: 3,
+          background: "#274060",
+        },
+      })
+        .png()
+        .toBuffer();
+      await writeFile(path.join(workspace, "responses.png"), sourceBytes);
+      const store = await ImageAssetStore.open({ workspaceRoot: workspace });
+      const imported = await store.importWorkspaceFile("responses.png");
+      const client = new OpenAIResponsesModelClient({
+        apiKey: "test-key",
+        model: "test-model",
+        contextBudget: TEST_CONTEXT_BUDGET,
+        inputModalities: ["text", "image"],
+        stream: false,
+      });
+      const prepared = client.prepare({
+        messages: [
+          messageWithAttachments("see [Image #1]", [
+            attachment(imported.asset, "[Image #1]", 4, 14, "responses.png"),
+          ]),
+        ],
+        tools: [],
+      });
+      const materialized = await client.materialize(prepared, {
+        assetStore: store,
+        signal: new AbortController().signal,
+      });
+
+      expect(materialized.promptSegments[0]?.media?.[0]).toMatchObject({
+        sourceWidth: 3000,
+        sourceHeight: 1000,
+        width: 2048,
+        height: 683,
+        planningTokens: 5504,
+      });
+      expect(JSON.stringify(materialized.payload)).toContain("data:image/png;base64,");
+      expect(await store.readVerified(imported.asset)).toEqual(sourceBytes);
+      expect(imported.asset.assetId).toBe(imageAssetIdForBytes(sourceBytes));
+    });
+  });
+
+  test("rejects image count before asset reads", async () => {
     const client = imageClient(stubFetch(async () => completionResponse()));
     let readCount = 0;
     const unreadableStore = {
@@ -206,19 +223,6 @@ describe("OpenAI multimodal mapping and materialization", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("9 images; maximum is 8");
-    expect(readCount).toBe(0);
-
-    const hugeAssets = Array.from({ length: 4 }, (_, index) =>
-      syntheticAsset(`body-${index}`, IMAGE_INPUT_POLICY.maxBytesPerImage),
-    );
-    const bodyMessage = sequentialMessage(hugeAssets);
-    const tooLarge = client.prepare({ messages: [bodyMessage], tools: [] });
-    expect(
-      client.materialize(tooLarge, {
-        assetStore: unreadableStore,
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow("UTF-8 bytes");
     expect(readCount).toBe(0);
   });
 
@@ -259,123 +263,11 @@ describe("OpenAI multimodal mapping and materialization", () => {
       );
     }
   });
-});
 
-describe("MoonshotInputTokenEstimator", () => {
-  test("posts estimator model, messages, and tools and validates total_tokens", async () => {
-    let capturedUrl = "";
-    let capturedInit: RequestInit | undefined;
-    const estimator = new MoonshotInputTokenEstimator({
-      apiKey: "secret-key",
-      baseURL: "https://api.moonshot.test/v1",
-      model: "kimi-k3",
-      timeoutMs: 1_000,
-      fetch: stubFetch(async (url, init) => {
-        capturedUrl = requestUrl(url);
-        capturedInit = init;
-        return Response.json({ data: { total_tokens: 321 } });
-      }),
-    });
-    const request = materializedEstimateRequest({
-      model: "k3",
-      messages: [{ role: "user", content: "hello" }],
-      tools: [{ secret: "tool-schema" }],
-    });
-
-    const estimate = await estimator.estimate(request, {
-      signal: new AbortController().signal,
-    });
-
-    expect(capturedUrl).toBe(
-      "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
+  test("keeps the exact materialized request body limit active", () => {
+    expect(() => assertOpenAIRequestBodyLimit(90_000_001, 1)).toThrow(
+      "90000001 UTF-8 bytes",
     );
-    expect(JSON.parse(capturedInit?.body as string)).toEqual({
-      model: "kimi-k3",
-      messages: [{ role: "user", content: "hello" }],
-      tools: [{ secret: "tool-schema" }],
-    });
-    expect(new Headers(capturedInit?.headers).get("authorization")).toBe(
-      "Bearer secret-key",
-    );
-    expect(estimate).toEqual({
-      inputTokens: 321,
-      source: "provider_estimated",
-      coverage: "full_request",
-    });
-    expect(estimator.compatibility).toEqual({
-      kind: "moonshot-estimate-token-count-v1",
-      coverageVersion: "full-request-v1",
-      model: "kimi-k3",
-      endpoint: "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
-      timeoutMs: 1_000,
-      maxRetries: 0,
-    });
-    expect(JSON.stringify(estimator.compatibility)).not.toContain("secret-key");
-  });
-
-  test("does not retry HTTP failures or call fetch after user abort", async () => {
-    let fetchCount = 0;
-    const estimator = new MoonshotInputTokenEstimator({
-      apiKey: "key",
-      baseURL: "https://api.moonshot.test/v1",
-      model: "kimi-k3",
-      timeoutMs: 1_000,
-      fetch: stubFetch(async () => {
-        fetchCount += 1;
-        return new Response("busy", { status: 503 });
-      }),
-    });
-    const request = materializedEstimateRequest({
-      model: "kimi-k3",
-      messages: [],
-    });
-    expect(
-      estimator.estimate(request, { signal: new AbortController().signal }),
-    ).rejects.toThrow("HTTP 503");
-    expect(fetchCount).toBe(1);
-
-    const controller = new AbortController();
-    controller.abort(new Error("user cancelled"));
-    expect(estimator.estimate(request, { signal: controller.signal })).rejects.toThrow(
-      "user cancelled",
-    );
-    expect(fetchCount).toBe(1);
-  });
-
-  test("aborts one in-flight request at its timeout", async () => {
-    let fetchCount = 0;
-    const estimator = new MoonshotInputTokenEstimator({
-      apiKey: "key",
-      baseURL: "https://api.moonshot.test/v1",
-      model: "kimi-k3",
-      timeoutMs: 5,
-      fetch: stubFetch(
-        async (_url, init) =>
-          new Promise<Response>((_resolve, reject) => {
-            fetchCount += 1;
-            init?.signal?.addEventListener(
-              "abort",
-              () => {
-                const reason: unknown = init.signal?.reason;
-                reject(
-                  reason instanceof Error
-                    ? reason
-                    : new Error("Token estimate aborted."),
-                );
-              },
-              { once: true },
-            );
-          }),
-      ),
-    });
-
-    expect(
-      estimator.estimate(
-        materializedEstimateRequest({ model: "kimi-k3", messages: [] }),
-        { signal: new AbortController().signal },
-      ),
-    ).rejects.toThrow("timed out");
-    expect(fetchCount).toBe(1);
   });
 });
 
@@ -386,14 +278,6 @@ function imageClient(fetchImpl: typeof fetch): OpenAIChatModelClient {
     model: "kimi-k3",
     contextBudget: TEST_CONTEXT_BUDGET,
     inputModalities: ["text", "image"],
-    tokenEstimator: {
-      kind: "moonshot-estimate-token-count-v1",
-      model: "kimi-k3",
-      apiBase: "https://api.moonshot.test/v1",
-      apiKey: "estimator-key",
-      timeoutMs: 30_000,
-      maxRetries: 0,
-    },
     stream: false,
     fetch: fetchImpl,
   });
@@ -440,25 +324,6 @@ function messageWithAttachments(
   });
 }
 
-function sequentialMessage(assets: readonly ImageAssetRef[]): UserMessage {
-  const chunks: string[] = [];
-  const attachments: UserImageAttachment[] = [];
-  let cursor = 0;
-  for (const [index, asset] of assets.entries()) {
-    const label = `[Image #${index + 1}]`;
-    if (index > 0) {
-      chunks.push(" ");
-      cursor += 1;
-    }
-    chunks.push(label);
-    attachments.push(
-      attachment(asset, label, cursor, cursor + [...label].length, `${index}.png`),
-    );
-    cursor += [...label].length;
-  }
-  return messageWithAttachments(chunks.join(""), attachments);
-}
-
 function completionResponse(): Response {
   return Response.json({
     id: "chatcmpl-image-test",
@@ -485,10 +350,6 @@ function stubFetch(
   return Object.assign(implementation, { preconnect() {} });
 }
 
-function requestUrl(input: string | URL | Request): string {
-  return input instanceof Request ? input.url : input.toString();
-}
-
 function replaceMarkers(
   value: unknown,
   lengths: ReadonlyMap<ImageAssetId, number>,
@@ -509,10 +370,6 @@ function replaceMarkers(
     );
   }
   return value;
-}
-
-function materializedEstimateRequest(payload: unknown): MaterializedModelRequest {
-  return { payload } as MaterializedModelRequest;
 }
 
 async function withWorkspace(run: (workspace: string) => Promise<void>): Promise<void> {

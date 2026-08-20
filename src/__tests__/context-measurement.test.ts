@@ -6,6 +6,7 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import { imageAssetIdForBytes } from "../image/image-types";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
 import {
   CALIBRATION_WINDOW_SIZE,
@@ -127,6 +128,8 @@ describe("token estimator", () => {
       toolTokens: 0,
       toolSchemaTokens: 0,
       protocolTokens: 8,
+      textAndProtocolTokens: 11,
+      imageTokens: 0,
       totalTokens: 11,
     });
     expect(
@@ -337,6 +340,92 @@ describe("ContextMeter", () => {
     expect(snapshot.pressure).toBe("blocked");
     expect(() => meter.assertWithinBudget(snapshot)).toThrow(
       ContextBudgetExceededError,
+    );
+  });
+
+  test("does not apply text calibration to fixed image buckets", () => {
+    const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
+    const base = prepareTestModelRequest({
+      messages: [{ role: "user", content: "image" }],
+      tools: [],
+    });
+    const prepared = Object.freeze({
+      ...base,
+      promptSegments: Object.freeze([
+        Object.freeze({
+          kind: "user" as const,
+          normalizedText: "",
+          media: Object.freeze([
+            Object.freeze({
+              assetId: `sha256:${"0".repeat(64)}` as never,
+              label: "[Image #1]",
+              range: Object.freeze({ start: 0, end: 10 }),
+              mimeType: "image/png" as const,
+              byteLength: 1,
+              sourceWidth: 2048,
+              sourceHeight: 2048,
+              width: 2048,
+              height: 2048,
+              planningTokens: 5504,
+            }),
+          ]),
+        }),
+      ]),
+      mediaOccurrenceCount: 1,
+    });
+    const snapshot = meter.measure(prepared);
+    expect(snapshot.rawFullEstimate).toMatchObject({
+      textAndProtocolTokens: 8,
+      imageTokens: 5504,
+      totalTokens: 5512,
+    });
+    expect(snapshot.usedInputTokens).toBe(5514);
+  });
+
+  test("adds a new image bucket directly to a measured-anchor delta", () => {
+    const meter = new ContextMeter(TEST_CONTEXT_BUDGET);
+    const firstInput: ModelRequestInput = {
+      messages: [{ role: "user", content: "first" }],
+      tools: [],
+    };
+    const first = prepareTestModelRequest(firstInput);
+    meter.measure(first);
+    const assistant = { role: "assistant" as const, content: "answer" };
+    const output = testModelOutput(first, assistant);
+    meter.recordProviderUsage(first, output);
+
+    const second = Object.freeze({
+      ...first,
+      promptSegments: Object.freeze([
+        ...first.promptSegments,
+        ...first.assistantReplaySegments(assistant),
+        Object.freeze({
+          kind: "user" as const,
+          normalizedText: "see [Image #1]",
+          media: Object.freeze([
+            Object.freeze({
+              assetId: imageAssetIdForBytes(Buffer.from("anchor-image")),
+              label: "[Image #1]",
+              range: Object.freeze({ start: 4, end: 14 }),
+              mimeType: "image/png" as const,
+              byteLength: 1,
+              sourceWidth: 400,
+              sourceHeight: 300,
+              width: 400,
+              height: 300,
+              planningTokens: 384,
+            }),
+          ]),
+        }),
+      ]),
+      mediaOccurrenceCount: 1,
+    });
+    const snapshot = meter.measure(second);
+    expect(snapshot.source).toBe("measured_plus_estimated_delta");
+    expect(snapshot.rawFullEstimate?.imageTokens).toBe(384);
+    expect(snapshot.guardedDeltaTokens).toBe(
+      Math.ceil(((snapshot.rawDeltaTokens ?? 0) - 384) * snapshot.correctionFactor) +
+        384,
     );
   });
 });

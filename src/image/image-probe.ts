@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { IMAGE_INPUT_POLICY } from "./image-input-policy";
+import { orientedDimensions } from "./provider-image";
 import {
   imageAssetIdForBytes,
   type ImageAssetRef,
@@ -59,8 +60,13 @@ export async function probeImageBytes(
       `Image container and decoder disagree on format (${container.mimeType} vs ${mimeType}).`,
     );
   }
-  const width = requireDimension(metadata.width, "width");
-  const height = requireDimension(metadata.height, "height");
+  const decodedWidth = requireDimension(metadata.width, "width");
+  const decodedHeight = requireDimension(metadata.height, "height");
+  const { width, height } = orientedDimensions(
+    decodedWidth,
+    decodedHeight,
+    metadata.orientation,
+  );
   const decoderAnimated =
     (metadata.pages ?? 1) > 1 || metadata.pageHeight !== undefined;
   if (container.animated || decoderAnimated) {

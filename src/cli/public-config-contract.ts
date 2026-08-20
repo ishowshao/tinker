@@ -242,11 +242,7 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
 
 export type ModelProfileField = {
   readonly name: string;
-  readonly valueKind:
-    | PublicConfigValueKind
-    | "input-modalities"
-    | "reasoning"
-    | "token-estimator";
+  readonly valueKind: PublicConfigValueKind | "input-modalities" | "reasoning";
   readonly required: boolean;
   readonly defaultValue?: string | number | boolean | readonly string[];
   readonly secret: boolean;
@@ -337,13 +333,6 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     description:
       'Accepted model input modalities; normalizes to ["text"] or ["text", "image"].',
   }),
-  profileField({
-    name: "tokenEstimator",
-    valueKind: "token-estimator",
-    required: false,
-    secret: true,
-    description: "Independent token estimator required for image profiles.",
-  }),
 ]);
 
 export type ModelReasoningField = {
@@ -374,82 +363,6 @@ export const MODEL_REASONING_FIELDS = Object.freeze([
     description: "Effort used whenever a session runtime is created or reopened.",
   }),
 ]);
-
-export type ModelTokenEstimatorField = {
-  readonly name: string;
-  readonly valueKind: PublicConfigValueKind | "literal-string" | "literal-number";
-  readonly required: true;
-  readonly secret: boolean;
-  readonly literalValue?: string | number;
-  readonly minimum?: number;
-  readonly maximum?: number;
-  readonly description: string;
-};
-
-function estimatorField<const T extends ModelTokenEstimatorField>(
-  field: T,
-): Readonly<T> {
-  return Object.freeze(field);
-}
-
-export const MODEL_TOKEN_ESTIMATOR_FIELDS = Object.freeze([
-  estimatorField({
-    name: "kind",
-    valueKind: "literal-string",
-    required: true,
-    secret: false,
-    literalValue: "moonshot-estimate-token-count-v1",
-    description: "Estimator protocol discriminator.",
-  }),
-  estimatorField({
-    name: "model",
-    valueKind: "non-empty-string",
-    required: true,
-    secret: false,
-    description: "Estimator model name.",
-  }),
-  estimatorField({
-    name: "apiBase",
-    valueKind: "non-empty-string",
-    required: true,
-    secret: false,
-    description: "Estimator API base URL.",
-  }),
-  estimatorField({
-    name: "apiKey",
-    valueKind: "non-empty-string",
-    required: true,
-    secret: true,
-    description: "Estimator API credential.",
-  }),
-  estimatorField({
-    name: "timeoutMs",
-    valueKind: "positive-integer",
-    required: true,
-    secret: false,
-    minimum: 1_000,
-    maximum: 60_000,
-    description: "Estimator request timeout in milliseconds.",
-  }),
-  estimatorField({
-    name: "maxRetries",
-    valueKind: "literal-number",
-    required: true,
-    secret: false,
-    literalValue: 0,
-    description: "Estimator retry count; retries are disabled.",
-  }),
-]);
-
-export type ModelTokenEstimatorKind = Extract<
-  (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number],
-  { readonly name: "kind" }
->["literalValue"];
-
-export type ModelTokenEstimatorMaxRetries = Extract<
-  (typeof MODEL_TOKEN_ESTIMATOR_FIELDS)[number],
-  { readonly name: "maxRetries" }
->["literalValue"];
 
 export type MemoryConfigField = {
   readonly name: "profile" | "embedding";

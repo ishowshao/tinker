@@ -5,7 +5,6 @@ import {
   toOpenAIResponsesTools,
 } from "../model/openai-responses-mapping";
 import { ProviderResponseError } from "../model/model-client";
-import { responsesPayloadForChatTokenEstimator } from "../model/openai-responses-token-estimator";
 import { createTestRuntime } from "./test-runtime";
 
 describe("OpenAI Responses mapping", () => {
@@ -82,88 +81,6 @@ describe("OpenAI Responses mapping", () => {
         strict: false,
       },
     ]);
-  });
-
-  test("maps a materialized Responses request to the independent chat token estimator", () => {
-    expect(
-      responsesPayloadForChatTokenEstimator({
-        input: [
-          { type: "message", role: "system", content: "kernel" },
-          {
-            type: "message",
-            role: "user",
-            content: [
-              { type: "input_text", text: "<image>" },
-              {
-                type: "input_image",
-                detail: "auto",
-                image_url: "data:image/png;base64,AA==",
-              },
-            ],
-          },
-          { type: "message", role: "assistant", content: "checking" },
-          {
-            type: "function_call",
-            call_id: "call_1",
-            name: "Read",
-            arguments: "{}",
-          },
-          {
-            type: "function_call_output",
-            call_id: "call_1",
-            output: "contents",
-          },
-        ],
-        tools: [
-          {
-            type: "function",
-            name: "Read",
-            description: "Read a file.",
-            parameters: { type: "object" },
-            strict: false,
-          },
-        ],
-      }),
-    ).toEqual({
-      messages: [
-        { role: "system", content: "kernel" },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "<image>" },
-            {
-              type: "image_url",
-              image_url: {
-                url: "data:image/png;base64,AA==",
-                detail: "auto",
-              },
-            },
-          ],
-        },
-        {
-          role: "assistant",
-          content: "checking",
-          tool_calls: [
-            {
-              id: "call_1",
-              type: "function",
-              function: { name: "Read", arguments: "{}" },
-            },
-          ],
-        },
-        { role: "tool", tool_call_id: "call_1", content: "contents" },
-      ],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "Read",
-            description: "Read a file.",
-            parameters: { type: "object" },
-          },
-        },
-      ],
-    });
   });
 
   test("combines message, reasoning, and function-call output items", () => {

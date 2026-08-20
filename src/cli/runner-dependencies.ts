@@ -66,7 +66,6 @@ export function createModelClient(
     | "apiKey"
     | "apiBase"
     | "inputModalities"
-    | "tokenEstimator"
   >,
   env: NodeJS.ProcessEnv = process.env,
   reasoningEffort?: ReasoningEffortController,
@@ -82,9 +81,6 @@ export function createModelClient(
       ...(activeReasoningEffort === undefined
         ? {}
         : { reasoningEffort: activeReasoningEffort }),
-      ...(config.tokenEstimator === undefined
-        ? {}
-        : { tokenEstimator: config.tokenEstimator }),
       ...(env.TINKER_TEST_FAKE_MODEL_REQUEST_LOG === undefined ||
       env.TINKER_TEST_FAKE_MODEL_REQUEST_LOG === ""
         ? {}
@@ -102,9 +98,6 @@ export function createModelClient(
     ...(activeReasoningEffort === undefined
       ? {}
       : { reasoningEffort: activeReasoningEffort }),
-    ...(config.tokenEstimator === undefined
-      ? {}
-      : { tokenEstimator: config.tokenEstimator }),
   };
   if (config.api === "responses") {
     return new OpenAIResponsesModelClient(common);

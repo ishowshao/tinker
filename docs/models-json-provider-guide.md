@@ -373,8 +373,8 @@ Kimi 官方公开 API 当前主要提供 OpenAI-compatible Chat Completions，�
 
 ### 推荐配置
 
-Kimi K3 原生支持文本和图片输入。图片 profile 在 Tinker 中必须同时配置 Moonshot 官方
-Token 估算接口：
+Kimi K3 原生支持文本和图片输入。Tinker 使用本地固定图片规格与 Token 档位进行请求前
+规划，不需要第二套 Token 估算 endpoint 或凭据：
 
 ```json
 {
@@ -393,15 +393,7 @@ Token 估算接口：
       },
       "includeReasoningContent": true,
       "stream": true,
-      "inputModalities": ["text", "image"],
-      "tokenEstimator": {
-        "kind": "moonshot-estimate-token-count-v1",
-        "model": "kimi-k3",
-        "apiBase": "https://api.moonshot.cn/v1",
-        "apiKey": "your-moonshot-api-key",
-        "timeoutMs": 30000,
-        "maxRetries": 0
-      }
+      "inputModalities": ["text", "image"]
     }
   }
 }
@@ -415,8 +407,7 @@ tinker
 ```
 
 请保护配置文件权限。Tinker 当前不会在 `models.json` 的字符串值内自动展开
-`$MOONSHOT_API_KEY` 一类环境变量；主模型和 Token estimator 的 `apiKey` 都必须填写实际
-凭据。
+`$MOONSHOT_API_KEY` 一类环境变量；主模型的 `apiKey` 必须填写实际凭据。
 
 如果不需要图片输入，可以把：
 
@@ -430,7 +421,6 @@ tinker
 "inputModalities": ["text"]
 ```
 
-并删除整个 `tokenEstimator` 对象。
 
 ### API adapter
 
@@ -535,7 +525,7 @@ Tinker 当前产品级单次输出预算上限也是 `128 * 1024 = 131072` token
 K3 的 `max_completion_tokens` 为 `131072`，与 K3 官方默认值一致。这里仍填写 provider
 支持的最大值 `1048576`，而不是 Tinker 当前的请求上限。
 
-### 输入模态与 Token estimator
+### 输入模态与本地图片预算
 
 K3 原生支持视觉理解。Tinker 当前 profile 只表达 `text` 和 `image`，因此配置为：
 
@@ -551,29 +541,10 @@ PNG、JPEG 和静态 WebP；这是 Kimi 支持格式的安全子集。公网图�
 附件流程内，而 Kimi 官方也要求视觉输入使用 base64 或其文件服务，不支持直接传公网
 图片 URL。
 
-图片会动态消耗 tokens，所以 Tinker 要求 image profile 配置独立 estimator：
-
-```json
-{
-  "tokenEstimator": {
-    "kind": "moonshot-estimate-token-count-v1",
-    "model": "kimi-k3",
-    "apiBase": "https://api.moonshot.cn/v1",
-    "apiKey": "your-moonshot-api-key",
-    "timeoutMs": 30000,
-    "maxRetries": 0
-  }
-}
-```
-
-它会调用 Moonshot 官方端点：
-
-```text
-POST /v1/tokenizers/estimate-token-count
-```
-
-并读取响应中的 `data.total_tokens`。估算请求使用同一个 `kimi-k3` 模型名，并携带实际
-messages 与 tools，从而覆盖图片在内的完整请求输入。
+图片会动态消耗 tokens。Tinker 在 provider request materialization 阶段纠正 EXIF 方向，
+保持宽高比并把长边限制为 2048px；随后按最终长边使用 512、1024、1536、2048 四档本地
+planning 值。该过程同步、确定且不产生额外网络请求。provider 成功响应中的实际 usage
+仍会建立 measured anchor，用于后续上下文管理。
 
 ### 其他与 Tinker 相关的官方约束
 
@@ -916,10 +887,8 @@ GPT-5.6 Sol、Terra 和 Luna 的配置均为：
 ```
 
 GPT-5.6 系列支持图片输入，Tinker 的 Chat Completions 和 Responses adapter 也可以发送
-用户附加的本地图片。不过 Tinker 的 image profile 当前必须配置独立
-`tokenEstimator`，现有 estimator 是 Moonshot 协议，不是 OpenAI 官方 Token 估算接口。
-因此纯 OpenAI profile 建议先保持 text-only，避免为了输入预算估算把完整请求额外发送给
-另一个 provider。
+用户附加的本地图片。需要图片时可把该字段改为 `["text", "image"]`；Tinker 使用统一的
+本地尺寸档位进行输入预算估算，不会把请求额外发送给另一个 provider。
 
 Tinker 当前的工具结果以文本 Observation 返回。即使工具自身产生截图或其他媒体，也不会
 作为多模态 tool result 发送给模型；这不影响普通文本工具调用。
@@ -1017,7 +986,5 @@ Azure OpenAI 示例同样使用：
 "inputModalities": ["text"]
 ```
 
-如果 deployment 支持图片，Tinker transport 可以发送用户图片，但 image profile 仍需要
-Tinker 支持的独立 `tokenEstimator`。在没有与 Azure deployment 对应的 estimator 配置
-前，建议保持 text-only。
-
+如果 deployment 支持图片，可改为 `["text", "image"]`。Tinker transport 会发送用户图片，
+并使用相同的本地尺寸档位完成请求前预算估算。

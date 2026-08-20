@@ -17,12 +17,12 @@ import type { AgentEvent } from "../src/events/types";
 import { runtimeIdFactory } from "../src/ids/runtime-id";
 import type { SessionId } from "../src/ids/runtime-id";
 import { createUuidV7 } from "../src/ids/uuid-v7";
-import {
-  ImageAssetStore,
-  type ImportedImageAsset,
-} from "../src/image/image-asset-store";
+import type { ImportedImageAsset } from "../src/image/image-asset-store";
 import type { UserImageAttachment } from "../src/image/image-types";
-import { materializeModelRequest } from "../src/model/model-client";
+import {
+  IMAGE_INPUT_POLICY,
+  imagePlanningTokens,
+} from "../src/image/image-input-policy";
 import { OpenAIChatModelClient } from "../src/model/openai-chat-model-client";
 
 const LIVE_ENABLE_ENV = "TINKER_LIVE_K3_IMAGE";
@@ -31,34 +31,23 @@ const DEFAULT_PROFILE = "k3";
 type LiveConfig = RunnerConfig;
 
 type HttpObservation = {
-  kind: "chat" | "estimate";
+  kind: "chat";
   requestBodyBytes: number;
   hasTools: boolean;
   imageDataUrlCount: number;
+  imageDimensions: readonly { width: number; height: number }[];
   status?: number;
-  totalTokens?: number;
 };
 
 type ImageCaseResult = {
   name: string;
   finalText: string;
-  estimateTokens: number;
-  admissionSource: "provider_estimated" | "estimated_full";
+  planningTokens: number;
+  admissionSource: "estimated_full";
   admittedInputTokens: number;
   chatPromptTokens: number;
   chatBodyBytes: number;
-};
-
-type EstimateToolsResult = {
-  messagesOnly: EndpointEstimateResult;
-  withTools: EndpointEstimateResult;
-  countsTools: boolean;
-};
-
-type EndpointEstimateResult = {
-  accepted: boolean;
-  status: number;
-  totalTokens?: number;
+  wireImageDimensions: readonly { width: number; height: number }[];
 };
 
 if (process.env[LIVE_ENABLE_ENV] !== "1") {
@@ -87,20 +76,24 @@ try {
     workspaceRoot: workspace,
     maxIterations: 4,
   };
-  const profileImageCapabilityEnabled = config.inputModalities.includes("image");
   const probeConfig = liveProbeConfig(config);
   await writeVisualFixture(workspace, "red-a.png", "#e00000", "A");
   await writeVisualFixture(workspace, "blue-b.png", "#0047d8", "B");
+  const dimensionFixtures = [
+    ["square-512.png", 512, 512],
+    ["square-1024.png", 1024, 1024],
+    ["square-1536.png", 1536, 1536],
+    ["square-2048.png", 2048, 2048],
+    ["landscape-3000x1000.png", 3000, 1000],
+    ["portrait-1000x3000.png", 1000, 3000],
+  ] as const;
+  for (const [name, width, height] of dimensionFixtures) {
+    await writeVisualFixture(workspace, name, "#365f91", "S", width, height);
+  }
   await writeFile(path.join(workspace, "tool-probe.txt"), "tool-loop-ok\n", "utf8");
 
   const observations: HttpObservation[] = [];
   const observedFetch = createObservedFetch(observations);
-  const estimatorAvailability = await callEstimateEndpoint(probeConfig, {
-    messages: [{ role: "user", content: "K3 estimator availability probe." }],
-  });
-  const runtimeAdmissionAvailable =
-    profileImageCapabilityEnabled && estimatorAvailability.accepted;
-  const imageAssetStore = await ImageAssetStore.open({ workspaceRoot: workspace });
   const singleInput = {
     config: probeConfig,
     workspace,
@@ -112,14 +105,12 @@ try {
     expected: "single=red/a",
     name: "single-image",
   } as const;
-  const single = runtimeAdmissionAvailable
-    ? await runImageCase({
-        ...singleInput,
-        setActiveSession(session) {
-          activeSession = session;
-        },
-      })
-    : await runDirectImageCase({ ...singleInput, imageAssetStore });
+  const single = await runImageCase({
+    ...singleInput,
+    setActiveSession(session) {
+      activeSession = session;
+    },
+  });
   activeSession = undefined;
 
   const pairInput = {
@@ -133,15 +124,33 @@ try {
     expected: "[image#1]=red/a;[image#2]=blue/b",
     name: "two-image-label-association",
   } as const;
-  const pair = runtimeAdmissionAvailable
-    ? await runImageCase({
-        ...pairInput,
+  const pair = await runImageCase({
+    ...pairInput,
+    setActiveSession(session) {
+      activeSession = session;
+    },
+  });
+  activeSession = undefined;
+
+  const dimensionRegression: ImageCaseResult[] = [];
+  for (const [name] of dimensionFixtures) {
+    dimensionRegression.push(
+      await runImageCase({
+        config: probeConfig,
+        workspace,
+        observedFetch,
+        observations,
+        files: [name],
+        content: "Inspect [Image #1] and reply with exactly OK.",
+        expected: "ok",
+        name,
         setActiveSession(session) {
           activeSession = session;
         },
-      })
-    : await runDirectImageCase({ ...pairInput, imageAssetStore });
-  activeSession = undefined;
+      }),
+    );
+    activeSession = undefined;
+  }
 
   const imageToolReplay = await runImageToolReplay({
     config: probeConfig,
@@ -165,38 +174,28 @@ try {
   activeSession = undefined;
 
   const nonStreaming = await runNonStreamingBaseline(probeConfig, observedFetch);
-  const estimateTools = await probeEstimateTools(probeConfig);
 
   console.log(
     JSON.stringify(
       {
         profile: profileName,
         model: config.modelName,
-        runtimeAdmission: {
-          available: runtimeAdmissionAvailable,
-          profileImageCapabilityEnabled,
-          estimatorStatus: estimatorAvailability.status,
-        },
+        runtimeAdmission: { available: true, strategy: "local-image-buckets" },
         single,
         pair,
+        dimensionRegression,
         imageToolReplay,
         toolLoop,
         nonStreaming,
-        estimateTools,
         httpRequestCounts: {
           chat: observations.filter((entry) => entry.kind === "chat").length,
-          estimate: observations.filter((entry) => entry.kind === "estimate").length,
+          estimate: 0,
         },
       },
       null,
       2,
     ),
   );
-  if (!runtimeAdmissionAvailable) {
-    throw new Error(
-      `K3 chat probes passed, but runtime admission is unavailable: profileImageCapabilityEnabled=${profileImageCapabilityEnabled}, estimatorStatus=${estimatorAvailability.status}.`,
-    );
-  }
 } finally {
   await activeSession?.dispose({ type: "tui_exit" }).catch(() => undefined);
   await rm(workspace, { recursive: true });
@@ -211,7 +210,7 @@ async function runImageToolReplay(input: {
 }): Promise<{
   finalText: string;
   modelRequestCount: number;
-  estimateRequestCount: number;
+  estimateRequestCount: 0;
   imageChatRequestCount: number;
   secondIterationSource: "measured_plus_estimated_delta";
 }> {
@@ -242,7 +241,6 @@ async function runImageToolReplay(input: {
     }
     requireExpectedOutput(result.finalText, "image-tool=red/a", "image tool replay");
     const current = input.observations.slice(observationStart);
-    const estimates = current.filter((entry) => entry.kind === "estimate");
     const chats = current.filter((entry) => entry.kind === "chat");
     const modelRequests = events.filter(
       (event) => event.type === "model.request.finished",
@@ -251,14 +249,13 @@ async function runImageToolReplay(input: {
       (event) => event.type === "tool.started" && event.data.call.name === "Glob",
     );
     if (
-      estimates.length !== 1 ||
       chats.length !== 2 ||
       modelRequests.length !== 2 ||
       toolCalls.length !== 1 ||
       chats.some((entry) => entry.imageDataUrlCount !== 1)
     ) {
       throw new Error(
-        `Image tool replay contract failed: estimates=${estimates.length}, chats=${chats.length}, modelRequests=${modelRequests.length}, tools=${toolCalls.length}, imageCounts=${chats.map((entry) => entry.imageDataUrlCount).join(",")}.`,
+        `Image tool replay contract failed: chats=${chats.length}, modelRequests=${modelRequests.length}, tools=${toolCalls.length}, imageCounts=${chats.map((entry) => entry.imageDataUrlCount).join(",")}.`,
       );
     }
     const preflights = events.filter(
@@ -274,7 +271,7 @@ async function runImageToolReplay(input: {
     return {
       finalText: result.finalText,
       modelRequestCount: modelRequests.length,
-      estimateRequestCount: estimates.length,
+      estimateRequestCount: 0,
       imageChatRequestCount: chats.length,
       secondIterationSource,
     };
@@ -282,74 +279,6 @@ async function runImageToolReplay(input: {
     await session.dispose({ type: "tui_exit" });
     input.setActiveSession(undefined);
   }
-}
-
-async function runDirectImageCase(input: {
-  config: LiveConfig;
-  workspace: string;
-  observedFetch: typeof fetch;
-  observations: HttpObservation[];
-  imageAssetStore: ImageAssetStore;
-  files: readonly string[];
-  content: string;
-  expected: string;
-  name: string;
-}): Promise<
-  Omit<
-    ImageCaseResult,
-    "estimateTokens" | "admissionSource" | "admittedInputTokens"
-  > & {
-    estimateTokens: null;
-    admissionSource: null;
-    admittedInputTokens: null;
-  }
-> {
-  const observationStart = input.observations.length;
-  const imported: ImportedImageAsset[] = [];
-  for (const file of input.files) {
-    imported.push(
-      await input.imageAssetStore.importWorkspaceFile(file, {
-        signal: new AbortController().signal,
-      }),
-    );
-  }
-  const client = createClient(input.config, input.observedFetch, true);
-  const prepared = client.prepare({
-    messages: [
-      {
-        role: "system",
-        content: "Follow explicit output formats exactly. Do not call tools.",
-      },
-      imageMessage(input.content, imported),
-    ],
-    tools: [],
-  });
-  const materialized = await materializeModelRequest(client, prepared, {
-    assetStore: input.imageAssetStore,
-    signal: new AbortController().signal,
-  });
-  const output = await client.request(materialized, {
-    signal: new AbortController().signal,
-  });
-  const finalText = output.message.content ?? "";
-  requireExpectedOutput(finalText, input.expected, input.name);
-  const current = input.observations.slice(observationStart);
-  const estimates = current.filter((entry) => entry.kind === "estimate");
-  const chats = current.filter((entry) => entry.kind === "chat");
-  if (estimates.length !== 0 || chats.length !== 1) {
-    throw new Error(
-      `${input.name} direct provider spike expected no estimate and one chat request; received ${estimates.length} and ${chats.length}.`,
-    );
-  }
-  return {
-    name: input.name,
-    finalText,
-    estimateTokens: null,
-    admissionSource: null,
-    admittedInputTokens: null,
-    chatPromptTokens: output.usage.promptTokens,
-    chatBodyBytes: chats[0].requestBodyBytes,
-  };
 }
 
 async function runImageCase(input: {
@@ -393,17 +322,20 @@ async function runImageCase(input: {
     requireExpectedOutput(result.finalText, input.expected, input.name);
 
     const current = input.observations.slice(observationStart);
-    const estimates = current.filter((entry) => entry.kind === "estimate");
     const chats = current.filter((entry) => entry.kind === "chat");
-    if (estimates.length !== 1 || chats.length !== 1) {
+    if (chats.length !== 1) {
       throw new Error(
-        `${input.name} expected one estimate and one chat request; received ${estimates.length} and ${chats.length}.`,
+        `${input.name} expected one chat request; received ${chats.length}.`,
       );
     }
-    const estimateTokens = requirePositiveInteger(
-      estimates[0].totalTokens,
-      `${input.name} estimate total_tokens`,
-    );
+    if (
+      chats[0].imageDimensions.some(
+        ({ width, height }) =>
+          Math.max(width, height) > IMAGE_INPUT_POLICY.maxProviderLongEdge,
+      )
+    ) {
+      throw new Error(`${input.name} exceeded the provider image size policy.`);
+    }
     const preflight = events.find(
       (event) =>
         event.type === "context.usage.updated" && event.data.phase === "preflight",
@@ -412,10 +344,7 @@ async function runImageCase(input: {
       throw new Error(`${input.name} did not record admission usage.`);
     }
     const admissionSource = preflight.data.snapshot.source;
-    if (
-      admissionSource !== "provider_estimated" &&
-      admissionSource !== "estimated_full"
-    ) {
+    if (admissionSource !== "estimated_full") {
       throw new Error(
         `${input.name} used an unexpected admission source: ${admissionSource}.`,
       );
@@ -426,14 +355,25 @@ async function runImageCase(input: {
     if (modelFinished?.type !== "model.request.finished") {
       throw new Error(`${input.name} did not record provider usage.`);
     }
+    const planningTokens = preflight.data.snapshot.rawFullEstimate?.imageTokens ?? 0;
+    const expectedPlanningTokens = chats[0].imageDimensions.reduce(
+      (total, image) => total + imagePlanningTokens(image.width, image.height),
+      0,
+    );
+    if (planningTokens !== expectedPlanningTokens) {
+      throw new Error(
+        `${input.name} planning mismatch: ${planningTokens} vs ${expectedPlanningTokens}.`,
+      );
+    }
     return {
       name: input.name,
       finalText: result.finalText,
-      estimateTokens,
+      planningTokens,
       admissionSource,
       admittedInputTokens: preflight.data.snapshot.usedInputTokens,
       chatPromptTokens: modelFinished.data.output.usage.promptTokens,
       chatBodyBytes: chats[0].requestBodyBytes,
+      wireImageDimensions: chats[0].imageDimensions,
     };
   } finally {
     await session.dispose({ type: "tui_exit" });
@@ -520,68 +460,6 @@ async function runNonStreamingBaseline(
   return { finalText, promptTokens: output.usage.promptTokens };
 }
 
-async function probeEstimateTools(config: LiveConfig): Promise<EstimateToolsResult> {
-  const messages = [{ role: "user", content: "Count this request." }];
-  const messagesOnly = await callEstimateEndpoint(config, { messages });
-  const withTools = await callEstimateEndpoint(config, {
-    messages,
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "live_probe",
-          description: "A deterministic live endpoint probe.",
-          parameters: {
-            type: "object",
-            properties: { value: { type: "string" } },
-            required: ["value"],
-            additionalProperties: false,
-          },
-        },
-      },
-    ],
-  });
-  return {
-    messagesOnly,
-    withTools,
-    countsTools:
-      messagesOnly.totalTokens !== undefined &&
-      withTools.totalTokens !== undefined &&
-      withTools.totalTokens > messagesOnly.totalTokens,
-  };
-}
-
-async function callEstimateEndpoint(
-  config: LiveConfig,
-  input: { messages: unknown; tools?: unknown },
-): Promise<EndpointEstimateResult> {
-  const estimator = config.tokenEstimator;
-  if (estimator === undefined) {
-    throw new Error("K3 live probe has no token estimator configuration.");
-  }
-  const apiKey = estimator.apiKey;
-  const baseURL = estimator.apiBase;
-  const base = new URL(baseURL.endsWith("/") ? baseURL : `${baseURL}/`);
-  const response = await fetch(new URL("tokenizers/estimate-token-count", base), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ model: estimator.model, ...input }),
-  });
-  if (!response.ok) {
-    return { accepted: false, status: response.status };
-  }
-  const decoded: unknown = await response.json();
-  const totalTokens = estimateResponseTokens(decoded);
-  return {
-    accepted: true,
-    status: response.status,
-    ...(totalTokens === undefined ? {} : { totalTokens }),
-  };
-}
-
 async function createLiveSession(
   config: LiveConfig,
   workspaceRoot: string,
@@ -627,7 +505,6 @@ function createClient(
     contextBudget: config.contextBudget,
     includeReasoningContent: config.includeReasoningContent,
     inputModalities: config.inputModalities,
-    tokenEstimator: config.tokenEstimator,
     stream,
     fetch: observedFetch,
   });
@@ -639,32 +516,21 @@ function createObservedFetch(observations: HttpObservation[]): typeof fetch {
     init?: RequestInit,
   ): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
-    const kind = url.endsWith("/tokenizers/estimate-token-count")
-      ? "estimate"
-      : url.endsWith("/chat/completions")
-        ? "chat"
-        : undefined;
-    if (kind === undefined) {
+    if (!url.endsWith("/chat/completions")) {
       throw new Error(`Unexpected K3 live endpoint: ${new URL(url).pathname}.`);
     }
     const body = await requestBody(input, init);
     const decodedBody = JSON.parse(body) as Record<string, unknown>;
     const observation: HttpObservation = {
-      kind,
+      kind: "chat",
       requestBodyBytes: Buffer.byteLength(body, "utf8"),
       hasTools: Array.isArray(decodedBody.tools),
       imageDataUrlCount: countImageDataUrls(decodedBody),
+      imageDimensions: await imageDataUrlDimensions(decodedBody),
     };
     observations.push(observation);
     const response = await fetch(input, init);
     observation.status = response.status;
-    if (kind === "estimate" && response.ok) {
-      const decoded: unknown = await response.clone().json();
-      const totalTokens = estimateResponseTokens(decoded);
-      if (totalTokens !== undefined) {
-        observation.totalTokens = totalTokens;
-      }
-    }
     return response;
   };
   return Object.assign(implementation, { preconnect() {} });
@@ -691,6 +557,48 @@ function countImageDataUrls(value: unknown): number {
   return 0;
 }
 
+async function imageDataUrlDimensions(
+  value: unknown,
+): Promise<readonly { width: number; height: number }[]> {
+  const urls: string[] = [];
+  collectImageDataUrls(value, urls);
+  return Promise.all(
+    urls.map(async (url) => {
+      const separator = url.indexOf(",");
+      if (separator < 0) {
+        throw new Error("Live image data URL has no payload separator.");
+      }
+      const metadata = await sharp(
+        Buffer.from(url.slice(separator + 1), "base64"),
+      ).metadata();
+      return {
+        width: requirePositiveInteger(metadata.width, "live image width"),
+        height: requirePositiveInteger(metadata.height, "live image height"),
+      };
+    }),
+  );
+}
+
+function collectImageDataUrls(value: unknown, output: string[]): void {
+  if (typeof value === "string") {
+    if (value.startsWith("data:image/")) {
+      output.push(value);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectImageDataUrls(entry, output);
+    }
+    return;
+  }
+  if (isRecord(value)) {
+    for (const entry of Object.values(value)) {
+      collectImageDataUrls(entry, output);
+    }
+  }
+}
+
 async function requestBody(
   input: string | URL | Request,
   init?: RequestInit,
@@ -702,15 +610,6 @@ async function requestBody(
     return input.clone().text();
   }
   throw new Error("K3 live request body is not inspectable.");
-}
-
-function estimateResponseTokens(value: unknown): number | undefined {
-  if (!isRecord(value) || !isRecord(value.data)) {
-    return undefined;
-  }
-  return Number.isSafeInteger(value.data.total_tokens)
-    ? (value.data.total_tokens as number)
-    : undefined;
 }
 
 function imageMessage(
@@ -748,14 +647,16 @@ async function writeVisualFixture(
   name: string,
   background: string,
   letter: string,
+  width = 320,
+  height = 240,
 ): Promise<void> {
   const overlay = Buffer.from(
-    `<svg width="320" height="240"><text x="160" y="165" text-anchor="middle" font-family="Arial" font-size="150" font-weight="bold" fill="white">${letter}</text></svg>`,
+    `<svg width="${width}" height="${height}"><text x="${Math.round(width / 2)}" y="${Math.round(height * 0.68)}" text-anchor="middle" font-family="Arial" font-size="${Math.max(64, Math.round(Math.min(width, height) * 0.6))}" font-weight="bold" fill="white">${letter}</text></svg>`,
   );
   await sharp({
     create: {
-      width: 320,
-      height: 240,
+      width,
+      height,
       channels: 3,
       background,
     },
@@ -765,24 +666,20 @@ async function writeVisualFixture(
     .toFile(path.join(workspaceRoot, name));
 }
 
+function requirePositiveInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new Error(`${name} is not a positive integer.`);
+  }
+  return value as number;
+}
+
 function liveProbeConfig(config: LiveConfig): LiveConfig {
   if (config.inputModalities.includes("image")) {
     return config;
   }
-  const tokenEstimator =
-    config.tokenEstimator ??
-    Object.freeze({
-      kind: "moonshot-estimate-token-count-v1" as const,
-      model: config.modelName,
-      apiBase: requireString(config.apiBase, "K3 API base URL"),
-      apiKey: requireString(config.apiKey, "K3 API key"),
-      timeoutMs: 30_000,
-      maxRetries: 0 as const,
-    });
   return {
     ...config,
     inputModalities: Object.freeze(["text", "image"]),
-    tokenEstimator,
   };
 }
 
@@ -791,13 +688,6 @@ function requireExpectedOutput(value: string, expected: string, name: string): v
   if (!normalized.includes(expected)) {
     throw new Error(`${name} returned an unexpected semantic result: ${value}`);
   }
-}
-
-function requirePositiveInteger(value: unknown, name: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new Error(`${name} is not a positive integer.`);
-  }
-  return value as number;
 }
 
 function requireString(value: unknown, name: string): string {
