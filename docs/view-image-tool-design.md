@@ -39,7 +39,8 @@ OpenAI adapter 将图片传给模型。但模型在执行任务过程中无法�
 
 ## 非目标
 
-- 不修改、缩放、裁剪、旋转或转码图片。
+- 不修改 canonical 原图，不提供用户可控的缩放、裁剪、旋转或转码；provider request materialization
+  继续执行统一图片策略要求的 EXIF 方向修正和最大长边缩放。
 - 不支持 GIF、SVG、PDF、视频或任意二进制文件。
 - 不允许相对路径通过 `..` 逃逸 workspace；workspace 外文件必须使用绝对路径明确指定。
 - 不跟随符号链接。
@@ -440,11 +441,12 @@ type SessionMediaCompatibility = {
   readonly policySha256: string;
   readonly inputModalities: readonly ModelInputModality[];
   readonly toolResultModalities: readonly ToolResultModality[];
-  readonly tokenEstimator?: InputTokenEstimatorCompatibility;
 };
 ```
 
 compatibility hash 必须包含 `toolResultModalities`、adapter serialization version 和图片 policy。
+图片 policy 使用当前 `image-input-policy-v2`，不再包含 provider token estimator endpoint、model、凭据或
+timeout。`ViewImage` 不建立第二套图片策略或 compatibility 字段。
 resume 或 fork 打开 session 时逐字段严格比较。历史中没有 `ViewImage` 调用也不放宽比较，因为工具 schema、
 context hash 和未来可执行能力已经改变。
 
@@ -537,7 +539,7 @@ Anthropic wire shape只存在于该 adapter；canonical history 不保存 `tool_
 现有三段式 pipeline 保持：
 
 1. `prepare()`：同步、确定、无 I/O，生成 normalized segments 和 media descriptors；
-2. admission：计算本地 planning charge，必要时调用 provider token estimator；
+2. admission：按最终 provider 尺寸对应的本地图片 Token 档位计算 planning charge，不执行网络 I/O；
 3. `materialize()`：异步读取并验证资产，生成最终 data URL 和精确 request body。
 
 `PreparedPromptSegment` 的 media descriptor 增加来源信息：
@@ -548,8 +550,30 @@ type PreparedMediaOccurrence = {
   readonly source: "user_attachment" | "tool_result";
   readonly messageOrdinal: number;
   readonly blockPosition: number;
+  readonly width: number;
+  readonly height: number;
+  readonly planningTokens: number;
 };
 ```
+
+`width`、`height` 和 `planningTokens` 使用 `image-input-policy-v2` 的统一规则：先根据原图和 EXIF
+orientation 计算视觉尺寸，再等比例限制到最大长边 `2048px`，最后按处理后长边选择
+`384 / 1,408 / 3,072 / 5,504` 档位。工具图片不得使用固定单值、文件字节数、Base64 长度或独立的
+provider estimator 估算。
+
+每个 occurrence 独立计费。相同 `assetId` 在多个 message 或 block 中出现时，物化读取可以去重，Token
+计量不能去重。图片 Token 不参与文本 rolling correction factor：
+
+```ts
+const guardedTokens =
+  Math.ceil(breakdown.textAndProtocolTokens * correctionFactor) +
+  breakdown.imageTokens;
+```
+
+该计算必须由 normal admission、active-turn maintenance、swap planner 和 prefix-retirement planner 共享，
+不能让 revision planner 回退为 `Math.ceil(totalTokens * correctionFactor)`。当前模型请求成功后仍使用
+provider usage 建立 measured anchor；旧 anchor 后新增的 `ViewImage` 图片先作为本地 bucket delta，下一次
+成功请求再由 provider 实测 usage 吸收。含图片请求不作为文本 calibration sample。
 
 所有图片统一受以下限制：
 
@@ -559,7 +583,8 @@ type PreparedMediaOccurrence = {
 - `maxLongEdge`
 - `maxPixels`
 - `maxRequestBodyBytes`
-- `planningTokensPerImage`
+- `maxProviderLongEdge`
+- `imageTokenBuckets`
 
 一个含图片的 tool message 受 `maxImagesPerMessage` 约束；`ViewImage` 第一版每次只产生一张图。
 request body 上限按最终 materialized payload 的精确字节数校验，不按原文件大小近似。
@@ -576,7 +601,9 @@ frame 原子性：assistant call 和对应 tool result 必须共同保留、共�
 
 ### Context swap
 
-context swap renderer 不把图片复制到 swap override。被压缩的图片工具结果转换为确定性文本：
+`view_image` 成功 raw result 必须显式进入 `SWAPPABLE_RAW_KINDS`，并由专门的确定性分支生成 placeholder；
+不能假设新增 tool kind 会被现有 renderer 自动支持。context swap renderer 不把图片复制到 swap override。
+已经被模型消费且满足现有候选条件的图片工具结果转换为确定性文本：
 
 ```text
 [Tool image omitted from compacted context: ViewImage screenshots/home.png,
@@ -584,7 +611,12 @@ image/png, 1440x900, asset=abc123…. Use ViewImage again if the current image i
 ```
 
 该文本是 active request 的 revision override，不修改 canonical message，也不删除资产。swap hash 必须覆盖
-该文本以及原 canonical image content hash。
+该文本以及原 canonical image content hash。swap 的节省量和 prospective request Token 必须基于完整
+text/image blocks 重新 prepare 和计量，不能只比较 `messages.content` 的文本投影字节数。
+
+当前 active turn 中刚返回、尚未被模型消费的 `ViewImage` frame 不可 swap。active-turn maintenance 只能
+换出更旧、已经消费过的 observation，不能先把当前图片降级成 placeholder 再让模型继续，否则模型从未
+真正收到该图片。
 
 ### Prefix retirement 与 Recall
 
@@ -597,6 +629,26 @@ block，并为每个 image block追加：
 
 Recall 第一版不把历史图片重新注入模型。模型若仍需查看原文件，应再次调用 `ViewImage(file_path)`；若文件
 已变化，新调用产生新 `assetId`，准确反映当前磁盘内容。
+
+### 工具 iteration 后的 context maintenance
+
+`ViewImage` completion 原子提交后、下一次 agent iteration 构建请求前，runtime 使用包含新 tool image 的
+最新 active context 重新计量。若达到 context pressure trigger，并且当前 profile 已启用自动维护，顺序固定为：
+
+1. 先尝试 swap 更旧、已消费且 allowlisted 的 tool observations；
+2. swap 后仍不能达到目标且允许自动 prefix retirement 时，退休更旧的完整 closed turns；
+3. 保留当前未消费的 assistant call 与 `ViewImage` completion；
+4. 下一 iteration 从最新 revision 重新 prepare、计量并执行 hard-budget preflight。
+
+维护是为当前图片腾出旧历史空间，不保证任何图片请求必然可发送。以下情况可能仍无法降到 input budget：
+
+- 当前未消费 frame、受保护 suffix 或 hot tail 本身已过大；
+- 没有足够的可 swap observation 或可退休 closed turn；
+- profile 未启用自动维护；
+- 图片 occurrence 数或 materialized request body 先触发独立上限。
+
+此时不得删除当前图片、只发送文本摘要、缩小到 policy 之外的规格或绕过 admission。下一 iteration 在
+provider dispatch 前失败，已提交的 canonical tool completion 和 asset ref 保留，turn 按现有失败合同结束。
 
 ## TUI、CLI 与事件
 
@@ -630,7 +682,7 @@ Recall 第一版不把历史图片重新注入模型。模型若仍需查看原�
 - session compatibility 不匹配；
 - resume 时 canonical block、asset metadata 或 asset bytes 损坏；
 - materialization 时已提交的 asset 缺失或校验失败；
-- provider estimator、body limit 或 context admission 失败。
+- 图片 occurrence、body limit 或 context admission 失败。
 
 工具执行成功只表示图片已经成为 canonical completion；下一轮请求仍可能因累计图片数、context token 或
 request body 超限而在 provider dispatch 前失败。此时保留已提交 completion，并按现有 runtime fault 合同结束 turn。
@@ -672,7 +724,10 @@ request body 超限而在 provider dispatch 前失败。此时保留已提交 co
 - `src/session/session-store.ts`
   - schema、block rows、asset refs、resume 与 compatibility validation。
 - `src/context/*`
-  - token measurement、swap、retirement、Recall 和 protocol validator 支持图片 block。
+  - token measurement、swap、retirement、Recall 和 protocol validator 支持图片 block；
+  - `view_image` raw result 显式加入 swap allowlist 并使用图片专用 placeholder；
+  - swap 与 retirement planner 使用“guarded text/protocol + fixed image buckets”，不对图片 Token 应用
+    text correction factor。
 
 ### Provider mapping 与 materialization
 
@@ -722,7 +777,12 @@ request body 超限而在 provider dispatch 前失败。此时保留已提交 co
 - prepare 不读取文件，materialize 才读取并复核。
 - 相同 asset 多次出现按 occurrence 计数。
 - user image 与 tool image 共同受 request image count 和 body limit 约束。
-- 本地 planning token、provider estimator 和 measured usage 路径覆盖 tool image。
+- tool image 根据处理后尺寸使用与 user image 相同的四档 planning Token。
+- normal admission、active-turn maintenance、swap 和 retirement 都不对图片 Token 应用 text correction factor。
+- measured anchor 后新增 tool image 作为 bucket delta，下一次成功请求建立包含图片实测成本的新 anchor。
+- 含图片请求不记录文本 calibration sample。
+- 当前未消费的 `ViewImage` frame 不进入 swap 候选；已消费的历史 `view_image` 可以生成确定性 placeholder。
+- pressure 时先 swap 旧 observation，必要时再 retire 旧 closed turns；仍超预算时下一 iteration preflight 失败。
 - context swap 和 retirement 后图片不再进入 materialized request。
 - request payload、diagnostics 和 snapshot 中不持久化 Base64。
 
@@ -735,7 +795,7 @@ request body 超限而在 provider dispatch 前失败。此时保留已提交 co
 3. 模型能准确描述一张包含可辨识内容的 fixture；
 4. streaming 与 non-streaming 各执行一次；
 5. 同一 session 的后续 iteration 能重放图片工具结果；
-6. provider usage 或 estimator 路径能覆盖该请求；
+6. 本地图片分档、provider usage 和 measured anchor 路径覆盖该请求，且没有 token-estimator 网络调用；
 7. event log、SQLite、console 和错误日志中不存在 data URL 或 Base64。
 
 第三方 Responses-compatible endpoint 只有通过相同验证后才能在其 profile 中声明 image tool result。
@@ -760,7 +820,9 @@ request body 超限而在 provider dispatch 前失败。此时保留已提交 co
 
 - 扩展 Responses tool output mapping。
 - 将 media collection 从 user attachment 推广到所有 message image blocks。
-- 完成 planning、estimator、materialization、body limit、swap 和 Recall。
+- 完成本地图片分档 planning、materialization、body limit、swap、retirement 和 Recall。
+- 统一 ContextMeter、swap planner 与 retirement planner 的图片 Token guard 公式。
+- 将 `view_image` 显式接入 swap allowlist 和图片 placeholder renderer，并保护当前未消费 frame。
 - 提升 adapter serialization 和图片 policy compatibility version。
 
 ### 阶段 D：真实验证与文档
@@ -780,6 +842,9 @@ request body 超限而在 provider dispatch 前失败。此时保留已提交 co
 5. OpenAI Responses 能把图片作为当前 tool call 的 output 发送并由模型识别。
 6. Chat Completions 不会收到、丢弃或伪装图片工具结果。
 7. session resume、fork、context planning、压缩、retirement 和 Recall 对图片工具结果保持确定性。
-8. 所有图片限制同时覆盖用户附件和工具结果图片。
-9. TUI、stdout、event、SQLite diagnostics 和错误日志不泄漏图片 data URL。
-10. 单元测试、集成测试、真实 provider 验证和 `bun run check` 全部通过。
+8. user image 与 tool image 使用相同的 v2 尺寸策略和四档图片 Token，图片 Token 不参与文本 correction factor。
+9. 工具 iteration 后会先通过旧 observation swap 和旧 closed-turn retirement 为当前未消费图片腾空间；
+   无法降到预算时在 provider dispatch 前确定性失败，且不丢失 canonical completion。
+10. 所有图片限制同时覆盖用户附件和工具结果图片。
+11. TUI、stdout、event、SQLite diagnostics 和错误日志不泄漏图片 data URL。
+12. 单元测试、集成测试、真实 provider 验证和 `bun run check` 全部通过。
