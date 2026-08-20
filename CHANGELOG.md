@@ -5,6 +5,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-20
+
 ### Changed
 
 - Estimate image input locally with deterministic size buckets instead of a
@@ -221,7 +223,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/ishowshao/tinker/releases/tag/v2.0.0
 [1.11.0]: https://github.com/ishowshao/tinker/releases/tag/v1.11.0
 [1.10.1]: https://github.com/ishowshao/tinker/releases/tag/v1.10.1
 [1.9.0]: https://github.com/ishowshao/tinker/releases/tag/v1.9.0
