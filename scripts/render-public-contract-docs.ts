@@ -368,6 +368,7 @@ function createProfileExample(image: boolean): Record<string, unknown> {
   const profileName = image ? "image" : "text";
   const profileValues: Readonly<Record<string, unknown>> = Object.freeze({
     model: image ? "example-vision-model" : "example-text-model",
+    api: image ? "responses" : "chat-completions",
     apiBase: "https://api.example.com/v1",
     apiKey: "your-model-api-key",
     contextWindowTokens: 128_000,
@@ -379,6 +380,7 @@ function createProfileExample(image: boolean): Record<string, unknown> {
     includeReasoningContent: false,
     stream: true,
     inputModalities: image ? ["text", "image"] : ["text"],
+    toolResultModalities: image ? ["text", "image"] : ["text"],
   });
   const profile = Object.fromEntries(
     MODEL_PROFILE_FIELDS.map((field) => [field.name, profileValues[field.name]]),
@@ -463,6 +465,7 @@ function modelProfileValueKind(field: ModelProfileField): string {
     case "boolean":
       return "JSON boolean";
     case "input-modalities":
+    case "tool-result-modalities":
       return "Normalized modality array";
     case "reasoning":
       return "Object";

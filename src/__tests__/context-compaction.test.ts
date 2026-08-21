@@ -9,6 +9,10 @@ import {
   createRuntimeSession,
 } from "../agent/runtime-session";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import {
+  textToolResultContent,
+  toolResultDisplayText,
+} from "../agent/tool-result-content";
 import { ContextManager, ContextManagerError } from "../context/context-manager";
 import {
   canonicalSequenceHash,
@@ -127,7 +131,8 @@ describe("I2 deterministic context compaction", () => {
           .buildCommittedModelRequest(tools)
           .request.messages.find(
             (message) =>
-              message.role === "tool" && message.content.includes(firstOverride.source),
+              message.role === "tool" &&
+              toolResultDisplayText(message.content).includes(firstOverride.source),
           ),
       ).toBeDefined();
 
@@ -965,7 +970,7 @@ function appendReadTurn(
         sizeBytes: Buffer.byteLength(observation),
         content: observation,
       },
-      observation,
+      observation: textToolResultContent(observation),
     },
   ]);
   fixture.store.finishIterationForContinuation(firstIteration);

@@ -181,7 +181,10 @@ describe("UpdatePlan tool", () => {
           }),
           raw,
         }),
-      ).toEqual({ content: "Plan updated." });
+      ).toMatchObject({
+        content: [{ type: "text", text: "Plan updated." }],
+        displayText: "Plan updated.",
+      });
       expect(decodeStoredToolRawResult(JSON.parse(JSON.stringify(raw)))).toEqual(raw);
       await tooling.dispose();
     } finally {
@@ -217,7 +220,7 @@ describe("UpdatePlan tool", () => {
             args: {},
           }),
           raw,
-        }).content,
+        }).displayText,
       ).toContain("UpdatePlan failed");
       await tooling.dispose();
     } finally {
@@ -991,7 +994,7 @@ describe("Edit tool", () => {
         true,
       );
       const observation = new ObservationBuilder().build({ call, raw });
-      expect(observation.content).toBe(
+      expect(observation.displayText).toBe(
         "Edit failed for notes.txt: File must be read before Edit. Call Read on this file before trying Edit again.",
       );
       expect(await readFile(filePath, "utf8")).toBe("alpha\nbeta\ngamma\n");
@@ -1426,7 +1429,7 @@ describe("Delete tool", () => {
       });
       expect(lstat(filePath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(tooling.snapshots.size).toBe(0);
-      expect(observation.content).toBe("Delete succeeded for obsolete.ts.");
+      expect(observation.displayText).toBe("Delete succeeded for obsolete.ts.");
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -1614,7 +1617,7 @@ describe("Delete tool", () => {
           filePath,
           error: "File does not exist.",
         });
-        expect(observation.content).toBe(
+        expect(observation.displayText).toBe(
           `Delete failed for ${filePath}: File does not exist.`,
         );
       }
@@ -1882,10 +1885,12 @@ describe("Glob tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.content).toContain('Glob succeeded for pattern="**/*.ts".');
-      expect(observation.content).toContain("searchPath=.");
-      expect(observation.content).toContain("ignored=node_modules,.git");
-      expect(observation.content).toContain("matches:\nsrc/app.ts");
+      expect(observation.displayText).toContain(
+        'Glob succeeded for pattern="**/*.ts".',
+      );
+      expect(observation.displayText).toContain("searchPath=.");
+      expect(observation.displayText).toContain("ignored=node_modules,.git");
+      expect(observation.displayText).toContain("matches:\nsrc/app.ts");
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -2255,7 +2260,7 @@ describe("Grep tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.content).toBe("Found 2 files\na.ts\nb.ts");
+      expect(observation.displayText).toBe("Found 2 files\na.ts\nb.ts");
 
       const emptyCall = tooling.testRuntime.toolCall({
         providerToolCallId: "call_2",
@@ -2268,7 +2273,7 @@ describe("Grep tool", () => {
         raw: emptyRaw,
       });
 
-      expect(emptyObservation.content).toBe("No files found");
+      expect(emptyObservation.displayText).toBe("No files found");
     });
   });
 
@@ -2288,7 +2293,7 @@ describe("Grep tool", () => {
         call: contentCall,
         raw: contentRaw,
       });
-      expect(contentObservation.content).toBe("a.ts:1:foo");
+      expect(contentObservation.displayText).toBe("a.ts:1:foo");
 
       const noMatchCall = tooling.testRuntime.toolCall({
         providerToolCallId: "call_2",
@@ -2300,7 +2305,7 @@ describe("Grep tool", () => {
         call: noMatchCall,
         raw: noMatchRaw,
       });
-      expect(noMatchObservation.content).toBe("No matches found");
+      expect(noMatchObservation.displayText).toBe("No matches found");
 
       const countCall = tooling.testRuntime.toolCall({
         providerToolCallId: "call_3",
@@ -2312,7 +2317,7 @@ describe("Grep tool", () => {
         call: countCall,
         raw: countRaw,
       });
-      expect(countObservation.content).toBe(
+      expect(countObservation.displayText).toBe(
         "a.ts:1\nb.ts:3\n\nFound 4 total occurrences across 2 files.",
       );
     });
@@ -2333,8 +2338,8 @@ describe("Grep tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.content).toContain("Found 1 file\nb.ts");
-      expect(observation.content).toContain(
+      expect(observation.displayText).toContain("Found 1 file\nb.ts");
+      expect(observation.displayText).toContain(
         "[Showing results with pagination = limit: 1, offset: 1]",
       );
     });
@@ -2351,7 +2356,7 @@ describe("Grep tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.content).toBe(
+      expect(observation.displayText).toBe(
         'Grep failed for pattern="foo": Path escapes workspace.',
       );
     });

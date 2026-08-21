@@ -5,6 +5,7 @@ import {
   toOpenAIResponsesTools,
 } from "../model/openai-responses-mapping";
 import { ProviderResponseError } from "../model/model-client";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { createTestRuntime } from "./test-runtime";
 
 describe("OpenAI Responses mapping", () => {
@@ -32,7 +33,7 @@ describe("OpenAI Responses mapping", () => {
           toolCallId: call.toolCallId,
           providerToolCallId: call.providerToolCallId,
           name: call.name,
-          content: "file contents",
+          content: textToolResultContent("file contents"),
         },
       ]),
     ).toEqual([

@@ -6,6 +6,7 @@ import { FatalAgentTurnError, runAgent } from "../agent/loop";
 import type { AssistantTextDeltaUpdate } from "../agent/assistant-text-delta";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { AgentMessage } from "../agent/types";
 import type { EventSink } from "../events/event-sink";
@@ -64,7 +65,10 @@ class ScriptedModel extends TestModelClient {
 
     const toolMessage = input.messages.at(-1) as AgentMessage;
     expect(toolMessage.role).toBe("tool");
-    expect(toolMessage.content).toContain("Read succeeded");
+    if (toolMessage.role !== "tool") {
+      throw new Error("Expected a tool result message.");
+    }
+    expect(toolResultDisplayText(toolMessage.content)).toContain("Read succeeded");
 
     return testModelOutput(prepared, {
       role: "assistant",

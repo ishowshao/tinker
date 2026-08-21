@@ -12,6 +12,7 @@ import {
   type RuntimeSession,
 } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import { materializeAgentMessages } from "../context/protocol-frame";
 import { cancellationError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
@@ -778,10 +779,10 @@ describe("RuntimeSession lifecycle", () => {
       (message) => message.role === "tool",
     );
     expect(failedToolMessages).toHaveLength(2);
-    expect(failedToolMessages[0]?.content).toContain(
+    expect(toolResultDisplayText(failedToolMessages[0].content)).toContain(
       "Tool execution failed: tool transport broke",
     );
-    expect(failedToolMessages[1]?.content).toContain("skipped");
+    expect(toolResultDisplayText(failedToolMessages[1].content)).toContain("skipped");
     expect(() => toOpenAIChatMessages(failedMessages)).not.toThrow();
     expect(model.inputs[1]?.messages).toEqual([
       ...failedMessages,

@@ -5,6 +5,12 @@ import {
   type MessageSource,
 } from "../context/context-source";
 import { contentHash, userMessageHash } from "../context/protocol-frame";
+import type { ToolResultContent } from "../agent/types";
+import {
+  canonicalToolResultContentHash,
+  toolResultDisplayText,
+  validateToolResultContent,
+} from "../agent/tool-result-content";
 import {
   parseImageAssetId,
   parseImageAttachmentId,
@@ -132,6 +138,18 @@ type RecallImageRow = {
   height: unknown;
 };
 
+type RecallToolBlockRow = {
+  message_id: unknown;
+  position: unknown;
+  kind: unknown;
+  text_content: unknown;
+  asset_id: unknown;
+  mime_type: unknown;
+  byte_length: unknown;
+  width: unknown;
+  height: unknown;
+};
+
 export function createSessionHistoryReader(input: {
   database: Database;
   sessionId: SessionId;
@@ -233,11 +251,15 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
       const imageAttachments = this.loadImageAttachments(
         rows.map((row) => nonEmptyString(row.message_id, "message_id") as MessageId),
       );
+      const toolBlocks = this.loadToolContentBlocks(
+        rows.map((row) => nonEmptyString(row.message_id, "message_id") as MessageId),
+      );
       decoded = rows.map((row) => {
         const metadata = decodeRecallRow(row);
         const attachments = imageAttachments.get(metadata.messageId) ?? [];
-        verifyRecallContent(metadata, attachments);
-        const content = renderRecallContent(metadata.content, attachments);
+        const blocks = toolBlocks.get(metadata.messageId);
+        verifyRecallContent(metadata, attachments, blocks);
+        const content = renderRecallContent(metadata.content, attachments, blocks);
         return {
           ...metadata,
           content,
@@ -293,14 +315,18 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
 
     let metadata: ReturnType<typeof decodeRecallRow>;
     let attachments: readonly UserImageAttachment[];
+    let toolBlocks: readonly ToolResultContent[] | undefined;
     try {
       metadata = decodeRecallRow(row);
       attachments =
         this.loadImageAttachments([metadata.messageId]).get(metadata.messageId) ?? [];
+      toolBlocks = this.loadToolContentBlocks([metadata.messageId]).get(
+        metadata.messageId,
+      );
     } catch (error) {
       throw sessionReadError("decode_recall_get", this.sessionId, error);
     }
-    const actualHash = recallContentHash(metadata, attachments);
+    const actualHash = recallContentHash(metadata, attachments, toolBlocks);
     const observationHash = row.observation_sha256;
     if (
       actualHash !== metadata.contentSha256 ||
@@ -314,7 +340,11 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
       );
     }
 
-    const renderedContent = renderRecallContent(metadata.content, attachments);
+    const renderedContent = renderRecallContent(
+      metadata.content,
+      attachments,
+      toolBlocks,
+    );
     const page = sliceUtf8Page(renderedContent, input.byteOffset, input.byteLimit);
     return Object.freeze({
       source: formatMessageSource(metadata.messageId),
@@ -428,12 +458,90 @@ class SqliteSessionHistoryReader implements SessionHistoryReader {
       ]),
     );
   }
+
+  private loadToolContentBlocks(
+    messageIds: readonly MessageId[],
+  ): ReadonlyMap<MessageId, readonly ToolResultContent[]> {
+    if (messageIds.length === 0) return new Map();
+    const unique = [...new Set(messageIds)];
+    let rows: RecallToolBlockRow[];
+    try {
+      this.requireStoreOpen();
+      rows = this.database
+        .query(
+          `SELECT tcb.message_id, tcb.position, tcb.kind, tcb.text_content,
+                  ia.asset_id, ia.mime_type, ia.byte_length, ia.width, ia.height
+           FROM tool_message_content_blocks tcb
+           LEFT JOIN image_assets ia ON ia.asset_id = tcb.asset_id
+           WHERE tcb.message_id IN (${unique.map(() => "?").join(", ")})
+           ORDER BY tcb.message_id, tcb.position`,
+        )
+        .all(...unique) as RecallToolBlockRow[];
+    } catch (error) {
+      throw sessionReadError("read_recall_tool_blocks", this.sessionId, error);
+    }
+    const grouped = new Map<MessageId, ToolResultContent[]>();
+    for (const row of rows) {
+      const messageId = nonEmptyString(row.message_id, "message_id") as MessageId;
+      const blocks = grouped.get(messageId) ?? [];
+      if (
+        nonNegativeSafeInteger(row.position, "tool block position") !== blocks.length
+      ) {
+        throw new Error("Recall tool content block positions are not contiguous.");
+      }
+      const kind = enumValue(row.kind, ["text", "image"] as const, "tool block kind");
+      blocks.push(
+        kind === "text"
+          ? Object.freeze({
+              type: "text",
+              text: nonEmptyString(row.text_content, "tool block text"),
+            })
+          : Object.freeze({
+              type: "image",
+              asset: Object.freeze({
+                assetId: parseImageAssetId(
+                  nonEmptyString(row.asset_id, "tool block asset_id"),
+                ),
+                mimeType: enumValue(
+                  row.mime_type,
+                  ["image/png", "image/jpeg", "image/webp"] as const,
+                  "tool block MIME type",
+                ),
+                byteLength: safeInteger(row.byte_length, "tool block byte length"),
+                width: safeInteger(row.width, "tool block width"),
+                height: safeInteger(row.height, "tool block height"),
+              }),
+            }),
+      );
+      grouped.set(messageId, blocks);
+    }
+    return new Map(
+      [...grouped].map(([messageId, blocks]) => {
+        validateToolResultContent(blocks);
+        return [messageId, Object.freeze(blocks)] as const;
+      }),
+    );
+  }
 }
 
 export function renderRecallContent(
   content: string,
   attachments: readonly UserImageAttachment[],
+  toolBlocks?: readonly ToolResultContent[],
 ): string {
+  if (toolBlocks !== undefined) {
+    const text = toolBlocks
+      .flatMap((block) => (block.type === "text" ? [block.text] : []))
+      .join("\n");
+    const notes = toolBlocks.flatMap((block) =>
+      block.type === "image"
+        ? [
+            `[Historical tool image omitted: ${block.asset.mimeType}, ${block.asset.width}x${block.asset.height}, asset=${block.asset.assetId.slice(0, 12)}….]`,
+          ]
+        : [],
+    );
+    return notes.length === 0 ? text : `${text}\n\n${notes.join("\n")}`;
+  }
   if (attachments.length === 0) return content;
   const notes = attachments.map(
     (attachment) =>
@@ -445,8 +553,9 @@ export function renderRecallContent(
 function verifyRecallContent(
   metadata: ReturnType<typeof decodeRecallRow>,
   attachments: readonly UserImageAttachment[],
+  toolBlocks?: readonly ToolResultContent[],
 ): void {
-  if (recallContentHash(metadata, attachments) !== metadata.contentSha256) {
+  if (recallContentHash(metadata, attachments, toolBlocks) !== metadata.contentSha256) {
     throw new Error("Canonical Recall content failed its integrity check.");
   }
 }
@@ -454,7 +563,21 @@ function verifyRecallContent(
 function recallContentHash(
   metadata: ReturnType<typeof decodeRecallRow>,
   attachments: readonly UserImageAttachment[],
+  toolBlocks?: readonly ToolResultContent[],
 ): string {
+  if (metadata.role === "tool") {
+    if (attachments.length > 0 || toolBlocks === undefined) {
+      throw new Error("Tool Recall message has invalid media relations.");
+    }
+    validateToolResultContent(toolBlocks);
+    if (toolResultDisplayText(toolBlocks) !== metadata.content) {
+      throw new Error("Tool Recall display projection does not match its blocks.");
+    }
+    return canonicalToolResultContentHash(toolBlocks);
+  }
+  if (toolBlocks !== undefined) {
+    throw new Error("Non-tool Recall message has tool content blocks.");
+  }
   if (metadata.role !== "user") {
     if (attachments.length > 0) {
       throw new Error("Non-user Recall message has image attachments.");

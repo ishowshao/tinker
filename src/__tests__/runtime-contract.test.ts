@@ -32,6 +32,8 @@ describe("runtime compatibility boundary", () => {
             adapter,
             serializationVersion: "test-protocol-v1",
           },
+          inputModalities: ["text"],
+          toolResultModalities: ["text"],
         }).messageProtocol.adapter,
       ).toBe(adapter);
     }
@@ -71,6 +73,8 @@ describe("runtime compatibility boundary", () => {
             includeReasoningContent: false,
             contextProfile: TEST_CONTEXT_PROFILE,
             messageProtocol: client.messageProtocol,
+            inputModalities: client.inputModalities,
+            toolResultModalities: client.toolResultModalities,
           }),
         ),
       ).not.toThrow();
@@ -80,7 +84,7 @@ describe("runtime compatibility boundary", () => {
     }
   });
 
-  test("decodes a v1 image contract but refuses to resume it under v2", async () => {
+  test("refuses to resume when the persisted media policy differs", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-image-v1-"));
     const sessionId = runtimeIdFactory.createSessionId();
     const client = openAiClient({ inputModalities: ["text", "image"] });
@@ -108,19 +112,13 @@ describe("runtime compatibility boundary", () => {
           contextProfile: TEST_CONTEXT_PROFILE,
           messageProtocol: client.messageProtocol,
           inputModalities: ["text", "image"],
+          toolResultModalities: ["text"],
         }),
-        imageInput: Object.freeze({
+        media: Object.freeze({
           policyVersion: "image-input-policy-v1",
           policySha256: "1".repeat(64),
           inputModalities: Object.freeze(["text", "image"] as const),
-          tokenEstimator: Object.freeze({
-            kind: "moonshot-estimate-token-count-v1",
-            coverageVersion: "full-request-v1",
-            model: "kimi-k3",
-            endpoint: "https://api.moonshot.test/v1/tokenizers/estimate-token-count",
-            timeoutMs: 30_000,
-            maxRetries: 0,
-          }),
+          toolResultModalities: Object.freeze(["text"] as const),
         }),
       });
       const json = stableJsonStringify(legacy);
@@ -149,9 +147,10 @@ describe("runtime compatibility boundary", () => {
             contextProfile: TEST_CONTEXT_PROFILE,
             messageProtocol: client.messageProtocol,
             inputModalities: ["text", "image"],
+            toolResultModalities: ["text"],
           }),
         ),
-      ).toThrow("imageInput");
+      ).toThrow("media");
     } finally {
       await store.close("tui_exit").catch(() => undefined);
       await rm(workspace, { recursive: true });
@@ -181,7 +180,7 @@ describe("runtime compatibility boundary", () => {
         "includeReasoningContent",
         "contextProfile",
         "messageProtocol",
-        "imageInput",
+        "media",
       ]);
       for (const excluded of [
         "version",
@@ -225,10 +224,10 @@ describe("runtime compatibility boundary", () => {
           }),
         ],
         [
-          "imageInput",
+          "media",
           compatibilityContract({
-            imageInput: {
-              ...current.imageInput,
+            media: {
+              ...current.media,
               inputModalities: ["text", "image"],
             },
           }),
@@ -247,6 +246,8 @@ describe("runtime compatibility boundary", () => {
               adapter: "fake",
               serializationVersion: "test-model-v1",
             },
+            inputModalities: ["text"],
+            toolResultModalities: ["text"],
           }),
         ),
       ).toThrow("profileName");
@@ -327,7 +328,8 @@ function compatibilityContract(
       adapter: "fake",
       serializationVersion: "test-model-v1",
     },
-    inputModalities: overrides.imageInput?.inputModalities,
+    inputModalities: overrides.media?.inputModalities ?? ["text"],
+    toolResultModalities: overrides.media?.toolResultModalities ?? ["text"],
   });
 }
 

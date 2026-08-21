@@ -6,6 +6,7 @@ import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
 } from "../agent/runtime-session";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
@@ -449,7 +450,9 @@ describe("Agent Skills session lifecycle", () => {
       if (activationObservation?.role !== "tool") {
         throw new Error("Expected the Skill activation observation.");
       }
-      expect(activationObservation.content).toContain("Review every changed line.");
+      expect(toolResultDisplayText(activationObservation.content)).toContain(
+        "Review every changed line.",
+      );
       expect(
         sink.events.find((event) => event.type === "skills.updated"),
       ).toMatchObject({
@@ -749,7 +752,9 @@ describe("Agent Skills session lifecycle", () => {
       if (rejectedObservation?.role !== "tool") {
         throw new Error("Expected the rejected Skill activation observation.");
       }
-      expect(rejectedObservation.content).toContain("Review every changed line.");
+      expect(toolResultDisplayText(rejectedObservation.content)).toContain(
+        "Review every changed line.",
+      );
     });
   });
 

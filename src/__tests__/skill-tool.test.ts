@@ -52,7 +52,7 @@ describe("Skill tool", () => {
         lifecycle: "pending",
       });
 
-      const observation = new ObservationBuilder().build({ call, raw }).content;
+      const observation = new ObservationBuilder().build({ call, raw }).displayText;
       expect(observation).toContain('<agent_skill name="review-code" scope="project">');
       expect(observation).toContain("Review code");
       expect(observation).not.toContain("Changed after discovery");

@@ -7,6 +7,41 @@ provider 的 API adapter、模型能力，以及 `reasoning.supportedEfforts` �
 各 provider 章节中的能力和参数信息以其官方文档为依据；推荐配置则结合 Tinker 当前的
 请求与会话实现。后续可以在本文中继续增加其他 provider 章节。
 
+## 图片与工具结果模态
+
+`inputModalities` 声明整个模型请求可接受的输入模态；`toolResultModalities` 单独声明当前
+模型 endpoint 可把哪些模态作为工具调用结果接收。两者都默认为 `["text"]`，必须包含
+`"text"`，且不能包含重复或未知值。
+
+只有经过真实验证的 Responses profile 才应显式开启图片工具结果：
+
+```json
+{
+  "api": "responses",
+  "inputModalities": ["text", "image"],
+  "toolResultModalities": ["text", "image"]
+}
+```
+
+这时 Tinker 才会向模型注册 `ViewImage(file_path)`。模型调用该工具后，Tinker 验证本地
+PNG、JPEG 或静态 WebP，把内容寻址的图片引用写入 canonical session，并在下一次
+Responses 请求中将文本摘要和图片共同编码为 `function_call_output.output`。相同图片在
+后续 iteration 中会继续重放，直到完整 tool frame 被压缩或退休。
+
+支持用户图片、但不支持图片工具结果的 profile 使用：
+
+```json
+{
+  "inputModalities": ["text", "image"],
+  "toolResultModalities": ["text"]
+}
+```
+
+OpenAI Chat Completions adapter 的工具结果能力固定为 `["text"]`。为 Chat profile 声明
+图片工具结果会在启动时失败，而不是静默丢图。`toolResultModalities` 包含 `"image"` 时，
+`inputModalities` 也必须包含 `"image"`。第三方 Responses-compatible endpoint 只有在实际
+完成图片工具结果、流式/非流式和历史重放验证后才应开启这一能力。
+
 ## DeepSeek
 
 本节覆盖 DeepSeek 官方 API 当前提供的两个 V4 模型：
@@ -393,7 +428,8 @@ Kimi K3 原生支持文本和图片输入。Tinker 使用本地固定图片规�
       },
       "includeReasoningContent": true,
       "stream": true,
-      "inputModalities": ["text", "image"]
+      "inputModalities": ["text", "image"],
+      "toolResultModalities": ["text"]
     }
   }
 }
@@ -545,6 +581,9 @@ PNG、JPEG 和静态 WebP；这是 Kimi 支持格式的安全子集。公网图�
 保持宽高比并把长边限制为 2048px；随后按最终长边使用 512、1024、1536、2048 四档本地
 planning 值。该过程同步、确定且不产生额外网络请求。provider 成功响应中的实际 usage
 仍会建立 measured anchor，用于后续上下文管理。
+
+K3 使用 Chat Completions，因此 `toolResultModalities` 必须保持 `["text"]`。它可以接收
+用户附件图片，但 Tinker 不会为该 profile 注册 `ViewImage`。
 
 ### 其他与 Tinker 相关的官方约束
 
@@ -890,8 +929,15 @@ GPT-5.6 系列支持图片输入，Tinker 的 Chat Completions 和 Responses ada
 用户附加的本地图片。需要图片时可把该字段改为 `["text", "image"]`；Tinker 使用统一的
 本地尺寸档位进行输入预算估算，不会把请求额外发送给另一个 provider。
 
-Tinker 当前的工具结果以文本 Observation 返回。即使工具自身产生截图或其他媒体，也不会
-作为多模态 tool result 发送给模型；这不影响普通文本工具调用。
+若使用 Responses API 并且实际 endpoint 已通过图片工具结果验证，可同时开启：
+
+```json
+"inputModalities": ["text", "image"],
+"toolResultModalities": ["text", "image"]
+```
+
+这样会注册 `ViewImage`。若只需用户附件图片，则仅开启 `inputModalities`，让
+`toolResultModalities` 保持 `["text"]`。Chat Completions profile 只能使用后一种组合。
 
 ## Azure OpenAI
 
@@ -988,3 +1034,12 @@ Azure OpenAI 示例同样使用：
 
 如果 deployment 支持图片，可改为 `["text", "image"]`。Tinker transport 会发送用户图片，
 并使用相同的本地尺寸档位完成请求前预算估算。
+
+若该 deployment 的 Responses endpoint 也已通过图片工具结果验证，可进一步声明：
+
+```json
+"toolResultModalities": ["text", "image"]
+```
+
+这要求 `inputModalities` 同时包含 `"image"`，并会启用 `ViewImage`。切换到 Chat
+Completions 时必须恢复 `["text"]`。

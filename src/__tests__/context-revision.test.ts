@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
 import { ContextSwapRenderer } from "../context/context-swap-renderer";
 import { validateStoredContextSurface } from "../context/context-surface";
@@ -107,7 +108,7 @@ describe("ContextRevisionCompiler", () => {
         toolCallId: message.toolCallId,
         providerToolCallId: message.providerToolCallId,
         name: message.name,
-        content: override.renderedContent,
+        content: textToolResultContent(override.renderedContent),
       },
     });
     expect(override.renderedContent).not.toContain("secret-body");
@@ -191,7 +192,7 @@ describe("SessionStore context snapshot", () => {
         keepFromOrdinal: 1,
       });
       expect(before.canonical.messages).toHaveLength(1);
-      expect(store.readMeta().schemaVersion).toBe(9);
+      expect(store.readMeta().schemaVersion).toBe(10);
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
@@ -359,7 +360,14 @@ function completedReadFixture(
     sizeBytes: 9_000,
     content: "raw-secret",
   };
-  pending.agent.commitToolCompletions([{ call, kind: "returned", raw, observation }]);
+  pending.agent.commitToolCompletions([
+    {
+      call,
+      kind: "returned",
+      raw,
+      observation: textToolResultContent(observation),
+    },
+  ]);
   const finalIteration: IterationIdentity = {
     ...turn,
     iterationId: runtimeIdFactory.createIterationId(),

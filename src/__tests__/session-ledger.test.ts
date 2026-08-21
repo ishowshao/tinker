@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { contentHash, interruptedCompletionInputs } from "../context/protocol-frame";
 import { deterministicIdFactory } from "./test-runtime";
 
@@ -34,7 +35,7 @@ describe("InMemorySessionLedger", () => {
           filePath: "README.md",
           content: "contents",
         },
-        observation: "Read succeeded.",
+        observation: textToolResultContent("Read succeeded."),
       },
     ]);
 

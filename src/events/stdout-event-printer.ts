@@ -122,6 +122,9 @@ export class StdoutEventPrinter implements EventSink {
           `${formatToolLine("tool.finished", event.data.call).trimEnd()} ok=${event.data.ok}\n`,
         );
         break;
+      case "tool.observation":
+        this.stdout.write(`${event.data.observation.displayText}\n`);
+        break;
       case "tool.confirmation.requested":
         this.stdout.write(
           `tool.confirmation.requested toolCallId=${event.toolCallId} reason=${JSON.stringify(event.data.reason)} command=${JSON.stringify(event.data.command)}\n`,
@@ -217,6 +220,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "skill":
       return [formatSkillResult(raw)];
     case "read":
+    case "view_image":
     case "delete":
     case "glob":
     case "grep":

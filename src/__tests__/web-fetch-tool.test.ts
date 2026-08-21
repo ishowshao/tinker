@@ -774,11 +774,11 @@ describe("WebFetch observation", () => {
     const builder = new ObservationBuilder();
 
     const success = builder.build({ call, raw });
-    expect(success.content).toContain(
+    expect(success.displayText).toContain(
       "Web fetch result for http://localhost:3000/docs (route=local, refined=false):",
     );
-    expect(success.content).toContain("Title: Docs");
-    expect(success.content).toContain("# Install");
+    expect(success.displayText).toContain("Title: Docs");
+    expect(success.displayText).toContain("# Install");
 
     const redirect = builder.build({
       call,
@@ -790,10 +790,10 @@ describe("WebFetch observation", () => {
         redirectUrl: "https://other.example.com/page",
       },
     });
-    expect(redirect.content).toContain(
+    expect(redirect.displayText).toContain(
       "WebFetch was redirected to https://other.example.com/page.",
     );
-    expect(redirect.content).toContain("Call WebFetch again");
+    expect(redirect.displayText).toContain("Call WebFetch again");
 
     const failure = builder.build({
       call,
@@ -804,7 +804,7 @@ describe("WebFetch observation", () => {
         error: "Exa could not fetch the page: CRAWL_NOT_FOUND (HTTP 404).",
       },
     });
-    expect(failure.content).toBe(
+    expect(failure.displayText).toBe(
       "WebFetch failed for https://bun.sh/gone: Exa could not fetch the page: CRAWL_NOT_FOUND (HTTP 404).",
     );
   });

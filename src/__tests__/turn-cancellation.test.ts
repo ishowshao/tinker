@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { runAgent } from "../agent/loop";
 import { InMemorySessionLedger } from "../agent/session-ledger";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import { cancellationError, TurnCancelledError } from "../agent/turn-cancellation";
 import type { EventSink } from "../events/event-sink";
 import { ObservationTextLog } from "../events/observation-text-log";
@@ -419,9 +420,11 @@ describe("turn cancellation", () => {
       .messages;
     const toolMessages = messages.filter((message) => message.role === "tool");
     expect(toolMessages).toHaveLength(3);
-    expect(toolMessages[0]?.content).toContain("Read succeeded");
-    expect(toolMessages[1]?.content).toContain("cancelled by the user");
-    expect(toolMessages[2]?.content).toContain("skipped");
+    expect(toolResultDisplayText(toolMessages[0].content)).toContain("Read succeeded");
+    expect(toolResultDisplayText(toolMessages[1].content)).toContain(
+      "cancelled by the user",
+    );
+    expect(toolResultDisplayText(toolMessages[2].content)).toContain("skipped");
     expect(() => toOpenAIChatMessages(messages)).not.toThrow();
 
     const eventTypes = events.events.map((event) => event.type);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import {
   ContextProtocolError,
   ContextProtocolValidator,
@@ -83,8 +84,12 @@ describe("ContextProtocolValidator", () => {
     );
 
     const contentCorruption = cloneView(completeToolView());
+    const user = contentCorruption.messages[1];
+    if (user.role !== "user") {
+      throw new Error("Expected user message.");
+    }
     contentCorruption.messages[1] = {
-      ...contentCorruption.messages[1],
+      ...user,
       content: "tampered",
     };
     expectProtocolCode(
@@ -164,7 +169,7 @@ function completeToolView(): ProtocolContextView {
         filePath: "README.md",
         content: "hello",
       },
-      observation: "Read succeeded.",
+      observation: textToolResultContent("Read succeeded."),
     },
     {
       call: second,

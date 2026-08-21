@@ -71,17 +71,44 @@ export class ImageAssetStore {
       accept?: (asset: ImageAssetRef) => void;
     } = {},
   ): Promise<ImportedImageAsset> {
+    return this.importFileInternal(sourcePath, true, options);
+  }
+
+  async importFile(
+    sourcePath: string,
+    options: {
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<ImportedImageAsset> {
+    return this.importFileInternal(sourcePath, false, options);
+  }
+
+  private async importFileInternal(
+    sourcePath: string,
+    workspaceOnly: boolean,
+    options: {
+      signal?: AbortSignal;
+      accept?: (asset: ImageAssetRef) => void;
+    },
+  ): Promise<ImportedImageAsset> {
     throwIfAborted(options.signal);
+    if (typeof sourcePath !== "string" || sourcePath.trim() === "") {
+      throw new Error("Image source path must be a non-empty string.");
+    }
     const candidate = path.isAbsolute(sourcePath)
       ? path.normalize(sourcePath)
       : path.resolve(this.workspaceRoot, sourcePath);
-    assertContained(this.workspaceRoot, candidate, "Image source path");
+    if (workspaceOnly || !path.isAbsolute(sourcePath)) {
+      assertContained(this.workspaceRoot, candidate, "Image source path");
+    }
     const pathStat = await lstat(candidate);
     if (pathStat.isSymbolicLink() || !pathStat.isFile()) {
       throw new Error("Image source must be a regular non-symlink file.");
     }
     const canonicalSource = await realpath(candidate);
-    assertContained(this.workspaceRoot, canonicalSource, "Image source realpath");
+    if (workspaceOnly || !path.isAbsolute(sourcePath)) {
+      assertContained(this.workspaceRoot, canonicalSource, "Image source realpath");
+    }
 
     const handle = await open(canonicalSource, constants.O_RDONLY | noFollowFlag());
     let bytes: Buffer;
@@ -102,7 +129,9 @@ export class ImageAssetStore {
           `Image is ${handleStat.size} bytes; maximum is ${IMAGE_INPUT_POLICY.maxBytesPerImage}.`,
         );
       }
-      bytes = await handle.readFile();
+      bytes = await handle.readFile(
+        options.signal === undefined ? undefined : { signal: options.signal },
+      );
     } finally {
       await handle.close();
     }

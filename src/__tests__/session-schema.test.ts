@@ -9,7 +9,7 @@ import { SessionCatalog } from "../session/session-catalog";
 import { SessionError } from "../session/session-errors";
 import {
   SESSION_APPLICATION_ID,
-  SESSION_SCHEMA_V9_FINGERPRINT,
+  SESSION_SCHEMA_V10_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   verifySessionSchema,
 } from "../session/session-schema";
@@ -35,7 +35,7 @@ describe("session schema identity", () => {
             schema_fingerprint: string;
           }
         ).schema_fingerprint,
-      ).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
+      ).toBe(SESSION_SCHEMA_V10_FINGERPRINT);
       expect(
         database
           .query(
@@ -200,7 +200,9 @@ describe("session schema identity", () => {
         sessionId,
       });
       expect(upgraded.loadProtocolView().messages).toEqual(messagesBefore);
-      expect(upgraded.readMeta().schemaFingerprint).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
+      expect(upgraded.readMeta().schemaFingerprint).toBe(
+        SESSION_SCHEMA_V10_FINGERPRINT,
+      );
       expect(
         upgraded.recoverInterruptedState(runtimeIdFactory).recallIndexRebuilt,
       ).toBe(true);
@@ -260,7 +262,9 @@ describe("session schema identity", () => {
         sessionId,
       });
       expect(upgraded.loadProtocolView().messages).toEqual(messagesBefore);
-      expect(upgraded.readMeta().schemaFingerprint).toBe(SESSION_SCHEMA_V9_FINGERPRINT);
+      expect(upgraded.readMeta().schemaFingerprint).toBe(
+        SESSION_SCHEMA_V10_FINGERPRINT,
+      );
       await upgraded.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });

@@ -13,6 +13,7 @@ import {
 import { lastPromptPrefixHash, promptPrefixHashes } from "../model/prompt-prefix-hash";
 import {
   estimatePromptSegments,
+  guardedContextTokens,
   RollingTokenCalibration,
   type RawContextBreakdown,
 } from "../model/token-estimator";
@@ -296,10 +297,7 @@ function guardedEstimate(
   breakdown: RawContextBreakdown,
   correctionFactor: number,
 ): number {
-  return (
-    Math.ceil(breakdown.textAndProtocolTokens * correctionFactor) +
-    breakdown.imageTokens
-  );
+  return guardedContextTokens(breakdown, correctionFactor);
 }
 
 function assertMeasuredContextAnchor(anchor: MeasuredContextAnchor): void {

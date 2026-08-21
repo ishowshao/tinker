@@ -7,7 +7,11 @@ import {
   type PromptPrefixFingerprint,
 } from "../model/prompt-prefix-hash";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
-import { estimatePromptSegments } from "../model/token-estimator";
+import {
+  estimatePromptSegments,
+  guardedContextTokens,
+  type RawContextBreakdown,
+} from "../model/token-estimator";
 import type { ToolDefinition } from "../tools/types";
 import {
   activeOverrideManifestHash,
@@ -150,11 +154,10 @@ export class PrefixRetirementPlanner {
     validatePlanningInput(input);
     const activeFingerprint = promptPrefixFingerprint(input.activePrepared);
     assertActiveFingerprint(input, activeFingerprint);
-    const rawTokensBefore = estimatePromptSegments(
-      input.activePrepared.promptSegments,
-    ).totalTokens;
+    const activeBreakdown = estimatePromptSegments(input.activePrepared.promptSegments);
+    const rawTokensBefore = activeBreakdown.totalTokens;
     const guardedTokensBefore = guardTokens(
-      rawTokensBefore,
+      activeBreakdown,
       input.activeUsage.correctionFactor,
     );
     const targetTokens = planningTarget(input);
@@ -223,7 +226,8 @@ export class PrefixRetirementPlanner {
         );
       }
       assertProspectiveConfiguration(input.activePrepared, prepared);
-      const rawTokens = estimatePromptSegments(prepared.promptSegments).totalTokens;
+      const breakdown = estimatePromptSegments(prepared.promptSegments);
+      const rawTokens = breakdown.totalTokens;
       const projection = Object.freeze({
         candidateIndex,
         boundary,
@@ -231,7 +235,7 @@ export class PrefixRetirementPlanner {
         compiled,
         prepared,
         rawTokens,
-        guardedTokens: guardTokens(rawTokens, input.activeUsage.correctionFactor),
+        guardedTokens: guardTokens(breakdown, input.activeUsage.correctionFactor),
       });
       projections.set(candidateIndex, projection);
       return projection;
@@ -603,8 +607,8 @@ function createPlan(input: {
   });
 }
 
-function guardTokens(rawTokens: number, correctionFactor: number): number {
-  return Math.ceil(rawTokens * correctionFactor);
+function guardTokens(breakdown: RawContextBreakdown, correctionFactor: number): number {
+  return guardedContextTokens(breakdown, correctionFactor);
 }
 
 function fail(code: string, message: string): never {

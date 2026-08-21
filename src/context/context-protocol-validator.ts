@@ -1,8 +1,14 @@
 import type { MessageId, ProtocolFrameId, ToolCallId } from "../ids/runtime-id";
 import {
+  canonicalToolResultContentHash,
+  toolResultDisplayText,
+  validateToolResultContent,
+} from "../agent/tool-result-content";
+import {
   contentHash,
   userMessageHash,
   rawResultHash,
+  validateReturnedToolObservation,
   type CanonicalMessageRecord,
   type ProtocolContextView,
   type ProtocolFrame,
@@ -113,7 +119,9 @@ export class ContextProtocolValidator {
                   ? {}
                   : { attachments: message.attachments }),
               })
-            : contentHash(message.content))
+            : message.role === "tool"
+              ? canonicalToolResultContentHash(message.content)
+              : contentHash(message.content))
       ) {
         fail(
           "content_hash_mismatch",
@@ -405,11 +413,19 @@ function validateToolExchange(
       );
     }
     const result = requireItem(results, 0, "tool result");
+    validateToolResultContent(message.content);
+    if (message.displayText !== toolResultDisplayText(message.content)) {
+      fail(
+        "content_hash_mismatch",
+        `Tool display projection does not match message ${message.messageId}.`,
+        identityForMessage(message),
+      );
+    }
     if (
       result.sessionId !== frame.sessionId ||
       result.frameId !== frame.frameId ||
       result.toolMessageId !== message.messageId ||
-      result.observationSha256 !== contentHash(message.content)
+      result.observationSha256 !== canonicalToolResultContentHash(message.content)
     ) {
       fail(
         "tool_result_mismatch",
@@ -427,6 +443,21 @@ function validateToolExchange(
         `Raw result hash does not match tool call ${call.toolCallId}.`,
         { ...identityForMessage(message), toolCallId: call.toolCallId },
       );
+    }
+    if (input.fullIntegrity && result.completion.kind === "returned") {
+      try {
+        validateReturnedToolObservation({
+          toolName: message.name,
+          raw: result.completion.raw,
+          content: message.content,
+        });
+      } catch (error) {
+        fail(
+          "tool_result_mismatch",
+          `Tool result for ${call.toolCallId} has invalid canonical content: ${error instanceof Error ? error.message : String(error)}`,
+          { ...identityForMessage(message), toolCallId: call.toolCallId },
+        );
+      }
     }
     input.usedResultCallIds.add(call.toolCallId);
   }

@@ -10,6 +10,10 @@ import type {
   ToolCall,
   UserMessage,
 } from "../agent/types";
+import {
+  toolResultText,
+  validateToolResultContent,
+} from "../agent/tool-result-content";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import {
   parseImageAssetId,
@@ -61,11 +65,31 @@ export function toOpenAIResponsesItems(
   }
 
   if (message.role === "tool") {
+    validateToolResultContent(message.content);
+    const hasImage = message.content.some((block) => block.type === "image");
     return [
       {
         type: "function_call_output",
         call_id: message.providerToolCallId,
-        output: message.content,
+        output: hasImage
+          ? message.content.map((block) =>
+              block.type === "text"
+                ? ({ type: "input_text", text: block.text } as const)
+                : ({
+                    type: "input_image",
+                    detail: "auto" as const,
+                    image_url:
+                      options.materializedImages === undefined
+                        ? (imageAssetUrlMarker(
+                            block.asset.assetId,
+                          ) as unknown as string)
+                        : requireMaterializedImage(
+                            options.materializedImages,
+                            block.asset.assetId,
+                          ),
+                  } as const),
+            )
+          : toolResultText(message.content),
       },
     ];
   }

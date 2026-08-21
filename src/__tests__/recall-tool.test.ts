@@ -288,7 +288,7 @@ describe("Recall tools", () => {
         filters: {},
         page: fixture.searchPage,
       },
-    }).content;
+    }).displayText;
     expect(search).toContain(
       "Recall searched historical session data.\nhistorical=true",
     );
@@ -305,7 +305,7 @@ describe("Recall tools", () => {
         historical: true,
         page: fixture.getPage,
       },
-    }).content;
+    }).displayText;
     expect(get).toBe(
       [
         "Recall retrieved historical session data.",
@@ -338,7 +338,7 @@ describe("Recall tools", () => {
         filters: {},
         page: { ...fixture.searchPage, hits: [] },
       },
-    }).content;
+    }).displayText;
     expect(empty).toContain(
       "No matches were found in the current session for the supplied query, filters, and search snapshot. This does not prove that the information does not exist.",
     );

@@ -236,6 +236,8 @@ export async function runI3ProviderSmoke(
 
 class ProviderSmokeModel implements ModelClient {
   readonly messageProtocol;
+  readonly inputModalities;
+  readonly toolResultModalities;
   readonly providerUsages: ModelUsage[] = [];
   providerRequestCount = 0;
   firstPostRetirementMarkerAbsent = false;
@@ -248,6 +250,8 @@ class ProviderSmokeModel implements ModelClient {
     private readonly marker: string,
   ) {
     this.messageProtocol = provider.messageProtocol;
+    this.inputModalities = provider.inputModalities;
+    this.toolResultModalities = provider.toolResultModalities;
   }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {

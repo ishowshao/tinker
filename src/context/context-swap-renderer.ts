@@ -9,6 +9,7 @@ const MAX_METADATA_BYTES = 1_024;
 const MAX_SCALAR_BYTES = 256;
 
 export const SWAP_OBSERVATION_FORMAT = "swap-observation-v1" as const;
+export const SWAP_TOOL_IMAGE_FORMAT = "swap-tool-image-v1" as const;
 
 export const SWAPPABLE_RAW_KINDS = Object.freeze([
   "read",
@@ -19,6 +20,7 @@ export const SWAPPABLE_RAW_KINDS = Object.freeze([
   "web_search",
   "web_fetch",
   "mcp",
+  "view_image",
 ] as const satisfies readonly ToolRawResultKind[]);
 
 export type SwappableRawKind = (typeof SWAPPABLE_RAW_KINDS)[number];
@@ -66,19 +68,21 @@ export class ContextSwapRenderer {
     assertHistoricalRawIsStable(raw);
 
     const source = formatMessageSource(message.messageId);
-    const metadata = renderMetadata(raw);
-    const renderedContent = [
-      "[Tinker historical tool observation swapped]",
-      `source=${source}`,
-      `contentSha256=${message.contentSha256}`,
-      `tool=${stableJsonStringify(compactExternalString(message.name))}`,
-      `metadata=${metadata}`,
-      "historical=Use RecallGet with source to recover the original observation.",
-      `current=${currentGuidance(raw.kind)}`,
-    ].join("\n");
-    const originalBytes = utf8Bytes(message.content);
+    const renderedContent =
+      raw.kind === "view_image"
+        ? renderImagePlaceholder(raw)
+        : [
+            "[Tinker historical tool observation swapped]",
+            `source=${source}`,
+            `contentSha256=${message.contentSha256}`,
+            `tool=${stableJsonStringify(compactExternalString(message.name))}`,
+            `metadata=${renderMetadata(raw)}`,
+            "historical=Use RecallGet with source to recover the original observation.",
+            `current=${currentGuidance(raw.kind)}`,
+          ].join("\n");
+    const originalBytes = utf8Bytes(message.displayText);
     const renderedBytes = utf8Bytes(renderedContent);
-    if (renderedBytes >= originalBytes) {
+    if (raw.kind !== "view_image" && renderedBytes >= originalBytes) {
       throw new SwapRenderUnsupportedError(
         "placeholder_not_smaller",
         "Rendered placeholder is not smaller than its canonical observation.",
@@ -95,6 +99,7 @@ export class ContextSwapRenderer {
       originalBytes,
       renderedBytes,
       byteSavings: originalBytes - renderedBytes,
+      ...(raw.kind === "view_image" ? { rendererFormat: SWAP_TOOL_IMAGE_FORMAT } : {}),
     });
   }
 }
@@ -123,6 +128,25 @@ function assertHistoricalRawIsStable(
       "Running task output cannot be rendered as a historical placeholder.",
     );
   }
+  if (raw.kind === "view_image" && (!raw.ok || raw.asset === undefined)) {
+    throw new SwapRenderUnsupportedError(
+      "unsuccessful_image",
+      "Only successful ViewImage results can use the image swap renderer.",
+    );
+  }
+}
+
+function renderImagePlaceholder(
+  raw: Extract<ToolRawResult, { kind: "view_image" }>,
+): string {
+  if (!raw.ok || raw.asset === undefined) {
+    throw new SwapRenderUnsupportedError(
+      "unsuccessful_image",
+      "Only successful ViewImage results can use the image swap renderer.",
+    );
+  }
+  const asset = raw.asset;
+  return `[Tool image omitted from compacted context: ViewImage ${raw.filePath}, ${asset.mimeType}, ${asset.width}x${asset.height}, asset=${asset.assetId.slice(0, 12)}…. Use ViewImage again if the current image is required.]`;
 }
 
 function renderMetadata(
@@ -213,6 +237,14 @@ function metadataEntries(
         ["isError", raw.isError],
         ["contentBlockCount", raw.contentBlockCount],
       ];
+    case "view_image":
+      return [
+        ["filePath", raw.filePath],
+        ["mimeType", raw.asset?.mimeType],
+        ["width", raw.asset?.width],
+        ["height", raw.asset?.height],
+        ["assetId", raw.asset?.assetId],
+      ];
   }
 }
 
@@ -234,6 +266,8 @@ function currentGuidance(kind: SwappableRawKind): string {
       return "Use WebFetch when the current page content is required.";
     case "mcp":
       return "Call the MCP tool again only when current external state is required.";
+    case "view_image":
+      return "Use ViewImage again if the current image is required.";
   }
 }
 

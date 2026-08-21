@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRuntimeSession } from "../agent/runtime-session";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import {
   I4_ACTIVE_RECALL_QUALIFICATION,
   I4_SWAP_ONLY_QUALIFICATION_ID,
@@ -199,7 +200,9 @@ describe("I4 automatic context maintenance", () => {
         thirdRequestTools?.filter(
           (message) =>
             message.role === "tool" &&
-            message.content.startsWith("[Tinker historical tool observation swapped]"),
+            toolResultDisplayText(message.content).startsWith(
+              "[Tinker historical tool observation swapped]",
+            ),
         ),
       ).toHaveLength(1);
       const turnFinished = sink.events.find((event) => event.type === "turn.finished");

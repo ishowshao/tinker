@@ -580,7 +580,8 @@ class DefaultRuntimeSession implements RuntimeSession {
         includeReasoningContent: input.includeReasoningContent,
         contextProfile: input.contextProfile,
         messageProtocol: input.modelClient.messageProtocol,
-        inputModalities: input.modelClient.inputModalities ?? ["text"],
+        inputModalities: input.modelClient.inputModalities,
+        toolResultModalities: input.modelClient.toolResultModalities,
       });
       if (input.selection.mode === "resume") {
         store.assertSessionCompatibility(compatibility);
@@ -654,6 +655,10 @@ class DefaultRuntimeSession implements RuntimeSession {
         workspaceRoot: input.workspaceRoot,
         runtimeSession: session.context,
         historyReader: store.historyReader(),
+        imageAssetStore: assetStore,
+        supportsViewImage:
+          input.modelClient.inputModalities.includes("image") &&
+          input.modelClient.toolResultModalities.includes("image"),
         ...(input.enableTurnUndo === true ? { enableTurnUndo: true } : {}),
         webFetchRefiner: input.webFetchRefiner,
         toolingConfig: input.toolingConfig,
@@ -1397,7 +1402,7 @@ class DefaultRuntimeSession implements RuntimeSession {
             messageId: message.messageId,
             frameId: message.frameId,
             ordinal: message.ordinal,
-            content: message.content,
+            content: message.displayText,
             contentSha256: message.contentSha256,
           },
           name: activation.name,

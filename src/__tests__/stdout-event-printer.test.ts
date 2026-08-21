@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { StdoutEventPrinter } from "../events/stdout-event-printer";
+import { imageAssetIdForBytes } from "../image/image-types";
+import { ObservationBuilder } from "../observation/observation-builder";
 import { createTestRuntime } from "./test-runtime";
 
 describe("stdout event printer", () => {
@@ -114,6 +116,48 @@ describe("stdout event printer", () => {
       "tool.finished name=Grep pattern=foo ok=true\n",
     ]);
     expect(stderr).toEqual([]);
+  });
+
+  test("prints only the safe ViewImage display projection", async () => {
+    const stdout: string[] = [];
+    const printer = new StdoutEventPrinter(
+      { write: (chunk: string) => stdout.push(chunk) },
+      { write: () => undefined },
+    );
+    const runtime = createTestRuntime(printer);
+    const call = runtime.toolCall({
+      providerToolCallId: "provider-view-image",
+      name: "ViewImage",
+      args: { file_path: "screen.png" },
+    });
+    const raw = {
+      kind: "view_image" as const,
+      ok: true,
+      filePath: "screen.png",
+      originalName: "screen.png",
+      asset: {
+        assetId: imageAssetIdForBytes(Buffer.from("stdout-view-image")),
+        mimeType: "image/png" as const,
+        byteLength: 512,
+        width: 80,
+        height: 40,
+      },
+    };
+    const observation = new ObservationBuilder().build({ call, raw });
+    await runtime.runtimeSession.append({
+      type: "tool.raw_result",
+      ...call,
+      data: { call, raw },
+    });
+    await runtime.runtimeSession.append({
+      type: "tool.observation",
+      ...call,
+      data: { call, observation },
+    });
+
+    expect(stdout.join("")).toBe(`${observation.displayText}\n`);
+    expect(stdout.join("")).not.toContain("data:image");
+    expect(stdout.join("")).not.toContain("base64");
   });
 
   test("prints a unified diff for Edit raw results with a patch", async () => {

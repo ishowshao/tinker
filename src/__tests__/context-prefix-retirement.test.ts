@@ -7,6 +7,7 @@ import { ContextMeter } from "../agent/context-meter";
 import { createRuntimeSession } from "../agent/runtime-session";
 import type { IterationIdentity, TurnIdentity } from "../agent/types";
 import type { ToolCall } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { ContextManager, ContextManagerError } from "../context/context-manager";
 import { ContextBuilder } from "../agent/context-builder";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
@@ -712,7 +713,7 @@ function appendReadTurn(
         sizeBytes: Buffer.byteLength(observation),
         content: observation,
       },
-      observation,
+      observation: textToolResultContent(observation),
     },
   ]);
   fixture.store.finishIterationForContinuation(firstIteration);

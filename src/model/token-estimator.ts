@@ -85,6 +85,16 @@ export function estimatePromptSegments(
   };
 }
 
+export function guardedContextTokens(
+  breakdown: RawContextBreakdown,
+  correctionFactor: number,
+): number {
+  return (
+    Math.ceil(breakdown.textAndProtocolTokens * correctionFactor) +
+    breakdown.imageTokens
+  );
+}
+
 export class RollingTokenCalibration {
   private readonly samples: number[] = [];
 

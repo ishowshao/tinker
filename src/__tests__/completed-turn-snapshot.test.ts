@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
@@ -86,7 +87,9 @@ describe("SessionStore completed-turn snapshots", () => {
               },
             ],
           },
-          observation: "MemorySearch returned one derived memory.",
+          observation: textToolResultContent(
+            "MemorySearch returned one derived memory.",
+          ),
         },
         {
           call: readCall,
@@ -97,7 +100,7 @@ describe("SessionStore completed-turn snapshots", () => {
             filePath: "README.md",
             content: "current contents",
           },
-          observation: "Read succeeded with current contents.",
+          observation: textToolResultContent("Read succeeded with current contents."),
         },
       ]);
       store.finishIterationForContinuation(firstIteration);

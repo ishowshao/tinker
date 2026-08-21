@@ -21,6 +21,7 @@ import type {
 } from "openai/resources/chat/completions";
 import { validateUserMessage, type ImageAssetId } from "../image/image-types";
 import { imageAssetUrlMarker } from "./openai-image-mapping";
+import { toolResultText } from "../agent/tool-result-content";
 
 type DeepSeekAssistantMessageParam = ChatCompletionAssistantMessageParam & {
   reasoning_content?: string | null;
@@ -57,7 +58,7 @@ export function toOpenAIChatMessages(
       return {
         role: "tool",
         tool_call_id: message.providerToolCallId,
-        content: message.content,
+        content: toolResultText(message.content),
       };
     }
 

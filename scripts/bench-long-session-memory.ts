@@ -18,6 +18,10 @@ import type {
   SessionLedger,
 } from "../src/agent/session-ledger";
 import type { AssistantMessage, ToolCall, UserMessage } from "../src/agent/types";
+import {
+  canonicalToolResultContentHash,
+  toolResultDisplayText,
+} from "../src/agent/tool-result-content";
 import type { EventSink } from "../src/events/event-sink";
 import type { AgentEvent } from "../src/events/types";
 import { runtimeIdFactory, type SessionId } from "../src/ids/runtime-id";
@@ -37,10 +41,9 @@ import { estimatePromptSegments } from "../src/model/token-estimator";
 import type { ProtocolContextView } from "../src/context/protocol-frame";
 import type { BuiltContextRequest } from "../src/context/context-revision";
 import type { SwapPlanningResult } from "../src/context/swap-planner";
-import { contentHash } from "../src/context/protocol-frame";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
-import { SESSION_SCHEMA_V9_FINGERPRINT } from "../src/session/session-schema";
+import { SESSION_SCHEMA_V10_FINGERPRINT } from "../src/session/session-schema";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -368,7 +371,7 @@ export async function runLongSessionBenchmark(
     const memoryAfter = memorySnapshot();
     const database = readDatabaseSummary(databasePath);
     if (
-      database.schemaVersion !== 9 ||
+      database.schemaVersion !== 10 ||
       !database.schemaFingerprintMatches ||
       database.contextRevisionCount !==
         compactionResults.length + retirementResults.length + 1 ||
@@ -486,6 +489,8 @@ class BenchmarkModelClient implements ModelClient {
     adapter: "openai-chat" as const,
     serializationVersion: "openai-chat-v1",
   });
+  readonly inputModalities = Object.freeze(["text"] as const);
+  readonly toolResultModalities = Object.freeze(["text"] as const);
   readonly prepareDurations: number[] = [];
   maxPromptSegmentCount = 0;
   requestCount = 0;
@@ -618,10 +623,9 @@ class BenchmarkModelClient implements ModelClient {
         "tool_calls",
       );
     }
-    if (latest.content.startsWith("Recall searched historical session data.")) {
-      const source = latest.content.match(
-        /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
-      )?.[1];
+    const latestText = toolResultDisplayText(latest.content);
+    if (latestText.startsWith("Recall searched historical session data.")) {
+      const source = latestText.match(/^source=(ctx:\/\/message\/[0-9a-f-]+)$/m)?.[1];
       if (source === undefined) {
         throw new Error("Benchmark RecallSearch returned no stable source.");
       }
@@ -640,7 +644,7 @@ class BenchmarkModelClient implements ModelClient {
         "tool_calls",
       );
     }
-    if (!latest.content.includes(historicalMarker)) {
+    if (!latestText.includes(historicalMarker)) {
       throw new Error("Benchmark RecallGet returned the wrong historical content.");
     }
     return outputWithUsage(
@@ -842,8 +846,9 @@ class BenchmarkShadowController {
       if (
         page.returnedBytes !== page.totalBytes ||
         page.contentSha256 !== selected.originalContentSha256 ||
-        contentHash(page.content) !== selected.originalContentSha256 ||
-        page.content !== canonical.content
+        canonicalToolResultContentHash(canonical.content) !==
+          selected.originalContentSha256 ||
+        page.content !== canonical.displayText
       ) {
         throw new Error("Shadow selection did not round-trip through RecallGet.");
       }
@@ -1180,7 +1185,7 @@ function readDatabaseSummary(
     return {
       schemaVersion: numberFromDatabase(meta.schema_version),
       schemaFingerprintMatches:
-        meta.schema_fingerprint === SESSION_SCHEMA_V9_FINGERPRINT,
+        meta.schema_fingerprint === SESSION_SCHEMA_V10_FINGERPRINT,
       turnCount: numberFromDatabase(counts.turn_count),
       messageCount: numberFromDatabase(counts.message_count),
       frameCount: numberFromDatabase(counts.frame_count),

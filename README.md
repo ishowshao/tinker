@@ -194,6 +194,7 @@ Profile fields:
 | `includeReasoningContent` | No | JSON boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
 | `stream` | No | JSON boolean | `true` | No | Use streaming transport for the selected model API. |
 | `inputModalities` | No | Normalized modality array | `["text"]` | No | Accepted model input modalities; normalizes to ["text"] or ["text", "image"]. |
+| `toolResultModalities` | No | Normalized modality array | `["text"]` | No | Accepted tool-result modalities; normalizes to ["text"] or ["text", "image"]. |
 
 `reasoning` fields:
 
@@ -212,6 +213,7 @@ Text-only profile example:
   "profiles": {
     "text": {
       "model": "example-text-model",
+      "api": "chat-completions",
       "apiBase": "https://api.example.com/v1",
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
@@ -228,6 +230,9 @@ Text-only profile example:
       "stream": true,
       "inputModalities": [
         "text"
+      ],
+      "toolResultModalities": [
+        "text"
       ]
     }
   }
@@ -242,6 +247,7 @@ Image-capable profile example:
   "profiles": {
     "image": {
       "model": "example-vision-model",
+      "api": "responses",
       "apiBase": "https://api.example.com/v1",
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
@@ -257,6 +263,10 @@ Image-capable profile example:
       "includeReasoningContent": false,
       "stream": true,
       "inputModalities": [
+        "text",
+        "image"
+      ],
+      "toolResultModalities": [
         "text",
         "image"
       ]
@@ -293,6 +303,7 @@ Atomic-memory profile example:
   "profiles": {
     "text": {
       "model": "example-text-model",
+      "api": "chat-completions",
       "apiBase": "https://api.example.com/v1",
       "apiKey": "your-model-api-key",
       "contextWindowTokens": 128000,
@@ -308,6 +319,9 @@ Atomic-memory profile example:
       "includeReasoningContent": false,
       "stream": true,
       "inputModalities": [
+        "text"
+      ],
+      "toolResultModalities": [
         "text"
       ]
     }
@@ -365,6 +379,17 @@ independent token-estimator request. See the
 [`image token bucket design`](docs/image-token-bucket-estimation-design.md) and
 [`multimodal image input design`](docs/multimodal-image-input-design.md) for the
 complete fixed policy and persistence contract.
+
+`ViewImage(file_path)` is registered only when the selected profile declares both
+`inputModalities: ["text", "image"]` and
+`toolResultModalities: ["text", "image"]`. The first implementation supports
+image tool results through the Responses adapter; Chat Completions remains
+text-only for tool results. Relative paths stay inside the workspace, absolute
+paths may explicitly select an external local file, and symbolic links are
+rejected. Canonical history stores content-addressed image references rather than
+Base64, while stdout, TUI, Recall, and logs show deterministic text summaries.
+See the [`ViewImage tool design`](docs/view-image-tool-design.md) for the complete
+capability, persistence, provider, and compaction contract.
 
 ### Built-in Slash Commands
 

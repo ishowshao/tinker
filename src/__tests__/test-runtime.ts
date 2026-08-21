@@ -65,7 +65,10 @@ export function finalizeTestSessionStore(
     includeReasoningContent?: boolean;
     projectInstruction?: ProjectInstructionManifest;
     tools?: readonly ToolDefinition[];
-    modelClient?: Pick<ModelClient, "messageProtocol" | "prepare">;
+    modelClient?: Pick<
+      ModelClient,
+      "messageProtocol" | "prepare" | "inputModalities" | "toolResultModalities"
+    >;
   },
 ): void {
   const modelName = input.modelName ?? "test-model";
@@ -98,6 +101,8 @@ export function finalizeTestSessionStore(
         adapter: "fake",
         serializationVersion: "test-model-v1",
       },
+      inputModalities: input.modelClient?.inputModalities ?? ["text"],
+      toolResultModalities: input.modelClient?.toolResultModalities ?? ["text"],
     }),
     surface,
     revisionId: runtimeIdFactory.createContextRevisionId(),
@@ -125,6 +130,8 @@ export function createTestHistoryReader(sessionId: SessionId): SessionHistoryRea
 const preparedInputs = new WeakMap<object, ModelRequestInput>();
 
 export abstract class TestModelClient implements ModelClient {
+  readonly inputModalities = Object.freeze(["text"] as const);
+  readonly toolResultModalities = Object.freeze(["text"] as const);
   readonly messageProtocol = Object.freeze({
     adapter: "fake" as const,
     serializationVersion: "test-model-v1",

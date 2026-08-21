@@ -6,6 +6,7 @@ import {
   createRuntimeSession,
   type CreateRuntimeSessionInput,
 } from "../agent/runtime-session";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import type { EventSink } from "../events/event-sink";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type {
@@ -115,7 +116,11 @@ class PlanProjectionModel extends TestModelClient {
     const planObservation = input.messages.find(
       (message) => message.role === "tool" && message.name === "UpdatePlan",
     );
-    if (planCall === undefined || planObservation?.content !== "Plan updated.") {
+    if (
+      planCall === undefined ||
+      planObservation?.role !== "tool" ||
+      toolResultDisplayText(planObservation.content) !== "Plan updated."
+    ) {
       throw new Error("The next model iteration did not receive the plan exchange.");
     }
     return testModelOutput(prepared, {

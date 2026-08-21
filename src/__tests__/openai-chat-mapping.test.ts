@@ -4,6 +4,7 @@ import {
   toOpenAIChatMessages,
 } from "../model/openai-chat-mapping";
 import { ProviderResponseError } from "../model/model-client";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { createTestRuntime } from "./test-runtime";
 
 describe("openai chat mapping", () => {
@@ -151,7 +152,7 @@ describe("openai chat mapping", () => {
         toolCallId: call.toolCallId,
         providerToolCallId: call.providerToolCallId,
         name: call.name,
-        content: "done",
+        content: textToolResultContent("done"),
       },
     ]);
 

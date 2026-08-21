@@ -9,7 +9,7 @@ import {
   IMAGE_INPUT_POLICY_VERSION,
 } from "../image/image-input-policy";
 import type { ModelContextBudget } from "./model-context-profile";
-import { ProviderResponseError } from "./model-client";
+import { ProviderResponseError, validateModelModalities } from "./model-client";
 import type {
   MaterializedModelRequest,
   ModelClient,
@@ -23,6 +23,7 @@ import type {
 } from "./model-client";
 import {
   deepFreeze,
+  imageToolSegment,
   imageUserSegment,
   materializeOpenAIRequest,
   normalizedEndpointPolicy,
@@ -39,7 +40,7 @@ import { OpenAIResponsesStreamAccumulator } from "./openai-responses-stream";
 import type { ReasoningEffortController } from "./reasoning-effort";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 
-const OPENAI_RESPONSES_SERIALIZATION_VERSION = "openai-responses-v1";
+const OPENAI_RESPONSES_SERIALIZATION_VERSION = "openai-responses-v2";
 const OPENAI_RESPONSES_TIMEOUT_MS = 30 * 60 * 1_000;
 
 export class OpenAIResponsesModelClient implements ModelClient {
@@ -48,6 +49,7 @@ export class OpenAIResponsesModelClient implements ModelClient {
     serializationVersion: OPENAI_RESPONSES_SERIALIZATION_VERSION,
   });
   readonly inputModalities: readonly ("text" | "image")[];
+  readonly toolResultModalities: readonly ("text" | "image")[];
   readonly reasoningEffort?: ReasoningEffortController;
   private readonly client: OpenAI;
   private readonly preparedRequests = new WeakSet<object>();
@@ -61,6 +63,8 @@ export class OpenAIResponsesModelClient implements ModelClient {
       contextBudget: ModelContextBudget;
       baseURL?: string;
       inputModalities?: readonly ("text" | "image")[];
+      toolResultModalities?: readonly ("text" | "image")[];
+      profileName?: string;
       model: string;
       providerName?: string;
       reasoningEffort?: ReasoningEffortController;
@@ -72,10 +76,15 @@ export class OpenAIResponsesModelClient implements ModelClient {
     this.provider = options.providerName ?? "responses-compatible";
     this.stream = options.stream ?? true;
     this.reasoningEffort = options.reasoningEffort;
-    this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
-    if (!this.inputModalities.includes("text")) {
-      throw new Error('OpenAI Responses input modalities must include "text".');
-    }
+    const modalities = validateModelModalities({
+      profileName: options.profileName,
+      adapter: this.messageProtocol.adapter,
+      inputModalities: options.inputModalities ?? ["text"],
+      toolResultModalities: options.toolResultModalities ?? ["text"],
+      adapterToolResultModalities: ["text", "image"],
+    });
+    this.inputModalities = modalities.inputModalities;
+    this.toolResultModalities = modalities.toolResultModalities;
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -113,11 +122,17 @@ export class OpenAIResponsesModelClient implements ModelClient {
     const messageSegments = input.messages.map(
       (message, index): PreparedPromptSegment =>
         message.role === "user" && message.attachments !== undefined
-          ? imageUserSegment(message)
-          : {
-              kind: segmentKind(message.role),
-              normalizedText: stableJsonStringify(itemsByMessage[index]),
-            },
+          ? imageUserSegment(message, index + 1)
+          : message.role === "tool"
+            ? imageToolSegment(
+                message,
+                index + 1,
+                stableJsonStringify(itemsByMessage[index]),
+              )
+            : {
+                kind: segmentKind(message.role),
+                normalizedText: stableJsonStringify(itemsByMessage[index]),
+              },
     );
     const mediaOccurrenceCount = messageSegments.reduce(
       (total, segment) => total + (segment.media?.length ?? 0),
@@ -132,6 +147,7 @@ export class OpenAIResponsesModelClient implements ModelClient {
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
         stream: this.stream,
         inputModalities: this.inputModalities,
+        toolResultModalities: this.toolResultModalities,
         requestPolicy: { store: false, toolChoice: "auto" },
         imagePolicy: {
           version: IMAGE_INPUT_POLICY_VERSION,

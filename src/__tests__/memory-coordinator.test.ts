@@ -275,7 +275,7 @@ describe("MemoryCoordinator", () => {
       const observation = new ObservationBuilder().build({
         call: {} as ToolCall,
         raw,
-      }).content;
+      }).displayText;
       expect(observation).toContain("derived memories");
       expect(observation).toContain("may be stale or wrong");
       expect(observation).toContain(fixture.workspaceRoot);
@@ -493,7 +493,7 @@ describe("MemoryCoordinator", () => {
         new ObservationBuilder().build({
           call: {} as ToolCall,
           raw: failed,
-        }).content,
+        }).displayText,
       ).toBe("MemorySearch unavailable: embedding endpoint unavailable");
 
       const recovered = await executor.execute(
@@ -558,7 +558,7 @@ describe("MemoryCoordinator", () => {
         new ObservationBuilder().build({
           call: {} as ToolCall,
           raw: valid,
-        }).content,
+        }).displayText,
       ).toBe("MemorySearch found no stored memories.");
 
       await waitForLogLines(fixture.paths.log, 3);

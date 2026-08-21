@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRuntimeSession } from "../agent/runtime-session";
 import type { AgentMessage } from "../agent/types";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type {
   ModelRequestOptions,
@@ -98,6 +99,8 @@ class HistoricalReadModel extends TestModelClient {
           message.role === "tool",
       );
     const latestTool = toolMessages.at(-1);
+    const latestText =
+      latestTool === undefined ? undefined : toolResultDisplayText(latestTool.content);
 
     if (user.content.startsWith("resume")) {
       if (latestTool === undefined) {
@@ -106,10 +109,13 @@ class HistoricalReadModel extends TestModelClient {
         });
       }
       expectHistoricalGet(
-        latestTool.content,
+        toolResultDisplayText(latestTool.content),
         requireString(this.originalObservation, "original observation"),
       );
-      this.resumedHash = metadata(latestTool.content, "contentSha256");
+      this.resumedHash = metadata(
+        toolResultDisplayText(latestTool.content),
+        "contentSha256",
+      );
       return testModelOutput(prepared, {
         role: "assistant",
         content: "resume historical get verified",
@@ -122,10 +128,10 @@ class HistoricalReadModel extends TestModelClient {
           file_path: "version.ts",
         });
       case 1:
-        if (!latestTool?.content.includes("version-one-marker")) {
+        if (!latestText?.includes("version-one-marker")) {
           throw new Error("Initial Read did not return file v1.");
         }
-        this.originalObservation = latestTool.content;
+        this.originalObservation = latestText;
         return this.toolCall(prepared, options, "Edit", {
           file_path: "version.ts",
           old_string: "version-one-marker",
@@ -138,17 +144,26 @@ class HistoricalReadModel extends TestModelClient {
           tool_names: ["Read"],
         });
       case 3:
-        this.source = metadata(latestTool!.content, "source");
-        this.originalHash = metadata(latestTool!.content, "contentSha256");
+        this.source = metadata(
+          requireString(latestText, "RecallSearch result"),
+          "source",
+        );
+        this.originalHash = metadata(
+          requireString(latestText, "RecallSearch result"),
+          "contentSha256",
+        );
         return this.toolCall(prepared, options, "RecallGet", {
           source: this.source,
         });
       case 4:
         expectHistoricalGet(
-          latestTool!.content,
+          requireString(latestText, "RecallGet result"),
           requireString(this.originalObservation, "original observation"),
         );
-        if (metadata(latestTool!.content, "contentSha256") !== this.originalHash) {
+        if (
+          metadata(requireString(latestText, "RecallGet result"), "contentSha256") !==
+          this.originalHash
+        ) {
           throw new Error("RecallGet hash changed from the search hit hash.");
         }
         return this.toolCall(prepared, options, "Read", {
@@ -156,8 +171,8 @@ class HistoricalReadModel extends TestModelClient {
         });
       case 5:
         if (
-          !latestTool?.content.includes("version-two-marker") ||
-          latestTool.content.includes("version-one-marker")
+          !latestText?.includes("version-two-marker") ||
+          latestText.includes("version-one-marker")
         ) {
           throw new Error("Current Read did not return file v2.");
         }

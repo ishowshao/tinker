@@ -16,6 +16,7 @@ import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
 import { createWriteToolExecutor } from "./write";
+import { createViewImageToolExecutor } from "./view-image";
 import { TurnUndoManager } from "./turn-undo-manager";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import type {
@@ -39,6 +40,7 @@ import {
   DEFAULT_PUBLIC_TOOLING_CONFIG,
   type PublicToolingConfig,
 } from "../cli/public-config-contract";
+import type { ImageAssetStore } from "../image/image-asset-store";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolExecutor>();
@@ -159,6 +161,8 @@ export function createDefaultTooling(options: {
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
   enableTurnUndo?: boolean;
+  imageAssetStore?: ImageAssetStore;
+  supportsViewImage?: boolean;
   bashGuard?: {
     readonly surface: "tui" | "one-shot";
     confirm(
@@ -206,6 +210,14 @@ export function createDefaultTooling(options: {
       maxContentBytes: options.maxReadContentBytes,
     }),
   );
+  if (options.supportsViewImage === true) {
+    if (options.imageAssetStore === undefined) {
+      throw new Error("ViewImage tooling requires an image asset store.");
+    }
+    registry.register(
+      createViewImageToolExecutor({ imageAssetStore: options.imageAssetStore }),
+    );
+  }
   registry.register(
     createRecallSearchToolExecutor({ historyReader: options.historyReader }),
   );

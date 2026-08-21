@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { textToolResultContent } from "../agent/tool-result-content";
 import { Database } from "bun:sqlite";
 import {
   chmod,
@@ -258,7 +259,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
             filePath: "README.md",
             content: "hello",
           },
-          observation: "Read succeeded.",
+          observation: textToolResultContent("Read succeeded."),
         },
       ]);
       store.finishIterationForContinuation(firstIteration);
@@ -413,7 +414,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
             filePath: "README.md",
             content: "done",
           },
-          observation: "Read succeeded.",
+          observation: textToolResultContent("Read succeeded."),
         },
       ]);
       await store.abandon();

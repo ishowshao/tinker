@@ -64,6 +64,7 @@ describe("public contract documentation rendering", () => {
       parseModelProfiles(example ?? "", `README example ${index + 1}`);
     }
     expect(examples[0]).toContain('"inputModalities": [');
+    expect(examples[0]).toContain('"toolResultModalities": [');
     expect(examples[0]).toContain('"supportedEfforts": [');
     expect(examples[1]).toContain('"image"');
     expect(examples[2]).toContain('"memory": {');

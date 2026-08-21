@@ -7,7 +7,11 @@ import {
   type PromptPrefixFingerprint,
 } from "../model/prompt-prefix-hash";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
-import { estimatePromptSegments } from "../model/token-estimator";
+import {
+  estimatePromptSegments,
+  guardedContextTokens,
+  type RawContextBreakdown,
+} from "../model/token-estimator";
 import type { ToolDefinition } from "../tools/types";
 import { activeOverrideManifestHash } from "./compiled-context-hash";
 import { CompiledContextError } from "./compiled-context-validator";
@@ -148,11 +152,10 @@ export class SwapPlanner {
     validatePlanningInput(input);
     const activeFingerprint = promptPrefixFingerprint(input.activePrepared);
     assertActiveFingerprint(input, activeFingerprint);
-    const rawTokensBefore = estimatePromptSegments(
-      input.activePrepared.promptSegments,
-    ).totalTokens;
+    const activeBreakdown = estimatePromptSegments(input.activePrepared.promptSegments);
+    const rawTokensBefore = activeBreakdown.totalTokens;
     const guardedTokensBefore = guardTokens(
-      rawTokensBefore,
+      activeBreakdown,
       input.activeUsage.correctionFactor,
     );
     const targetTokens = planningTarget(input);
@@ -238,12 +241,13 @@ export class SwapPlanner {
         );
       }
       assertProspectiveConfiguration(input.activePrepared, prepared);
-      const rawTokens = estimatePromptSegments(prepared.promptSegments).totalTokens;
+      const breakdown = estimatePromptSegments(prepared.promptSegments);
+      const rawTokens = breakdown.totalTokens;
       const projection = Object.freeze({
         count,
         prepared,
         rawTokens,
-        guardedTokens: guardTokens(rawTokens, input.activeUsage.correctionFactor),
+        guardedTokens: guardTokens(breakdown, input.activeUsage.correctionFactor),
       });
       projectionCache.set(count, projection);
       return projection;
@@ -615,14 +619,15 @@ function basicExclusionReason(input: {
   ) {
     return "active_turn_unconsumed";
   }
-  if (
-    Buffer.byteLength(input.message.content, "utf8") < input.minimumObservationBytes
-  ) {
-    return "observation_too_small";
-  }
   const raw = input.result.completion.raw;
   if (!isSwappableRawResult(raw)) {
     return "raw_kind_not_allowlisted";
+  }
+  if (
+    raw.kind !== "view_image" &&
+    Buffer.byteLength(input.message.displayText, "utf8") < input.minimumObservationBytes
+  ) {
+    return "observation_too_small";
   }
   if (
     (raw.kind === "bash" && raw.status === "running") ||
@@ -742,8 +747,8 @@ function increment(counts: Map<string, number>, key: string): void {
   counts.set(key, (counts.get(key) ?? 0) + 1);
 }
 
-function guardTokens(rawTokens: number, correctionFactor: number): number {
-  return Math.ceil(rawTokens * correctionFactor);
+function guardTokens(breakdown: RawContextBreakdown, correctionFactor: number): number {
+  return guardedContextTokens(breakdown, correctionFactor);
 }
 
 function isCanonicalPlanningError(error: unknown): boolean {

@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import {
+  textToolResultContent,
+  toolResultDisplayText,
+} from "../agent/tool-result-content";
 import { formatMessageSource } from "../context/context-source";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
@@ -60,7 +64,8 @@ describe("SessionHistoryReader", () => {
         expect(page.nextByteOffset).toBe(page.byteOffset + page.returnedBytes);
         byteOffset = page.nextByteOffset;
       }
-      expect(pages.join("")).toBe(toolMessage.content);
+      const toolText = toolResultDisplayText(toolMessage.content);
+      expect(pages.join("")).toBe(toolText);
 
       const systemMessage = first.store.loadProtocolView().messages[0];
       expectRecallError(
@@ -83,7 +88,7 @@ describe("SessionHistoryReader", () => {
       );
 
       const chineseByte = Buffer.byteLength(
-        toolMessage.content.slice(0, toolMessage.content.indexOf("历")),
+        toolText.slice(0, toolText.indexOf("历")),
         "utf8",
       );
       expectRecallError(
@@ -94,7 +99,7 @@ describe("SessionHistoryReader", () => {
         () =>
           reader.get({
             source,
-            byteOffset: Buffer.byteLength(toolMessage.content, "utf8"),
+            byteOffset: Buffer.byteLength(toolText, "utf8"),
             byteLimit: 256,
           }),
         "RECALL_PAGE_INVALID",
@@ -353,7 +358,7 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
         filePath: "src/foo.ts",
         content: "v1",
       },
-      observation,
+      observation: textToolResultContent(observation),
     },
   ]);
   store.finishIterationForContinuation(iteration);
@@ -414,7 +419,7 @@ async function createHistoryFixture(workspaceRoot: string): Promise<HistoryFixtu
         toolName: "RecallSearch",
         error: "fixture",
       },
-      observation: "recursive-secret must never be indexed",
+      observation: textToolResultContent("recursive-secret must never be indexed"),
     },
   ]);
   const recallToolMessage = store

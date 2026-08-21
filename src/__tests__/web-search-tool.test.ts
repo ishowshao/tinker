@@ -312,14 +312,14 @@ describe("WebSearch observation", () => {
 
     const observation = new ObservationBuilder().build({ call, raw });
 
-    expect(observation.content).toContain(
+    expect(observation.displayText).toContain(
       'Web search results for query "bun 2.0 release notes" (2 results):',
     );
-    expect(observation.content).toContain("1. Bun 2.0 released");
-    expect(observation.content).toContain("   URL: https://bun.sh/blog/bun-v2");
-    expect(observation.content).toContain("   Published: 2026-06-01T00:00:00.000Z");
-    expect(observation.content).toContain("   - Bun 2.0 ships a faster runtime.");
-    expect(observation.content).toContain("2. https://example.com/untitled");
+    expect(observation.displayText).toContain("1. Bun 2.0 released");
+    expect(observation.displayText).toContain("   URL: https://bun.sh/blog/bun-v2");
+    expect(observation.displayText).toContain("   Published: 2026-06-01T00:00:00.000Z");
+    expect(observation.displayText).toContain("   - Bun 2.0 ships a faster runtime.");
+    expect(observation.displayText).toContain("2. https://example.com/untitled");
   });
 
   test("renders empty results and failures", async () => {
@@ -333,7 +333,7 @@ describe("WebSearch observation", () => {
     const raw = await tool.execute(call.args, call);
     const builder = new ObservationBuilder();
 
-    expect(builder.build({ call, raw }).content).toContain("(no results)");
+    expect(builder.build({ call, raw }).displayText).toContain("(no results)");
 
     const failure = builder.build({
       call,
@@ -344,7 +344,7 @@ describe("WebSearch observation", () => {
         error: "Exa /search returned HTTP 429",
       },
     });
-    expect(failure.content).toBe(
+    expect(failure.displayText).toBe(
       'WebSearch failed for query="no hits": Exa /search returned HTTP 429',
     );
   });

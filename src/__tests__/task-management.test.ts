@@ -558,7 +558,7 @@ describe("background task management", () => {
       expect(completedOutput.preview).toBe(foreground.preview);
       expect(completedOutput.truncated).toBe(foreground.truncated);
       expect(completedOutput.omittedLines).toBe(foreground.omittedLines);
-      expect(observation.content).toContain(`preview:\n${completedOutput.preview}`);
+      expect(observation.displayText).toContain(`preview:\n${completedOutput.preview}`);
     } finally {
       await tooling.dispose();
       await rm(workspace, { recursive: true });
@@ -726,7 +726,7 @@ describe("background task management", () => {
         args: {},
       });
       const list = await tooling.runtime.execute(listCall);
-      expect(observations.build({ call: listCall, raw: list }).content).toContain(
+      expect(observations.build({ call: listCall, raw: list }).displayText).toContain(
         `taskId=${background.taskId}`,
       );
 
@@ -737,8 +737,8 @@ describe("background task management", () => {
       });
       const stopped = await tooling.runtime.execute(stopCall);
       const stopObservation = observations.build({ call: stopCall, raw: stopped });
-      expect(stopObservation.content).toContain("Task stopped.");
-      expect(stopObservation.content).toContain("signal=SIGTERM");
+      expect(stopObservation.displayText).toContain("Task stopped.");
+      expect(stopObservation.displayText).toContain("signal=SIGTERM");
     } finally {
       await tooling.dispose();
       await rm(workspace, { recursive: true });

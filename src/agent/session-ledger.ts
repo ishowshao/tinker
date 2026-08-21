@@ -26,12 +26,15 @@ import {
 } from "../context/context-protocol-validator";
 import {
   CURRENT_TOOL_OBSERVATION_FORMAT,
+  canonicalToolResultContentHash,
   contentHash,
+  displayTextForCompletion,
   immutableCanonicalClone,
   immutableRecord,
   observationForCompletion,
   rawResultHash,
   userMessageHash,
+  validateReturnedToolObservation,
   type CanonicalMessageRecord,
   type ProtocolContextView,
   type ProtocolFrame,
@@ -583,6 +586,7 @@ export class InMemorySessionLedger implements SessionLedger {
       assertSameToolCall(expectedCall, completionInput.call);
       validateCompletionInput(completionInput);
       const content = observationForCompletion(completionInput);
+      const displayText = displayTextForCompletion(completionInput);
       const createdAt = this.clock();
       const messageId = this.input.idFactory.createMessageId();
       const message = immutableRecord<CanonicalMessageRecord>({
@@ -590,7 +594,7 @@ export class InMemorySessionLedger implements SessionLedger {
         sessionId: this.input.sessionId,
         frameId: frameBefore.frameId,
         ordinal: this.view.messages.length + messages.length + 1,
-        contentSha256: contentHash(content),
+        contentSha256: canonicalToolResultContentHash(content),
         createdAt,
         role: "tool",
         turnId: pending.turn.turnId,
@@ -599,6 +603,7 @@ export class InMemorySessionLedger implements SessionLedger {
         providerToolCallId: expectedCall.providerToolCallId,
         name: expectedCall.name,
         content,
+        displayText,
         origin: completionInput.kind === "returned" ? "tool" : "runtime",
       });
       const completion = canonicalCompletion(completionInput);
@@ -608,7 +613,7 @@ export class InMemorySessionLedger implements SessionLedger {
         toolCallId: expectedCall.toolCallId,
         toolMessageId: messageId,
         completion,
-        observationSha256: contentHash(content),
+        observationSha256: canonicalToolResultContentHash(content),
         createdAt,
       });
       messages.push(message);
@@ -1006,9 +1011,11 @@ function canonicalCompletion(input: ToolCompletionInput): ToolCompletion {
 
 function validateCompletionInput(input: ToolCompletionInput): void {
   if (input.kind === "returned") {
-    if (typeof input.observation !== "string") {
-      throw new Error("Returned tool completion observation must be a string.");
-    }
+    validateReturnedToolObservation({
+      toolName: input.call.name,
+      raw: input.raw,
+      content: input.observation,
+    });
     immutableCanonicalClone(input.raw);
     return;
   }

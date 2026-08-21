@@ -2,12 +2,13 @@ import type { AgentMessage, AssistantMessage, IterationIdentity } from "../agent
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import type { ToolDefinition } from "../tools/types";
 import type { ImageAssetStore } from "../image/image-asset-store";
-import type { CodePointRange, ImageAssetId, ImageMimeType } from "../image/image-types";
+import type { ImageAssetRef } from "../image/image-types";
 import type { ReasoningEffortController } from "./reasoning-effort";
 
 export interface ModelClient {
   readonly messageProtocol: ModelMessageProtocol;
-  readonly inputModalities?: readonly ("text" | "image")[];
+  readonly inputModalities: readonly ModelInputModality[];
+  readonly toolResultModalities: readonly ToolResultModality[];
   readonly reasoningEffort?: ReasoningEffortController;
   prepare(input: ModelRequestInput): PreparedModelRequest;
   materialize?(
@@ -18,6 +19,59 @@ export interface ModelClient {
     prepared: PreparedModelRequest,
     options: ModelRequestOptions,
   ): Promise<ModelRequestOutput>;
+}
+
+export type ModelInputModality = "text" | "image";
+export type ToolResultModality = "text" | "image";
+
+export function validateModelModalities(input: {
+  readonly profileName?: string;
+  readonly adapter: ModelMessageProtocol["adapter"];
+  readonly inputModalities: readonly ModelInputModality[];
+  readonly toolResultModalities: readonly ToolResultModality[];
+  readonly adapterToolResultModalities: readonly ToolResultModality[];
+}): {
+  readonly inputModalities: readonly ModelInputModality[];
+  readonly toolResultModalities: readonly ToolResultModality[];
+} {
+  const inputModalities = normalizeModalities(input.inputModalities, "model input");
+  const toolResultModalities = normalizeModalities(
+    input.toolResultModalities,
+    "tool result",
+  );
+  if (toolResultModalities.includes("image") && !inputModalities.includes("image")) {
+    throw new Error(
+      'Image tool results require "image" in the model input modalities.',
+    );
+  }
+  const unsupported = toolResultModalities.find(
+    (modality) => !input.adapterToolResultModalities.includes(modality),
+  );
+  if (unsupported !== undefined) {
+    const subject =
+      input.profileName === undefined
+        ? "Model configuration"
+        : `Profile ${JSON.stringify(input.profileName)}`;
+    throw new Error(
+      `${subject} declares ${unsupported} tool results, but adapter ${JSON.stringify(input.adapter)} does not support them.`,
+    );
+  }
+  return Object.freeze({ inputModalities, toolResultModalities });
+}
+
+function normalizeModalities(
+  modalities: readonly (ModelInputModality | ToolResultModality)[],
+  label: string,
+): readonly ("text" | "image")[] {
+  if (
+    modalities.length === 0 ||
+    modalities.some((modality) => modality !== "text" && modality !== "image") ||
+    new Set(modalities).size !== modalities.length ||
+    !modalities.includes("text")
+  ) {
+    throw new Error(`${label} modalities must be unique and include "text".`);
+  }
+  return Object.freeze(modalities.includes("image") ? ["text", "image"] : ["text"]);
 }
 
 export class ModelRequestMediaAggregateError extends Error {
@@ -65,17 +119,14 @@ export type PreparedPromptSegmentKind =
 export type PreparedPromptSegment = {
   kind: PreparedPromptSegmentKind;
   normalizedText: string;
-  media?: readonly PreparedMediaDescriptor[];
+  media?: readonly PreparedMediaOccurrence[];
 };
 
-export type PreparedMediaDescriptor = {
-  assetId: ImageAssetId;
-  label: string;
-  range: CodePointRange;
-  mimeType: ImageMimeType;
-  byteLength: number;
-  sourceWidth: number;
-  sourceHeight: number;
+export type PreparedMediaOccurrence = {
+  readonly asset: ImageAssetRef;
+  readonly source: "user_attachment" | "tool_result";
+  readonly messageOrdinal: number;
+  readonly blockPosition: number;
   width: number;
   height: number;
   planningTokens: number;

@@ -188,8 +188,11 @@ describe("OpenAI multimodal mapping and materialization", () => {
       });
 
       expect(materialized.promptSegments[0]?.media?.[0]).toMatchObject({
-        sourceWidth: 3000,
-        sourceHeight: 1000,
+        asset: {
+          width: 3000,
+          height: 1000,
+        },
+        source: "user_attachment",
         width: 2048,
         height: 683,
         planningTokens: 5504,

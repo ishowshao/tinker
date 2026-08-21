@@ -1,4 +1,5 @@
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
+import { toolResultText } from "../agent/tool-result-content";
 import type { CompiledContextEntry, SwapOverride } from "./context-revision";
 import {
   contentHash,
@@ -132,7 +133,7 @@ function renderedMessageDescriptor(entry: CompiledContextEntry): unknown {
         contentSha256:
           entry.representation === "canonical"
             ? entry.sourceContentSha256
-            : contentHash(message.content),
+            : contentHash(toolResultText(message.content)),
       };
   }
 }

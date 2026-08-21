@@ -66,6 +66,8 @@ export function createModelClient(
     | "apiKey"
     | "apiBase"
     | "inputModalities"
+    | "toolResultModalities"
+    | "profileName"
   >,
   env: NodeJS.ProcessEnv = process.env,
   reasoningEffort?: ReasoningEffortController,
@@ -78,6 +80,7 @@ export function createModelClient(
       model: config.modelName,
       contextBudget: config.contextBudget,
       inputModalities: config.inputModalities,
+      toolResultModalities: config.toolResultModalities,
       ...(activeReasoningEffort === undefined
         ? {}
         : { reasoningEffort: activeReasoningEffort }),
@@ -95,6 +98,8 @@ export function createModelClient(
     stream: config.stream,
     contextBudget: config.contextBudget,
     inputModalities: config.inputModalities,
+    toolResultModalities: config.toolResultModalities,
+    profileName: config.profileName,
     ...(activeReasoningEffort === undefined
       ? {}
       : { reasoningEffort: activeReasoningEffort }),

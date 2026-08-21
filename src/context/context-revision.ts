@@ -133,12 +133,18 @@ export type SwapOverride = {
   readonly originalBytes: number;
   readonly renderedBytes: number;
   readonly byteSavings: number;
-  readonly rendererFormat?: "swap-observation-v1" | "skill-activation-receipt-v1";
+  readonly rendererFormat?:
+    | "swap-observation-v1"
+    | "swap-tool-image-v1"
+    | "skill-activation-receipt-v1";
 };
 
 export type StoredContextOverrideV8 = SwapOverride & {
   readonly introducedRevisionId: ContextRevisionId;
-  readonly rendererFormat: "swap-observation-v1" | "skill-activation-receipt-v1";
+  readonly rendererFormat:
+    | "swap-observation-v1"
+    | "swap-tool-image-v1"
+    | "skill-activation-receipt-v1";
   readonly createdAt: string;
 };
 

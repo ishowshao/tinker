@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../agent/types";
+import { textToolResultContent } from "../agent/tool-result-content";
 import type { ContextRevisionId } from "../ids/runtime-id";
 import { CompiledContextValidator } from "./compiled-context-validator";
 import {
@@ -263,7 +264,7 @@ function swappedToolMessage(
   }
   return {
     ...message,
-    content: override.renderedContent,
+    content: textToolResultContent(override.renderedContent),
   };
 }
 

@@ -1,4 +1,5 @@
 import type { ToolCall } from "../agent/types";
+import type { ImageAssetRef } from "../image/image-types";
 import type { SessionId } from "../ids/runtime-id";
 import type {
   RecallGetPage,
@@ -35,6 +36,14 @@ export type ReadFileRawResult = {
   startLine?: number;
   endLine?: number;
   sha256?: string;
+  error?: string;
+};
+
+export type ViewImageRawResult = {
+  ok: boolean;
+  filePath: string;
+  originalName?: string;
+  asset?: ImageAssetRef;
   error?: string;
 };
 
@@ -367,6 +376,7 @@ export type McpToolRawResult = {
 
 export type ToolRawResultByKind = {
   read: ReadFileRawResult;
+  view_image: ViewImageRawResult;
   write: WriteFileRawResult;
   edit: EditFileRawResult;
   delete: DeleteFileRawResult;

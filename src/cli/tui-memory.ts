@@ -47,6 +47,7 @@ export async function initializeTuiMemory(input: {
             stream: profile.stream,
             contextBudget: memoryConfig.contextBudget,
             inputModalities: profile.inputModalities,
+            toolResultModalities: profile.toolResultModalities,
           },
           input.env,
         );

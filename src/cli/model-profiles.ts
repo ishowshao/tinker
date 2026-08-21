@@ -13,6 +13,7 @@ import {
 } from "./public-config-contract";
 import type { MemoryEmbeddingConfig } from "../memory/contracts";
 import type { ReasoningEffortConfig } from "../model/reasoning-effort";
+import type { ModelInputModality, ToolResultModality } from "../model/model-client";
 
 export type ModelProfile = {
   readonly name: string;
@@ -26,9 +27,9 @@ export type ModelProfile = {
   readonly includeReasoningContent: boolean;
   readonly stream: boolean;
   readonly inputModalities: readonly ModelInputModality[];
+  readonly toolResultModalities: readonly ToolResultModality[];
 };
-
-export type ModelInputModality = "text" | "image";
+export type { ModelInputModality, ToolResultModality } from "../model/model-client";
 
 export type ModelProfiles = {
   readonly defaultProfile: string;
@@ -272,6 +273,15 @@ function parseProfile(
     value.inputModalities,
     `${where}: "inputModalities"`,
   );
+  const toolResultModalities = parseToolResultModalities(
+    value.toolResultModalities,
+    `${where}: "toolResultModalities"`,
+  );
+  if (toolResultModalities.includes("image") && !inputModalities.includes("image")) {
+    throw new Error(
+      `${where}: "toolResultModalities" cannot include "image" unless "inputModalities" also includes "image".`,
+    );
+  }
   createModelContextProfile({
     contextWindowTokens,
     maxSupportedOutputTokens,
@@ -289,7 +299,36 @@ function parseProfile(
     includeReasoningContent,
     stream,
     inputModalities,
+    toolResultModalities,
   });
+}
+
+function parseToolResultModalities(
+  value: unknown,
+  name: string,
+): readonly ToolResultModality[] {
+  if (value === undefined) {
+    return modelProfileField("toolResultModalities").defaultValue;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${name} must be a non-empty array.`);
+  }
+  const modalities = value.map((rawEntry): ToolResultModality => {
+    const entry: unknown = rawEntry;
+    if (entry !== "text" && entry !== "image") {
+      throw new Error(`${name} contains an unsupported modality.`);
+    }
+    return entry;
+  });
+  if (new Set(modalities).size !== modalities.length) {
+    throw new Error(`${name} must not contain duplicates.`);
+  }
+  if (!modalities.includes("text")) {
+    throw new Error(`${name} must include "text".`);
+  }
+  return Object.freeze(
+    modalities.includes("image") ? (["text", "image"] as const) : (["text"] as const),
+  );
 }
 
 function parseReasoning(value: unknown, where: string): ReasoningEffortConfig {

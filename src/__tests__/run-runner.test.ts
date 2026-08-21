@@ -50,6 +50,7 @@ function testRunnerConfig(input: {
     contextProfile: TEST_CONTEXT_PROFILE,
     contextBudget: TEST_CONTEXT_BUDGET,
     inputModalities: Object.freeze(["text"] as const),
+    toolResultModalities: Object.freeze(["text"] as const),
     bashGuardMode: "guard",
     bashGuardSource: "default",
   };

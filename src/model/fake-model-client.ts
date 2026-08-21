@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
+import { toolResultDisplayText } from "../agent/tool-result-content";
 import { cancellationError } from "../agent/turn-cancellation";
 import {
   IMAGE_INPUT_POLICY,
@@ -19,15 +20,17 @@ import type {
   ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
-  PreparedMediaDescriptor,
+  PreparedMediaOccurrence,
   PreparedModelRequest,
   PreparedPromptSegment,
 } from "./model-client";
+import { validateModelModalities } from "./model-client";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 import { estimatePromptSegments } from "./token-estimator";
 
 export class FakeModelClient implements ModelClient {
   readonly inputModalities: readonly ("text" | "image")[];
+  readonly toolResultModalities: readonly ("text" | "image")[];
   readonly reasoningEffort?: ReasoningEffortController;
   readonly messageProtocol: ModelMessageProtocol = Object.freeze({
     adapter: "fake",
@@ -43,17 +46,20 @@ export class FakeModelClient implements ModelClient {
       model: string;
       contextBudget: ModelContextBudget;
       inputModalities?: readonly ("text" | "image")[];
+      toolResultModalities?: readonly ("text" | "image")[];
       reasoningEffort?: ReasoningEffortController;
       requestLogPath?: string;
     },
   ) {
     this.reasoningEffort = options.reasoningEffort;
-    this.inputModalities = Object.freeze([
-      ...(options.inputModalities ?? (["text"] as const)),
-    ]);
-    if (!this.inputModalities.includes("text")) {
-      throw new Error('Fake model input modalities must include "text".');
-    }
+    const modalities = validateModelModalities({
+      adapter: this.messageProtocol.adapter,
+      inputModalities: options.inputModalities ?? ["text"],
+      toolResultModalities: options.toolResultModalities ?? ["text"],
+      adapterToolResultModalities: ["text", "image"],
+    });
+    this.inputModalities = modalities.inputModalities;
+    this.toolResultModalities = modalities.toolResultModalities;
   }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {
@@ -63,7 +69,9 @@ export class FakeModelClient implements ModelClient {
         normalizedText: stableJsonStringify(tool),
       }),
     );
-    const messageSegments = input.messages.map(toPromptSegment);
+    const messageSegments = input.messages.map((message, index) =>
+      toPromptSegment(message, index + 1),
+    );
     const mediaOccurrenceCount = messageSegments.reduce(
       (total, segment) => total + (segment.media?.length ?? 0),
       0,
@@ -77,6 +85,7 @@ export class FakeModelClient implements ModelClient {
         model: this.options.model,
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
         inputModalities: this.inputModalities,
+        toolResultModalities: this.toolResultModalities,
       }),
     );
     const prepared: PreparedModelRequest = Object.freeze({
@@ -348,7 +357,7 @@ export class FakeModelClient implements ModelClient {
         description: "Exercise static history live tail",
       });
     }
-    if (!bash.content.includes("PTY_STATIC_LIVE_LINE_20")) {
+    if (!toolMessageText(bash).includes("PTY_STATIC_LIVE_LINE_20")) {
       throw new Error("PTY static-history Bash output was incomplete.");
     }
     return textOutput(prepared, "PTY_STATIC_LIVE_DONE");
@@ -492,9 +501,9 @@ export class FakeModelClient implements ModelClient {
         });
       }
       if (
-        !bash.content.includes("Bash failed") ||
-        !bash.content.includes("exitCode=7") ||
-        !bash.content.includes("PTY_TOOL_FAILURE_OUTPUT")
+        !toolMessageText(bash).includes("Bash failed") ||
+        !toolMessageText(bash).includes("exitCode=7") ||
+        !toolMessageText(bash).includes("PTY_TOOL_FAILURE_OUTPUT")
       ) {
         throw new Error("PTY Bash failure branch returned an unexpected result.");
       }
@@ -524,7 +533,7 @@ export class FakeModelClient implements ModelClient {
         content: "alpha\n",
       });
     }
-    if (!write.content.includes("Write succeeded")) {
+    if (!toolMessageText(write).includes("Write succeeded")) {
       throw new Error("PTY Write tool did not succeed.");
     }
 
@@ -536,7 +545,7 @@ export class FakeModelClient implements ModelClient {
         new_string: "beta",
       });
     }
-    if (!edit.content.includes("Edit succeeded")) {
+    if (!toolMessageText(edit).includes("Edit succeeded")) {
       throw new Error("PTY Edit tool did not succeed.");
     }
 
@@ -548,8 +557,8 @@ export class FakeModelClient implements ModelClient {
       });
     }
     if (
-      !bash.content.includes("Bash completed") ||
-      !bash.content.includes("PTY_BASH_OK:beta")
+      !toolMessageText(bash).includes("Bash completed") ||
+      !toolMessageText(bash).includes("PTY_BASH_OK:beta")
     ) {
       throw new Error("PTY Bash tool did not verify the edited file.");
     }
@@ -574,7 +583,7 @@ export class FakeModelClient implements ModelClient {
         file_path: "pty-undo-modified.txt",
       });
     }
-    if (!read.content.includes("Read succeeded")) {
+    if (!toolMessageText(read).includes("Read succeeded")) {
       throw new Error("PTY undo Read tool did not succeed.");
     }
 
@@ -585,7 +594,10 @@ export class FakeModelClient implements ModelClient {
         content: "after undo turn\n",
       });
     }
-    if (!writes[0]?.content.includes("Write succeeded")) {
+    if (
+      writes[0] === undefined ||
+      !toolMessageText(writes[0]).includes("Write succeeded")
+    ) {
       throw new Error("PTY undo modifying Write did not succeed.");
     }
     if (writes.length === 1) {
@@ -594,7 +606,10 @@ export class FakeModelClient implements ModelClient {
         content: "created by undo turn\n",
       });
     }
-    if (!writes[1]?.content.includes("Write succeeded")) {
+    if (
+      writes[1] === undefined ||
+      !toolMessageText(writes[1]).includes("Write succeeded")
+    ) {
       throw new Error("PTY undo creating Write did not succeed.");
     }
 
@@ -604,7 +619,7 @@ export class FakeModelClient implements ModelClient {
         file_path: "pty-undo-deleted.bin",
       });
     }
-    if (!deletion.content.includes("Delete succeeded")) {
+    if (!toolMessageText(deletion).includes("Delete succeeded")) {
       throw new Error("PTY undo Delete tool did not succeed.");
     }
     return textOutput(prepared, "PTY_UNDO_MUTATIONS_DONE");
@@ -633,10 +648,10 @@ export class FakeModelClient implements ModelClient {
         run_in_background: true,
       });
     }
-    if (!bash.content.includes("Bash command is running in background")) {
+    if (!toolMessageText(bash).includes("Bash command is running in background")) {
       throw new Error("PTY Bash task did not enter the background.");
     }
-    const taskId = requireObservationValue(bash.content, "taskId");
+    const taskId = requireObservationValue(toolMessageText(bash), "taskId");
 
     if (prompt === "PTY_BACKGROUND_QUIT") {
       return textOutput(prepared, "PTY_BACKGROUND_RUNNING");
@@ -644,7 +659,10 @@ export class FakeModelClient implements ModelClient {
 
     const outputs = tools.filter((message) => message.name === "TaskOutput");
     const output = outputs.at(-1);
-    if (output === undefined || !output.content.includes("PTY_BACKGROUND_READY")) {
+    if (
+      output === undefined ||
+      !toolMessageText(output).includes("PTY_BACKGROUND_READY")
+    ) {
       if (outputs.length >= 20) {
         throw new Error("PTY background task did not produce its ready marker.");
       }
@@ -652,7 +670,7 @@ export class FakeModelClient implements ModelClient {
         task_id: taskId,
       });
     }
-    if (!output.content.includes(`taskId=${taskId}`)) {
+    if (!toolMessageText(output).includes(`taskId=${taskId}`)) {
       throw new Error("PTY TaskOutput returned the wrong task.");
     }
 
@@ -663,8 +681,8 @@ export class FakeModelClient implements ModelClient {
       });
     }
     if (
-      !stop.content.includes(`taskId=${taskId}`) ||
-      !stop.content.includes("status=killed")
+      !toolMessageText(stop).includes(`taskId=${taskId}`) ||
+      !toolMessageText(stop).includes("status=killed")
     ) {
       throw new Error("PTY TaskStop did not kill the background task.");
     }
@@ -698,14 +716,17 @@ export class FakeModelClient implements ModelClient {
         timeout: 25,
       });
     }
-    if (!bash.content.includes("taskId=") || !bash.content.includes("tty=true")) {
+    if (
+      !toolMessageText(bash).includes("taskId=") ||
+      !toolMessageText(bash).includes("tty=true")
+    ) {
       throw new Error("PTY Bash task did not return an interactive task ID.");
     }
-    const taskId = requireObservationValue(bash.content, "taskId");
+    const taskId = requireObservationValue(toolMessageText(bash), "taskId");
 
     const outputs = tools.filter((message) => message.name === "TaskOutput");
     const output = outputs.at(-1);
-    if (output === undefined || !output.content.includes(">>>")) {
+    if (output === undefined || !toolMessageText(output).includes(">>>")) {
       if (outputs.length >= 20) {
         throw new Error("Interactive Python fixture did not show its prompt.");
       }
@@ -728,7 +749,7 @@ export class FakeModelClient implements ModelClient {
 
     const latestInput = inputs.at(-1);
     const expected = prompt === "PTY_INTERACTIVE_QUIT" ? "PTY_INTERACTIVE_PID=" : "42";
-    if (!latestInput?.content.includes(expected)) {
+    if (latestInput === undefined || !toolMessageText(latestInput).includes(expected)) {
       if (inputs.length >= 20) {
         throw new Error(`Interactive Python fixture did not show ${expected}.`);
       }
@@ -742,7 +763,9 @@ export class FakeModelClient implements ModelClient {
     if (prompt === "PTY_INTERACTIVE_QUIT") {
       return textOutput(prepared, "PTY_INTERACTIVE_RUNNING");
     }
-    if (!inputs.some((message) => message.content.includes("status=completed"))) {
+    if (
+      !inputs.some((message) => toolMessageText(message).includes("status=completed"))
+    ) {
       return toolCallOutput(prepared, options, "TaskInput", {
         task_id: taskId,
         chars: "exit()\n",
@@ -777,7 +800,7 @@ export class FakeModelClient implements ModelClient {
         content: "PTY_RESUME_SIDE_EFFECT\n",
       });
     }
-    if (!write.content.includes("Write succeeded")) {
+    if (!toolMessageText(write).includes("Write succeeded")) {
       throw new Error("PTY resume seed Write did not succeed.");
     }
     return textOutput(prepared, "PTY_RESUME_SEED_DONE");
@@ -809,7 +832,7 @@ export class FakeModelClient implements ModelClient {
         content: "PTY_INTERRUPT_SIDE_EFFECT\n",
       });
     }
-    if (!write.content.includes("Write succeeded")) {
+    if (!toolMessageText(write).includes("Write succeeded")) {
       throw new Error("PTY interrupted Write did not succeed.");
     }
     return waitForCancellation(options.signal);
@@ -900,7 +923,7 @@ export class FakeModelClient implements ModelClient {
           content: "PTY_FORK_SHARED_HISTORY\n",
         });
       }
-      if (!write.content.includes("Write succeeded")) {
+      if (!toolMessageText(write).includes("Write succeeded")) {
         throw new Error("PTY fork seed Write did not succeed.");
       }
       return textOutput(prepared, "PTY_FORK_SEED_DONE");
@@ -977,7 +1000,7 @@ export class FakeModelClient implements ModelClient {
           file_path: "context-heavy.txt",
         });
       }
-      if (!read.content.includes("PTY_CONTEXT_ORIGINAL_MARKER")) {
+      if (!toolMessageText(read).includes("PTY_CONTEXT_ORIGINAL_MARKER")) {
         throw new Error("PTY context Read did not return the original marker.");
       }
       return textOutput(prepared, "PTY_CONTEXT_HEAVY_DONE");
@@ -1069,7 +1092,7 @@ export class FakeModelClient implements ModelClient {
           name: "pty-review",
         });
       }
-      if (!skill.content.includes("PTY_SKILL_INSTRUCTIONS")) {
+      if (!toolMessageText(skill).includes("PTY_SKILL_INSTRUCTIONS")) {
         throw new Error("PTY Skill result did not contain the fixture instructions.");
       }
       return textOutput(prepared, "PTY_SKILL_DONE");
@@ -1101,7 +1124,7 @@ export class FakeModelClient implements ModelClient {
         message: "PTY_MCP_PAYLOAD",
       });
     }
-    if (!echo.content.includes("echo: PTY_MCP_PAYLOAD")) {
+    if (!toolMessageText(echo).includes("echo: PTY_MCP_PAYLOAD")) {
       throw new Error("PTY MCP echo returned unexpected content.");
     }
     return textOutput(prepared, "PTY_MCP_DONE\n\necho: PTY_MCP_PAYLOAD");
@@ -1189,10 +1212,9 @@ export class FakeModelClient implements ModelClient {
         "tool_calls",
       );
     }
-    if (latestRecallResult.content.startsWith("Recall searched")) {
-      const source = latestRecallResult.content.match(
-        /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
-      )?.[1];
+    const recallText = toolMessageText(latestRecallResult);
+    if (recallText.startsWith("Recall searched")) {
+      const source = recallText.match(/^source=(ctx:\/\/message\/[0-9a-f-]+)$/m)?.[1];
       if (source === undefined) {
         throw new Error("Fake RecallSearch did not return a source.");
       }
@@ -1215,7 +1237,7 @@ export class FakeModelClient implements ModelClient {
         "tool_calls",
       );
     }
-    if (!latestRecallResult.content.includes("recall-smoke-marker")) {
+    if (!recallText.includes("recall-smoke-marker")) {
       throw new Error("Fake RecallGet did not recover the expected marker.");
     }
     return outputWithUsage(
@@ -1320,6 +1342,10 @@ function toolMessagesAfterLastUser(
     );
 }
 
+function toolMessageText(message: Extract<AgentMessage, { role: "tool" }>): string {
+  return toolResultDisplayText(message.content);
+}
+
 function requireMessage(
   messages: AgentMessage[],
   role: "user" | "assistant",
@@ -1390,7 +1416,7 @@ function requireToolMessage(
     (message) =>
       message.role === "tool" &&
       message.name === name &&
-      message.content.includes(content),
+      toolMessageText(message).includes(content),
   );
   if (!found) {
     throw new Error(`Fake PTY context is missing ${name} tool content ${content}.`);
@@ -1425,27 +1451,59 @@ function lastMessageIndex(
   return -1;
 }
 
-function toPromptSegment(message: AgentMessage): PreparedPromptSegment {
+function toPromptSegment(
+  message: AgentMessage,
+  messageOrdinal = 0,
+): PreparedPromptSegment {
   if (message.role === "user" && message.attachments !== undefined) {
-    const media = message.attachments.map((attachment): PreparedMediaDescriptor => {
-      const dimensions = providerImageDimensions(attachment.width, attachment.height);
-      return Object.freeze({
-        assetId: attachment.assetId,
-        label: attachment.label,
-        range: Object.freeze({ ...attachment.range }),
-        mimeType: attachment.mimeType,
-        byteLength: attachment.byteLength,
-        sourceWidth: attachment.width,
-        sourceHeight: attachment.height,
-        width: dimensions.width,
-        height: dimensions.height,
-        planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
-      });
-    });
+    const media = message.attachments.map(
+      (attachment, blockPosition): PreparedMediaOccurrence => {
+        const dimensions = providerImageDimensions(attachment.width, attachment.height);
+        return Object.freeze({
+          asset: Object.freeze({
+            assetId: attachment.assetId,
+            mimeType: attachment.mimeType,
+            byteLength: attachment.byteLength,
+            width: attachment.width,
+            height: attachment.height,
+          }),
+          source: "user_attachment",
+          messageOrdinal,
+          blockPosition,
+          width: dimensions.width,
+          height: dimensions.height,
+          planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+        });
+      },
+    );
     return Object.freeze({
       kind: "user",
       normalizedText: message.content,
       media: Object.freeze(media),
+    });
+  }
+  if (message.role === "tool") {
+    const media = message.content.flatMap((block, blockPosition) => {
+      if (block.type !== "image") {
+        return [];
+      }
+      const dimensions = providerImageDimensions(block.asset.width, block.asset.height);
+      return [
+        Object.freeze<PreparedMediaOccurrence>({
+          asset: Object.freeze({ ...block.asset }),
+          source: "tool_result",
+          messageOrdinal,
+          blockPosition,
+          width: dimensions.width,
+          height: dimensions.height,
+          planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+        }),
+      ];
+    });
+    return Object.freeze({
+      kind: "tool",
+      normalizedText: stableJsonStringify(message),
+      ...(media.length === 0 ? {} : { media: Object.freeze(media) }),
     });
   }
   return {
@@ -1465,21 +1523,15 @@ function distinctPreparedAssets(
   const assets = new Map<ImageAssetId, ImageAssetRef>();
   for (const segment of segments) {
     for (const media of segment.media ?? []) {
-      const asset = Object.freeze({
-        assetId: media.assetId,
-        mimeType: media.mimeType,
-        byteLength: media.byteLength,
-        width: media.sourceWidth,
-        height: media.sourceHeight,
-      });
-      const existing = assets.get(media.assetId);
+      const asset = media.asset;
+      const existing = assets.get(asset.assetId);
       if (
         existing !== undefined &&
         stableJsonStringify(existing) !== stableJsonStringify(asset)
       ) {
-        throw new Error(`Conflicting fake image descriptors for ${media.assetId}.`);
+        throw new Error(`Conflicting fake image descriptors for ${asset.assetId}.`);
       }
-      assets.set(media.assetId, asset);
+      assets.set(asset.assetId, asset);
     }
   }
   return assets;
@@ -1503,9 +1555,11 @@ function materializedFakePromptSegments(
             ...segment,
             media: Object.freeze(
               segment.media.map((media) => {
-                const image = byId.get(media.assetId);
+                const image = byId.get(media.asset.assetId);
                 if (image === undefined) {
-                  throw new Error(`Fake image ${media.assetId} was not materialized.`);
+                  throw new Error(
+                    `Fake image ${media.asset.assetId} was not materialized.`,
+                  );
                 }
                 return Object.freeze({
                   ...media,
@@ -1537,10 +1591,9 @@ function recallMarker(
       query: marker,
     });
   }
-  if (latestRecallResult.content.startsWith("Recall searched")) {
-    const source = latestRecallResult.content.match(
-      /^source=(ctx:\/\/message\/[0-9a-f-]+)$/m,
-    )?.[1];
+  const recallText = toolMessageText(latestRecallResult);
+  if (recallText.startsWith("Recall searched")) {
+    const source = recallText.match(/^source=(ctx:\/\/message\/[0-9a-f-]+)$/m)?.[1];
     if (source === undefined) {
       throw new Error("Fake PTY RecallSearch did not return a source.");
     }
@@ -1548,7 +1601,7 @@ function recallMarker(
       source,
     });
   }
-  if (!latestRecallResult.content.includes(marker)) {
+  if (!recallText.includes(marker)) {
     throw new Error(`Fake PTY RecallGet did not recover ${marker}.`);
   }
   return textOutput(prepared, finalText);

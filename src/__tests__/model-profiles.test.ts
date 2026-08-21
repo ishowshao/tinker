@@ -51,6 +51,7 @@ describe("parseModelProfiles", () => {
       includeReasoningContent: false,
       stream: true,
       inputModalities: ["text"],
+      toolResultModalities: ["text"],
     });
 
     const gpt4o = result.profiles.get("gpt-4o");
@@ -316,6 +317,49 @@ describe("parseModelProfiles", () => {
         parseModelProfiles(profileJson({ inputModalities }), "/test/models.json"),
       ).toThrow();
     }
+  });
+
+  test("normalizes explicit image tool-result capability", () => {
+    const profile = parseModelProfiles(
+      profileJson({
+        inputModalities: ["image", "text"],
+        toolResultModalities: ["image", "text"],
+      }),
+      "/test/models.json",
+    ).profiles.get("test");
+
+    expect(profile).toMatchObject({
+      inputModalities: ["text", "image"],
+      toolResultModalities: ["text", "image"],
+    });
+  });
+
+  test("strictly validates tool-result modalities and their input dependency", () => {
+    for (const toolResultModalities of [
+      [],
+      ["text", "text"],
+      ["image"],
+      ["text", "audio"],
+    ]) {
+      expect(() =>
+        parseModelProfiles(
+          profileJson({
+            inputModalities: ["text", "image"],
+            toolResultModalities,
+          }),
+          "/test/models.json",
+        ),
+      ).toThrow();
+    }
+    expect(() =>
+      parseModelProfiles(
+        profileJson({
+          inputModalities: ["text"],
+          toolResultModalities: ["text", "image"],
+        }),
+        "/test/models.json",
+      ),
+    ).toThrow('"inputModalities" also includes "image"');
   });
 
   test("rejects profile-level image policy and legacy estimator overrides", () => {

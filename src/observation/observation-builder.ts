@@ -1,4 +1,9 @@
 import type { ToolCall } from "../agent/types";
+import type { ToolResultContent } from "../agent/types";
+import {
+  textToolResultContent,
+  toolResultDisplayText,
+} from "../agent/tool-result-content";
 import type {
   BashRawResult,
   DeleteFileRawResult,
@@ -17,60 +22,83 @@ import type {
   TaskStopRawResult,
   ToolRawResult,
   UpdatePlanRawResult,
+  ViewImageRawResult,
   WebFetchRawResult,
   WebSearchRawResult,
   WriteFileRawResult,
 } from "../tools/types";
 
 export type ToolObservation = {
-  content: string;
+  readonly content: readonly ToolResultContent[];
+  readonly displayText: string;
 };
 
 export class ObservationBuilder {
   build(input: { call: ToolCall; raw: ToolRawResult }): ToolObservation {
     switch (input.raw.kind) {
       case "glob":
-        return { content: renderGlobObservation(input.raw) };
+        return textObservation(renderGlobObservation(input.raw));
       case "grep":
-        return { content: renderGrepObservation(input.raw) };
+        return textObservation(renderGrepObservation(input.raw));
       case "read":
-        return { content: renderReadObservation(input.raw) };
+        return textObservation(renderReadObservation(input.raw));
+      case "view_image":
+        return renderViewImageObservation(input.raw);
       case "recall":
-        return { content: renderRecallObservation(input.raw) };
+        return textObservation(renderRecallObservation(input.raw));
       case "memory_search":
-        return { content: renderMemorySearchObservation(input.raw) };
+        return textObservation(renderMemorySearchObservation(input.raw));
       case "skill":
-        return { content: renderSkillObservation(input.raw) };
+        return textObservation(renderSkillObservation(input.raw));
       case "write":
-        return { content: renderWriteObservation(input.raw) };
+        return textObservation(renderWriteObservation(input.raw));
       case "edit":
-        return { content: renderEditObservation(input.raw) };
+        return textObservation(renderEditObservation(input.raw));
       case "delete":
-        return { content: renderDeleteObservation(input.raw) };
+        return textObservation(renderDeleteObservation(input.raw));
       case "bash":
-        return { content: renderBashObservation(input.raw) };
+        return textObservation(renderBashObservation(input.raw));
       case "update_plan":
-        return { content: renderUpdatePlanObservation(input.raw) };
+        return textObservation(renderUpdatePlanObservation(input.raw));
       case "task_list":
-        return { content: renderTaskListObservation(input.raw) };
+        return textObservation(renderTaskListObservation(input.raw));
       case "task_output":
-        return { content: renderTaskOutputObservation(input.raw) };
+        return textObservation(renderTaskOutputObservation(input.raw));
       case "task_input":
-        return { content: renderTaskInputObservation(input.raw) };
+        return textObservation(renderTaskInputObservation(input.raw));
       case "task_stop":
-        return { content: renderTaskStopObservation(input.raw) };
+        return textObservation(renderTaskStopObservation(input.raw));
       case "web_search":
-        return { content: renderWebSearchObservation(input.raw) };
+        return textObservation(renderWebSearchObservation(input.raw));
       case "web_fetch":
-        return { content: renderWebFetchObservation(input.raw) };
+        return textObservation(renderWebFetchObservation(input.raw));
       case "mcp":
-        return { content: renderMcpObservation(input.raw) };
+        return textObservation(renderMcpObservation(input.raw));
       case "generic":
-        return { content: renderGenericObservation(input.raw) };
+        return textObservation(renderGenericObservation(input.raw));
       default:
         return assertNever(input.raw);
     }
   }
+}
+
+function textObservation(text: string): ToolObservation {
+  return Object.freeze({ content: textToolResultContent(text), displayText: text });
+}
+
+function renderViewImageObservation(raw: ViewImageRawResult): ToolObservation {
+  if (!raw.ok || raw.asset === undefined) {
+    return textObservation(
+      `ViewImage failed for ${raw.filePath || "(unknown path)"}: ${raw.error ?? "Unknown error."}`,
+    );
+  }
+  const text = `Viewed image ${raw.filePath} (${raw.asset.mimeType}, ${raw.asset.width}x${raw.asset.height}, ${raw.asset.byteLength} bytes, asset=${raw.asset.assetId.slice(0, 12)}…).`;
+  const content = Object.freeze([
+    Object.freeze({ type: "text" as const, text }),
+    Object.freeze({ type: "image" as const, asset: raw.asset }),
+  ]);
+  const displayText = toolResultDisplayText(content);
+  return Object.freeze({ content, displayText });
 }
 
 function renderUpdatePlanObservation(raw: UpdatePlanRawResult): string {

@@ -277,9 +277,9 @@ describe("Bash tool", () => {
       expect(await readFile(raw.outputFilePath, "utf8")).toBe("hello\n");
 
       const observation = new ObservationBuilder().build({ call, raw });
-      expect(observation.content).toContain("Bash completed.");
-      expect(observation.content).toContain("outputFilePath=");
-      expect(observation.content).toContain("preview:\nhello");
+      expect(observation.displayText).toContain("Bash completed.");
+      expect(observation.displayText).toContain("outputFilePath=");
+      expect(observation.displayText).toContain("preview:\nhello");
     } finally {
       await rm(workspace, { recursive: true });
     }
@@ -500,8 +500,8 @@ describe("Bash tool", () => {
         MAX_PREVIEW_BYTES,
       );
       expect(completeOutput.toString("utf8")).toContain("MIDDLE_SECRET");
-      expect(observation.content).not.toContain("MIDDLE_SECRET");
-      expect(observation.content).toContain(`preview:\n${raw.preview}`);
+      expect(observation.displayText).not.toContain("MIDDLE_SECRET");
+      expect(observation.displayText).toContain(`preview:\n${raw.preview}`);
     } finally {
       await rm(workspace, { recursive: true });
     }

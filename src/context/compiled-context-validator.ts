@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../agent/types";
+import { toolResultDisplayText, toolResultText } from "../agent/tool-result-content";
 import { stableJsonStringify } from "../model/model-request-preflight";
 import { formatMessageSource } from "./context-source";
 import type { CompiledRevisionContext, SwapOverride } from "./context-revision";
@@ -157,7 +158,7 @@ export class CompiledContextValidator {
         entry.message.toolCallId !== record.toolCallId ||
         entry.message.providerToolCallId !== record.providerToolCallId ||
         entry.message.name !== record.name ||
-        entry.message.content !== override.renderedContent
+        toolResultText(entry.message.content) !== override.renderedContent
       ) {
         fail(
           `Swapped tool entry changed protocol identity at ordinal ${entry.ordinal}.`,
@@ -197,7 +198,11 @@ function validateOverrideIdentity(
     fail(`Swap override changed canonical identity at ordinal ${record.ordinal}.`);
   }
   const originalBytes = Buffer.byteLength(
-    record.role === "assistant" ? (record.content ?? "") : record.content,
+    record.role === "assistant"
+      ? (record.content ?? "")
+      : record.role === "tool"
+        ? record.displayText
+        : record.content,
     "utf8",
   );
   const renderedBytes = Buffer.byteLength(override.renderedContent, "utf8");
@@ -208,8 +213,11 @@ function validateOverrideIdentity(
     override.originalBytes !== originalBytes ||
     override.renderedBytes !== renderedBytes ||
     override.byteSavings !== originalBytes - renderedBytes ||
-    (rendererFormat === "swap-observation-v1" && override.byteSavings <= 0) ||
+    ((rendererFormat === "swap-observation-v1" ||
+      rendererFormat === "skill-activation-receipt-v1") &&
+      override.byteSavings <= 0) ||
     (rendererFormat !== "swap-observation-v1" &&
+      rendererFormat !== "swap-tool-image-v1" &&
       rendererFormat !== "skill-activation-receipt-v1")
   ) {
     fail(`Swap override metadata is invalid at ordinal ${record.ordinal}.`);
@@ -266,7 +274,8 @@ function assertSameMessage(actual: AgentMessage, record: CanonicalMessageRecord)
         actual.toolCallId !== record.toolCallId ||
         actual.providerToolCallId !== record.providerToolCallId ||
         actual.name !== record.name ||
-        actual.content !== record.content
+        stableJsonStringify(actual.content) !== stableJsonStringify(record.content) ||
+        toolResultDisplayText(actual.content) !== record.displayText
       ) {
         fail(`Canonical entry changed tool data at ordinal ${record.ordinal}.`);
       }

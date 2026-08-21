@@ -647,7 +647,7 @@ describe("mcp observation", () => {
       call,
       raw: { ok: true, ...base, isError: false, text: "hello", truncated: false },
     });
-    expect(observation.content).toBe("hello");
+    expect(observation.displayText).toBe("hello");
   });
 
   test("appends a truncation notice", () => {
@@ -655,7 +655,7 @@ describe("mcp observation", () => {
       call,
       raw: { ok: true, ...base, isError: false, text: "hello", truncated: true },
     });
-    expect(observation.content).toContain("[Output truncated to 5 characters.]");
+    expect(observation.displayText).toContain("[Output truncated to 5 characters.]");
   });
 
   test("renders server-reported errors", () => {
@@ -663,7 +663,7 @@ describe("mcp observation", () => {
       call,
       raw: { ok: false, ...base, isError: true, text: "element not found" },
     });
-    expect(observation.content).toBe(
+    expect(observation.displayText).toBe(
       "mcp__srv__echo failed (server reported error):\nelement not found",
     );
   });
@@ -673,7 +673,7 @@ describe("mcp observation", () => {
       call,
       raw: { ok: false, ...base, error: "timeout" },
     });
-    expect(observation.content).toBe("mcp__srv__echo failed: timeout");
+    expect(observation.displayText).toBe("mcp__srv__echo failed: timeout");
   });
 
   test("renders a placeholder when there is no text content", () => {
@@ -681,7 +681,7 @@ describe("mcp observation", () => {
       call,
       raw: { ok: true, ...base, isError: false, text: "", contentBlockCount: 1 },
     });
-    expect(observation.content).toBe("(no text content, 1 content block)");
+    expect(observation.displayText).toBe("(no text content, 1 content block)");
   });
 });
 

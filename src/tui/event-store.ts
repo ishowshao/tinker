@@ -816,6 +816,10 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
   }
 
   switch (raw.kind) {
+    case "view_image":
+      return raw.asset === undefined
+        ? base
+        : `${base} -> ${raw.asset.mimeType}, ${raw.asset.width}x${raw.asset.height}, ${raw.asset.byteLength} bytes`;
     case "glob":
       return raw.ok && raw.matchCount !== undefined
         ? `${base} -> ${raw.matchCount} match${raw.matchCount === 1 ? "" : "es"}`
@@ -951,6 +955,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
       return detail === undefined ? {} : { bash: detail };
     }
     case "read":
+    case "view_image":
     case "write":
     case "edit":
     case "delete":
@@ -988,6 +993,7 @@ function toolRawResultDiff(
             diffTruncated: raw.patchTruncated === true,
           };
     case "read":
+    case "view_image":
     case "delete":
     case "glob":
     case "grep":

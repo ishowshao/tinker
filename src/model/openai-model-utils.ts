@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { UserMessage } from "../agent/types";
+import type { AgentMessage, UserMessage } from "../agent/types";
 import {
   IMAGE_INPUT_POLICY,
   imagePlanningTokens,
@@ -13,7 +13,7 @@ import {
   type MaterializedModelRequest,
   type ModelMaterializeOptions,
   type ModelRequestInput,
-  type PreparedMediaDescriptor,
+  type PreparedMediaOccurrence,
   type PreparedModelRequest,
   type PreparedPromptSegment,
   type ProviderResponseErrorCode,
@@ -124,26 +124,63 @@ export function exactJsonBodyBytes(
   );
 }
 
-export function imageUserSegment(message: UserMessage): PreparedPromptSegment {
-  const media = message.attachments!.map((attachment): PreparedMediaDescriptor => {
-    const dimensions = providerImageDimensions(attachment.width, attachment.height);
-    return Object.freeze({
-      assetId: attachment.assetId,
-      label: attachment.label,
-      range: Object.freeze({ ...attachment.range }),
-      mimeType: attachment.mimeType,
-      byteLength: attachment.byteLength,
-      sourceWidth: attachment.width,
-      sourceHeight: attachment.height,
-      width: dimensions.width,
-      height: dimensions.height,
-      planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
-    });
-  });
+export function imageUserSegment(
+  message: UserMessage,
+  messageOrdinal: number,
+): PreparedPromptSegment {
+  const media = message.attachments!.map(
+    (attachment, blockPosition): PreparedMediaOccurrence => {
+      const dimensions = providerImageDimensions(attachment.width, attachment.height);
+      return Object.freeze({
+        asset: Object.freeze({
+          assetId: attachment.assetId,
+          mimeType: attachment.mimeType,
+          byteLength: attachment.byteLength,
+          width: attachment.width,
+          height: attachment.height,
+        }),
+        source: "user_attachment",
+        messageOrdinal,
+        blockPosition,
+        width: dimensions.width,
+        height: dimensions.height,
+        planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+      });
+    },
+  );
   return Object.freeze({
     kind: "user",
     normalizedText: message.content,
     media: Object.freeze(media),
+  });
+}
+
+export function imageToolSegment(
+  message: Extract<AgentMessage, { role: "tool" }>,
+  messageOrdinal: number,
+  normalizedText: string,
+): PreparedPromptSegment {
+  const media = message.content.flatMap((block, blockPosition) => {
+    if (block.type !== "image") {
+      return [];
+    }
+    const dimensions = providerImageDimensions(block.asset.width, block.asset.height);
+    return [
+      Object.freeze<PreparedMediaOccurrence>({
+        asset: Object.freeze({ ...block.asset }),
+        source: "tool_result",
+        messageOrdinal,
+        blockPosition,
+        width: dimensions.width,
+        height: dimensions.height,
+        planningTokens: imagePlanningTokens(dimensions.width, dimensions.height),
+      }),
+    ];
+  });
+  return Object.freeze({
+    kind: "tool",
+    normalizedText,
+    ...(media.length === 0 ? {} : { media: Object.freeze(media) }),
   });
 }
 
@@ -208,21 +245,15 @@ function distinctPreparedAssets(
   const assets = new Map<ImageAssetId, ImageAssetRef>();
   for (const segment of segments) {
     for (const media of segment.media ?? []) {
-      const asset = Object.freeze({
-        assetId: media.assetId,
-        mimeType: media.mimeType,
-        byteLength: media.byteLength,
-        width: media.sourceWidth,
-        height: media.sourceHeight,
-      });
-      const existing = assets.get(media.assetId);
+      const asset = media.asset;
+      const existing = assets.get(asset.assetId);
       if (
         existing !== undefined &&
         stableJsonStringify(existing) !== stableJsonStringify(asset)
       ) {
-        throw new Error(`Conflicting descriptors for image ${media.assetId}.`);
+        throw new Error(`Conflicting descriptors for image ${asset.assetId}.`);
       }
-      assets.set(media.assetId, asset);
+      assets.set(asset.assetId, asset);
     }
   }
   return assets;
@@ -296,10 +327,10 @@ function materializedPromptSegments(
             ...segment,
             media: Object.freeze(
               segment.media.map((media) => {
-                const image = images.get(media.assetId);
+                const image = images.get(media.asset.assetId);
                 if (image === undefined) {
                   throw new Error(
-                    `Image ${media.assetId.slice(0, 12)}… was not materialized.`,
+                    `Image ${media.asset.assetId.slice(0, 12)}… was not materialized.`,
                   );
                 }
                 return Object.freeze({

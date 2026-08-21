@@ -242,7 +242,11 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
 
 export type ModelProfileField = {
   readonly name: string;
-  readonly valueKind: PublicConfigValueKind | "input-modalities" | "reasoning";
+  readonly valueKind:
+    | PublicConfigValueKind
+    | "input-modalities"
+    | "tool-result-modalities"
+    | "reasoning";
   readonly required: boolean;
   readonly defaultValue?: string | number | boolean | readonly string[];
   readonly secret: boolean;
@@ -332,6 +336,15 @@ export const MODEL_PROFILE_FIELDS = Object.freeze([
     secret: false,
     description:
       'Accepted model input modalities; normalizes to ["text"] or ["text", "image"].',
+  }),
+  profileField({
+    name: "toolResultModalities",
+    valueKind: "tool-result-modalities",
+    required: false,
+    defaultValue: Object.freeze(["text"] as const),
+    secret: false,
+    description:
+      'Accepted tool-result modalities; normalizes to ["text"] or ["text", "image"].',
   }),
 ]);
 

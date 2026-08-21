@@ -398,6 +398,8 @@ async function runTrial(input: {
 
 class FixtureThenProviderModel implements ModelClient {
   readonly messageProtocol;
+  readonly inputModalities;
+  readonly toolResultModalities;
   expectedHistoricalValueVisible?: boolean;
   private readonly inputs = new WeakMap<object, ModelRequestInput>();
   private providerEnabled = false;
@@ -412,6 +414,8 @@ class FixtureThenProviderModel implements ModelClient {
 
   constructor(private readonly provider: ModelClient) {
     this.messageProtocol = provider.messageProtocol;
+    this.inputModalities = provider.inputModalities;
+    this.toolResultModalities = provider.toolResultModalities;
   }
 
   prepare(input: ModelRequestInput): PreparedModelRequest {

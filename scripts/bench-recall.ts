@@ -104,6 +104,8 @@ export async function runRecallBenchmark(
           adapter: "fake",
           serializationVersion: "g0-recall-benchmark-v1",
         },
+        inputModalities: ["text"],
+        toolResultModalities: ["text"],
       }),
       surface,
       revisionId: runtimeIdFactory.createContextRevisionId(),

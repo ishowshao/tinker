@@ -50,6 +50,7 @@ import {
 import {
   ContextSwapRenderer,
   SWAP_OBSERVATION_FORMAT,
+  SWAP_TOOL_IMAGE_FORMAT,
 } from "../context/context-swap-renderer";
 import {
   SUPPORTED_TOOL_OBSERVATION_FORMATS,
@@ -78,10 +79,16 @@ import type {
   StoredContextOverrideV8,
   SwapOverride,
 } from "../context/context-revision";
-import type { IterationIdentity, ToolCall } from "../agent/types";
+import type { IterationIdentity, ToolCall, ToolResultContent } from "../agent/types";
+import {
+  canonicalToolResultContentHash,
+  toolResultDisplayText,
+  validateToolResultContent,
+} from "../agent/tool-result-content";
 import {
   parseImageAssetId,
   parseImageAttachmentId,
+  validateImageAssetRef,
   validateOriginalImageName,
   validateUserMessage,
   type ImageAssetRef,
@@ -108,7 +115,7 @@ import {
 } from "./session-history-reader";
 import { SessionLease } from "./session-lock";
 import {
-  SESSION_SCHEMA_V9_FINGERPRINT,
+  SESSION_SCHEMA_V10_FINGERPRINT,
   SESSION_SCHEMA_VERSION,
   upgradeActiveTurnRetirementContract,
   upgradeRecallIndexContract,
@@ -144,20 +151,11 @@ import {
   IMAGE_INPUT_POLICY_VERSION,
 } from "../image/image-input-policy";
 
-export type SessionImageInputCompatibility = {
+export type SessionMediaCompatibility = {
   readonly policyVersion: string;
   readonly policySha256: string;
   readonly inputModalities: readonly ("text" | "image")[];
-  readonly tokenEstimator?: LegacyInputTokenEstimatorCompatibility;
-};
-
-type LegacyInputTokenEstimatorCompatibility = {
-  readonly kind: "moonshot-estimate-token-count-v1";
-  readonly coverageVersion: "full-request-v1";
-  readonly model: string;
-  readonly endpoint: string;
-  readonly timeoutMs: number;
-  readonly maxRetries: 0;
+  readonly toolResultModalities: readonly ("text" | "image")[];
 };
 
 export type CompletedTurnMessageSnapshot =
@@ -189,11 +187,11 @@ export type SessionCompatibilityContract = {
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   messageProtocol: ModelMessageProtocol;
-  imageInput: SessionImageInputCompatibility;
+  media: SessionMediaCompatibility;
 };
 
-export type StoredSessionMetaV9 = {
-  schemaVersion: 9;
+export type StoredSessionMetaV10 = {
+  schemaVersion: 10;
   schemaFingerprint: string;
   initializationState: "creating" | "ready";
   sessionId: SessionId;
@@ -220,7 +218,7 @@ export type StoredSessionMetaV9 = {
     | null;
 };
 
-export type SessionCloseReason = NonNullable<StoredSessionMetaV9["lastCloseReason"]>;
+export type SessionCloseReason = NonNullable<StoredSessionMetaV10["lastCloseReason"]>;
 
 export type SessionRecoveryResult = {
   recoveredTurnId?: TurnId;
@@ -517,7 +515,7 @@ export class SessionStore implements SessionLedgerCommitter {
           )
           .run(
             SESSION_SCHEMA_VERSION,
-            SESSION_SCHEMA_V9_FINGERPRINT,
+            SESSION_SCHEMA_V10_FINGERPRINT,
             input.sessionId,
             workspaceRoot,
             input.modelName,
@@ -1700,7 +1698,7 @@ export class SessionStore implements SessionLedgerCommitter {
               messageId: message.messageId,
               frameId: message.frameId,
               ordinal: message.ordinal,
-              content: message.content,
+              content: message.displayText,
               contentSha256: message.contentSha256,
             },
             name: activation.name,
@@ -2084,13 +2082,14 @@ export class SessionStore implements SessionLedgerCommitter {
     for (const input of completionInputs) {
       const createdAt = this.clock();
       const content = observationForCompletion(input);
+      const displayText = toolResultDisplayText(content);
       const messageId = idFactory.createMessageId();
       const message = immutableRecord<CanonicalMessageRecord>({
         messageId,
         sessionId: this.sessionId,
         frameId: frame.frameId,
         ordinal: view.messages.length + messages.length + 1,
-        contentSha256: contentHash(content),
+        contentSha256: canonicalToolResultContentHash(content),
         createdAt,
         role: "tool",
         turnId,
@@ -2099,6 +2098,7 @@ export class SessionStore implements SessionLedgerCommitter {
         providerToolCallId: input.call.providerToolCallId,
         name: input.call.name,
         content,
+        displayText,
         origin: "runtime",
       });
       const completion: ToolCompletion = immutableRecord({
@@ -2111,7 +2111,7 @@ export class SessionStore implements SessionLedgerCommitter {
         toolCallId: input.call.toolCallId,
         toolMessageId: messageId,
         completion,
-        observationSha256: contentHash(content),
+        observationSha256: canonicalToolResultContentHash(content),
         createdAt,
       });
       messages.push(message);
@@ -2297,6 +2297,7 @@ export class SessionStore implements SessionLedgerCommitter {
   loadProtocolView(): ProtocolContextView {
     this.requireOpen();
     const imageAttachments = loadMessageImageAttachments(this.database);
+    const toolContentBlocks = loadToolMessageContentBlocks(this.database);
     const frames = this.database
       .query("SELECT * FROM protocol_frames ORDER BY first_ordinal")
       .all()
@@ -2307,12 +2308,20 @@ export class SessionStore implements SessionLedgerCommitter {
       .map((row) => {
         const record = recordFromSql(row, "message");
         const messageId = stringFromSql(record.message_id, "message_id");
-        const message = decodeMessage(row, imageAttachments.get(messageId));
+        const message = decodeMessage(
+          row,
+          imageAttachments.get(messageId),
+          toolContentBlocks.get(messageId),
+        );
         imageAttachments.delete(messageId);
+        toolContentBlocks.delete(messageId);
         return message;
       });
     if (imageAttachments.size > 0) {
       throw new Error("Image attachment rows reference unknown messages.");
+    }
+    if (toolContentBlocks.size > 0) {
+      throw new Error("Tool content block rows reference unknown messages.");
     }
     const toolResults = this.database
       .query(
@@ -2335,21 +2344,23 @@ export class SessionStore implements SessionLedgerCommitter {
     this.requireOpen();
     const distinct = new Map<string, ImageAssetRef>();
     for (const message of this.loadProtocolView().messages) {
-      if (message.role !== "user") {
-        continue;
-      }
-      for (const attachment of message.attachments ?? []) {
-        const previous = distinct.get(attachment.assetId);
-        const asset = imageAssetRefFromAttachment(attachment);
+      const assets =
+        message.role === "user"
+          ? (message.attachments ?? []).map(imageAssetRefFromAttachment)
+          : message.role === "tool"
+            ? message.content.flatMap((block) =>
+                block.type === "image" ? [block.asset] : [],
+              )
+            : [];
+      for (const asset of assets) {
+        const previous = distinct.get(asset.assetId);
         if (
           previous !== undefined &&
           stableJsonStringify(previous) !== stableJsonStringify(asset)
         ) {
-          throw new Error(
-            `Conflicting metadata for image asset ${attachment.assetId}.`,
-          );
+          throw new Error(`Conflicting metadata for image asset ${asset.assetId}.`);
         }
-        distinct.set(attachment.assetId, asset);
+        distinct.set(asset.assetId, asset);
       }
     }
     if (distinct.size === 0) {
@@ -2367,7 +2378,7 @@ export class SessionStore implements SessionLedgerCommitter {
     try {
       if (
         meta.sessionId !== this.sessionId ||
-        meta.schemaFingerprint !== SESSION_SCHEMA_V9_FINGERPRINT
+        meta.schemaFingerprint !== SESSION_SCHEMA_V10_FINGERPRINT
       ) {
         throw new Error("Session metadata identity or schema fingerprint changed.");
       }
@@ -2413,7 +2424,7 @@ export class SessionStore implements SessionLedgerCommitter {
     }
   }
 
-  readMeta(): StoredSessionMetaV9 {
+  readMeta(): StoredSessionMetaV10 {
     this.requireOpen();
     const rows = this.database.query("SELECT * FROM session_meta").all();
     if (rows.length !== 1) {
@@ -2549,7 +2560,7 @@ export class SessionStore implements SessionLedgerCommitter {
     const meta = this.readMeta();
     if (
       meta.sessionId !== this.sessionId ||
-      meta.schemaFingerprint !== SESSION_SCHEMA_V9_FINGERPRINT ||
+      meta.schemaFingerprint !== SESSION_SCHEMA_V10_FINGERPRINT ||
       meta.initializationState !== "ready" ||
       meta.activeRevisionId === null
     ) {
@@ -3047,7 +3058,7 @@ export class SessionStore implements SessionLedgerCommitter {
   }
 
   private loadValidatedContextSnapshot(
-    meta: StoredSessionMetaV9,
+    meta: StoredSessionMetaV10,
     canonical: ProtocolContextView,
   ): StoredContextSnapshotV8 {
     const activeRevisionId = requireActiveRevisionId(meta);
@@ -3333,7 +3344,8 @@ export class SessionStore implements SessionLedgerCommitter {
       if (
         (revision?.kind !== "swap_only" && revision?.kind !== "skills_update") ||
         (revision.kind === "swap_only" &&
-          override.rendererFormat !== SWAP_OBSERVATION_FORMAT) ||
+          override.rendererFormat !== SWAP_OBSERVATION_FORMAT &&
+          override.rendererFormat !== SWAP_TOOL_IMAGE_FORMAT) ||
         (revision.kind === "skills_update" &&
           override.rendererFormat !== SKILL_ACTIVATION_RECEIPT_FORMAT) ||
         revisionNumberById.get(revision.revisionId) === undefined ||
@@ -3350,7 +3362,8 @@ export class SessionStore implements SessionLedgerCommitter {
         throw new Error("Stored context override canonical identity is invalid.");
       }
       const rendered =
-        override.rendererFormat === SWAP_OBSERVATION_FORMAT
+        override.rendererFormat === SWAP_OBSERVATION_FORMAT ||
+        override.rendererFormat === SWAP_TOOL_IMAGE_FORMAT
           ? this.swapRenderer.render({ message, result })
           : this.renderStoredSkillReceipt(message, result, revision.revisionId);
       if (
@@ -3469,7 +3482,7 @@ export class SessionStore implements SessionLedgerCommitter {
         messageId: message.messageId,
         frameId: message.frameId,
         ordinal: message.ordinal,
-        content: message.content,
+        content: message.displayText,
         contentSha256: message.contentSha256,
       },
       name: activation.name,
@@ -3495,7 +3508,10 @@ export class SessionStore implements SessionLedgerCommitter {
       : decodeMeasuredContextState(row, this.sessionId);
   }
 
-  private validateCounters(meta: StoredSessionMetaV9, view: ProtocolContextView): void {
+  private validateCounters(
+    meta: StoredSessionMetaV10,
+    view: ProtocolContextView,
+  ): void {
     const turns = this.database
       .query("SELECT * FROM turns ORDER BY turn_number")
       .all() as Array<Record<string, unknown>>;
@@ -3711,7 +3727,8 @@ export function createSessionCompatibilityContract(input: {
   includeReasoningContent: boolean;
   contextProfile: ModelContextProfile;
   messageProtocol: ModelMessageProtocol;
-  inputModalities?: readonly ("text" | "image")[];
+  inputModalities: readonly ("text" | "image")[];
+  toolResultModalities: readonly ("text" | "image")[];
 }): SessionCompatibilityContract {
   if (input.modelName.trim() === "") {
     throw new Error("Session compatibility model name must not be empty.");
@@ -3728,14 +3745,18 @@ export function createSessionCompatibilityContract(input: {
   ) {
     throw new Error("Session compatibility message protocol is invalid.");
   }
-  const inputModalities = normalizeInputModalities(input.inputModalities ?? ["text"]);
+  const inputModalities = normalizeInputModalities(input.inputModalities);
+  const toolResultModalities = normalizeInputModalities(input.toolResultModalities);
+  if (toolResultModalities.includes("image") && !inputModalities.includes("image")) {
+    throw new Error("Session compatibility image tool results require image input.");
+  }
   return Object.freeze({
     modelName: input.modelName,
     ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
     includeReasoningContent: input.includeReasoningContent,
     contextProfile: Object.freeze(createModelContextProfile(input.contextProfile)),
     messageProtocol: immutableCanonicalClone(input.messageProtocol),
-    imageInput: Object.freeze({
+    media: Object.freeze({
       policyVersion: IMAGE_INPUT_POLICY_VERSION,
       policySha256: sha256(
         stableJsonStringify({
@@ -3744,6 +3765,7 @@ export function createSessionCompatibilityContract(input: {
         }),
       ),
       inputModalities,
+      toolResultModalities,
     }),
   });
 }
@@ -3759,7 +3781,8 @@ function normalizeSessionCompatibilityContract(
     includeReasoningContent: contract.includeReasoningContent,
     contextProfile: contract.contextProfile,
     messageProtocol: contract.messageProtocol,
-    inputModalities: contract.imageInput.inputModalities,
+    inputModalities: contract.media.inputModalities,
+    toolResultModalities: contract.media.toolResultModalities,
   });
 }
 
@@ -3777,40 +3800,6 @@ function normalizeInputModalities(
   return Object.freeze(
     modalities.includes("image") ? (["text", "image"] as const) : (["text"] as const),
   );
-}
-
-function validateTokenEstimatorCompatibility(
-  estimator: LegacyInputTokenEstimatorCompatibility,
-): void {
-  if (
-    estimator.kind !== "moonshot-estimate-token-count-v1" ||
-    estimator.coverageVersion !== "full-request-v1" ||
-    estimator.model.trim() === "" ||
-    !isNormalizedEstimatorEndpoint(estimator.endpoint) ||
-    !Number.isSafeInteger(estimator.timeoutMs) ||
-    estimator.timeoutMs < 1_000 ||
-    estimator.timeoutMs > 60_000 ||
-    estimator.maxRetries !== 0
-  ) {
-    throw new Error("Session compatibility token estimator identity is invalid.");
-  }
-}
-
-function isNormalizedEstimatorEndpoint(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      url.username === "" &&
-      url.password === "" &&
-      url.search === "" &&
-      url.hash === "" &&
-      url.pathname.endsWith("/tokenizers/estimate-token-count") &&
-      url.toString() === value
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function sessionDatabasePath(
@@ -3866,7 +3855,7 @@ function insertMessage(database: Database, message: CanonicalMessageRecord): voi
       message.role,
       turnId,
       iterationId,
-      message.content,
+      message.role === "tool" ? message.displayText : message.content,
       message.contentSha256,
       assistant?.reasoningContent ?? null,
       reasoningPresent,
@@ -3883,6 +3872,9 @@ function insertMessage(database: Database, message: CanonicalMessageRecord): voi
     );
   if (message.role === "user" && message.attachments !== undefined) {
     insertMessageImageAttachments(database, message);
+  }
+  if (message.role === "tool") {
+    insertToolMessageContentBlocks(database, message);
   }
 }
 
@@ -3901,45 +3893,11 @@ function insertMessageImageAttachments(
   }
   for (let position = 0; position < message.attachments!.length; position += 1) {
     const attachment = requireItem(message.attachments!, position, "image attachment");
-    const existing = database
-      .query(
-        `SELECT mime_type, byte_length, width, height, created_at
-         FROM image_assets WHERE asset_id = ?`,
-      )
-      .get(attachment.assetId) as {
-      mime_type: unknown;
-      byte_length: unknown;
-      width: unknown;
-      height: unknown;
-      created_at: unknown;
-    } | null;
-    if (existing === null) {
-      database
-        .query(
-          `INSERT INTO image_assets (
-             asset_id, mime_type, byte_length, width, height, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          attachment.assetId,
-          attachment.mimeType,
-          attachment.byteLength,
-          attachment.width,
-          attachment.height,
-          message.createdAt,
-        );
-    } else {
-      timestampFromSql(existing.created_at, "image asset created_at");
-      if (
-        existing.mime_type !== attachment.mimeType ||
-        numberFromSql(existing.byte_length, "image asset byte_length") !==
-          attachment.byteLength ||
-        numberFromSql(existing.width, "image asset width") !== attachment.width ||
-        numberFromSql(existing.height, "image asset height") !== attachment.height
-      ) {
-        throw new Error(`Image asset metadata conflicts for ${attachment.assetId}.`);
-      }
-    }
+    ensureImageAsset(
+      database,
+      imageAssetRefFromAttachment(attachment),
+      message.createdAt,
+    );
     database
       .query(
         `INSERT INTO message_image_attachments (
@@ -3957,6 +3915,84 @@ function insertMessageImageAttachments(
         attachment.range.end,
         attachment.originalName,
       );
+  }
+}
+
+function insertToolMessageContentBlocks(
+  database: Database,
+  message: Extract<CanonicalMessageRecord, { role: "tool" }>,
+): void {
+  validateToolResultContent(message.content);
+  if (
+    canonicalToolResultContentHash(message.content) !== message.contentSha256 ||
+    toolResultDisplayText(message.content) !== message.displayText
+  ) {
+    throw new Error("Tool content blocks do not match canonical message metadata.");
+  }
+  for (let position = 0; position < message.content.length; position += 1) {
+    const block = requireItem(message.content, position, "tool content block");
+    if (block.type === "image") {
+      ensureImageAsset(database, block.asset, message.createdAt);
+    }
+    database
+      .query(
+        `INSERT INTO tool_message_content_blocks (
+           message_id, position, kind, text_content, asset_id
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        message.messageId,
+        position,
+        block.type,
+        block.type === "text" ? block.text : null,
+        block.type === "image" ? block.asset.assetId : null,
+      );
+  }
+}
+
+function ensureImageAsset(
+  database: Database,
+  asset: ImageAssetRef,
+  createdAt: string,
+): void {
+  const existing = database
+    .query(
+      `SELECT mime_type, byte_length, width, height, created_at
+       FROM image_assets WHERE asset_id = ?`,
+    )
+    .get(asset.assetId) as {
+    mime_type: unknown;
+    byte_length: unknown;
+    width: unknown;
+    height: unknown;
+    created_at: unknown;
+  } | null;
+  if (existing === null) {
+    database
+      .query(
+        `INSERT INTO image_assets (
+           asset_id, mime_type, byte_length, width, height, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        asset.assetId,
+        asset.mimeType,
+        asset.byteLength,
+        asset.width,
+        asset.height,
+        createdAt,
+      );
+    return;
+  }
+  timestampFromSql(existing.created_at, "image asset created_at");
+  if (
+    existing.mime_type !== asset.mimeType ||
+    numberFromSql(existing.byte_length, "image asset byte_length") !==
+      asset.byteLength ||
+    numberFromSql(existing.width, "image asset width") !== asset.width ||
+    numberFromSql(existing.height, "image asset height") !== asset.height
+  ) {
+    throw new Error(`Image asset metadata conflicts for ${asset.assetId}.`);
   }
 }
 
@@ -4113,9 +4149,74 @@ function loadMessageImageAttachments(
   );
 }
 
+function loadToolMessageContentBlocks(
+  database: Database,
+): Map<string, readonly ToolResultContent[]> {
+  const rows = database
+    .query(
+      `SELECT tcb.*, ia.mime_type, ia.byte_length, ia.width, ia.height,
+              ia.created_at AS asset_created_at
+       FROM tool_message_content_blocks tcb
+       LEFT JOIN image_assets ia ON ia.asset_id = tcb.asset_id
+       JOIN messages m ON m.message_id = tcb.message_id
+       ORDER BY m.ordinal, tcb.position`,
+    )
+    .all();
+  const mutable = new Map<string, ToolResultContent[]>();
+  for (const rowValue of rows) {
+    const row = recordFromSql(rowValue, "tool message content block");
+    const messageId = stringFromSql(row.message_id, "tool block message_id");
+    const blocks = mutable.get(messageId) ?? [];
+    const position = numberFromSql(row.position, "tool block position");
+    if (position !== blocks.length) {
+      throw new Error(
+        `Tool content block positions for message ${messageId} are not continuous.`,
+      );
+    }
+    const kind = enumFromSql(row.kind, ["text", "image"] as const, "tool block kind");
+    const block: ToolResultContent =
+      kind === "text"
+        ? immutableRecord({
+            type: "text",
+            text: stringFromSql(row.text_content, "tool block text_content"),
+          })
+        : immutableRecord({
+            type: "image",
+            asset: immutableRecord({
+              assetId: parseImageAssetId(
+                stringFromSql(row.asset_id, "tool block asset_id"),
+              ),
+              mimeType: enumFromSql(
+                row.mime_type,
+                ["image/png", "image/jpeg", "image/webp"] as const,
+                "tool block image mime_type",
+              ),
+              byteLength: numberFromSql(
+                row.byte_length,
+                "tool block image byte_length",
+              ),
+              width: numberFromSql(row.width, "tool block image width"),
+              height: numberFromSql(row.height, "tool block image height"),
+            }),
+          });
+    if (kind === "image") {
+      timestampFromSql(row.asset_created_at, "tool block image asset created_at");
+    }
+    blocks.push(block);
+    mutable.set(messageId, blocks);
+  }
+  return new Map(
+    [...mutable].map(([messageId, blocks]) => {
+      validateToolResultContent(blocks);
+      return [messageId, Object.freeze(blocks)] as const;
+    }),
+  );
+}
+
 function decodeMessage(
   rowValue: unknown,
   attachments?: readonly UserImageAttachment[],
+  toolContentBlocks?: readonly ToolResultContent[],
 ): CanonicalMessageRecord {
   const row = recordFromSql(rowValue, "message");
   const base = {
@@ -4133,8 +4234,8 @@ function decodeMessage(
   );
   switch (role) {
     case "system":
-      if (attachments !== undefined) {
-        throw new Error("System messages cannot have image attachments.");
+      if (attachments !== undefined || toolContentBlocks !== undefined) {
+        throw new Error("System messages cannot have media relation rows.");
       }
       return immutableRecord({
         ...base,
@@ -4143,6 +4244,9 @@ function decodeMessage(
         origin: "runtime",
       });
     case "user": {
+      if (toolContentBlocks !== undefined) {
+        throw new Error("User messages cannot have tool content blocks.");
+      }
       const message = {
         ...base,
         role,
@@ -4161,8 +4265,8 @@ function decodeMessage(
       return immutableRecord(message);
     }
     case "assistant": {
-      if (attachments !== undefined) {
-        throw new Error("Assistant messages cannot have image attachments.");
+      if (attachments !== undefined || toolContentBlocks !== undefined) {
+        throw new Error("Assistant messages cannot have media relation rows.");
       }
       const content = nullableTextFromSql(row.content, "content");
       const reasoningPresent = numberFromSql(
@@ -4198,9 +4302,17 @@ function decodeMessage(
         origin: "model",
       });
     }
-    case "tool":
+    case "tool": {
       if (attachments !== undefined) {
         throw new Error("Tool messages cannot have image attachments.");
+      }
+      if (toolContentBlocks === undefined) {
+        throw new Error("Tool messages must have persisted content blocks.");
+      }
+      validateToolResultContent(toolContentBlocks);
+      const displayText = stringFromSql(row.content, "content");
+      if (toolResultDisplayText(toolContentBlocks) !== displayText) {
+        throw new Error("Tool message display projection does not match its blocks.");
       }
       return immutableRecord({
         ...base,
@@ -4213,9 +4325,11 @@ function decodeMessage(
           "provider_tool_call_id",
         ),
         name: stringFromSql(row.name, "name"),
-        content: stringFromSql(row.content, "content"),
+        content: toolContentBlocks,
+        displayText,
         origin: enumFromSql(row.origin, ["tool", "runtime"] as const, "tool origin"),
       });
+    }
   }
 }
 
@@ -4597,7 +4711,11 @@ function decodeStoredSwapOverride(rowValue: unknown): StoredContextOverrideV8 {
     ordinal: numberFromSql(row.ordinal, "ordinal"),
     rendererFormat: enumFromSql(
       row.renderer_format,
-      [SWAP_OBSERVATION_FORMAT, SKILL_ACTIVATION_RECEIPT_FORMAT] as const,
+      [
+        SWAP_OBSERVATION_FORMAT,
+        SWAP_TOOL_IMAGE_FORMAT,
+        SKILL_ACTIVATION_RECEIPT_FORMAT,
+      ] as const,
       "context override renderer format",
     ),
     source: stringFromSql(row.source, "source") as StoredContextOverrideV8["source"],
@@ -4937,6 +5055,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
     raw.kind,
     [
       "read",
+      "view_image",
       "write",
       "edit",
       "delete",
@@ -4964,7 +5083,63 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   if (kind === "skill") {
     return decodeStoredSkillRawResult(raw);
   }
+  if (kind === "view_image") {
+    return decodeStoredViewImageRawResult(raw);
+  }
   return immutableCanonicalClone(raw) as ToolRawResult;
+}
+
+function decodeStoredViewImageRawResult(
+  raw: Record<string, unknown>,
+): Extract<ToolRawResult, { kind: "view_image" }> {
+  assertObjectKeys(
+    raw,
+    ["kind", "ok", "filePath", "originalName", "asset", "error"],
+    ["kind", "ok", "filePath"],
+    "ViewImage raw result",
+  );
+  const filePath = stringFromSql(raw.filePath, "ViewImage filePath");
+  if (raw.ok === false) {
+    if (raw.originalName !== undefined || raw.asset !== undefined) {
+      throw new Error("Failed ViewImage raw result cannot contain image metadata.");
+    }
+    const error = stringFromSql(raw.error, "ViewImage error");
+    if (error.trim() === "") {
+      throw new Error("Failed ViewImage raw result error must not be empty.");
+    }
+    return immutableRecord({ kind: "view_image", ok: false, filePath, error });
+  }
+  if (raw.ok !== true || raw.error !== undefined || filePath.trim() === "") {
+    throw new Error("Successful ViewImage raw result is invalid.");
+  }
+  const originalName = stringFromSql(raw.originalName, "ViewImage originalName");
+  validateOriginalImageName(originalName);
+  const storedAsset = recordFromSql(raw.asset, "ViewImage asset");
+  assertObjectKeys(
+    storedAsset,
+    ["assetId", "mimeType", "byteLength", "width", "height"],
+    ["assetId", "mimeType", "byteLength", "width", "height"],
+    "ViewImage asset",
+  );
+  const asset: ImageAssetRef = immutableRecord({
+    assetId: parseImageAssetId(stringFromSql(storedAsset.assetId, "assetId")),
+    mimeType: enumFromSql(
+      storedAsset.mimeType,
+      ["image/png", "image/jpeg", "image/webp"] as const,
+      "ViewImage asset mimeType",
+    ),
+    byteLength: numberFromJson(storedAsset.byteLength, "ViewImage asset byteLength"),
+    width: numberFromJson(storedAsset.width, "ViewImage asset width"),
+    height: numberFromJson(storedAsset.height, "ViewImage asset height"),
+  });
+  validateImageAssetRef(asset);
+  return immutableRecord({
+    kind: "view_image",
+    ok: true,
+    filePath,
+    originalName,
+    asset,
+  });
 }
 
 function decodeStoredSkillRawResult(
@@ -5325,7 +5500,7 @@ function assertCommitPrefixRetirementRevisionInput(
   }
 }
 
-function requireActiveRevisionId(meta: StoredSessionMetaV9): ContextRevisionId {
+function requireActiveRevisionId(meta: StoredSessionMetaV10): ContextRevisionId {
   if (meta.initializationState !== "ready" || meta.activeRevisionId === null) {
     throw new Error("Session has no active context revision.");
   }
@@ -5339,16 +5514,19 @@ function previousRevision(
   return revisions[revision.revisionNumber - 2];
 }
 
-function decodeMeta(value: unknown, expectedSessionId: SessionId): StoredSessionMetaV9 {
+function decodeMeta(
+  value: unknown,
+  expectedSessionId: SessionId,
+): StoredSessionMetaV10 {
   const row = recordFromSql(value, "session metadata");
   const sessionId = stringFromSql(row.session_id, "session_id") as SessionId;
   if (sessionId !== expectedSessionId) {
     throw new Error(`Metadata session ID ${sessionId} does not match directory.`);
   }
   const schemaVersion = numberFromSql(row.schema_version, "schema_version");
-  if (schemaVersion !== 9) {
+  if (schemaVersion !== 10) {
     throw new Error(
-      `Session metadata schema version must be 9; received ${schemaVersion}.`,
+      `Session metadata schema version must be 10; received ${schemaVersion}.`,
     );
   }
   const projectInstructionFile = nullableStringFromSql(
@@ -5477,7 +5655,7 @@ function compatibilityContractDifferences(
     "includeReasoningContent",
     "contextProfile",
     "messageProtocol",
-    "imageInput",
+    "media",
   ];
   return fields.filter((key) => {
     const storedValue = record[key];
@@ -5504,14 +5682,14 @@ function decodeSessionCompatibilityContract(
       "includeReasoningContent",
       "contextProfile",
       "messageProtocol",
-      "imageInput",
+      "media",
     ],
     [
       "modelName",
       "includeReasoningContent",
       "contextProfile",
       "messageProtocol",
-      "imageInput",
+      "media",
     ],
     "session compatibility contract",
   );
@@ -5535,24 +5713,21 @@ function decodeSessionCompatibilityContract(
     ["adapter", "serializationVersion"],
     "session compatibility message protocol",
   );
-  const imageInput = recordFromSql(
-    record.imageInput,
-    "session compatibility image input",
-  );
+  const media = recordFromSql(record.media, "session compatibility media");
   assertObjectKeys(
-    imageInput,
-    ["policyVersion", "policySha256", "inputModalities", "tokenEstimator"],
-    ["policyVersion", "policySha256", "inputModalities"],
-    "session compatibility image input",
+    media,
+    ["policyVersion", "policySha256", "inputModalities", "toolResultModalities"],
+    ["policyVersion", "policySha256", "inputModalities", "toolResultModalities"],
+    "session compatibility media",
   );
-  const inputModalities = imageInput.inputModalities;
-  if (!Array.isArray(inputModalities)) {
-    throw new Error("Session compatibility input modalities must be an array.");
+  const inputModalities = decodeCompatibilityModalities(media.inputModalities, "input");
+  const toolResultModalities = decodeCompatibilityModalities(
+    media.toolResultModalities,
+    "tool result",
+  );
+  if (toolResultModalities.includes("image") && !inputModalities.includes("image")) {
+    throw new Error("Session compatibility image tool results require image input.");
   }
-  const tokenEstimator =
-    imageInput.tokenEstimator === undefined
-      ? undefined
-      : decodeTokenEstimatorCompatibility(imageInput.tokenEstimator);
   if (typeof record.includeReasoningContent !== "boolean") {
     throw new Error("Session compatibility reasoning replay flag must be boolean.");
   }
@@ -5582,17 +5757,12 @@ function decodeSessionCompatibilityContract(
       "compatibility serializationVersion",
     ),
   });
-  const modalities = normalizeInputModalities(
-    inputModalities.map((value) =>
-      enumFromSql(value, ["text", "image"] as const, "compatibility input modality"),
-    ),
-  );
   const policyVersion = stringFromSql(
-    imageInput.policyVersion,
+    media.policyVersion,
     "compatibility image policyVersion",
   );
   const policySha256 = stringFromSql(
-    imageInput.policySha256,
+    media.policySha256,
     "compatibility image policySha256",
   );
   if (!/^[0-9a-f]{64}$/.test(policySha256)) {
@@ -5604,49 +5774,31 @@ function decodeSessionCompatibilityContract(
     includeReasoningContent: record.includeReasoningContent,
     contextProfile: Object.freeze(context),
     messageProtocol: protocol,
-    imageInput: Object.freeze({
+    media: Object.freeze({
       policyVersion,
       policySha256,
-      inputModalities: modalities,
-      ...(tokenEstimator === undefined ? {} : { tokenEstimator }),
+      inputModalities,
+      toolResultModalities,
     }),
   });
 }
 
-function decodeTokenEstimatorCompatibility(
+function decodeCompatibilityModalities(
   value: unknown,
-): LegacyInputTokenEstimatorCompatibility {
-  const record = recordFromSql(value, "session compatibility token estimator");
-  assertObjectKeys(
-    record,
-    ["kind", "coverageVersion", "model", "endpoint", "timeoutMs", "maxRetries"],
-    ["kind", "coverageVersion", "model", "endpoint", "timeoutMs", "maxRetries"],
-    "session compatibility token estimator",
+  label: string,
+): readonly ("text" | "image")[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Session compatibility ${label} modalities must be an array.`);
+  }
+  return normalizeInputModalities(
+    value.map((modality) =>
+      enumFromSql(
+        modality,
+        ["text", "image"] as const,
+        `compatibility ${label} modality`,
+      ),
+    ),
   );
-  const estimator: LegacyInputTokenEstimatorCompatibility = {
-    kind: enumFromSql(
-      record.kind,
-      ["moonshot-estimate-token-count-v1"] as const,
-      "compatibility token estimator kind",
-    ),
-    coverageVersion: enumFromSql(
-      record.coverageVersion,
-      ["full-request-v1"] as const,
-      "compatibility token estimator coverage",
-    ),
-    model: stringFromSql(record.model, "compatibility token estimator model"),
-    endpoint: stringFromSql(record.endpoint, "compatibility token estimator endpoint"),
-    timeoutMs: numberFromJson(
-      record.timeoutMs,
-      "compatibility token estimator timeoutMs",
-    ),
-    maxRetries: zeroFromJson(
-      record.maxRetries,
-      "compatibility token estimator maxRetries",
-    ),
-  };
-  validateTokenEstimatorCompatibility(estimator);
-  return Object.freeze(estimator);
 }
 
 function openWritableDatabase(databasePath: string): Database {
@@ -6242,13 +6394,6 @@ function numberFromJson(value: unknown, name: string): number {
     throw new Error(`${name} must be a positive safe integer.`);
   }
   return value as number;
-}
-
-function zeroFromJson(value: unknown, name: string): 0 {
-  if (value !== 0) {
-    throw new Error(`${name} must be 0.`);
-  }
-  return 0;
 }
 
 function enumFromSql<const T extends readonly string[]>(

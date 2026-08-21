@@ -12,6 +12,7 @@ import {
   persistDefaultProfile,
   profileToContextProfile,
   type ModelInputModality,
+  type ToolResultModality,
   type ModelProfile,
   type ModelProfiles,
   unknownProfileError,
@@ -39,6 +40,7 @@ export type RunnerConfig = {
   readonly contextBudget: ModelContextBudget;
   readonly profileName?: string;
   readonly inputModalities: readonly ModelInputModality[];
+  readonly toolResultModalities: readonly ToolResultModality[];
   readonly bashGuardMode: "guard" | "yolo";
   readonly bashGuardSource: "default" | "environment" | "cli";
 };
@@ -180,6 +182,7 @@ function runnerConfigTemplateFromProfile(
     contextBudget: deriveModelContextBudget(contextProfile),
     profileName: profile.name,
     inputModalities: profile.inputModalities,
+    toolResultModalities: profile.toolResultModalities,
     bashGuardMode: environment.bashGuardMode,
     bashGuardSource: environment.bashGuardSource,
   });
@@ -205,6 +208,7 @@ function runnerConfigTemplateFromEnvironment(
     contextProfile,
     contextBudget: deriveModelContextBudget(contextProfile),
     inputModalities: Object.freeze(["text"] as const),
+    toolResultModalities: Object.freeze(["text"] as const),
     bashGuardMode: environment.bashGuardMode,
     bashGuardSource: environment.bashGuardSource,
   });

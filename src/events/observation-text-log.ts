@@ -209,7 +209,7 @@ function toolCallSummary(call: ToolCall): string {
 }
 
 function observationContent(observation: ToolObservation): string {
-  return observation.content;
+  return observation.displayText;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

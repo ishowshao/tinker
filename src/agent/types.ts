@@ -1,5 +1,5 @@
 import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-id";
-import type { UserMessage } from "../image/image-types";
+import type { ImageAssetRef, UserMessage } from "../image/image-types";
 
 export type {
   CodePointRange,
@@ -45,12 +45,24 @@ export type AssistantMessage = {
   toolCalls?: readonly ToolCall[];
 };
 
+export type ToolResultTextContent = {
+  readonly type: "text";
+  readonly text: string;
+};
+
+export type ToolResultImageContent = {
+  readonly type: "image";
+  readonly asset: ImageAssetRef;
+};
+
+export type ToolResultContent = ToolResultTextContent | ToolResultImageContent;
+
 export type ToolMessage = {
   role: "tool";
   toolCallId: ToolCallId;
   providerToolCallId: string;
   name: string;
-  content: string;
+  content: readonly ToolResultContent[];
 };
 
 export type AgentMessage =

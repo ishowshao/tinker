@@ -4,6 +4,11 @@ import { runAgent } from "../agent/loop";
 import type { RuntimeSessionContext } from "../agent/runtime-session";
 import { InMemorySessionLedger } from "../agent/session-ledger";
 import type { IterationIdentity, ToolCall, TurnIdentity } from "../agent/types";
+import {
+  canonicalToolResultContentHash,
+  textToolResultContent,
+  toolResultDisplayText,
+} from "../agent/tool-result-content";
 import { ContextRevisionCompiler } from "../context/context-revision-compiler";
 import { swapOnlyPolicyV1 } from "../context/context-policy";
 import {
@@ -14,11 +19,13 @@ import {
 import { ContextSwapRenderer } from "../context/context-swap-renderer";
 import {
   contentHash,
+  CURRENT_TOOL_OBSERVATION_FORMAT,
   rawResultHash,
   type CanonicalMessageRecord,
   type ToolResultRecord,
 } from "../context/protocol-frame";
 import { runtimeIdFactory } from "../ids/runtime-id";
+import { imageAssetIdForBytes } from "../image/image-types";
 import type { AgentEventInput } from "../events/types";
 import type {
   ModelClient,
@@ -28,6 +35,7 @@ import type {
 } from "../model/model-client";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import { OpenAIChatModelClient } from "../model/openai-chat-model-client";
+import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { ToolRegistry, ToolRuntime } from "../tools/registry";
 import type { ToolRawResult } from "../tools/types";
@@ -451,7 +459,7 @@ describe("SwapPlanner", () => {
           call,
           kind: "returned",
           raw: readRaw(marker),
-          observation: marker.repeat(12_000),
+          observation: textToolResultContent(marker.repeat(12_000)),
         },
       ])[0];
     };
@@ -487,6 +495,89 @@ describe("SwapPlanner", () => {
     expect(result.plan?.addedOverrides.map((entry) => entry.ordinal)).not.toContain(
       unseen.ordinal,
     );
+  });
+
+  test("uses a media-removing placeholder and protects an unconsumed ViewImage", () => {
+    const fixture = activeViewImageFixture();
+    const built = fixture.pending.agent.buildModelRequest([]);
+    const model = new PreparingImageModel();
+    const activePrepared = model.prepare(built.request);
+    const activeUsage = new ContextMeter(TEST_CONTEXT_BUDGET).measure(activePrepared);
+    expect(activePrepared.mediaOccurrenceCount).toBe(1);
+
+    const protectedResult = new SwapPlanner(model).plan({
+      active: built.compiled,
+      revision: built.revision,
+      surface: built.surface,
+      activeOverrides: built.activeOverrides,
+      canonical: built.canonical,
+      activePrepared,
+      activeUsage,
+      tools: [],
+      policy: swapOnlyPolicyV1,
+      trigger: "benchmark_forced",
+      forcedTargetTokens: activeUsage.usedInputTokens - 1,
+      activeTurn: {
+        turnId: fixture.turn.turnId,
+        consumedThroughOrdinal: fixture.toolMessage.ordinal - 1,
+      },
+    });
+    expect(protectedResult.eligibleCandidateCount).toBe(0);
+    expect(protectedResult.excludedByReason).toMatchObject({
+      active_turn_unconsumed: 1,
+    });
+
+    const consumedResult = new SwapPlanner(model).plan({
+      active: built.compiled,
+      revision: built.revision,
+      surface: built.surface,
+      activeOverrides: built.activeOverrides,
+      canonical: built.canonical,
+      activePrepared,
+      activeUsage,
+      tools: [],
+      policy: swapOnlyPolicyV1,
+      trigger: "benchmark_forced",
+      forcedTargetTokens: activeUsage.usedInputTokens - 1,
+      activeTurn: {
+        turnId: fixture.turn.turnId,
+        consumedThroughOrdinal: fixture.toolMessage.ordinal,
+      },
+    });
+    const override = consumedResult.plan?.addedOverrides[0];
+    expect(override).toMatchObject({
+      messageId: fixture.toolMessage.messageId,
+      rendererFormat: "swap-tool-image-v1",
+    });
+    expect(override?.renderedContent).toBe(
+      `[Tool image omitted from compacted context: ViewImage fixture.png, image/png, 2048x1024, asset=${fixture.asset.assetId.slice(0, 12)}…. Use ViewImage again if the current image is required.]`,
+    );
+    expect(consumedResult.plan?.guardedTokensAfter).toBeLessThan(
+      consumedResult.guardedTokensBefore,
+    );
+
+    if (override === undefined) {
+      throw new Error("Expected a ViewImage swap override.");
+    }
+    const compiled = new ContextRevisionCompiler().compileProspective({
+      active: built.compiled,
+      canonical: built.canonical,
+      activeOverrides: built.activeOverrides,
+      addedOverrides: [override],
+      activeSurface: built.surface,
+    });
+    const swappedPrepared = model.prepare({
+      messages: compiled.entries.map((entry) => entry.message),
+      tools: [],
+    });
+    expect(swappedPrepared.mediaOccurrenceCount).toBe(0);
+    expect(
+      built.canonical.messages.find(
+        (message) => message.messageId === fixture.toolMessage.messageId,
+      ),
+    ).toMatchObject({
+      content: [{ type: "text" }, { type: "image", asset: fixture.asset }],
+    });
   });
 });
 
@@ -529,7 +620,9 @@ describe("runtime shadow isolation", () => {
       model.requestedInputs[0]?.messages.some(
         (message) =>
           message.role === "tool" &&
-          message.content.startsWith("[Tinker historical tool observation swapped]"),
+          toolResultDisplayText(message.content).startsWith(
+            "[Tinker historical tool observation swapped]",
+          ),
       ),
     ).toBe(false);
     expect(events.map((event) => event.type)).toContain("context.shadow.planned");
@@ -594,6 +687,8 @@ describe("runtime shadow isolation", () => {
 });
 
 class PreparingOnlyModel implements ModelClient {
+  readonly inputModalities = Object.freeze(["text"] as const);
+  readonly toolResultModalities = Object.freeze(["text"] as const);
   readonly messageProtocol = Object.freeze({
     adapter: "openai-chat" as const,
     serializationVersion: "openai-chat-v1",
@@ -618,7 +713,34 @@ class PreparingOnlyModel implements ModelClient {
   }
 }
 
+class PreparingImageModel implements ModelClient {
+  readonly inputModalities = Object.freeze(["text", "image"] as const);
+  readonly toolResultModalities = Object.freeze(["text", "image"] as const);
+  readonly messageProtocol = Object.freeze({
+    adapter: "openai-responses" as const,
+    serializationVersion: "openai-responses-v2",
+  });
+  private readonly serializer = new OpenAIResponsesModelClient({
+    apiKey: "test-no-network",
+    baseURL: "https://example.invalid/v1",
+    model: "test-model",
+    contextBudget: TEST_CONTEXT_BUDGET,
+    inputModalities: ["text", "image"],
+    toolResultModalities: ["text", "image"],
+  });
+
+  prepare(input: ModelRequestInput): PreparedModelRequest {
+    return this.serializer.prepare(input);
+  }
+
+  async request(): Promise<ModelRequestOutput> {
+    throw new Error("ViewImage planning fixture must never request the provider.");
+  }
+}
+
 class RuntimeShadowModel implements ModelClient {
+  readonly inputModalities = Object.freeze(["text"] as const);
+  readonly toolResultModalities = Object.freeze(["text"] as const);
   readonly messageProtocol = Object.freeze({
     adapter: "openai-chat" as const,
     serializationVersion: "openai-chat-v1",
@@ -641,7 +763,9 @@ class RuntimeShadowModel implements ModelClient {
       input.messages.some(
         (message) =>
           message.role === "tool" &&
-          message.content.startsWith("[Tinker historical tool observation swapped]"),
+          toolResultDisplayText(message.content).startsWith(
+            "[Tinker historical tool observation swapped]",
+          ),
       )
     ) {
       throw new Error("secret prospective serializer detail");
@@ -671,12 +795,13 @@ function rendererFixture(name: string, raw: ToolRawResult) {
   const messageId = runtimeIdFactory.createMessageId();
   const toolCallId = runtimeIdFactory.createToolCallId();
   const observation = `secret-observation-${raw.kind}-${"x".repeat(12_000)}`;
+  const content = textToolResultContent(observation);
   const message: Extract<CanonicalMessageRecord, { role: "tool" }> = {
     messageId,
     sessionId,
     frameId,
     ordinal: 3,
-    contentSha256: contentHash(observation),
+    contentSha256: canonicalToolResultContentHash(content),
     createdAt: "2026-07-16T00:00:00.000Z",
     role: "tool",
     turnId: runtimeIdFactory.createTurnId(),
@@ -684,7 +809,8 @@ function rendererFixture(name: string, raw: ToolRawResult) {
     toolCallId,
     providerToolCallId: "provider-call",
     name,
-    content: observation,
+    content,
+    displayText: observation,
     origin: "tool",
   };
   const result: ToolResultRecord = {
@@ -696,12 +822,73 @@ function rendererFixture(name: string, raw: ToolRawResult) {
       kind: "returned",
       raw,
       rawSha256: rawResultHash(raw),
-      observationFormat: "tool-observation-v2",
+      observationFormat: CURRENT_TOOL_OBSERVATION_FORMAT,
     },
     observationSha256: message.contentSha256,
     createdAt: message.createdAt,
   };
   return { message, result };
+}
+
+function activeViewImageFixture() {
+  const sessionId = runtimeIdFactory.createSessionId();
+  const ledger = new InMemorySessionLedger({
+    sessionId,
+    systemPrompt: "system",
+    idFactory: runtimeIdFactory,
+  });
+  const turn = nextTurn(sessionId, 1);
+  const iteration: IterationIdentity = {
+    ...turn,
+    iterationId: runtimeIdFactory.createIterationId(),
+    iterationNumber: 1,
+  };
+  const call: ToolCall = {
+    ...iteration,
+    toolCallId: runtimeIdFactory.createToolCallId(),
+    toolCallNumber: 1,
+    providerToolCallId: "provider-view-image",
+    name: "ViewImage",
+    args: { file_path: "fixture.png" },
+  };
+  const asset = Object.freeze({
+    assetId: imageAssetIdForBytes(Buffer.from("view-image-context-fixture")),
+    mimeType: "image/png" as const,
+    byteLength: 1_024,
+    width: 2_048,
+    height: 1_024,
+  });
+  const raw = Object.freeze({
+    kind: "view_image" as const,
+    ok: true,
+    filePath: "fixture.png",
+    originalName: "fixture.png",
+    asset,
+  });
+  const observation = new ObservationBuilder().build({ call, raw });
+  const pending = ledger.beginTurn({
+    turn,
+    userMessage: { role: "user", content: "inspect fixture" },
+  });
+  pending.agent.appendAssistant({
+    iteration,
+    message: { role: "assistant", toolCalls: [call] },
+    provider: "test",
+    model: "test-model",
+  });
+  const completion = pending.agent.commitToolCompletions([
+    { call, kind: "returned", raw, observation: observation.content },
+  ])[0];
+  if (completion === undefined) {
+    throw new Error("Expected a committed ViewImage completion.");
+  }
+  const toolMessage = ledger
+    .snapshot({ allowOpenTail: false })
+    .messages.find((message) => message.messageId === completion.toolMessageId);
+  if (toolMessage?.role !== "tool") {
+    throw new Error("Expected a canonical ViewImage tool message.");
+  }
+  return { pending, turn, toolMessage, asset };
 }
 
 function planningFixture() {
@@ -886,7 +1073,7 @@ function appendToolTurn(
             call,
             kind: "returned",
             raw: requireRaw(specification.raw),
-            observation: specification.observation,
+            observation: textToolResultContent(specification.observation),
           },
         ],
   );

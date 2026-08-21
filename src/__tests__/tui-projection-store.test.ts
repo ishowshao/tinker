@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { textToolResultContent } from "../agent/tool-result-content";
 import type { ToolCall } from "../agent/types";
 import type { AgentEvent } from "../events/types";
 import type { IterationId, SessionId, ToolCallId, TurnId } from "../ids/runtime-id";
@@ -247,7 +248,10 @@ describe("TuiProjectionStore", () => {
       timestamp: timestamp(6),
       data: {
         call,
-        observation: { content: observationSecret },
+        observation: {
+          content: textToolResultContent(observationSecret),
+          displayText: observationSecret,
+        },
       },
     });
 

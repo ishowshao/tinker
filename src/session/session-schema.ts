@@ -4,7 +4,7 @@ import type { SessionId } from "../ids/runtime-id";
 import { SessionError } from "./session-errors";
 
 export const SESSION_APPLICATION_ID = 0x544b5231;
-export const SESSION_SCHEMA_VERSION = 9;
+export const SESSION_SCHEMA_VERSION = 10;
 
 type SchemaDefinition = {
   type: "table" | "index" | "trigger" | "view";
@@ -27,7 +27,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
     name: "session_meta",
     sql: `CREATE TABLE session_meta (
       singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      schema_version INTEGER NOT NULL CHECK (schema_version = 9),
+      schema_version INTEGER NOT NULL CHECK (schema_version = 10),
       schema_fingerprint TEXT NOT NULL,
       initialization_state TEXT NOT NULL CHECK (initialization_state IN ('creating', 'ready')),
       session_id TEXT NOT NULL UNIQUE,
@@ -233,6 +233,24 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
   {
     type: "table",
+    name: "tool_message_content_blocks",
+    sql: `CREATE TABLE tool_message_content_blocks (
+      message_id TEXT NOT NULL,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      kind TEXT NOT NULL CHECK (kind IN ('text', 'image')),
+      text_content TEXT,
+      asset_id TEXT,
+      PRIMARY KEY (message_id, position),
+      FOREIGN KEY (message_id) REFERENCES messages(message_id),
+      FOREIGN KEY (asset_id) REFERENCES image_assets(asset_id),
+      CHECK (
+        (kind = 'text' AND text_content IS NOT NULL AND length(text_content) > 0 AND asset_id IS NULL) OR
+        (kind = 'image' AND text_content IS NULL AND asset_id IS NOT NULL)
+      )
+    ) STRICT`,
+  },
+  {
+    type: "table",
     name: "context_surfaces",
     sql: `CREATE TABLE context_surfaces (
       surface_id TEXT PRIMARY KEY,
@@ -334,7 +352,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       frame_id TEXT NOT NULL,
       ordinal INTEGER NOT NULL CHECK (ordinal >= 1),
       representation TEXT NOT NULL CHECK (representation = 'swapped'),
-      renderer_format TEXT NOT NULL CHECK (renderer_format IN ('swap-observation-v1', 'skill-activation-receipt-v1')),
+      renderer_format TEXT NOT NULL CHECK (renderer_format IN ('swap-observation-v1', 'swap-tool-image-v1', 'skill-activation-receipt-v1')),
       source TEXT NOT NULL,
       original_content_sha256 TEXT NOT NULL CHECK (length(original_content_sha256) = 64),
       rendered_content TEXT NOT NULL CHECK (length(rendered_content) > 0),
@@ -351,7 +369,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
       FOREIGN KEY (message_id) REFERENCES messages(message_id),
       FOREIGN KEY (frame_id) REFERENCES protocol_frames(frame_id),
       CHECK (original_bytes = rendered_bytes + byte_savings),
-      CHECK (renderer_format <> 'swap-observation-v1' OR byte_savings > 0)
+      CHECK (renderer_format = 'swap-tool-image-v1' OR byte_savings > 0)
     ) STRICT`,
   },
   {
@@ -430,6 +448,11 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
   {
     type: "index",
+    name: "idx_tool_message_content_blocks_asset",
+    sql: "CREATE INDEX idx_tool_message_content_blocks_asset ON tool_message_content_blocks(asset_id)",
+  },
+  {
+    type: "index",
     name: "idx_turns_session_recent",
     sql: "CREATE INDEX idx_turns_session_recent ON turns(session_id, turn_number DESC)",
   },
@@ -476,9 +499,32 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   ...immutableTriggers("tool_results"),
   ...immutableTriggers("image_assets"),
   ...immutableTriggers("message_image_attachments"),
+  ...immutableTriggers("tool_message_content_blocks"),
   ...immutableTriggers("context_surfaces"),
   ...immutableTriggers("context_revisions"),
   ...immutableTriggers("context_overrides"),
+  {
+    type: "trigger",
+    name: "tool_message_content_blocks_validate_insert",
+    sql: `CREATE TRIGGER tool_message_content_blocks_validate_insert
+      BEFORE INSERT ON tool_message_content_blocks
+      WHEN NOT (
+        EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.message_id = NEW.message_id AND m.role = 'tool'
+        ) AND
+        NEW.position = (
+          SELECT COUNT(*) FROM tool_message_content_blocks
+          WHERE message_id = NEW.message_id
+        ) AND
+        NOT (
+          NEW.kind = 'text' AND NEW.position > 0 AND
+          (SELECT kind FROM tool_message_content_blocks
+           WHERE message_id = NEW.message_id AND position = NEW.position - 1) = 'text'
+        )
+      )
+      BEGIN SELECT RAISE(ABORT, 'invalid tool message content block insert'); END`,
+  },
   {
     type: "trigger",
     name: "skill_activations_no_delete",
@@ -636,7 +682,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
           SELECT 1 FROM context_revisions cr
           WHERE cr.revision_id = NEW.introduced_revision_id
             AND cr.session_id = NEW.session_id
-            AND ((cr.kind = 'swap_only' AND NEW.renderer_format = 'swap-observation-v1') OR
+            AND ((cr.kind = 'swap_only' AND NEW.renderer_format IN ('swap-observation-v1', 'swap-tool-image-v1')) OR
                  (cr.kind = 'skills_update' AND NEW.renderer_format = 'skill-activation-receipt-v1'))
             AND NEW.ordinal >= cr.keep_from_ordinal
             AND NEW.ordinal <= cr.source_through_ordinal
@@ -659,6 +705,10 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
             AND tr.session_id = NEW.session_id
             AND tr.frame_id = NEW.frame_id
             AND tr.observation_sha256 = NEW.original_content_sha256
+            AND (NEW.renderer_format <> 'swap-tool-image-v1' OR
+                 (m.name = 'ViewImage' AND tr.completion_kind = 'returned' AND
+                  json_extract(tr.raw_json, '$.kind') = 'view_image' AND
+                  json_extract(tr.raw_json, '$.ok') = 1))
             AND (NEW.renderer_format <> 'skill-activation-receipt-v1' OR
                  (m.name = 'Skill' AND tr.completion_kind = 'returned' AND
                   json_extract(tr.raw_json, '$.kind') = 'skill' AND
@@ -845,7 +895,7 @@ const schemaDefinitions: readonly SchemaDefinition[] = [
   },
 ];
 
-export const SESSION_SCHEMA_V9_FINGERPRINT = sha256(
+export const SESSION_SCHEMA_V10_FINGERPRINT = sha256(
   stableJsonStringify({
     definitions: schemaDefinitions.map((definition) => ({
       type: definition.type,
@@ -1016,7 +1066,7 @@ export function upgradeActiveTurnRetirementContract(database: Database): boolean
        WHERE singleton = 1 AND schema_fingerprint = ?`,
     )
     .run(
-      SESSION_SCHEMA_V9_FINGERPRINT,
+      SESSION_SCHEMA_V10_FINGERPRINT,
       PRE_ACTIVE_TURN_RETIREMENT_SCHEMA_V9_FINGERPRINT,
     );
   database.exec(metadataTrigger.sql);
@@ -1092,7 +1142,7 @@ export function verifyReadableSessionSchema(
 
   let expectedDefinitions: readonly SchemaDefinition[];
   let compatibility: "current" | "migratable";
-  if (meta.schema_fingerprint === SESSION_SCHEMA_V9_FINGERPRINT) {
+  if (meta.schema_fingerprint === SESSION_SCHEMA_V10_FINGERPRINT) {
     expectedDefinitions = schemaDefinitions;
     compatibility = "current";
   } else if (
@@ -1195,7 +1245,7 @@ function verifySessionSchemaDefinitions(
     throw new SessionError(
       "SESSION_SCHEMA_INVALID",
       "verify_schema",
-      "Session FTS configuration does not match schema v9.",
+      "Session FTS configuration does not match schema v10.",
       { sessionId },
     );
   }

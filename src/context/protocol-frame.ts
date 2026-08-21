@@ -6,18 +6,26 @@ import type {
   AssistantMessage,
   IterationIdentity,
   ToolCall,
+  ToolResultContent,
   TurnIdentity,
 } from "../agent/types";
 import {
+  canonicalToolResultContentHash,
+  textToolResultContent,
+  toolResultDisplayText,
+  validateToolResultContent,
+} from "../agent/tool-result-content";
+import {
   canonicalUserMessageHash,
+  validateImageAssetRef,
+  validateOriginalImageName,
   validateUserMessage,
   type UserImageAttachment,
   type UserMessage,
 } from "../image/image-types";
 
-export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v3" as const;
+export const CURRENT_TOOL_OBSERVATION_FORMAT = "tool-observation-v4" as const;
 export const SUPPORTED_TOOL_OBSERVATION_FORMATS = [
-  "tool-observation-v2",
   CURRENT_TOOL_OBSERVATION_FORMAT,
 ] as const;
 export type SupportedToolObservationFormat =
@@ -63,7 +71,8 @@ export type CanonicalMessageRecord =
       readonly toolCallId: ToolCall["toolCallId"];
       readonly providerToolCallId: string;
       readonly name: string;
-      readonly content: string;
+      readonly content: readonly ToolResultContent[];
+      readonly displayText: string;
       readonly origin: "tool" | "runtime";
     });
 
@@ -123,7 +132,7 @@ export type ReturnedToolCompletionInput = {
   readonly call: ToolCall;
   readonly kind: "returned";
   readonly raw: ToolRawResult;
-  readonly observation: string;
+  readonly observation: readonly ToolResultContent[];
 };
 
 export type SyntheticToolCompletionInput = {
@@ -193,12 +202,13 @@ export function materializeAgentMessages(
         return message;
       }
       case "tool":
+        validateToolResultContent(record.content);
         return {
           role: "tool",
           toolCallId: record.toolCallId,
           providerToolCallId: record.providerToolCallId,
           name: record.name,
-          content: record.content,
+          content: canonicalClone(record.content),
         };
     }
   });
@@ -243,11 +253,68 @@ export function interruptedCompletionInputs(
   }));
 }
 
-export function observationForCompletion(input: ToolCompletionInput): string {
+export function observationForCompletion(
+  input: ToolCompletionInput,
+): readonly ToolResultContent[] {
   return input.kind === "returned"
     ? input.observation
-    : renderSyntheticToolObservation(input.reason, input.detail);
+    : textToolResultContent(renderSyntheticToolObservation(input.reason, input.detail));
 }
+
+export function displayTextForCompletion(input: ToolCompletionInput): string {
+  return toolResultDisplayText(observationForCompletion(input));
+}
+
+export function validateReturnedToolObservation(input: {
+  readonly toolName: string;
+  readonly raw: ToolRawResult;
+  readonly content: readonly ToolResultContent[];
+}): void {
+  validateToolResultContent(input.content);
+  if (input.raw.kind !== "view_image") {
+    return;
+  }
+  if (input.toolName !== "ViewImage") {
+    throw new Error("ViewImage raw result has an invalid tool name.");
+  }
+  const raw = input.raw;
+  if (!raw.ok) {
+    if (raw.asset !== undefined || raw.originalName !== undefined) {
+      throw new Error("Failed ViewImage result cannot contain image metadata.");
+    }
+    const expected = `ViewImage failed for ${raw.filePath || "(unknown path)"}: ${raw.error ?? "Unknown error."}`;
+    if (
+      input.content.length !== 1 ||
+      input.content[0]?.type !== "text" ||
+      input.content[0].text !== expected
+    ) {
+      throw new Error("Failed ViewImage observation is not canonical.");
+    }
+    return;
+  }
+  if (
+    raw.asset === undefined ||
+    raw.originalName === undefined ||
+    raw.filePath.trim() === "" ||
+    raw.error !== undefined
+  ) {
+    throw new Error("Successful ViewImage result is missing required metadata.");
+  }
+  validateImageAssetRef(raw.asset);
+  validateOriginalImageName(raw.originalName);
+  const expectedText = `Viewed image ${raw.filePath} (${raw.asset.mimeType}, ${raw.asset.width}x${raw.asset.height}, ${raw.asset.byteLength} bytes, asset=${raw.asset.assetId.slice(0, 12)}…).`;
+  if (
+    input.content.length !== 2 ||
+    input.content[0]?.type !== "text" ||
+    input.content[0].text !== expectedText ||
+    input.content[1]?.type !== "image" ||
+    stableJsonStringify(input.content[1].asset) !== stableJsonStringify(raw.asset)
+  ) {
+    throw new Error("Successful ViewImage observation is not canonical.");
+  }
+}
+
+export { canonicalToolResultContentHash };
 
 function requireSyntheticDetail(detail: string | undefined): string {
   if (detail === undefined || detail.trim() === "") {

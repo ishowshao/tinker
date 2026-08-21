@@ -9,7 +9,7 @@ import {
   IMAGE_INPUT_POLICY_VERSION,
 } from "../image/image-input-policy";
 import type { ModelContextBudget } from "./model-context-profile";
-import { ProviderResponseError } from "./model-client";
+import { ProviderResponseError, validateModelModalities } from "./model-client";
 import type {
   MaterializedModelRequest,
   ModelClient,
@@ -29,6 +29,7 @@ import {
 import { OpenAIChatCompletionStreamAccumulator } from "./openai-chat-stream";
 import {
   deepFreeze,
+  imageToolSegment,
   imageUserSegment,
   materializeOpenAIRequest,
   normalizedEndpointPolicy,
@@ -53,6 +54,7 @@ export class OpenAIChatModelClient implements ModelClient {
   private readonly provider: string;
   private readonly stream: boolean;
   readonly inputModalities: readonly ("text" | "image")[];
+  readonly toolResultModalities: readonly ("text" | "image")[];
 
   constructor(
     private readonly options: {
@@ -61,6 +63,8 @@ export class OpenAIChatModelClient implements ModelClient {
       baseURL?: string;
       includeReasoningContent?: boolean;
       inputModalities?: readonly ("text" | "image")[];
+      toolResultModalities?: readonly ("text" | "image")[];
+      profileName?: string;
       model: string;
       providerName?: string;
       reasoningEffort?: ReasoningEffortController;
@@ -72,10 +76,15 @@ export class OpenAIChatModelClient implements ModelClient {
     this.provider = options.providerName ?? "openai-compatible";
     this.stream = options.stream ?? true;
     this.reasoningEffort = options.reasoningEffort;
-    this.inputModalities = Object.freeze([...(options.inputModalities ?? ["text"])]);
-    if (!this.inputModalities.includes("text")) {
-      throw new Error('OpenAI chat input modalities must include "text".');
-    }
+    const modalities = validateModelModalities({
+      profileName: options.profileName,
+      adapter: this.messageProtocol.adapter,
+      inputModalities: options.inputModalities ?? ["text"],
+      toolResultModalities: options.toolResultModalities ?? ["text"],
+      adapterToolResultModalities: ["text"],
+    });
+    this.inputModalities = modalities.inputModalities;
+    this.toolResultModalities = modalities.toolResultModalities;
     this.client = new OpenAI({
       apiKey: options.apiKey,
       baseURL: options.baseURL,
@@ -115,11 +124,13 @@ export class OpenAIChatModelClient implements ModelClient {
     const messageSegments = input.messages.map(
       (message, index): PreparedPromptSegment =>
         message.role === "user" && message.attachments !== undefined
-          ? imageUserSegment(message)
-          : {
-              kind: segmentKind(message.role),
-              normalizedText: stableJsonStringify(messages[index]),
-            },
+          ? imageUserSegment(message, index + 1)
+          : message.role === "tool"
+            ? imageToolSegment(message, index + 1, stableJsonStringify(messages[index]))
+            : {
+                kind: segmentKind(message.role),
+                normalizedText: stableJsonStringify(messages[index]),
+              },
     );
     const mediaOccurrenceCount = messageSegments.reduce(
       (total, segment) => total + (segment.media?.length ?? 0),
@@ -135,6 +146,7 @@ export class OpenAIChatModelClient implements ModelClient {
         includeReasoningContent: this.options.includeReasoningContent === true,
         stream: this.stream,
         inputModalities: this.inputModalities,
+        toolResultModalities: this.toolResultModalities,
         requestPolicy: { toolChoice: "auto" },
         imagePolicy: {
           version: IMAGE_INPUT_POLICY_VERSION,
