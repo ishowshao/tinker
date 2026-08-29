@@ -5071,6 +5071,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "web_fetch",
       "recall",
       "memory_search",
+      "memory_get",
       "skill",
       "mcp",
       "generic",

@@ -1,11 +1,13 @@
 import type { SessionId, TurnId } from "../ids/runtime-id";
 
 export const MEMORY_SEARCH_TOOL_NAME = "MemorySearch" as const;
+export const MEMORY_GET_TOOL_NAME = "MemoryGet" as const;
 export const MEMORY_SCHEMA_VERSION = 2 as const;
 export const MAX_MEMORY_TEXT_BYTES = 512;
 export const MAX_MEMORY_SUMMARY_BYTES = 4_096;
 export const MAX_SEARCH_RESULT_SUMMARY_BYTES = 1_536;
 export const MAX_MEMORY_QUERY_BYTES = 1_024;
+export const MAX_MEMORY_ID_BYTES = 64;
 export const MEMORY_SEARCH_LIMIT = 5;
 export const MEMORY_EXTRACTION_QUEUE_CAPACITY = 64;
 
@@ -76,6 +78,10 @@ export type StoredMemorySummary = {
   readonly createdAt: string;
 };
 
+export type StoredMemoryRecord = StoredMemorySummary & {
+  readonly sourceTurnId: string;
+};
+
 export type MemoryExtractionRejectedCounts = {
   readonly duplicate: number;
   readonly secret: number;
@@ -117,9 +123,21 @@ export type MemoryInitDiagnostic = {
   readonly reason: string;
 };
 
+export type MemoryGetDiagnostic = {
+  readonly at: string;
+  readonly kind: "get";
+  readonly outcome: "ok" | "failed";
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly sessionId: string;
+  readonly found: boolean;
+  readonly ms: number;
+};
+
 export type MemoryDiagnostic =
   | MemoryExtractionDiagnostic
   | MemorySearchDiagnostic
+  | MemoryGetDiagnostic
   | MemoryInitDiagnostic;
 
 export class MemoryError extends Error {

@@ -308,6 +308,7 @@ type CommonRuntimeSessionInput = {
   webFetchRefiner?: Refiner;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
+  memoryGet?: ToolExecutor;
   completedTurnHook?: CompletedTurnHook;
   enableTurnUndo?: boolean;
   bashGuard?: {
@@ -670,6 +671,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         ...(input.memorySearch === undefined
           ? {}
           : { memorySearch: input.memorySearch }),
+        ...(input.memoryGet === undefined ? {} : { memoryGet: input.memoryGet }),
         ...(session.skillCatalog.skills.size === 0
           ? {}
           : {

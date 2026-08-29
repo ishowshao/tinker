@@ -882,6 +882,11 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         return base;
       }
       return `${base} -> ${raw.matches.length} derived memor${raw.matches.length === 1 ? "y" : "ies"}`;
+    case "memory_get":
+      if (!raw.ok) {
+        return base;
+      }
+      return raw.memory === null ? `${base} -> not found` : `${base} -> found`;
     case "skill":
       if (!raw.ok) {
         return `${base} failed -> ${boundedToolError(raw.error)}`;
@@ -968,6 +973,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "web_fetch":
     case "recall":
     case "memory_search":
+    case "memory_get":
     case "skill":
     case "mcp":
     case "generic":
@@ -1007,6 +1013,7 @@ function toolRawResultDiff(
     case "web_fetch":
     case "recall":
     case "memory_search":
+    case "memory_get":
     case "skill":
     case "mcp":
     case "generic":

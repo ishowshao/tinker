@@ -160,6 +160,7 @@ export function createDefaultTooling(options: {
   skillCoordinator?: SkillActivationCoordinator;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
+  memoryGet?: ToolExecutor;
   enableTurnUndo?: boolean;
   imageAssetStore?: ImageAssetStore;
   supportsViewImage?: boolean;
@@ -226,6 +227,9 @@ export function createDefaultTooling(options: {
   );
   if (options.memorySearch !== undefined) {
     registry.register(options.memorySearch);
+  }
+  if (options.memoryGet !== undefined) {
+    registry.register(options.memoryGet);
   }
   if (options.skillCatalog !== undefined) {
     if (options.skillCatalog.skills.size === 0) {

@@ -13,6 +13,7 @@ import {
   type MemoryEmbeddingIdentity,
   type MemoryPaths,
   type MemorySearchMatch,
+  type StoredMemoryRecord,
   type StoredMemorySummary,
   type MemoryWriteBatch,
   type MemoryWriteResult,
@@ -298,6 +299,34 @@ export class MemoryStore {
       );
     }
     return Object.freeze(memories);
+  }
+
+  getById(memoryId: string): StoredMemoryRecord | undefined {
+    this.requireOpen();
+    const rowValue = this.database
+      .query(
+        `SELECT memory_id, text, summary, source_workspace, source_session_id,
+                source_turn_id, created_at
+         FROM memories
+         WHERE memory_id = ?`,
+      )
+      .get(memoryId);
+    if (rowValue === null) {
+      return undefined;
+    }
+    const row = sqlRecord(rowValue, "memory row");
+    return Object.freeze({
+      memoryId: sqlString(row.memory_id, "memory_id"),
+      text: sqlString(row.text, "memory text"),
+      summary: sqlSummary(row.summary, "memory summary"),
+      sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+      sourceSessionId: sqlString(row.source_session_id, "memory source_session_id"),
+      sourceTurnId: sqlString(row.source_turn_id, "memory source_turn_id"),
+      createdAt: requireUtcTimestamp(
+        sqlString(row.created_at, "memory created_at"),
+        "memory created_at",
+      ),
+    });
   }
 
   count(): number {

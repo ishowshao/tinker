@@ -314,6 +314,7 @@ export type MemorySearchRawResult =
   | {
       ok: true;
       matches: readonly {
+        memoryId: string;
         text: string;
         summary: string;
         score: number;
@@ -321,6 +322,24 @@ export type MemorySearchRawResult =
         sourceSessionId: string;
         createdAt: string;
       }[];
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type MemoryGetRawResult =
+  | {
+      ok: true;
+      memory: {
+        memoryId: string;
+        text: string;
+        summary: string;
+        sourceWorkspace: string;
+        sourceSessionId: string;
+        sourceTurnId: string;
+        createdAt: string;
+      } | null;
     }
   | {
       ok: false;
@@ -394,6 +413,7 @@ export type ToolRawResultByKind = {
   web_fetch: WebFetchRawResult;
   recall: RecallRawResult;
   memory_search: MemorySearchRawResult;
+  memory_get: MemoryGetRawResult;
   skill: SkillRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;

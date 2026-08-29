@@ -167,7 +167,7 @@ class AbortableExtractionModel extends TestModelClient {
 }
 
 describe("completed-turn memory projection", () => {
-  test("keeps full text evidence and filters only MemorySearch observations", () => {
+  test("keeps full text evidence and filters MemorySearch and MemoryGet observations", () => {
     const evidence = buildExtractionEvidenceText(
       "/workspace/a",
       completedSnapshot("user text [Image #1]"),
@@ -186,6 +186,8 @@ describe("completed-turn memory projection", () => {
     expect(parsed.messages.some((message) => message.name === "MemorySearch")).toBe(
       false,
     );
+    expect(parsed.messages.some((message) => message.name === "MemoryGet")).toBe(false);
+    expect(evidence).not.toContain("old derived memory");
     expect(parsed.messages.find((message) => message.name === "Read")?.content).toBe(
       "Read succeeded with verified output.",
     );
@@ -283,9 +285,11 @@ describe("MemoryCoordinator", () => {
       expect(observation).toContain("may be stale or wrong");
       expect(observation).toContain(fixture.workspaceRoot);
       expect(observation).toContain(`session=${fixture.sessionId}`);
+      expect(observation).toContain(`memory=${raw.matches[0]?.memoryId}`);
       expect(observation).toContain(
         "User stated that Tinker source changes require bun run check before completion.",
       );
+      expect(observation).toContain("MemoryGet");
       expect(observation).toContain("RecallSearch");
 
       const invalid = await executor.execute(
@@ -299,11 +303,68 @@ describe("MemoryCoordinator", () => {
       });
       expect(embeddings.calls).toHaveLength(2);
 
-      await waitForLogLines(fixture.paths.log, 3);
+      const getExecutor = coordinator.createGetToolExecutor({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+      });
+      const memoryId = raw.matches[0]?.memoryId;
+      if (memoryId === undefined) {
+        throw new Error("Expected MemorySearch to expose a memoryId.");
+      }
+      const got = await getExecutor.execute({ id: memoryId }, {} as ToolCall, {
+        signal: new AbortController().signal,
+      });
+      expect(got).toMatchObject({ kind: "memory_get", ok: true });
+      if (got.kind !== "memory_get" || !got.ok || got.memory === null) {
+        throw new Error("Expected successful MemoryGet.");
+      }
+      expect(got.memory).toMatchObject({
+        memoryId,
+        text: "Tinker quality gate: source changes require bun run check.",
+        summary:
+          "User stated that Tinker source changes require bun run check before completion.",
+        sourceWorkspace: fixture.workspaceRoot,
+        sourceSessionId: fixture.sessionId,
+        sourceTurnId: "coordinator-turn-1",
+      });
+      const getObservation = new ObservationBuilder().build({
+        call: {} as ToolCall,
+        raw: got,
+      }).displayText;
+      expect(getObservation).toContain("derived historical memory record");
+      expect(getObservation).toContain("may be stale or wrong");
+      expect(getObservation).toContain(`memory=${memoryId}`);
+      expect(getObservation).toContain("turn=coordinator-turn-1");
+      expect(getObservation).toContain(
+        "summary: User stated that Tinker source changes require bun run check before completion.",
+      );
+      expect(getObservation).toContain("RecallSearch");
+
+      const missing = await getExecutor.execute(
+        { id: "01a00000-0000-7000-8000-000000000000" },
+        {} as ToolCall,
+        { signal: new AbortController().signal },
+      );
+      expect(missing).toMatchObject({ kind: "memory_get", ok: true, memory: null });
+      const missingObservation = new ObservationBuilder().build({
+        call: {} as ToolCall,
+        raw: missing,
+      }).displayText;
+      expect(missingObservation).toBe("MemoryGet found no stored memory with that id.");
+
+      const invalidGet = await getExecutor.execute(
+        { id: memoryId, extra: true },
+        {} as ToolCall,
+        { signal: new AbortController().signal },
+      );
+      expect(invalidGet).toMatchObject({ kind: "memory_get", ok: false });
+
+      await waitForLogLines(fixture.paths.log, 6);
       const diagnosticText = await readFile(fixture.paths.log, "utf8");
       expect(diagnosticText).not.toContain("What checks does Tinker require?");
       expect(diagnosticText).not.toContain("Tinker quality gate");
       expect(diagnosticText).not.toContain("User stated that Tinker");
+      expect(diagnosticText).not.toContain(memoryId);
       const diagnostics = diagnosticText
         .trim()
         .split("\n")
@@ -312,6 +373,9 @@ describe("MemoryCoordinator", () => {
         "extraction",
         "search",
         "search",
+        "get",
+        "get",
+        "get",
       ]);
       expect(diagnostics[0]).toMatchObject({
         outcome: "ok",
@@ -326,6 +390,12 @@ describe("MemoryCoordinator", () => {
       expect(diagnostics[2]).toMatchObject({
         outcome: "failed",
         reason: "memory_search_args_invalid",
+      });
+      expect(diagnostics[3]).toMatchObject({ outcome: "ok", found: true });
+      expect(diagnostics[4]).toMatchObject({ outcome: "ok", found: false });
+      expect(diagnostics[5]).toMatchObject({
+        outcome: "failed",
+        reason: "memory_get_args_invalid",
       });
       const extractedText = await readFile(fixture.paths.extractedLog, "utf8");
       expect(extractedText).toContain(
@@ -831,6 +901,12 @@ function completedSnapshot(userContent: string): CompletedTurnSnapshot {
       }),
       Object.freeze({
         ordinal: 5,
+        role: "tool" as const,
+        name: "MemoryGet",
+        content: "old derived memory full record",
+      }),
+      Object.freeze({
+        ordinal: 6,
         role: "tool" as const,
         name: "Read",
         content: "Read succeeded with verified output.",

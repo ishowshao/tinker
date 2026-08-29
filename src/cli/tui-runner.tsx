@@ -129,6 +129,10 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
                 workspaceRoot,
                 sessionId,
               }),
+              memoryGet: memoryCoordinator.createGetToolExecutor({
+                workspaceRoot,
+                sessionId,
+              }),
               completedTurnHook: memoryCoordinator,
             }),
       };

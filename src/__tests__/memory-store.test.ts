@@ -261,6 +261,46 @@ describe("MemoryStore", () => {
     }
   });
 
+  test("gets one stored memory by id including its source turn", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+        createMemoryId: () => "00000000-0000-7000-8000-00000000000a",
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "stored memory",
+            summary: "stored summary",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+
+      expect(store.getById("00000000-0000-7000-8000-00000000000a")).toEqual({
+        memoryId: "00000000-0000-7000-8000-00000000000a",
+        text: "stored memory",
+        summary: "stored summary",
+        sourceWorkspace: fixture.source.workspaceRoot,
+        sourceSessionId: fixture.source.sessionId,
+        sourceTurnId: fixture.source.turnId,
+        createdAt: "2026-07-25T10:00:00.000Z",
+      });
+      expect(store.getById("00000000-0000-7000-8000-00000000000b")).toBeUndefined();
+
+      store.close();
+      expect(() => store.getById("00000000-0000-7000-8000-00000000000a")).toThrow(
+        "store is closed",
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("lists memories without decoding embeddings and rejects an invalid row", async () => {
     const fixture = await createFixture();
     try {

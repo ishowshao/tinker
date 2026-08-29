@@ -80,6 +80,7 @@ describe("SessionStore completed-turn snapshots", () => {
             ok: true,
             matches: [
               {
+                memoryId: "memory-1",
                 text: "A derived memory.",
                 summary: "",
                 score: 0.9,

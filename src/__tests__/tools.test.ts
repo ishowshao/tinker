@@ -120,6 +120,47 @@ describe("ToolRegistry", () => {
       await rm(workspace, { recursive: true });
     }
   });
+
+  test("registers MemoryGet only when composition supplies its executor", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-memory-tool-"));
+    const memoryGet = defineToolExecutor("memory_get", {
+      definition: {
+        name: "MemoryGet",
+        description: "test memory get",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { id: { type: "string" } },
+          required: ["id"],
+        },
+      },
+      async execute() {
+        return { ok: true, memory: null };
+      },
+    });
+    try {
+      const withoutMemory = createDefaultTooling({ workspaceRoot: workspace });
+      expect(
+        withoutMemory.registry
+          .definitions()
+          .some((definition) => definition.name === "MemoryGet"),
+      ).toBe(false);
+      await withoutMemory.dispose();
+
+      const withMemory = createDefaultTooling({
+        workspaceRoot: workspace,
+        memoryGet,
+      });
+      expect(
+        withMemory.registry
+          .definitions()
+          .some((definition) => definition.name === "MemoryGet"),
+      ).toBe(true);
+      await withMemory.dispose();
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
 });
 
 describe("UpdatePlan tool", () => {

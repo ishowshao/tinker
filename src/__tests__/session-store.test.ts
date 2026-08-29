@@ -233,6 +233,14 @@ describe("SessionStore and SqliteSessionLedger", () => {
         name: "Read",
         args: { file_path: "README.md" },
       };
+      const memoryGetCall: ToolCall = {
+        ...firstIteration,
+        toolCallId: runtimeIdFactory.createToolCallId(),
+        toolCallNumber: 2,
+        providerToolCallId: "provider-memory-get",
+        name: "MemoryGet",
+        args: { id: "memory-1" },
+      };
       const pending = ledger.beginTurn({
         turn,
         userMessage: { role: "user", content: "read" },
@@ -244,7 +252,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
           role: "assistant",
           content: "",
           reasoningContent: "",
-          toolCalls: [call],
+          toolCalls: [call, memoryGetCall],
         },
         provider: "test",
         model: "test-model",
@@ -260,6 +268,26 @@ describe("SessionStore and SqliteSessionLedger", () => {
             content: "hello",
           },
           observation: textToolResultContent("Read succeeded."),
+        },
+        {
+          call: memoryGetCall,
+          kind: "returned",
+          raw: {
+            kind: "memory_get",
+            ok: true,
+            memory: {
+              memoryId: "memory-1",
+              text: "A derived memory.",
+              summary: "A detailed historical summary.",
+              sourceWorkspace: "/other",
+              sourceSessionId: "source-session",
+              sourceTurnId: "source-turn",
+              createdAt: "2026-07-25T10:00:00.000Z",
+            },
+          },
+          observation: textToolResultContent(
+            "MemoryGet returned one derived historical memory record.",
+          ),
         },
       ]);
       store.finishIterationForContinuation(firstIteration);
@@ -313,7 +341,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         role: "assistant",
         content: "",
         reasoningContent: "",
-        toolCalls: [call],
+        toolCalls: [call, memoryGetCall],
       });
       const lastEventSequence = store.allocateEventSequence();
       expect(lastEventSequence).toBe(1);
@@ -325,7 +353,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         nextEventSequence: 2,
         initializationState: "ready",
       });
-      expect(store.validateAll({ allowOpenTail: false }).messages).toHaveLength(7);
+      expect(store.validateAll({ allowOpenTail: false }).messages).toHaveLength(8);
       const reopened = new SqliteSessionLedger(store, runtimeIdFactory);
       expect(reopened.buildCommittedModelRequest([])).toEqual(before);
       expect(store.allocateEventSequence()).toBe(2);

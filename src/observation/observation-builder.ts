@@ -11,6 +11,7 @@ import type {
   GenericToolRawResult,
   GlobRawResult,
   GrepRawResult,
+  MemoryGetRawResult,
   MemorySearchRawResult,
   McpToolRawResult,
   ReadFileRawResult,
@@ -48,6 +49,8 @@ export class ObservationBuilder {
         return textObservation(renderRecallObservation(input.raw));
       case "memory_search":
         return textObservation(renderMemorySearchObservation(input.raw));
+      case "memory_get":
+        return textObservation(renderMemoryGetObservation(input.raw));
       case "skill":
         return textObservation(renderSkillObservation(input.raw));
       case "write":
@@ -280,16 +283,39 @@ function renderMemorySearchObservation(raw: MemorySearchRawResult): string {
   }
   const header = `MemorySearch returned ${raw.matches.length} derived historical memory records. They describe past turns and may be stale or wrong; verify current workspace facts with current tools before relying on them.`;
   const footer =
-    "Use RecallSearch on a result's source session when you need its full original context.";
+    "Use MemoryGet on a result's memory id when its summary is truncated or you need the exact stored record; use RecallSearch on its source session for the full original context.";
   return [
     header,
     ...raw.matches.map((match, index) =>
       [
-        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace} session=${match.sourceSessionId}`,
+        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace} session=${match.sourceSessionId} memory=${match.memoryId}`,
         `   ${match.text}`,
         ...(match.summary === "" ? [] : [`   summary: ${match.summary}`]),
       ].join("\n"),
     ),
+    footer,
+  ].join("\n\n");
+}
+
+function renderMemoryGetObservation(raw: MemoryGetRawResult): string {
+  if (!raw.ok) {
+    return `MemoryGet unavailable: ${raw.error}`;
+  }
+  if (raw.memory === null) {
+    return "MemoryGet found no stored memory with that id.";
+  }
+  const memory = raw.memory;
+  const header =
+    "MemoryGet returned one derived historical memory record. It describes a past turn and may be stale or wrong; verify current workspace facts with current tools before relying on it.";
+  const footer =
+    "Use RecallSearch on the source session when you need the full original context.";
+  return [
+    header,
+    [
+      `memory=${memory.memoryId} created_at=${memory.createdAt} workspace=${memory.sourceWorkspace} session=${memory.sourceSessionId} turn=${memory.sourceTurnId}`,
+      `text: ${memory.text}`,
+      ...(memory.summary === "" ? [] : [`summary: ${memory.summary}`]),
+    ].join("\n"),
     footer,
   ].join("\n\n");
 }

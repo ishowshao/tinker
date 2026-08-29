@@ -8,18 +8,24 @@ import type { SessionId } from "../ids/runtime-id";
 import type { ModelContextBudget } from "../model/model-context-profile";
 import type { ModelClient } from "../model/model-client";
 import type { CompletedTurnSnapshot } from "../session/session-store";
-import type { MemorySearchRawResult, ToolExecutor } from "../tools/types";
+import type {
+  MemoryGetRawResult,
+  MemorySearchRawResult,
+  ToolExecutor,
+} from "../tools/types";
 import {
   boundedMemoryError,
   MAX_SEARCH_RESULT_SUMMARY_BYTES,
   MEMORY_EXTRACTION_QUEUE_CAPACITY,
   memoryErrorCode,
+  MEMORY_GET_TOOL_NAME,
   MEMORY_SEARCH_TOOL_NAME,
   MemoryError,
   truncateUtf8,
   type MemoryEmbeddingConfig,
   type MemoryExtractionDiagnostic,
   type MemoryExtractionRejectedCounts,
+  type MemoryGetDiagnostic,
   type MemoryPaths,
   type MemorySearchDiagnostic,
   type StoredMemorySummary,
@@ -36,6 +42,7 @@ import {
   type MemoryExtractionResult,
 } from "./memory-extractor";
 import { ExtractedMemoryLog, MemoryLog } from "./memory-log";
+import { createMemoryGetToolExecutor } from "./memory-get-tool";
 import { createMemorySearchToolExecutor } from "./memory-search-tool";
 import { MemoryStore, resolveMemoryPaths } from "./memory-store";
 import { normalizeEmbedding } from "./vector";
@@ -153,6 +160,16 @@ export class MemoryCoordinator implements CompletedTurnHook {
     return createMemorySearchToolExecutor({
       search: (query, signal) => this.search(query, signal, input),
       recordInvalidCall: (queryBytes) => this.recordInvalidSearch(queryBytes, input),
+    });
+  }
+
+  createGetToolExecutor(input: {
+    readonly workspaceRoot: string;
+    readonly sessionId: SessionId;
+  }): ToolExecutor {
+    return createMemoryGetToolExecutor({
+      get: (memoryId, signal) => this.get(memoryId, signal, input),
+      recordInvalidCall: () => this.recordInvalidGet(input),
     });
   }
 
@@ -415,6 +432,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
         matches: Object.freeze(
           matches.map((match) =>
             Object.freeze({
+              memoryId: match.memoryId,
               text: match.text,
               summary: truncateUtf8(match.summary, MAX_SEARCH_RESULT_SUMMARY_BYTES),
               score: match.score,
@@ -466,6 +484,80 @@ export class MemoryCoordinator implements CompletedTurnHook {
       }),
     );
   }
+
+  private async get(
+    memoryId: string,
+    signal: AbortSignal,
+    source: { readonly workspaceRoot: string; readonly sessionId: SessionId },
+  ): Promise<MemoryGetRawResult> {
+    const startedAt = performance.now();
+    try {
+      signal.throwIfAborted();
+      const record = this.store.getById(memoryId);
+      await this.log.append(
+        getDiagnostic({
+          clock: this.clock,
+          outcome: "ok",
+          reason: null,
+          workspace: source.workspaceRoot,
+          sessionId: source.sessionId,
+          found: record !== undefined,
+          ms: elapsedMs(startedAt),
+        }),
+      );
+      return {
+        ok: true,
+        memory:
+          record === undefined
+            ? null
+            : Object.freeze({
+                memoryId: record.memoryId,
+                text: record.text,
+                summary: record.summary,
+                sourceWorkspace: record.sourceWorkspace,
+                sourceSessionId: record.sourceSessionId,
+                sourceTurnId: record.sourceTurnId,
+                createdAt: record.createdAt,
+              }),
+      };
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+      await this.log.append(
+        getDiagnostic({
+          clock: this.clock,
+          outcome: "failed",
+          reason: memoryErrorCode(error, "memory_get_failed"),
+          workspace: source.workspaceRoot,
+          sessionId: source.sessionId,
+          found: false,
+          ms: elapsedMs(startedAt),
+        }),
+      );
+      return {
+        ok: false,
+        error: boundedMemoryError(error),
+      };
+    }
+  }
+
+  private recordInvalidGet(source: {
+    readonly workspaceRoot: string;
+    readonly sessionId: SessionId;
+  }): Promise<void> {
+    return this.log.append(
+      getDiagnostic({
+        clock: this.clock,
+        outcome: "failed",
+        reason: "memory_get_args_invalid",
+        workspace: source.workspaceRoot,
+        sessionId: source.sessionId,
+        found: false,
+        ms: 0,
+      }),
+    );
+  }
 }
 
 export function buildExtractionEvidenceText(
@@ -480,7 +572,10 @@ export function buildExtractionEvidenceText(
   }
   const messages = snapshot.messages
     .filter(
-      (message) => message.role !== "tool" || message.name !== MEMORY_SEARCH_TOOL_NAME,
+      (message) =>
+        message.role !== "tool" ||
+        (message.name !== MEMORY_SEARCH_TOOL_NAME &&
+          message.name !== MEMORY_GET_TOOL_NAME),
     )
     .map((message) => ({ ...message }));
   return JSON.stringify(
@@ -551,6 +646,27 @@ function searchDiagnostic(input: {
     queryBytes: input.queryBytes,
     returned: input.returned ?? 0,
     scores: Object.freeze([...(input.scores ?? [])]),
+    ms: input.ms,
+  });
+}
+
+function getDiagnostic(input: {
+  readonly clock: () => string;
+  readonly outcome: MemoryGetDiagnostic["outcome"];
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly sessionId: string;
+  readonly found: boolean;
+  readonly ms: number;
+}): MemoryGetDiagnostic {
+  return Object.freeze({
+    at: input.clock(),
+    kind: "get",
+    outcome: input.outcome,
+    reason: input.reason,
+    workspace: input.workspace,
+    sessionId: input.sessionId,
+    found: input.found,
     ms: input.ms,
   });
 }
