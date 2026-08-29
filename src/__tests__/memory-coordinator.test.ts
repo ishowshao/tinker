@@ -1034,6 +1034,14 @@ describe("MemoryCoordinator", () => {
         returned: 3,
         degraded: null,
       });
+      const vectorScores =
+        (diagnostics[3] as { vectorScores?: number[] }).vectorScores ?? [];
+      expect(vectorScores).toHaveLength(3);
+      for (const score of vectorScores) {
+        expect(score).toBeGreaterThanOrEqual(-1);
+        expect(score).toBeLessThanOrEqual(1);
+      }
+      expect([...vectorScores].sort((a, b) => b - a)).toEqual(vectorScores);
       coordinator.dispose();
     } finally {
       await fixture.cleanup();
@@ -1081,6 +1089,7 @@ describe("MemoryCoordinator", () => {
         keywordCount: 1,
         vectorReturned: 0,
         ftsReturned: 1,
+        vectorScores: [],
       });
       coordinator.dispose();
     } finally {

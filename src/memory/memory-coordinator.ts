@@ -21,6 +21,7 @@ import {
   MEMORY_GET_TOOL_NAME,
   MEMORY_RECALL_CANDIDATE_LIMIT,
   MEMORY_RRF_K,
+  MEMORY_SEARCH_DIAGNOSTIC_VECTOR_SCORES_LIMIT,
   MEMORY_SEARCH_LIMIT,
   MEMORY_SEARCH_TOOL_NAME,
   MemoryError,
@@ -470,6 +471,9 @@ export class MemoryCoordinator implements CompletedTurnHook {
           ftsReturned: ftsMatches.length,
           degraded,
           scores: fused.map((match) => roundScore(match.score)),
+          vectorScores: vectorMatches
+            .slice(0, MEMORY_SEARCH_DIAGNOSTIC_VECTOR_SCORES_LIMIT)
+            .map((match) => roundScore(match.score)),
           ms: elapsedMs(startedAt),
         }),
       );
@@ -688,6 +692,7 @@ function searchDiagnostic(input: {
   readonly ftsReturned?: number;
   readonly degraded?: MemoryRecallDegraded | null;
   readonly scores?: readonly number[];
+  readonly vectorScores?: readonly number[];
   readonly ms: number;
 }): MemorySearchDiagnostic {
   return Object.freeze({
@@ -704,6 +709,7 @@ function searchDiagnostic(input: {
     ftsReturned: input.ftsReturned ?? 0,
     degraded: input.degraded ?? null,
     scores: Object.freeze([...(input.scores ?? [])]),
+    vectorScores: Object.freeze([...(input.vectorScores ?? [])]),
     ms: input.ms,
   });
 }

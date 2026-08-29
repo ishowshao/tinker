@@ -14,6 +14,7 @@ export const MAX_MEMORY_KEYWORDS = 8;
 export const MAX_MEMORY_KEYWORD_BYTES = 128;
 export const MEMORY_RRF_K = 60;
 export const MEMORY_EXTRACTION_QUEUE_CAPACITY = 64;
+export const MEMORY_SEARCH_DIAGNOSTIC_VECTOR_SCORES_LIMIT = 10;
 
 export type MemoryEmbeddingKind = "openai-compatible";
 
@@ -146,6 +147,7 @@ export type MemorySearchDiagnostic = {
   readonly ftsReturned: number;
   readonly degraded: MemoryRecallDegraded | null;
   readonly scores: readonly number[];
+  readonly vectorScores: readonly number[];
   readonly ms: number;
 };
 
