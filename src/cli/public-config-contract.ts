@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { rgPath } from "@vscode/ripgrep";
 import { parseModelApi, type ModelApi } from "../model/model-api";
@@ -29,7 +30,7 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     secret: false,
     section: "model",
     description:
-      "Optional model profiles JSON path. Relative paths resolve from the process cwd.",
+      "Optional model profiles JSON path. A leading ~ expands to the home directory; other relative paths resolve from the process cwd.",
   }),
   publicField({
     name: "TINKER_MODEL",
@@ -126,7 +127,8 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     defaultSource: "process-cwd",
     secret: false,
     section: "workspace",
-    description: "Workspace path. Relative paths resolve from the process cwd.",
+    description:
+      "Workspace path. A leading ~ expands to the home directory; other relative paths resolve from the process cwd.",
   }),
   publicField({
     name: "TINKER_MAX_ITERATIONS",
@@ -536,7 +538,7 @@ export function parsePublicEnvironment(
     values[field.name] = parseEnvironmentField(field, env[field.name], mode, cwd);
   }
 
-  const workspaceRoot = path.resolve(
+  const workspaceRoot = resolveUserPath(
     cwd,
     requiredStringValue(values, "TINKER_WORKSPACE"),
   );
@@ -585,9 +587,7 @@ export function parsePublicEnvironment(
     return Object.freeze({
       ...common,
       mode,
-      modelsPath: path.isAbsolute(configuredModelsPath)
-        ? configuredModelsPath
-        : path.resolve(cwd, configuredModelsPath),
+      modelsPath: resolveUserPath(cwd, configuredModelsPath),
     });
   }
 
@@ -684,6 +684,16 @@ function defaultNumber(name: PublicConfigFieldName): number {
 function optionalRawString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized === "" ? undefined : normalized;
+}
+
+function resolveUserPath(cwd: string, value: string): string {
+  let expanded = value;
+  if (value === "~") {
+    expanded = os.homedir();
+  } else if (value.startsWith("~/") || value.startsWith(`~${path.sep}`)) {
+    expanded = path.join(os.homedir(), value.slice(2));
+  }
+  return path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
 }
 
 function optionalStringValue(

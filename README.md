@@ -138,7 +138,7 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 <!-- BEGIN GENERATED: PUBLIC ENVIRONMENT VARIABLES -->
 | Variable | Area | Applies | Required | Type | Default | Secret | Description |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `TINKER_MODELS` | Model | All modes | No | Non-empty string | — | No | Optional model profiles JSON path. Relative paths resolve from the process cwd. |
+| `TINKER_MODELS` | Model | All modes | No | Non-empty string | — | No | Optional model profiles JSON path. A leading ~ expands to the home directory; other relative paths resolve from the process cwd. |
 | `TINKER_MODEL` | Model | Env mode | Env mode | Non-empty string | — | No | Model name used when model profiles are not configured. |
 | `TINKER_API` | Model | Env mode | No | Non-empty string | `"chat-completions"` | No | Model API adapter: "chat-completions" or "responses". |
 | `TINKER_BASE_URL` | Model | Env mode | Env mode | Non-empty string | — | No | OpenAI-compatible API root URL; do not append /chat/completions or /responses. |
@@ -148,7 +148,7 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 | `TINKER_INCLUDE_REASONING_CONTENT` | Model | Env mode | No | Boolean | `false` | No | Replay provider reasoning_content in Chat Completions history; ignored by Responses. |
 | `TINKER_STREAM` | Model | Env mode | No | Boolean | `true` | No | Use streaming transport for the selected model API. |
 | `TINKER_WEBFETCH_REFINE_MODEL` | Model | Env mode | No | Non-empty string | — | No | Optional WebFetch refiner model; currently must match TINKER_MODEL. |
-| `TINKER_WORKSPACE` | Workspace | All modes | No | Non-empty string | Process cwd | No | Workspace path. Relative paths resolve from the process cwd. |
+| `TINKER_WORKSPACE` | Workspace | All modes | No | Non-empty string | Process cwd | No | Workspace path. A leading ~ expands to the home directory; other relative paths resolve from the process cwd. |
 | `TINKER_MAX_ITERATIONS` | Workspace | All modes | No | Positive integer | `512` | No | Maximum agent-loop iterations per turn. |
 | `EXA_API_KEY` | Tooling | All modes | No | Non-empty string | — | Yes | Enables WebSearch and the Exa WebFetch backend when set. |
 | `TINKER_MCP_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `60000` | No | MCP tool-call timeout in milliseconds. |

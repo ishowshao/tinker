@@ -133,6 +133,35 @@ describe("public environment parser", () => {
     });
   });
 
+  test("expands a leading ~ to the home directory in path values", () => {
+    const environment = parsePublicEnvironment(
+      envMode({ TINKER_WORKSPACE: "~/workspaces/demo" }),
+      TEST_CWD,
+    );
+    expect(environment.workspaceRoot).toBe(path.join(os.homedir(), "workspaces/demo"));
+
+    expect(
+      parsePublicEnvironment(envMode({ TINKER_WORKSPACE: "~" }), TEST_CWD)
+        .workspaceRoot,
+    ).toBe(os.homedir());
+
+    const profile = parsePublicEnvironment(
+      { TINKER_MODELS: "~/.tinker/models.json" },
+      TEST_CWD,
+    );
+    expect(profile.mode).toBe("profile");
+    if (profile.mode !== "profile") {
+      throw new Error("Expected profile mode.");
+    }
+    expect(profile.modelsPath).toBe(path.join(os.homedir(), ".tinker/models.json"));
+
+    const relative = parsePublicEnvironment(
+      envMode({ TINKER_WORKSPACE: "workspaces/demo" }),
+      TEST_CWD,
+    );
+    expect(relative.workspaceRoot).toBe(path.join(TEST_CWD, "workspaces/demo"));
+  });
+
   test("selects and validates the env-mode model API", () => {
     const environment = parsePublicEnvironment(
       envMode({ TINKER_API: "responses" }),
