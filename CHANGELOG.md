@@ -5,6 +5,32 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-29
+
+### Added
+
+- Add cross-session derived memory. Completed turns are distilled into memory
+  records that the agent can recall in later sessions and workspaces through
+  `MemorySearch`, which fuses vector similarity with FTS5 keyword matching via
+  RRF hybrid ranking, and `MemoryGet`, which reads a full record by its id.
+- Add a `toolResultModalities` model-profile setting. Image-capable profiles can
+  now receive `ViewImage` results as real image content in the model request
+  instead of text-only descriptions.
+- Add a `Wait` tool that pauses the agent loop for a cancellable whole number of
+  seconds (1 to 3600), useful for spacing polling attempts.
+- Expand a leading `~` to the user's home directory in `TINKER_MODELS` and
+  `TINKER_WORKSPACE` paths.
+
+### Changed
+
+- Show `MemorySearch` keywords alongside the query in TUI tool summaries, so
+  hybrid recall behavior is visible while observing the agent.
+
+### Fixed
+
+- Accept `memory_get` raw results in stored tool history, so sessions that
+  contain MemoryGet calls remain resumable.
+
 ## [2.0.0] - 2026-08-20
 
 ### Changed
@@ -223,7 +249,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/ishowshao/tinker/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ishowshao/tinker/releases/tag/v2.0.0
 [1.11.0]: https://github.com/ishowshao/tinker/releases/tag/v1.11.0
 [1.10.1]: https://github.com/ishowshao/tinker/releases/tag/v1.10.1
