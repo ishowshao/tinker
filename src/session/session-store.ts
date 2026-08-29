@@ -5072,6 +5072,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "recall",
       "memory_search",
       "memory_get",
+      "wait",
       "skill",
       "mcp",
       "generic",

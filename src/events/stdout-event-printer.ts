@@ -229,6 +229,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "recall":
     case "memory_search":
     case "memory_get":
+    case "wait":
     case "mcp":
     case "generic":
       return [];

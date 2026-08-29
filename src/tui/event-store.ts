@@ -804,6 +804,9 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "TaskList") {
     return "TaskList";
   }
+  if (input.name === "Wait") {
+    return `Wait ${toolSeconds(input.args) ?? ""}`.trim();
+  }
   if (input.name === "Skill") {
     return `Skill ${stringProperty(asRecord(input.args), "name") ?? ""}`.trim();
   }
@@ -927,6 +930,8 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       const completed = raw.plan.filter((step) => step.status === "completed").length;
       return `${base} -> ${completed}/${raw.plan.length} completed`;
     }
+    case "wait":
+      return raw.ok ? `${base} -> done` : base;
     case "mcp":
     case "generic":
       return base;
@@ -977,6 +982,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "recall":
     case "memory_search":
     case "memory_get":
+    case "wait":
     case "skill":
     case "mcp":
     case "generic":
@@ -1017,6 +1023,7 @@ function toolRawResultDiff(
     case "recall":
     case "memory_search":
     case "memory_get":
+    case "wait":
     case "skill":
     case "mcp":
     case "generic":
@@ -1114,6 +1121,13 @@ function toolKeywords(args: unknown): string | undefined {
 
 function toolUrl(args: unknown): string | undefined {
   return stringProperty(asRecord(args), "url");
+}
+
+function toolSeconds(args: unknown): string | undefined {
+  const seconds = asRecord(args).seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds)
+    ? `${seconds}s`
+    : undefined;
 }
 
 function toolPath(args: unknown): string | undefined {

@@ -399,6 +399,34 @@ describe("tui event store", () => {
     );
   });
 
+  test("summarizes Wait calls with the requested seconds", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const call = {
+      providerToolCallId: "wait_1",
+      name: "Wait",
+      args: { seconds: 5 },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call,
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Wait 5s");
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call,
+      raw: { kind: "wait", ok: true, seconds: 5, waitedMs: 5001 },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("Wait 5s -> done");
+  });
+
   test("summarizes task management tool results", () => {
     let state = createInitialTuiState({
       sessionId: "run-1",

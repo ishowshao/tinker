@@ -397,6 +397,17 @@ export type McpToolRawResult = {
   error?: string;
 };
 
+export type WaitRawResult =
+  | {
+      ok: true;
+      seconds: number;
+      waitedMs: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 export type ToolRawResultByKind = {
   read: ReadFileRawResult;
   view_image: ViewImageRawResult;
@@ -416,6 +427,7 @@ export type ToolRawResultByKind = {
   recall: RecallRawResult;
   memory_search: MemorySearchRawResult;
   memory_get: MemoryGetRawResult;
+  wait: WaitRawResult;
   skill: SkillRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;

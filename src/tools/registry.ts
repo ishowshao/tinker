@@ -12,6 +12,7 @@ import { createTaskInputToolExecutor } from "./task-input";
 import { createTaskOutputToolExecutor } from "./task-output-tool";
 import { createTaskStopToolExecutor } from "./task-stop";
 import { createUpdatePlanToolExecutor } from "./update-plan";
+import { createWaitToolExecutor } from "./wait";
 import { createWebFetchToolExecutor } from "./web-fetch";
 import type { Refiner } from "./web-fetch/refiner";
 import { createWebSearchToolExecutor } from "./web-search";
@@ -278,6 +279,7 @@ export function createDefaultTooling(options: {
     }),
   );
   registry.register(createUpdatePlanToolExecutor());
+  registry.register(createWaitToolExecutor());
   registry.register(createTaskListToolExecutor({ taskManager }));
   registry.register(createTaskOutputToolExecutor({ taskManager }));
   registry.register(createTaskInputToolExecutor({ taskManager }));

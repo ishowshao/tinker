@@ -24,6 +24,7 @@ import type {
   ToolRawResult,
   UpdatePlanRawResult,
   ViewImageRawResult,
+  WaitRawResult,
   WebFetchRawResult,
   WebSearchRawResult,
   WriteFileRawResult,
@@ -63,6 +64,8 @@ export class ObservationBuilder {
         return textObservation(renderBashObservation(input.raw));
       case "update_plan":
         return textObservation(renderUpdatePlanObservation(input.raw));
+      case "wait":
+        return textObservation(renderWaitObservation(input.raw));
       case "task_list":
         return textObservation(renderTaskListObservation(input.raw));
       case "task_output":
@@ -106,6 +109,12 @@ function renderViewImageObservation(raw: ViewImageRawResult): ToolObservation {
 
 function renderUpdatePlanObservation(raw: UpdatePlanRawResult): string {
   return raw.ok ? "Plan updated." : `UpdatePlan failed: ${raw.error}`;
+}
+
+function renderWaitObservation(raw: WaitRawResult): string {
+  return raw.ok
+    ? `Waited ${raw.seconds} second${raw.seconds === 1 ? "" : "s"}.`
+    : `Wait failed: ${raw.error}`;
 }
 
 function assertNever(value: never): never {
