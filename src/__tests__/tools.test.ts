@@ -94,7 +94,7 @@ describe("ToolRegistry", () => {
         },
       },
       async execute() {
-        return { ok: true, matches: [] };
+        return { ok: true, degraded: null, matches: [] };
       },
     });
     try {

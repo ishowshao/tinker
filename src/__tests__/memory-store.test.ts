@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
 import { MemoryStore, resolveMemoryPaths } from "../memory/memory-store";
+import { buildFtsMatchExpression } from "../memory/memory-store";
 import {
   cosineFromNormalized,
   decodeEmbedding,
@@ -296,6 +297,220 @@ describe("MemoryStore", () => {
       expect(() => store.getById("00000000-0000-7000-8000-00000000000a")).toThrow(
         "store is closed",
       );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("builds FTS match expressions with quoting, escaping, and short-term drops", () => {
+    expect(buildFtsMatchExpression(["memory"])).toBe('"memory"');
+    expect(buildFtsMatchExpression(['we"ird', "bun run"])).toBe(
+      '"we""ird" OR "bun run"',
+    );
+    expect(buildFtsMatchExpression(["ab", "  ", "x"])).toBeNull();
+    expect(buildFtsMatchExpression(["ab", "schema"])).toBe('"schema"');
+    expect(buildFtsMatchExpression([])).toBeNull();
+  });
+
+  test("syncs inserted rows into the FTS index and skips duplicates", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      expect(store.ftsAvailable).toBe(true);
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "记忆 schema v2 升级需要删除旧库",
+            summary: "用户决定不做迁移，直接废弃旧库。",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "记忆 schema v2 升级需要删除旧库",
+            summary: "重复内容不应进入索引。",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+
+      const hits = store.searchFts(["schema v2"]);
+      expect(hits).toHaveLength(1);
+      expect(hits[0]).toMatchObject({
+        text: "记忆 schema v2 升级需要删除旧库",
+        sourceSessionId: fixture.source.sessionId,
+      });
+      expect(store.searchFts(["不存在的词xyz"])).toEqual([]);
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("creates and backfills the FTS index for an existing v2 database", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "hybrid recall backfill target",
+            summary: "既有记忆，FTS 表缺失时应被回填。",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.close();
+
+      const external = new Database(fixture.paths.database, { strict: true });
+      external.exec("DROP TABLE memories_fts");
+      external.close();
+
+      const reopened = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      });
+      expect(reopened.ftsAvailable).toBe(true);
+      expect(reopened.searchFts(["backfill"])).toHaveLength(1);
+      expect(reopened.searchFts(["既有记忆"])).toHaveLength(1);
+      reopened.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("rebuilds the FTS index when its structure drifted", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "结构漂移后中文检索必须恢复",
+            summary: "unicode61 cannot segment Chinese text.",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.close();
+
+      const external = new Database(fixture.paths.database, { strict: true });
+      external.exec("DROP TABLE memories_fts");
+      external.exec(
+        `CREATE VIRTUAL TABLE memories_fts USING fts5(
+           text, summary, content='memories', content_rowid='rowid',
+           tokenize='unicode61'
+         )`,
+      );
+      external.close();
+
+      const reopened = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      });
+      expect(reopened.ftsAvailable).toBe(true);
+      expect(reopened.searchFts(["中文检索"])).toHaveLength(1);
+      reopened.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("rebuilds the FTS index when its content lags behind memories", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "lagging index rebuild target",
+            summary: "索引行数落后时应触发 rebuild。",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.close();
+
+      const external = new Database(fixture.paths.database, { strict: true });
+      external.exec("DROP TABLE memories_fts");
+      external.exec(
+        `CREATE VIRTUAL TABLE memories_fts USING fts5(
+           text, summary, content='memories', content_rowid='rowid',
+           tokenize='trigram'
+         )`,
+      );
+      external.close();
+
+      const reopened = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      });
+      expect(reopened.ftsAvailable).toBe(true);
+      expect(reopened.searchFts(["rebuild target"])).toHaveLength(1);
+      reopened.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("ranks FTS hits with the text column weighted above summary", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "RRF fusion ranks keyword recall",
+            summary: "这条摘要不含目标词组，只有 text 命中。",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      store.insertBatch({
+        ...fixture.source,
+        turnId: "memory-test-turn-2" as TurnId,
+        candidates: [
+          {
+            text: "另一条记忆，主题不同",
+            summary: "这条的 summary 提到了 RRF fusion 这个词组。",
+            embedding: normalizeEmbedding([0, 1, 0], 3),
+          },
+        ],
+      });
+
+      const hits = store.searchFts(["RRF fusion"]);
+      expect(hits).toHaveLength(2);
+      expect(hits[0]?.text).toBe("RRF fusion ranks keyword recall");
+      expect(hits[1]?.text).toBe("另一条记忆，主题不同");
+      store.close();
     } finally {
       await fixture.cleanup();
     }

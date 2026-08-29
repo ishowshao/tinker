@@ -9,6 +9,10 @@ export const MAX_SEARCH_RESULT_SUMMARY_BYTES = 1_536;
 export const MAX_MEMORY_QUERY_BYTES = 1_024;
 export const MAX_MEMORY_ID_BYTES = 64;
 export const MEMORY_SEARCH_LIMIT = 5;
+export const MEMORY_RECALL_CANDIDATE_LIMIT = 20;
+export const MAX_MEMORY_KEYWORDS = 8;
+export const MAX_MEMORY_KEYWORD_BYTES = 128;
+export const MEMORY_RRF_K = 60;
 export const MEMORY_EXTRACTION_QUEUE_CAPACITY = 64;
 
 export type MemoryEmbeddingKind = "openai-compatible";
@@ -69,6 +73,31 @@ export type MemorySearchMatch = {
   readonly createdAt: string;
 };
 
+export type MemoryRecallPath = "vector" | "fts";
+
+export type MemoryFtsMatch = {
+  readonly memoryId: string;
+  readonly text: string;
+  readonly summary: string;
+  readonly bm25: number;
+  readonly sourceWorkspace: string;
+  readonly sourceSessionId: string;
+  readonly createdAt: string;
+};
+
+export type MemoryHybridMatch = {
+  readonly memoryId: string;
+  readonly text: string;
+  readonly summary: string;
+  readonly score: number;
+  readonly via: readonly MemoryRecallPath[];
+  readonly sourceWorkspace: string;
+  readonly sourceSessionId: string;
+  readonly createdAt: string;
+};
+
+export type MemoryRecallDegraded = "vector" | "fts";
+
 export type StoredMemorySummary = {
   readonly memoryId: string;
   readonly text: string;
@@ -111,7 +140,11 @@ export type MemorySearchDiagnostic = {
   readonly workspace: string;
   readonly sessionId: string;
   readonly queryBytes: number;
+  readonly keywordCount: number;
   readonly returned: number;
+  readonly vectorReturned: number;
+  readonly ftsReturned: number;
+  readonly degraded: MemoryRecallDegraded | null;
   readonly scores: readonly number[];
   readonly ms: number;
 };

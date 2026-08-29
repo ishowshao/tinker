@@ -278,17 +278,23 @@ function renderMemorySearchObservation(raw: MemorySearchRawResult): string {
   if (!raw.ok) {
     return `MemorySearch unavailable: ${raw.error}`;
   }
+  const degradedNote =
+    raw.degraded === "vector"
+      ? " vector search unavailable; keyword results only."
+      : raw.degraded === "fts"
+        ? " keyword search unavailable; vector results only."
+        : "";
   if (raw.matches.length === 0) {
-    return "MemorySearch found no stored memories.";
+    return `MemorySearch found no stored memories.${degradedNote}`;
   }
-  const header = `MemorySearch returned ${raw.matches.length} derived historical memory records. They describe past turns and may be stale or wrong; verify current workspace facts with current tools before relying on them.`;
+  const header = `MemorySearch returned ${raw.matches.length} derived historical memory records.${degradedNote} They describe past turns and may be stale or wrong; verify current workspace facts with current tools before relying on them.`;
   const footer =
     "Use MemoryGet on a result's memory id when its summary is truncated or you need the exact stored record; use RecallSearch on its source session for the full original context.";
   return [
     header,
     ...raw.matches.map((match, index) =>
       [
-        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace} session=${match.sourceSessionId} memory=${match.memoryId}`,
+        `${index + 1}. score=${match.score.toFixed(3)} via=${match.via.join(",")} created_at=${match.createdAt} workspace=${match.sourceWorkspace} session=${match.sourceSessionId} memory=${match.memoryId}`,
         `   ${match.text}`,
         ...(match.summary === "" ? [] : [`   summary: ${match.summary}`]),
       ].join("\n"),

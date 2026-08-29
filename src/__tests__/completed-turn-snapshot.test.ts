@@ -78,12 +78,14 @@ describe("SessionStore completed-turn snapshots", () => {
           raw: {
             kind: "memory_search",
             ok: true,
+            degraded: null,
             matches: [
               {
                 memoryId: "memory-1",
                 text: "A derived memory.",
                 summary: "",
                 score: 0.9,
+                via: ["vector"],
                 sourceWorkspace: "/other",
                 sourceSessionId: "source-session",
                 createdAt: "2026-07-25T10:00:00.000Z",

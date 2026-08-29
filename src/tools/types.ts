@@ -313,11 +313,13 @@ export type RecallRawResult = RecallSearchRawResult | RecallGetRawResult;
 export type MemorySearchRawResult =
   | {
       ok: true;
+      degraded: "vector" | "fts" | null;
       matches: readonly {
         memoryId: string;
         text: string;
         summary: string;
         score: number;
+        via: readonly ("vector" | "fts")[];
         sourceWorkspace: string;
         sourceSessionId: string;
         createdAt: string;

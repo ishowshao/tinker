@@ -11,6 +11,7 @@ import {
   MEMORY_SEARCH_LIMIT,
   MemoryError,
   type MemoryEmbeddingIdentity,
+  type MemoryFtsMatch,
   type MemoryPaths,
   type MemorySearchMatch,
   type StoredMemoryRecord,
@@ -47,6 +48,16 @@ const CREATE_MEMORIES_SQL = `CREATE TABLE memories (
 const CREATE_MEMORIES_INDEX_SQL = `CREATE INDEX memories_created_at
 ON memories(created_at DESC)`;
 
+const MEMORIES_FTS_TABLE = "memories_fts";
+
+const CREATE_MEMORIES_FTS_SQL = `CREATE VIRTUAL TABLE memories_fts USING fts5(
+  text,
+  summary,
+  content='memories',
+  content_rowid='rowid',
+  tokenize='trigram'
+)`;
+
 const EXPECTED_SCHEMA = new Map([
   ["index:memories_created_at", CREATE_MEMORIES_INDEX_SQL],
   ["table:memories", CREATE_MEMORIES_SQL],
@@ -74,6 +85,7 @@ export function resolveMemoryPaths(homeRoot = os.homedir()): MemoryPaths {
 export class MemoryStore {
   readonly paths: MemoryPaths;
   readonly dimensions: number;
+  readonly ftsAvailable: boolean;
   private closed = false;
 
   private constructor(
@@ -81,10 +93,12 @@ export class MemoryStore {
     input: Required<Pick<OpenMemoryStoreInput, "clock" | "createMemoryId">> & {
       readonly paths: MemoryPaths;
       readonly embedding: MemoryEmbeddingIdentity;
+      readonly ftsAvailable: boolean;
     },
   ) {
     this.paths = input.paths;
     this.dimensions = input.embedding.dimensions;
+    this.ftsAvailable = input.ftsAvailable;
     this.clock = input.clock;
     this.createMemoryId = input.createMemoryId;
   }
@@ -123,6 +137,12 @@ export class MemoryStore {
       });
       configureDatabase(database, busyTimeoutMs);
       initializeOrVerifySchema(database, input.embedding, paths.database);
+      let ftsAvailable = true;
+      try {
+        ensureFtsIndex(database);
+      } catch {
+        ftsAvailable = false;
+      }
       await secureCreatedAuxiliaryFile(`${paths.database}-wal`, walExisted);
       await secureCreatedAuxiliaryFile(`${paths.database}-shm`, shmExisted);
       await validatePrivateFile(paths.database);
@@ -132,6 +152,7 @@ export class MemoryStore {
         embedding: Object.freeze({ ...input.embedding }),
         clock: input.clock ?? (() => new Date().toISOString()),
         createMemoryId: input.createMemoryId ?? createUuidV7,
+        ftsAvailable,
       });
     } catch (error) {
       database?.close();
@@ -170,6 +191,11 @@ export class MemoryStore {
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(text_sha256) DO NOTHING`,
       );
+      const ftsInsert = this.ftsAvailable
+        ? this.database.query(
+            `INSERT INTO ${MEMORIES_FTS_TABLE}(rowid, text, summary) VALUES (?, ?, ?)`,
+          )
+        : undefined;
       for (const candidate of input.candidates) {
         const memoryId = this.createMemoryId();
         if (!isCanonicalUuidV7(memoryId)) {
@@ -197,6 +223,7 @@ export class MemoryStore {
           );
         }
         if (changes === 1) {
+          ftsInsert?.run(result.lastInsertRowid, candidate.text, candidate.summary);
           inserted.push(
             Object.freeze({
               memoryId,
@@ -269,6 +296,67 @@ export class MemoryStore {
         left.memoryId.localeCompare(right.memoryId),
     );
     return Object.freeze(matches.slice(0, limit));
+  }
+
+  searchFts(
+    keywords: readonly string[],
+    limit = MEMORY_SEARCH_LIMIT,
+  ): readonly MemoryFtsMatch[] {
+    this.requireOpen();
+    if (!this.ftsAvailable) {
+      throw new MemoryError(
+        "memory_fts_unavailable",
+        "Global memory keyword index is unavailable.",
+      );
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new MemoryError(
+        "memory_search_limit_invalid",
+        "Memory search limit must be a positive safe integer.",
+      );
+    }
+    const matchExpression = buildFtsMatchExpression(keywords);
+    if (matchExpression === null) {
+      return Object.freeze([]);
+    }
+    const matches: MemoryFtsMatch[] = [];
+    const rows = this.database
+      .query(
+        `SELECT m.memory_id, m.text, m.summary, m.source_workspace,
+                m.source_session_id, m.created_at,
+                bm25(${MEMORIES_FTS_TABLE}, 10.0, 1.0) AS bm25
+         FROM ${MEMORIES_FTS_TABLE}
+         JOIN memories AS m ON m.rowid = ${MEMORIES_FTS_TABLE}.rowid
+         WHERE ${MEMORIES_FTS_TABLE} MATCH ?
+         ORDER BY bm25 ASC, m.created_at DESC, m.memory_id ASC
+         LIMIT ?`,
+      )
+      .iterate(matchExpression, limit);
+    for (const rowValue of rows) {
+      const row = sqlRecord(rowValue, "memory fts row");
+      const bm25 = Number(row.bm25);
+      if (!Number.isFinite(bm25)) {
+        throw new MemoryError(
+          "memory_store_read_failed",
+          "Memory FTS bm25 score must be finite.",
+        );
+      }
+      matches.push(
+        Object.freeze({
+          memoryId: sqlString(row.memory_id, "memory_id"),
+          text: sqlString(row.text, "memory text"),
+          summary: sqlSummary(row.summary, "memory summary"),
+          bm25,
+          sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+          sourceSessionId: sqlString(row.source_session_id, "memory source_session_id"),
+          createdAt: requireUtcTimestamp(
+            sqlString(row.created_at, "memory created_at"),
+            "memory created_at",
+          ),
+        }),
+      );
+    }
+    return Object.freeze(matches);
   }
 
   listStoredMemories(): readonly StoredMemorySummary[] {
@@ -510,6 +598,7 @@ function applicationSchemaObjects(
       `SELECT type, name, sql
        FROM sqlite_schema
        WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'
+         AND name <> '${MEMORIES_FTS_TABLE}' AND name NOT LIKE '${MEMORIES_FTS_TABLE}\\_%' ESCAPE '\\'
        ORDER BY type, name`,
     )
     .all()
@@ -533,6 +622,60 @@ function metadataEntries(
     Object.freeze(["embedding_model", embedding.model] as const),
     Object.freeze(["embedding_dimensions", String(embedding.dimensions)] as const),
   ]);
+}
+
+function ensureFtsIndex(database: Database): void {
+  runImmediateTransaction(database, () => {
+    const rowValue = database
+      .query(
+        `SELECT sql FROM sqlite_schema
+         WHERE type = 'table' AND name = '${MEMORIES_FTS_TABLE}'`,
+      )
+      .get();
+    if (rowValue === null) {
+      database.exec(CREATE_MEMORIES_FTS_SQL);
+      backfillFtsIndex(database);
+      return;
+    }
+    const row = sqlRecord(rowValue, "memories_fts schema");
+    const sql = sqlString(row.sql, "memories_fts SQL");
+    if (normalizeSql(sql) !== normalizeSql(CREATE_MEMORIES_FTS_SQL)) {
+      database.exec(`DROP TABLE ${MEMORIES_FTS_TABLE}`);
+      database.exec(CREATE_MEMORIES_FTS_SQL);
+      backfillFtsIndex(database);
+      return;
+    }
+    const memoryCount = countRows(database, "memories");
+    const ftsCount = countRows(database, `${MEMORIES_FTS_TABLE}_docsize`);
+    if (memoryCount !== ftsCount) {
+      database.exec(
+        `INSERT INTO ${MEMORIES_FTS_TABLE}(${MEMORIES_FTS_TABLE}) VALUES('rebuild')`,
+      );
+    }
+  });
+}
+
+function backfillFtsIndex(database: Database): void {
+  database.exec(
+    `INSERT INTO ${MEMORIES_FTS_TABLE}(rowid, text, summary)
+     SELECT rowid, text, summary FROM memories`,
+  );
+}
+
+function countRows(database: Database, table: string): number {
+  const row = sqlRecord(
+    database.query(`SELECT COUNT(*) AS count FROM ${table}`).get(),
+    `${table} count`,
+  );
+  return Number(row.count);
+}
+
+export function buildFtsMatchExpression(keywords: readonly string[]): string | null {
+  const phrases = keywords
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => [...keyword].length >= 3)
+    .map((keyword) => `"${keyword.replaceAll('"', '""')}"`);
+  return phrases.length === 0 ? null : phrases.join(" OR ");
 }
 
 function runImmediateTransaction(database: Database, operation: () => void): void {

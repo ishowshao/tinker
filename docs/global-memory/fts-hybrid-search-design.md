@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-08-29
-- 状态：方案已评审，待实施
+- 状态：已实施（`bun run check` 全量通过；既有 v2 库打开时自动创建并回填 FTS 索引）
 - 上位文档：
   [`high-level-decisions.md`](high-level-decisions.md)
 - 修订对象：[`history-summary-memory-design.md`](history-summary-memory-design.md)

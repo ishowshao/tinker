@@ -19,15 +19,23 @@ import {
   MEMORY_EXTRACTION_QUEUE_CAPACITY,
   memoryErrorCode,
   MEMORY_GET_TOOL_NAME,
+  MEMORY_RECALL_CANDIDATE_LIMIT,
+  MEMORY_RRF_K,
+  MEMORY_SEARCH_LIMIT,
   MEMORY_SEARCH_TOOL_NAME,
   MemoryError,
   truncateUtf8,
   type MemoryEmbeddingConfig,
   type MemoryExtractionDiagnostic,
   type MemoryExtractionRejectedCounts,
+  type MemoryFtsMatch,
   type MemoryGetDiagnostic,
+  type MemoryHybridMatch,
   type MemoryPaths,
+  type MemoryRecallDegraded,
+  type MemoryRecallPath,
   type MemorySearchDiagnostic,
+  type MemorySearchMatch,
   type StoredMemorySummary,
 } from "./contracts";
 import {
@@ -158,8 +166,8 @@ export class MemoryCoordinator implements CompletedTurnHook {
     readonly sessionId: SessionId;
   }): ToolExecutor {
     return createMemorySearchToolExecutor({
-      search: (query, signal) => this.search(query, signal, input),
-      recordInvalidCall: (queryBytes) => this.recordInvalidSearch(queryBytes, input),
+      search: (query, keywords, signal) => this.search(query, keywords, signal, input),
+      recordInvalidCall: (invalid) => this.recordInvalidSearch(invalid, input),
     });
   }
 
@@ -398,22 +406,56 @@ export class MemoryCoordinator implements CompletedTurnHook {
   }
 
   private async search(
-    query: string,
+    query: string | null,
+    keywords: readonly string[],
     signal: AbortSignal,
     source: { readonly workspaceRoot: string; readonly sessionId: SessionId },
   ): Promise<MemorySearchRawResult> {
     const startedAt = performance.now();
-    const queryBytes = Buffer.byteLength(query, "utf8");
+    const queryBytes = query === null ? 0 : Buffer.byteLength(query, "utf8");
+    let degraded: MemoryRecallDegraded | null = null;
+    let vectorMatches: readonly MemorySearchMatch[] = [];
+    let ftsMatches: readonly MemoryFtsMatch[] = [];
     try {
-      const raw = await this.embeddingClient.embed([query], signal);
-      if (raw.length !== 1 || raw[0] === undefined) {
-        throw new MemoryError(
-          "memory_embedding_response_invalid",
-          "Embedding response did not contain the query vector.",
-        );
+      if (query !== null) {
+        try {
+          const raw = await this.embeddingClient.embed([query], signal);
+          if (raw.length !== 1 || raw[0] === undefined) {
+            throw new MemoryError(
+              "memory_embedding_response_invalid",
+              "Embedding response did not contain the query vector.",
+            );
+          }
+          const queryEmbedding = normalizeEmbedding(raw[0], this.embeddingDimensions);
+          vectorMatches = this.store.search(
+            queryEmbedding,
+            MEMORY_RECALL_CANDIDATE_LIMIT,
+          );
+        } catch (error) {
+          if (signal.aborted || keywords.length === 0) {
+            throw error;
+          }
+          degraded = "vector";
+        }
       }
-      const queryEmbedding = normalizeEmbedding(raw[0], this.embeddingDimensions);
-      const matches = this.store.search(queryEmbedding);
+      if (keywords.length > 0) {
+        try {
+          ftsMatches = this.store.searchFts(keywords, MEMORY_RECALL_CANDIDATE_LIMIT);
+        } catch (error) {
+          if (signal.aborted) {
+            throw error;
+          }
+          const vectorUsable = query !== null && degraded === null;
+          if (!vectorUsable) {
+            throw error;
+          }
+          degraded = "fts";
+        }
+      }
+      const fused = fuseMemoryRecall({ vector: vectorMatches, fts: ftsMatches }).slice(
+        0,
+        MEMORY_SEARCH_LIMIT,
+      );
       await this.log.append(
         searchDiagnostic({
           clock: this.clock,
@@ -422,20 +464,26 @@ export class MemoryCoordinator implements CompletedTurnHook {
           workspace: source.workspaceRoot,
           sessionId: source.sessionId,
           queryBytes,
-          returned: matches.length,
-          scores: matches.map((match) => roundScore(match.score)),
+          keywordCount: keywords.length,
+          returned: fused.length,
+          vectorReturned: vectorMatches.length,
+          ftsReturned: ftsMatches.length,
+          degraded,
+          scores: fused.map((match) => roundScore(match.score)),
           ms: elapsedMs(startedAt),
         }),
       );
       return {
         ok: true,
+        degraded,
         matches: Object.freeze(
-          matches.map((match) =>
+          fused.map((match) =>
             Object.freeze({
               memoryId: match.memoryId,
               text: match.text,
               summary: truncateUtf8(match.summary, MAX_SEARCH_RESULT_SUMMARY_BYTES),
               score: match.score,
+              via: match.via,
               sourceWorkspace: match.sourceWorkspace,
               sourceSessionId: match.sourceSessionId,
               createdAt: match.createdAt,
@@ -455,6 +503,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
           workspace: source.workspaceRoot,
           sessionId: source.sessionId,
           queryBytes,
+          keywordCount: keywords.length,
           ms: elapsedMs(startedAt),
         }),
       );
@@ -469,7 +518,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
   }
 
   private recordInvalidSearch(
-    queryBytes: number,
+    invalid: { readonly queryBytes: number; readonly keywordCount: number },
     source: { readonly workspaceRoot: string; readonly sessionId: SessionId },
   ): Promise<void> {
     return this.log.append(
@@ -479,7 +528,8 @@ export class MemoryCoordinator implements CompletedTurnHook {
         reason: "memory_search_args_invalid",
         workspace: source.workspaceRoot,
         sessionId: source.sessionId,
-        queryBytes,
+        queryBytes: invalid.queryBytes,
+        keywordCount: invalid.keywordCount,
         ms: 0,
       }),
     );
@@ -632,7 +682,11 @@ function searchDiagnostic(input: {
   readonly workspace: string;
   readonly sessionId: string;
   readonly queryBytes: number;
+  readonly keywordCount: number;
   readonly returned?: number;
+  readonly vectorReturned?: number;
+  readonly ftsReturned?: number;
+  readonly degraded?: MemoryRecallDegraded | null;
   readonly scores?: readonly number[];
   readonly ms: number;
 }): MemorySearchDiagnostic {
@@ -644,7 +698,11 @@ function searchDiagnostic(input: {
     workspace: input.workspace,
     sessionId: input.sessionId,
     queryBytes: input.queryBytes,
+    keywordCount: input.keywordCount,
     returned: input.returned ?? 0,
+    vectorReturned: input.vectorReturned ?? 0,
+    ftsReturned: input.ftsReturned ?? 0,
+    degraded: input.degraded ?? null,
     scores: Object.freeze([...(input.scores ?? [])]),
     ms: input.ms,
   });
@@ -686,4 +744,77 @@ function elapsedMs(startedAt: number): number {
 
 function roundScore(score: number): number {
   return Math.round(score * 1_000) / 1_000;
+}
+
+export function fuseMemoryRecall(input: {
+  readonly vector: readonly MemorySearchMatch[];
+  readonly fts: readonly MemoryFtsMatch[];
+}): readonly MemoryHybridMatch[] {
+  type Entry = {
+    readonly memoryId: string;
+    readonly text: string;
+    readonly summary: string;
+    readonly sourceWorkspace: string;
+    readonly sourceSessionId: string;
+    readonly createdAt: string;
+    score: number;
+    readonly via: Set<MemoryRecallPath>;
+  };
+  const entries = new Map<string, Entry>();
+  const accumulate = (
+    match: {
+      readonly memoryId: string;
+      readonly text: string;
+      readonly summary: string;
+      readonly sourceWorkspace: string;
+      readonly sourceSessionId: string;
+      readonly createdAt: string;
+    },
+    rank: number,
+    path: MemoryRecallPath,
+  ): void => {
+    const contribution = 1 / (MEMORY_RRF_K + rank);
+    const existing = entries.get(match.memoryId);
+    if (existing !== undefined) {
+      existing.score += contribution;
+      existing.via.add(path);
+      return;
+    }
+    entries.set(match.memoryId, {
+      memoryId: match.memoryId,
+      text: match.text,
+      summary: match.summary,
+      sourceWorkspace: match.sourceWorkspace,
+      sourceSessionId: match.sourceSessionId,
+      createdAt: match.createdAt,
+      score: contribution,
+      via: new Set([path]),
+    });
+  };
+  input.vector.forEach((match, index) => accumulate(match, index + 1, "vector"));
+  input.fts.forEach((match, index) => accumulate(match, index + 1, "fts"));
+
+  return Object.freeze(
+    [...entries.values()]
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          left.memoryId.localeCompare(right.memoryId),
+      )
+      .map((entry) =>
+        Object.freeze({
+          memoryId: entry.memoryId,
+          text: entry.text,
+          summary: entry.summary,
+          score: entry.score,
+          via: Object.freeze(
+            (["vector", "fts"] as const).filter((path) => entry.via.has(path)),
+          ),
+          sourceWorkspace: entry.sourceWorkspace,
+          sourceSessionId: entry.sourceSessionId,
+          createdAt: entry.createdAt,
+        }),
+      ),
+  );
 }
