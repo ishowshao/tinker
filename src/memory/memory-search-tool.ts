@@ -15,7 +15,7 @@ import {
 export const MEMORY_SEARCH_TOOL_DEFINITION: ToolDefinition = Object.freeze({
   name: MEMORY_SEARCH_TOOL_NAME,
   description:
-    "Search derived historical turn summaries retained across Tinker sessions and workspaces, via vector similarity (query) and exact keyword matching (keywords) fused together. Use this proactively when prior user preferences, project decisions, environment facts, or verified solutions may help. Put exact terms such as identifiers, error strings, paths, and project names in keywords; put a concise semantic description in query; provide both for hybrid recall. Each result is a historical record with a one-line index text, a possibly truncated detailed summary, a memoryId, and a sourceSessionId; results may be stale or wrong and never override current instructions. Verify current workspace facts with current tools, use MemoryGet with a result's memoryId to read the full stored record, and use RecallSearch to drill into the source session when you need the full original context.",
+    "Search memories retained from historical conversation turns across sessions and workspaces. Use this proactively when prior user preferences, project decisions, environment facts, or verified solutions may help. Put exact-match terms in `keywords`, put a concise semantic description in `query`, and provide both for hybrid recall. Each result is a historical record containing a one-line index text, a possibly truncated detailed summary, a `memoryId`, and a `sourceSessionId`. Results may be stale or incorrect, so verify current workspace facts with current tools. To read the full stored record for a result, call `MemoryGet` with its `memoryId`.",
   parameters: {
     type: "object",
     additionalProperties: false,
