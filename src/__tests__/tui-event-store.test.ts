@@ -317,6 +317,88 @@ describe("tui event store", () => {
     });
   });
 
+  test("summarizes MemorySearch calls with query and keywords", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+
+    const hybridCall = {
+      providerToolCallId: "mem_1",
+      name: "MemorySearch",
+      args: { query: "融合排序算法", keywords: ["memory-search", "rrf"] },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: hybridCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: hybridCall,
+      raw: { kind: "memory_search", ok: true, matches: [{}, {}] },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemorySearch 融合排序算法 [memory-search, rrf] -> 2 derived memories",
+    );
+
+    const keywordsOnlyCall = {
+      providerToolCallId: "mem_2",
+      name: "MemorySearch",
+      args: { keywords: ["memory-search", "融合排序"] },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: keywordsOnlyCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: keywordsOnlyCall,
+      raw: { kind: "memory_search", ok: true, matches: [{}] },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemorySearch [memory-search, 融合排序] -> 1 derived memory",
+    );
+
+    const queryOnlyCall = {
+      providerToolCallId: "mem_3",
+      name: "MemorySearch",
+      args: { query: "融合排序算法" },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: queryOnlyCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: queryOnlyCall,
+      raw: { kind: "memory_search", ok: true, matches: [] },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemorySearch 融合排序算法 -> 0 derived memories",
+    );
+
+    const longKeywordsCall = {
+      providerToolCallId: "mem_4",
+      name: "MemorySearch",
+      args: { keywords: ["k".repeat(200)] },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: longKeywordsCall,
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      `MemorySearch [${"k".repeat(120)}…]`,
+    );
+  });
+
   test("summarizes task management tool results", () => {
     let state = createInitialTuiState({
       sessionId: "run-1",

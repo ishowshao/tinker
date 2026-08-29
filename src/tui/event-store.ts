@@ -785,8 +785,11 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "Grep") {
     return `Grep ${toolPattern(input.args) ?? ""}`.trim();
   }
-  if (input.name === "WebSearch" || input.name === "MemorySearch") {
-    return `${input.name} ${toolQuery(input.args) ?? ""}`.trim();
+  if (input.name === "WebSearch") {
+    return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
+  }
+  if (input.name === "MemorySearch") {
+    return `MemorySearch ${memorySearchDetail(input.args)}`.trim();
   }
   if (input.name === "WebFetch") {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
@@ -1078,6 +1081,35 @@ function toolPattern(args: unknown): string | undefined {
 
 function toolQuery(args: unknown): string | undefined {
   return stringProperty(asRecord(args), "query");
+}
+
+function memorySearchDetail(args: unknown): string {
+  const parts: string[] = [];
+  const query = toolQuery(args);
+  if (query !== undefined) {
+    parts.push(query);
+  }
+  const keywords = toolKeywords(args);
+  if (keywords !== undefined) {
+    parts.push(`[${keywords}]`);
+  }
+  return parts.join(" ");
+}
+
+function toolKeywords(args: unknown): string | undefined {
+  const limit = 120;
+  const value = asRecord(args).keywords;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const keywords = value.filter(
+    (keyword): keyword is string => typeof keyword === "string" && keyword.length > 0,
+  );
+  if (keywords.length === 0) {
+    return undefined;
+  }
+  const joined = keywords.join(", ");
+  return joined.length <= limit ? joined : `${joined.slice(0, limit)}…`;
 }
 
 function toolUrl(args: unknown): string | undefined {
