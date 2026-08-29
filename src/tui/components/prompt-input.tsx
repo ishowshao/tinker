@@ -741,30 +741,42 @@ export function PromptInput(props: PromptInputProps) {
       </Box>
       {showSuggestions ? null : (
         <Box>
-          <Text dimColor>
-            {props.modelName}
-            {props.reasoningEffort === undefined ? null : ` ${props.reasoningEffort}`} ·{" "}
-            {formatWorkspacePath(props.workspaceRoot)}
-            {props.gitBranch === undefined ? null : ` · ${props.gitBranch}`}
-            {state.phase.kind === "idle" ? null : ` · ${phaseLabel(state.phase)}`}
+          <Text>
+            <Text color={FOOTER_COLORS.model}>{props.modelName}</Text>
+            {props.reasoningEffort === undefined ? null : (
+              <Text dimColor> {props.reasoningEffort}</Text>
+            )}
+            <Text dimColor> · </Text>
+            <Text color={FOOTER_COLORS.workspacePath}>
+              {formatWorkspacePath(props.workspaceRoot)}
+            </Text>
+            {props.gitBranch === undefined ? null : (
+              <>
+                <Text dimColor> · </Text>
+                <Text color={FOOTER_COLORS.gitBranch}>{props.gitBranch}</Text>
+              </>
+            )}
+            {state.phase.kind === "idle" ? null : (
+              <>
+                <Text dimColor> · </Text>
+                <Text dimColor>{phaseLabel(state.phase)}</Text>
+              </>
+            )}
+            {props.contextUsage === undefined ? null : (
+              <>
+                <Text dimColor> · </Text>
+                <Text color={contextColor(props.contextUsage.pressure)}>
+                  {formatContextUsageLine(props.contextUsage)}
+                </Text>
+              </>
+            )}
+            {cacheRate === undefined ? null : (
+              <>
+                <Text dimColor> · </Text>
+                <Text color={FOOTER_COLORS.cacheRate}>{cacheRate}</Text>
+              </>
+            )}
           </Text>
-          {props.contextUsage === undefined ? null : (
-            <>
-              <Text dimColor> · </Text>
-              <Text
-                color={contextColor(props.contextUsage.pressure)}
-                dimColor={props.contextUsage.pressure === "normal"}
-              >
-                {formatContextUsageLine(props.contextUsage)}
-              </Text>
-            </>
-          )}
-          {cacheRate === undefined ? null : (
-            <>
-              <Text dimColor> · </Text>
-              <Text dimColor>{cacheRate}</Text>
-            </>
-          )}
         </Box>
       )}
       {showFileSuggestions ? (
@@ -962,14 +974,25 @@ function fileMentionReplacement(
     : `${filePath} `;
 }
 
+// Decorative palette for the footer status line, kept muted so it reads
+// softly against the dim separators. Red and yellow are deliberately
+// excluded: they stay reserved for context-pressure warnings.
+const FOOTER_COLORS = {
+  model: "#7b9cc4",
+  workspacePath: "#6fa8a8",
+  gitBranch: "#a08fbd",
+  cacheRate: "#7aa37e",
+  contextUsage: "#8a9199",
+} as const;
+
 function contextColor(
   pressure: ContextUsageSnapshot["pressure"],
-): "yellow" | "red" | undefined {
+): "yellow" | "red" | typeof FOOTER_COLORS.contextUsage {
   return pressure === "blocked"
     ? "red"
     : pressure === "triggered"
       ? "yellow"
-      : undefined;
+      : FOOTER_COLORS.contextUsage;
 }
 
 function formatWorkspacePath(workspaceRoot: string): string {
