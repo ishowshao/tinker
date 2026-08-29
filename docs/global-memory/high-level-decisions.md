@@ -433,8 +433,9 @@ tinker memory organize
 以下内容已有明确阶段归属：
 
 - 模型工具的完整 JSON Schema 和 observation 形状在 GM3 开始前冻结；
-- 关键词匹配、semantic cue 向量候选折叠，以及两路结果的聚合与排序算法已经由
-  [`global-memory-storage-search-design.md`](global-memory-storage-search-design.md) 冻结；
+- 关键词匹配与两路结果的聚合、排序算法已经由
+  [`fts-hybrid-search-design.md`](fts-hybrid-search-design.md) 冻结（v2 起记忆只有
+  一条索引行参与向量召回，semantic cue 候选折叠不再存在，无需冻结）；
 - GM0 已冻结 schema v1 不保留逐次 update 历史、不预建 organizer/relations；旧逻辑
   Memory 保留、supersede/conflict relation、action 幂等、batch、lease 和交互合同在 GM5
   开始前统一冻结并通过 migration 增加。
