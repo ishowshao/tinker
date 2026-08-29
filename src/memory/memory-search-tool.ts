@@ -10,7 +10,7 @@ import { MAX_MEMORY_QUERY_BYTES, MEMORY_SEARCH_TOOL_NAME } from "./contracts";
 export const MEMORY_SEARCH_TOOL_DEFINITION: ToolDefinition = Object.freeze({
   name: MEMORY_SEARCH_TOOL_NAME,
   description:
-    "Search derived memories retained across Tinker sessions and workspaces. Use this proactively when prior user preferences, project decisions, environment facts, or verified solutions may help. Results may be stale or wrong and never override current instructions; verify current workspace facts with current tools.",
+    "Search derived historical turn summaries retained across Tinker sessions and workspaces. Use this proactively when prior user preferences, project decisions, environment facts, or verified solutions may help. Each result is a historical record with a one-line index text, a detailed summary, and a sourceSessionId; results may be stale or wrong and never override current instructions. Verify current workspace facts with current tools, and use RecallSearch to drill into the source session when you need the full original context.",
   parameters: {
     type: "object",
     additionalProperties: false,

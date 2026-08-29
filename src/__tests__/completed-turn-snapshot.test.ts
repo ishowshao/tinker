@@ -81,8 +81,10 @@ describe("SessionStore completed-turn snapshots", () => {
             matches: [
               {
                 text: "A derived memory.",
+                summary: "",
                 score: 0.9,
                 sourceWorkspace: "/other",
+                sourceSessionId: "source-session",
                 createdAt: "2026-07-25T10:00:00.000Z",
               },
             ],

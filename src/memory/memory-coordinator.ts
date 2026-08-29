@@ -11,9 +11,12 @@ import type { CompletedTurnSnapshot } from "../session/session-store";
 import type { MemorySearchRawResult, ToolExecutor } from "../tools/types";
 import {
   boundedMemoryError,
+  MAX_SEARCH_RESULT_SUMMARY_BYTES,
+  MEMORY_EXTRACTION_QUEUE_CAPACITY,
   memoryErrorCode,
   MEMORY_SEARCH_TOOL_NAME,
   MemoryError,
+  truncateUtf8,
   type MemoryEmbeddingConfig,
   type MemoryExtractionDiagnostic,
   type MemoryExtractionRejectedCounts,
@@ -62,7 +65,7 @@ export type CreateMemoryCoordinatorInput = {
 export class MemoryCoordinator implements CompletedTurnHook {
   private accepting = true;
   private active?: ActiveMemoryTask;
-  private pending?: MemoryWorkerTask;
+  private pending: MemoryWorkerTask[] = [];
 
   private constructor(
     private readonly store: MemoryStore,
@@ -124,7 +127,10 @@ export class MemoryCoordinator implements CompletedTurnHook {
       this.start(task);
       return;
     }
-    this.pending = task;
+    if (this.pending.length >= MEMORY_EXTRACTION_QUEUE_CAPACITY) {
+      this.pending.shift();
+    }
+    this.pending.push(task);
   }
 
   recordFailure(input: CompletedTurnHookFailure): void {
@@ -159,7 +165,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
       return;
     }
     this.accepting = false;
-    this.pending = undefined;
+    this.pending = [];
     this.active?.controller.abort(
       new MemoryError(
         "memory_coordinator_disposed",
@@ -183,8 +189,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
           return;
         }
         this.active = undefined;
-        const next = this.accepting ? this.pending : undefined;
-        this.pending = undefined;
+        const next = this.accepting ? this.pending.shift() : undefined;
         if (next !== undefined) {
           this.start(next);
         }
@@ -204,7 +209,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
     try {
       extraction = await this.extractor.extract(task.extractionEvidenceText, signal);
       inputTokens = extraction.inputTokens;
-      returned = extraction.memories.length;
+      returned = extraction.memory === null ? 0 : 1;
     } catch (error) {
       if (error instanceof MemoryExtractionSkippedError) {
         inputTokens = error.inputTokens;
@@ -246,17 +251,28 @@ export class MemoryCoordinator implements CompletedTurnHook {
       return;
     }
 
-    const safeMemories = extraction.memories.filter((text) => {
-      if (!containsSensitiveMemory(text)) {
-        return true;
-      }
-      rejected = Object.freeze({
-        ...rejected,
-        secret: rejected.secret + 1,
-      });
-      return false;
-    });
-    if (safeMemories.length === 0) {
+    const candidate = extraction.memory;
+    if (candidate === null) {
+      await this.log.append(
+        extractionDiagnostic({
+          clock: this.clock,
+          outcome: "ok",
+          reason: null,
+          workspace: task.workspaceRoot,
+          turnId: task.turnId,
+          inputTokens,
+          returned,
+          ms: elapsedMs(startedAt),
+        }),
+      );
+      return;
+    }
+
+    if (
+      containsSensitiveMemory(candidate.text) ||
+      containsSensitiveMemory(candidate.summary)
+    ) {
+      rejected = Object.freeze({ ...rejected, secret: 1 });
       await this.log.append(
         extractionDiagnostic({
           clock: this.clock,
@@ -273,24 +289,20 @@ export class MemoryCoordinator implements CompletedTurnHook {
       return;
     }
 
-    let embeddings: readonly Float32Array[];
+    let embedding: Float32Array;
     try {
-      const rawEmbeddings = await this.embeddingClient.embed(safeMemories, signal);
-      if (rawEmbeddings.length !== safeMemories.length) {
+      const rawEmbeddings = await this.embeddingClient.embed([candidate.text], signal);
+      if (rawEmbeddings.length !== 1 || rawEmbeddings[0] === undefined) {
         throw new MemoryError(
           "memory_embedding_response_invalid",
           "Embedding response count does not match the memory candidate count.",
         );
       }
-      embeddings = Object.freeze(
-        rawEmbeddings.map((vector) =>
-          normalizeEmbedding(vector, this.embeddingDimensions),
-        ),
-      );
+      embedding = normalizeEmbedding(rawEmbeddings[0], this.embeddingDimensions);
     } catch (error) {
       rejected = Object.freeze({
         ...rejected,
-        embedding: safeMemories.length,
+        embedding: 1,
       });
       await this.log.append(
         extractionDiagnostic({
@@ -315,10 +327,13 @@ export class MemoryCoordinator implements CompletedTurnHook {
         workspaceRoot: task.workspaceRoot,
         sessionId: task.sessionId,
         turnId: task.turnId,
-        candidates: safeMemories.map((text, index) => ({
-          text,
-          embedding: embeddings[index],
-        })),
+        candidates: [
+          {
+            text: candidate.text,
+            summary: candidate.summary,
+            embedding,
+          },
+        ],
       });
       rejected = Object.freeze({
         ...rejected,
@@ -401,8 +416,10 @@ export class MemoryCoordinator implements CompletedTurnHook {
           matches.map((match) =>
             Object.freeze({
               text: match.text,
+              summary: truncateUtf8(match.summary, MAX_SEARCH_RESULT_SUMMARY_BYTES),
               score: match.score,
               sourceWorkspace: match.sourceWorkspace,
+              sourceSessionId: match.sourceSessionId,
               createdAt: match.createdAt,
             }),
           ),

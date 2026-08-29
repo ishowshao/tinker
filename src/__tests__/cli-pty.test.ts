@@ -942,6 +942,7 @@ test(
               "OLDEST_LINE_3",
               "OLDEST_FINAL_MEMORY",
             ].join("\n"),
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],
@@ -952,6 +953,7 @@ test(
         candidates: [
           {
             text: "MIDDLE_MEMORY",
+            summary: "",
             embedding: normalizeEmbedding([0, 1, 0], 3),
           },
         ],
@@ -962,6 +964,7 @@ test(
         candidates: [
           {
             text: "NEWEST_MEMORY",
+            summary: "",
             embedding: normalizeEmbedding([0, 0, 1], 3),
           },
         ],

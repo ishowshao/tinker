@@ -93,6 +93,9 @@ export function MemoryBrowser(props: MemoryBrowserProps) {
                   {formatMemoryCreatedAt(memory.createdAt)} · {memory.sourceWorkspace}
                 </Text>
                 <Text>{normalizeMemoryDisplayText(memory.text)}</Text>
+                {memory.summary === "" ? null : (
+                  <Text dimColor>{normalizeMemoryDisplayText(memory.summary)}</Text>
+                )}
               </Box>
             ))}
           </Box>

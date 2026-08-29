@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Database } from "bun:sqlite";
@@ -42,7 +42,7 @@ describe("memory vectors", () => {
 });
 
 describe("MemoryStore", () => {
-  test("initializes schema v1, writes atomically, deduplicates, searches, and reopens", async () => {
+  test("initializes schema v2, writes atomically, deduplicates, searches, and reopens", async () => {
     const fixture = await createFixture();
     try {
       let store = await MemoryStore.open({
@@ -55,18 +55,25 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "Tinker source changes require bun run check.",
+            summary: "Turn recorded the Tinker quality gate after a source change.",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
+        ],
+      });
+      const second = store.insertBatch({
+        ...fixture.source,
+        candidates: [
           {
             text: "The user prefers strict fail-fast configuration.",
+            summary: "",
             embedding: normalizeEmbedding([0, 1, 0], 3),
           },
         ],
       });
-      expect(first).toMatchObject({ written: 2, duplicate: 0 });
+      expect(first).toMatchObject({ written: 1, duplicate: 0 });
+      expect(second).toMatchObject({ written: 1, duplicate: 0 });
       expect(first.inserted.map((memory) => memory.text)).toEqual([
         "Tinker source changes require bun run check.",
-        "The user prefers strict fail-fast configuration.",
       ]);
       expect(
         first.inserted.every(
@@ -79,6 +86,7 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "Tinker source changes require bun run check.",
+            summary: "A reworded duplicate summary.",
             embedding: normalizeEmbedding([0, 0, 1], 3),
           },
         ],
@@ -89,12 +97,16 @@ describe("MemoryStore", () => {
         inserted: [],
       });
       expect(store.count()).toBe(2);
-      expect(
-        store.search(normalizeEmbedding([0.9, 0.1, 0], 3)).map((match) => match.text),
-      ).toEqual([
+      const matches = store.search(normalizeEmbedding([0.9, 0.1, 0], 3));
+      expect(matches.map((match) => match.text)).toEqual([
         "Tinker source changes require bun run check.",
         "The user prefers strict fail-fast configuration.",
       ]);
+      expect(matches[0]).toMatchObject({
+        summary: "Turn recorded the Tinker quality gate after a source change.",
+        sourceSessionId: fixture.source.sessionId,
+      });
+      expect(matches[1]).toMatchObject({ summary: "" });
       store.close();
 
       store = await MemoryStore.open({
@@ -138,10 +150,17 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "first insertion",
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
+        ],
+      });
+      store.insertBatch({
+        ...fixture.source,
+        candidates: [
           {
             text: "second insertion",
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],
@@ -157,7 +176,11 @@ describe("MemoryStore", () => {
 
   test("lists a complete read-only snapshot in creation and ID order", async () => {
     const fixture = await createFixture();
-    const timestamps = ["2026-07-25T09:00:00.000Z", "2026-07-26T10:00:00.000Z"];
+    const timestamps = [
+      "2026-07-25T09:00:00.000Z",
+      "2026-07-26T10:00:00.000Z",
+      "2026-07-26T10:00:00.000Z",
+    ];
     const ids = [
       "00000000-0000-7000-8000-00000000000a",
       "00000000-0000-7000-8000-00000000000b",
@@ -177,6 +200,7 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "older memory",
+            summary: "older summary",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],
@@ -187,10 +211,18 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "newer first",
+            summary: "",
             embedding: normalizeEmbedding([0, 1, 0], 3),
           },
+        ],
+      });
+      store.insertBatch({
+        ...fixture.source,
+        workspaceRoot: "/workspace/newer",
+        candidates: [
           {
             text: "newer second",
+            summary: "newer second summary",
             embedding: normalizeEmbedding([0, 0, 1], 3),
           },
         ],
@@ -200,19 +232,25 @@ describe("MemoryStore", () => {
         {
           memoryId: "00000000-0000-7000-8000-00000000000c",
           text: "newer second",
+          summary: "newer second summary",
           sourceWorkspace: "/workspace/newer",
+          sourceSessionId: fixture.source.sessionId,
           createdAt: "2026-07-26T10:00:00.000Z",
         },
         {
           memoryId: "00000000-0000-7000-8000-00000000000b",
           text: "newer first",
+          summary: "",
           sourceWorkspace: "/workspace/newer",
+          sourceSessionId: fixture.source.sessionId,
           createdAt: "2026-07-26T10:00:00.000Z",
         },
         {
           memoryId: "00000000-0000-7000-8000-00000000000a",
           text: "older memory",
+          summary: "older summary",
           sourceWorkspace: "/workspace/older",
+          sourceSessionId: fixture.source.sessionId,
           createdAt: "2026-07-25T09:00:00.000Z",
         },
       ]);
@@ -236,6 +274,7 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "stored memory",
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],
@@ -257,14 +296,12 @@ describe("MemoryStore", () => {
     }
   });
 
-  test("rolls back the whole batch when a later insert fails", async () => {
+  test("rejects batches with more than one candidate without writing", async () => {
     const fixture = await createFixture();
-    const duplicateId = "00000000-0000-7000-8000-000000000001";
     try {
       const store = await MemoryStore.open({
         paths: fixture.paths,
         embedding: EMBEDDING,
-        createMemoryId: () => duplicateId,
       });
       expect(() =>
         store.insertBatch({
@@ -272,16 +309,59 @@ describe("MemoryStore", () => {
           candidates: [
             {
               text: "candidate one",
+              summary: "",
               embedding: normalizeEmbedding([1, 0, 0], 3),
             },
             {
               text: "candidate two",
+              summary: "",
               embedding: normalizeEmbedding([0, 1, 0], 3),
             },
           ],
         }),
-      ).toThrow();
+      ).toThrow("at most 1 candidate");
       expect(store.count()).toBe(0);
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("enforces the summary byte limit while allowing an empty summary", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      });
+      expect(() =>
+        store.insertBatch({
+          ...fixture.source,
+          candidates: [
+            {
+              text: "oversized summary candidate",
+              summary: "记".repeat(1_366),
+              embedding: normalizeEmbedding([1, 0, 0], 3),
+            },
+          ],
+        }),
+      ).toThrow("text, summary, or embedding is invalid");
+      expect(store.count()).toBe(0);
+
+      const accepted = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "boundary summary candidate",
+            summary: "记".repeat(1_365),
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      });
+      expect(accepted.written).toBe(1);
+      expect(store.search(normalizeEmbedding([1, 0, 0], 3))[0]?.summary).toBe(
+        "记".repeat(1_365),
+      );
       store.close();
     } finally {
       await fixture.cleanup();
@@ -304,6 +384,7 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "visible through the second connection",
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],
@@ -325,16 +406,15 @@ describe("MemoryStore", () => {
       });
       const candidates = Array.from({ length: 6 }, (_, index) => ({
         text: `candidate ${index}`,
+        summary: "",
         embedding: normalizeEmbedding([6 - index, index + 1, 0], 3),
       }));
-      store.insertBatch({
-        ...fixture.source,
-        candidates: candidates.slice(0, 4),
-      });
-      store.insertBatch({
-        ...fixture.source,
-        candidates: candidates.slice(4),
-      });
+      for (const candidate of candidates) {
+        store.insertBatch({
+          ...fixture.source,
+          candidates: [candidate],
+        });
+      }
 
       const matches = store.search(normalizeEmbedding([1, 0, 0], 3));
       expect(matches).toHaveLength(5);
@@ -379,6 +459,81 @@ describe("MemoryStore", () => {
     }
   });
 
+  test("rejects a schema v1 database with a deletion directive", async () => {
+    const fixture = await createFixture();
+    try {
+      await mkdir(fixture.paths.directory, { recursive: true, mode: 0o700 });
+      const database = new Database(fixture.paths.database, {
+        create: true,
+        readwrite: true,
+        strict: true,
+      });
+      database.exec(`CREATE TABLE memory_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      ) STRICT`);
+      database.exec(`CREATE TABLE memories (
+        memory_id TEXT PRIMARY KEY,
+        text TEXT NOT NULL,
+        text_sha256 TEXT NOT NULL UNIQUE,
+        embedding BLOB NOT NULL,
+        source_workspace TEXT NOT NULL,
+        source_session_id TEXT NOT NULL,
+        source_turn_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      ) STRICT`);
+      database.exec(`CREATE INDEX memories_created_at
+      ON memories(created_at DESC)`);
+      const insert = database.query(
+        "INSERT INTO memory_meta(key, value) VALUES (?, ?)",
+      );
+      insert.run("schema_version", "1");
+      insert.run("embedding_profile", EMBEDDING.name);
+      insert.run("embedding_kind", EMBEDDING.kind);
+      insert.run("embedding_model", EMBEDDING.model);
+      insert.run("embedding_dimensions", String(EMBEDDING.dimensions));
+      database.close();
+      await chmod(fixture.paths.database, 0o600);
+
+      const error = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "memory_schema_unsupported" });
+      expect((error as Error).message).toContain(fixture.paths.database);
+      expect((error as Error).message).toContain("-wal");
+      expect((error as Error).message).toContain("restart");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("rejects a v2-shaped database whose metadata predates schema v2", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      });
+      store.close();
+      const database = new Database(fixture.paths.database);
+      database
+        .query("UPDATE memory_meta SET value = ? WHERE key = ?")
+        .run("1", "schema_version");
+      database.close();
+
+      const error = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+      }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "memory_schema_unsupported" });
+      expect((error as Error).message).toContain("Delete");
+      expect((error as Error).message).toContain(fixture.paths.database);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("allows embedding API routing and credentials to rotate", async () => {
     const fixture = await createFixture();
     const initialEmbedding = {
@@ -401,6 +556,7 @@ describe("MemoryStore", () => {
         candidates: [
           {
             text: "Identity remains stable across provider routing changes.",
+            summary: "",
             embedding: normalizeEmbedding([1, 0, 0], 3),
           },
         ],

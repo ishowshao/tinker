@@ -674,7 +674,9 @@ describe("tui components", () => {
             {
               memoryId: "memory-1",
               text: "Tinker changes require bun run check.",
+              summary: "Recorded the Tinker quality gate rule.",
               sourceWorkspace: "/tmp/tinker",
+              sourceSessionId: "source-session",
               createdAt: "2026-07-26T06:32:00.000Z",
             },
           ];

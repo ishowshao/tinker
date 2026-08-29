@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-08-29
-- 状态：方案已评审，待实施
+- 状态：已实施（`bun run check` 全量通过；旧库已按第 3.2 节一次性删除）
 - 上位文档：
   [`high-level-decisions.md`](high-level-decisions.md)
 - 修订对象：[`atomic-memory-mvp-design.md`](atomic-memory-mvp-design.md)

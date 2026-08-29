@@ -51,6 +51,29 @@ describe("memory browser", () => {
     cleanup();
   });
 
+  test("renders the historical summary below the index line", async () => {
+    const memory = storedMemory({
+      text: "Tinker memory v2 index line.",
+      summary: "Detailed turn summary with evidence and unresolved items.",
+    });
+    const { lastFrame, cleanup } = render(
+      <MemoryBrowser
+        memories={[memory]}
+        viewportRows={10}
+        viewportColumns={70}
+        onClose={() => undefined}
+      />,
+    );
+    await Bun.sleep(25);
+
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Tinker memory v2 index line.");
+    expect(frame).toContain(
+      "Detailed turn summary with evidence and unresolved items.",
+    );
+    cleanup();
+  });
+
   test("scrolls Ink-wrapped physical lines and clamps after resize", async () => {
     let closeCount = 0;
     const first = storedMemory({
@@ -100,7 +123,9 @@ function storedMemory(
   return {
     memoryId: "memory-1",
     text: "Stored memory text.",
+    summary: "",
     sourceWorkspace: "/workspace/example",
+    sourceSessionId: "source-session",
     createdAt: "2026-07-26T06:32:00.000Z",
     ...overrides,
   };

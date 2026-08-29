@@ -315,8 +315,10 @@ export type MemorySearchRawResult =
       ok: true;
       matches: readonly {
         text: string;
+        summary: string;
         score: number;
         sourceWorkspace: string;
+        sourceSessionId: string;
         createdAt: string;
       }[];
     }

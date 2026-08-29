@@ -5,7 +5,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { createUuidV7, isCanonicalUuidV7 } from "../ids/uuid-v7";
 import {
-  MAX_MEMORIES_PER_TURN,
+  MAX_MEMORY_SUMMARY_BYTES,
   MAX_MEMORY_TEXT_BYTES,
   MEMORY_SCHEMA_VERSION,
   MEMORY_SEARCH_LIMIT,
@@ -34,6 +34,7 @@ const CREATE_MEMORY_META_SQL = `CREATE TABLE memory_meta (
 const CREATE_MEMORIES_SQL = `CREATE TABLE memories (
   memory_id TEXT PRIMARY KEY,
   text TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
   text_sha256 TEXT NOT NULL UNIQUE,
   embedding BLOB NOT NULL,
   source_workspace TEXT NOT NULL,
@@ -120,7 +121,7 @@ export class MemoryStore {
         safeIntegers: true,
       });
       configureDatabase(database, busyTimeoutMs);
-      initializeOrVerifySchema(database, input.embedding);
+      initializeOrVerifySchema(database, input.embedding, paths.database);
       await secureCreatedAuxiliaryFile(`${paths.database}-wal`, walExisted);
       await secureCreatedAuxiliaryFile(`${paths.database}-shm`, shmExisted);
       await validatePrivateFile(paths.database);
@@ -163,9 +164,9 @@ export class MemoryStore {
     runImmediateTransaction(this.database, () => {
       const insert = this.database.query(
         `INSERT INTO memories (
-           memory_id, text, text_sha256, embedding, source_workspace,
+           memory_id, text, summary, text_sha256, embedding, source_workspace,
            source_session_id, source_turn_id, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(text_sha256) DO NOTHING`,
       );
       for (const candidate of input.candidates) {
@@ -179,6 +180,7 @@ export class MemoryStore {
         const result = insert.run(
           memoryId,
           candidate.text,
+          candidate.summary,
           sha256(candidate.text),
           encodeEmbedding(candidate.embedding),
           input.workspaceRoot,
@@ -236,7 +238,8 @@ export class MemoryStore {
     const matches: MemorySearchMatch[] = [];
     const rows = this.database
       .query(
-        `SELECT memory_id, text, embedding, source_workspace, created_at
+        `SELECT memory_id, text, summary, embedding, source_workspace,
+                source_session_id, created_at
          FROM memories`,
       )
       .iterate();
@@ -247,8 +250,10 @@ export class MemoryStore {
         Object.freeze({
           memoryId: sqlString(row.memory_id, "memory_id"),
           text: sqlString(row.text, "memory text"),
+          summary: sqlSummary(row.summary, "memory summary"),
           score: cosineFromNormalized(queryEmbedding, embedding),
           sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+          sourceSessionId: sqlString(row.source_session_id, "memory source_session_id"),
           createdAt: requireUtcTimestamp(
             sqlString(row.created_at, "memory created_at"),
             "memory created_at",
@@ -270,7 +275,8 @@ export class MemoryStore {
     const memories: StoredMemorySummary[] = [];
     const rows = this.database
       .query(
-        `SELECT memory_id, text, source_workspace, created_at
+        `SELECT memory_id, text, summary, source_workspace, source_session_id,
+                created_at
          FROM memories
          ORDER BY created_at DESC, memory_id DESC`,
       )
@@ -281,7 +287,9 @@ export class MemoryStore {
         Object.freeze({
           memoryId: sqlString(row.memory_id, "memory_id"),
           text: sqlString(row.text, "memory text"),
+          summary: sqlSummary(row.summary, "memory summary"),
           sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+          sourceSessionId: sqlString(row.source_session_id, "memory source_session_id"),
           createdAt: requireUtcTimestamp(
             sqlString(row.created_at, "memory created_at"),
             "memory created_at",
@@ -350,6 +358,7 @@ function configureDatabase(database: Database, busyTimeoutMs: number): void {
 function initializeOrVerifySchema(
   database: Database,
   embedding: MemoryEmbeddingIdentity,
+  databasePath: string,
 ): void {
   let started = false;
   try {
@@ -367,7 +376,7 @@ function initializeOrVerifySchema(
         insert.run(key, value);
       }
     }
-    verifySchema(database, embedding);
+    verifySchema(database, embedding, databasePath);
     database.exec("COMMIT");
     started = false;
   } catch (error) {
@@ -391,11 +400,15 @@ function initializeOrVerifySchema(
   }
 }
 
-function verifySchema(database: Database, embedding: MemoryEmbeddingIdentity): void {
+function verifySchema(
+  database: Database,
+  embedding: MemoryEmbeddingIdentity,
+  databasePath: string,
+): void {
   const objects = applicationSchemaObjects(database);
   if (objects.length !== EXPECTED_SCHEMA.size) {
-    throw new MemoryError(
-      "memory_schema_invalid",
+    throw unsupportedSchemaError(
+      databasePath,
       "Global memory schema has unexpected objects.",
     );
   }
@@ -403,8 +416,8 @@ function verifySchema(database: Database, embedding: MemoryEmbeddingIdentity): v
     const key = `${row.type}:${row.name}`;
     const expected = EXPECTED_SCHEMA.get(key);
     if (expected === undefined || normalizeSql(row.sql) !== normalizeSql(expected)) {
-      throw new MemoryError(
-        "memory_schema_invalid",
+      throw unsupportedSchemaError(
+        databasePath,
         `Global memory schema object ${key} is incompatible.`,
       );
     }
@@ -434,16 +447,30 @@ function verifySchema(database: Database, embedding: MemoryEmbeddingIdentity): v
     const identityMismatch = identityKeys.some(
       (key) => actual.has(key) && actual.get(key) !== expected.get(key),
     );
-    throw new MemoryError(
-      identityMismatch ? "memory_embedding_identity_mismatch" : "memory_schema_invalid",
-      identityMismatch
-        ? "Configured embedding profile does not match the existing global memory database."
-        : "Global memory metadata is invalid.",
+    if (identityMismatch) {
+      throw new MemoryError(
+        "memory_embedding_identity_mismatch",
+        "Configured embedding profile does not match the existing global memory database.",
+      );
+    }
+    throw unsupportedSchemaError(
+      databasePath,
+      "Global memory metadata does not match schema version " +
+        `${MEMORY_SCHEMA_VERSION}.`,
     );
   }
 
   const storedDimensions = Number(actual.get("embedding_dimensions"));
   expectedEmbeddingBlobBytes(storedDimensions);
+}
+
+function unsupportedSchemaError(databasePath: string, detail: string): MemoryError {
+  return new MemoryError(
+    "memory_schema_unsupported",
+    `${detail} Delete ${databasePath} (including ${databasePath}-wal and ` +
+      `${databasePath}-shm) and restart to finish the memory schema v` +
+      `${MEMORY_SCHEMA_VERSION} upgrade.`,
+  );
 }
 
 function applicationSchemaObjects(
@@ -519,10 +546,10 @@ function validateWriteBatch(input: MemoryWriteBatch, dimensions: number): void {
       "Memory source session and turn IDs must not be empty.",
     );
   }
-  if (input.candidates.length > MAX_MEMORIES_PER_TURN) {
+  if (input.candidates.length > 1) {
     throw new MemoryError(
       "memory_write_invalid",
-      `A memory batch may contain at most ${MAX_MEMORIES_PER_TURN} candidates.`,
+      "A memory batch may contain at most 1 candidate.",
     );
   }
   for (const candidate of input.candidates) {
@@ -530,11 +557,12 @@ function validateWriteBatch(input: MemoryWriteBatch, dimensions: number): void {
       candidate.text.trim() !== candidate.text ||
       Buffer.byteLength(candidate.text, "utf8") < 1 ||
       Buffer.byteLength(candidate.text, "utf8") > MAX_MEMORY_TEXT_BYTES ||
+      Buffer.byteLength(candidate.summary, "utf8") > MAX_MEMORY_SUMMARY_BYTES ||
       candidate.embedding.length !== dimensions
     ) {
       throw new MemoryError(
         "memory_write_invalid",
-        "Memory candidate text or embedding is invalid.",
+        "Memory candidate text, summary, or embedding is invalid.",
       );
     }
   }
@@ -660,6 +688,13 @@ function sqlString(value: unknown, name: string): string {
       "memory_store_read_failed",
       `${name} must be a non-empty string.`,
     );
+  }
+  return value;
+}
+
+function sqlSummary(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw new MemoryError("memory_store_read_failed", `${name} must be a string.`);
   }
   return value;
 }

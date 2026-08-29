@@ -278,13 +278,19 @@ function renderMemorySearchObservation(raw: MemorySearchRawResult): string {
   if (raw.matches.length === 0) {
     return "MemorySearch found no stored memories.";
   }
-  const header = `MemorySearch returned ${raw.matches.length} derived memories. They may be stale or wrong; verify current workspace facts.`;
+  const header = `MemorySearch returned ${raw.matches.length} derived historical memory records. They describe past turns and may be stale or wrong; verify current workspace facts with current tools before relying on them.`;
+  const footer =
+    "Use RecallSearch on a result's source session when you need its full original context.";
   return [
     header,
-    ...raw.matches.map(
-      (match, index) =>
-        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace}\n   ${match.text}`,
+    ...raw.matches.map((match, index) =>
+      [
+        `${index + 1}. score=${match.score.toFixed(3)} created_at=${match.createdAt} workspace=${match.sourceWorkspace} session=${match.sourceSessionId}`,
+        `   ${match.text}`,
+        ...(match.summary === "" ? [] : [`   summary: ${match.summary}`]),
+      ].join("\n"),
     ),
+    footer,
   ].join("\n\n");
 }
 

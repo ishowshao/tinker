@@ -118,7 +118,8 @@ class GatedExtractionModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: JSON.stringify({
-        memories: [`memory from extraction ${this.inputs.length}`],
+        text: `memory from extraction ${this.inputs.length}`,
+        summary: "",
       }),
     });
   }
@@ -211,19 +212,16 @@ describe("completed-turn memory projection", () => {
 });
 
 describe("MemoryCoordinator", () => {
-  test("extracts, batches embeddings, persists, searches, and writes content-free diagnostics", async () => {
+  test("extracts one historical record, embeds its text, persists, searches, and writes content-free diagnostics", async () => {
     const fixture = await createFixture();
     const model = new QueueExtractionModel([
       JSON.stringify({
-        memories: [
-          "Tinker source changes require bun run check.",
-          "The user prefers strict fail-fast configuration.",
-        ],
+        text: "Tinker quality gate: source changes require bun run check.",
+        summary:
+          "User stated that Tinker source changes require bun run check before completion.",
       }),
     ]);
-    const embeddings = new RecordingEmbeddingClient((input) =>
-      input.includes("fail-fast") ? [0, 1, 0] : [1, 0, 0],
-    );
+    const embeddings = new RecordingEmbeddingClient();
     let extractionClientCreations = 0;
     try {
       const coordinator = await MemoryCoordinator.create({
@@ -247,8 +245,7 @@ describe("MemoryCoordinator", () => {
 
       expect(extractionClientCreations).toBe(1);
       expect(embeddings.calls[0]).toEqual([
-        "Tinker source changes require bun run check.",
-        "The user prefers strict fail-fast configuration.",
+        "Tinker quality gate: source changes require bun run check.",
       ]);
       expect(model.inputs[0]?.messages[1]?.content).not.toContain("old derived memory");
       expect(model.inputs[0]?.messages[1]?.content).toContain(
@@ -271,14 +268,25 @@ describe("MemoryCoordinator", () => {
       if (raw.kind !== "memory_search" || !raw.ok) {
         throw new Error("Expected successful MemorySearch.");
       }
-      expect(raw.matches).toHaveLength(2);
+      expect(raw.matches).toHaveLength(1);
+      expect(raw.matches[0]).toMatchObject({
+        text: "Tinker quality gate: source changes require bun run check.",
+        summary:
+          "User stated that Tinker source changes require bun run check before completion.",
+        sourceSessionId: fixture.sessionId,
+      });
       const observation = new ObservationBuilder().build({
         call: {} as ToolCall,
         raw,
       }).displayText;
-      expect(observation).toContain("derived memories");
+      expect(observation).toContain("derived historical memory records");
       expect(observation).toContain("may be stale or wrong");
       expect(observation).toContain(fixture.workspaceRoot);
+      expect(observation).toContain(`session=${fixture.sessionId}`);
+      expect(observation).toContain(
+        "User stated that Tinker source changes require bun run check before completion.",
+      );
+      expect(observation).toContain("RecallSearch");
 
       const invalid = await executor.execute(
         { query: "valid", limit: 10 },
@@ -294,9 +302,8 @@ describe("MemoryCoordinator", () => {
       await waitForLogLines(fixture.paths.log, 3);
       const diagnosticText = await readFile(fixture.paths.log, "utf8");
       expect(diagnosticText).not.toContain("What checks does Tinker require?");
-      expect(diagnosticText).not.toContain(
-        "Tinker source changes require bun run check.",
-      );
+      expect(diagnosticText).not.toContain("Tinker quality gate");
+      expect(diagnosticText).not.toContain("User stated that Tinker");
       const diagnostics = diagnosticText
         .trim()
         .split("\n")
@@ -308,13 +315,13 @@ describe("MemoryCoordinator", () => {
       ]);
       expect(diagnostics[0]).toMatchObject({
         outcome: "ok",
-        returned: 2,
-        written: 2,
+        returned: 1,
+        written: 1,
         rejected: { duplicate: 0, secret: 0, invalid: 0, embedding: 0 },
       });
       expect(diagnostics[1]).toMatchObject({
         outcome: "ok",
-        returned: 2,
+        returned: 1,
       });
       expect(diagnostics[2]).toMatchObject({
         outcome: "failed",
@@ -322,13 +329,12 @@ describe("MemoryCoordinator", () => {
       });
       const extractedText = await readFile(fixture.paths.extractedLog, "utf8");
       expect(extractedText).toContain(
-        `[2026-07-25T10:00:00.000Z] workspace=${JSON.stringify(fixture.workspaceRoot)} turn=coordinator-turn-1 written=2`,
+        `[2026-07-25T10:00:00.000Z] workspace=${JSON.stringify(fixture.workspaceRoot)} turn=coordinator-turn-1 written=1`,
       );
-      expect(extractedText).toContain('"Tinker source changes require bun run check."');
       expect(extractedText).toContain(
-        '"The user prefers strict fail-fast configuration."',
+        '"Tinker quality gate: source changes require bun run check."',
       );
-      expect(extractedText.match(/^- /gm)).toHaveLength(2);
+      expect(extractedText.match(/^- /gm)).toHaveLength(1);
       expect((await stat(fixture.paths.extractedLog)).mode & 0o777).toBe(0o600);
 
       coordinator.dispose();
@@ -336,14 +342,14 @@ describe("MemoryCoordinator", () => {
         paths: fixture.paths,
         embedding: EMBEDDING,
       });
-      expect(reopened.count()).toBe(2);
+      expect(reopened.count()).toBe(1);
       reopened.close();
     } finally {
       await fixture.cleanup();
     }
   });
 
-  test("rejects secrets before embedding and skips the request when none remain", async () => {
+  test("rejects records whose text or summary carries a secret before embedding", async () => {
     const fixture = await createFixture();
     const embeddings = new RecordingEmbeddingClient();
     try {
@@ -354,7 +360,12 @@ describe("MemoryCoordinator", () => {
         createExtractionClient: () =>
           new QueueExtractionModel([
             JSON.stringify({
-              memories: ["The deployment password=supersecretvalue"],
+              text: "The deployment password=supersecretvalue",
+              summary: "Harmless summary.",
+            }),
+            JSON.stringify({
+              text: "Deployment turn record.",
+              summary: "The deployment used api_key=supersecretvalue during setup.",
             }),
           ]),
         createEmbeddingClient: () => embeddings,
@@ -362,12 +373,25 @@ describe("MemoryCoordinator", () => {
       coordinator.enqueue({
         workspaceRoot: fixture.workspaceRoot,
         sessionId: fixture.sessionId,
-        turnId: "secret-turn" as TurnId,
-        snapshot: completedSnapshot("secret evidence"),
+        turnId: "secret-text-turn" as TurnId,
+        snapshot: completedSnapshot("secret evidence in text"),
       });
-      const [diagnostic] = await waitForLogKind(fixture.paths.log, "extraction");
+      await waitForLogLines(fixture.paths.log, 1);
+      coordinator.enqueue({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+        turnId: "secret-summary-turn" as TurnId,
+        snapshot: completedSnapshot("secret evidence in summary"),
+      });
+      const diagnostics = await waitForLogLines(fixture.paths.log, 2);
       expect(embeddings.calls).toHaveLength(0);
-      expect(diagnostic).toMatchObject({
+      expect(diagnostics[0]).toMatchObject({
+        outcome: "ok",
+        returned: 1,
+        written: 0,
+        rejected: { secret: 1 },
+      });
+      expect(diagnostics[1]).toMatchObject({
         outcome: "ok",
         returned: 1,
         written: 0,
@@ -380,19 +404,52 @@ describe("MemoryCoordinator", () => {
     }
   });
 
-  test("logs only newly inserted memories when later extraction is a duplicate", async () => {
+  test("logs a skipped turn as returned 0 without embedding or writing", async () => {
     const fixture = await createFixture();
-    const memory = "Tinker uses bun run check as its source-change gate.";
+    const embeddings = new RecordingEmbeddingClient();
     try {
       const coordinator = await MemoryCoordinator.create({
         paths: fixture.paths,
         embedding: EMBEDDING,
         extractionContextBudget: TEST_CONTEXT_BUDGET,
         createExtractionClient: () =>
-          new QueueExtractionModel([
-            JSON.stringify({ memories: [memory] }),
-            JSON.stringify({ memories: [memory] }),
-          ]),
+          new QueueExtractionModel([JSON.stringify({ text: "", summary: "" })]),
+        createEmbeddingClient: () => embeddings,
+      });
+      coordinator.enqueue({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+        turnId: "skipped-turn" as TurnId,
+        snapshot: completedSnapshot("just a greeting"),
+      });
+      const [diagnostic] = await waitForLogKind(fixture.paths.log, "extraction");
+      expect(embeddings.calls).toHaveLength(0);
+      expect(diagnostic).toMatchObject({
+        outcome: "ok",
+        returned: 0,
+        written: 0,
+        rejected: { duplicate: 0, secret: 0, invalid: 0, embedding: 0 },
+      });
+      expect(await readOptionalFile(fixture.paths.extractedLog)).toBe("");
+      coordinator.dispose();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("logs only newly inserted memories when later extraction is a duplicate", async () => {
+    const fixture = await createFixture();
+    const memory = {
+      text: "Tinker uses bun run check as its source-change gate.",
+      summary: "Recorded from a turn about the Tinker quality gate.",
+    };
+    try {
+      const coordinator = await MemoryCoordinator.create({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        extractionContextBudget: TEST_CONTEXT_BUDGET,
+        createExtractionClient: () =>
+          new QueueExtractionModel([JSON.stringify(memory), JSON.stringify(memory)]),
         createEmbeddingClient: () => new RecordingEmbeddingClient(),
         clock: () => "2026-07-25T10:00:00.000Z",
       });
@@ -451,6 +508,50 @@ describe("MemoryCoordinator", () => {
         written: 0,
       });
       expect(diagnostic?.inputTokens).toBeGreaterThan(1);
+      coordinator.dispose();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("truncates surfaced summaries to the search-result budget with a visible marker", async () => {
+    const fixture = await createFixture();
+    try {
+      const coordinator = await MemoryCoordinator.create({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        extractionContextBudget: TEST_CONTEXT_BUDGET,
+        createExtractionClient: () =>
+          new QueueExtractionModel([
+            JSON.stringify({
+              text: "Tinker truncation record.",
+              summary: " evidence line".repeat(200),
+            }),
+          ]),
+        createEmbeddingClient: () => new RecordingEmbeddingClient(),
+      });
+      coordinator.enqueue({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+        turnId: "truncation-turn" as TurnId,
+        snapshot: completedSnapshot("long summary evidence"),
+      });
+      await waitForLogKind(fixture.paths.log, "extraction");
+      const executor = coordinator.createSearchToolExecutor({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+      });
+
+      const raw = await executor.execute({ query: "truncation" }, {} as ToolCall, {
+        signal: new AbortController().signal,
+      });
+      if (raw.kind !== "memory_search" || !raw.ok) {
+        throw new Error("Expected successful MemorySearch.");
+      }
+      expect(raw.matches).toHaveLength(1);
+      const summary = raw.matches[0]?.summary ?? "";
+      expect(Buffer.byteLength(summary, "utf8")).toBeLessThanOrEqual(1_536);
+      expect(summary.endsWith("…")).toBe(true);
       coordinator.dispose();
     } finally {
       await fixture.cleanup();
@@ -570,11 +671,9 @@ describe("MemoryCoordinator", () => {
     }
   });
 
-  test("does not partially write when one vector in a batch is invalid", async () => {
+  test("fails the extraction when the embedding vector is invalid", async () => {
     const fixture = await createFixture();
-    const embeddings = new RecordingEmbeddingClient((input) =>
-      input === "second candidate" ? [1, 0] : [1, 0, 0],
-    );
+    const embeddings = new RecordingEmbeddingClient(() => [1, 0]);
     try {
       const coordinator = await MemoryCoordinator.create({
         paths: fixture.paths,
@@ -583,7 +682,8 @@ describe("MemoryCoordinator", () => {
         createExtractionClient: () =>
           new QueueExtractionModel([
             JSON.stringify({
-              memories: ["first candidate", "second candidate"],
+              text: "Tinker vector record.",
+              summary: "A summary that will never be stored.",
             }),
           ]),
         createEmbeddingClient: () => embeddings,
@@ -599,7 +699,7 @@ describe("MemoryCoordinator", () => {
       expect(diagnostic).toMatchObject({
         outcome: "failed",
         written: 0,
-        rejected: { embedding: 2 },
+        rejected: { embedding: 1 },
       });
       coordinator.dispose();
 
@@ -614,7 +714,7 @@ describe("MemoryCoordinator", () => {
     }
   });
 
-  test("keeps one active and replaces the single pending task with the latest", async () => {
+  test("keeps one active task and drains queued tasks in FIFO order", async () => {
     const fixture = await createFixture();
     const model = new GatedExtractionModel();
     try {
@@ -631,11 +731,47 @@ describe("MemoryCoordinator", () => {
       coordinator.enqueue(completedHookInput(fixture, "third", "turn-third"));
       model.release();
 
-      await waitForLogLines(fixture.paths.log, 2);
-      expect(model.inputs).toHaveLength(2);
+      await waitForLogLines(fixture.paths.log, 3);
+      expect(model.inputs).toHaveLength(3);
       expect(model.inputs[0]?.messages[1]?.content).toContain("first");
-      expect(model.inputs[1]?.messages[1]?.content).toContain("third");
-      expect(model.inputs[1]?.messages[1]?.content).not.toContain("second");
+      expect(model.inputs[1]?.messages[1]?.content).toContain("second");
+      expect(model.inputs[2]?.messages[1]?.content).toContain("third");
+      coordinator.dispose();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("bounds the pending queue and drops the oldest queued tasks", async () => {
+    const fixture = await createFixture();
+    const model = new GatedExtractionModel();
+    try {
+      const coordinator = await MemoryCoordinator.create({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        extractionContextBudget: TEST_CONTEXT_BUDGET,
+        createExtractionClient: () => model,
+        createEmbeddingClient: () => new RecordingEmbeddingClient(),
+      });
+      coordinator.enqueue(completedHookInput(fixture, "marker-001", "turn-001"));
+      await model.firstStarted;
+      for (let index = 2; index <= 67; index += 1) {
+        const marker = `marker-${String(index).padStart(3, "0")}`;
+        coordinator.enqueue(completedHookInput(fixture, marker, `turn-${marker}`));
+      }
+      model.release();
+
+      await waitForLogLines(fixture.paths.log, 65);
+      const contents = model.inputs.map((input) => {
+        const content: unknown = input.messages[1]?.content;
+        return typeof content === "string" ? content : "";
+      });
+      expect(contents).toHaveLength(65);
+      expect(contents[0]).toContain("marker-001");
+      expect(contents.some((content) => content.includes("marker-002"))).toBe(false);
+      expect(contents.some((content) => content.includes("marker-003"))).toBe(false);
+      expect(contents[1]).toContain("marker-004");
+      expect(contents[64]).toContain("marker-067");
       coordinator.dispose();
     } finally {
       await fixture.cleanup();

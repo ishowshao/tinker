@@ -1,11 +1,13 @@
 import type { SessionId, TurnId } from "../ids/runtime-id";
 
 export const MEMORY_SEARCH_TOOL_NAME = "MemorySearch" as const;
-export const MEMORY_SCHEMA_VERSION = 1 as const;
-export const MAX_MEMORIES_PER_TURN = 4;
+export const MEMORY_SCHEMA_VERSION = 2 as const;
 export const MAX_MEMORY_TEXT_BYTES = 512;
+export const MAX_MEMORY_SUMMARY_BYTES = 4_096;
+export const MAX_SEARCH_RESULT_SUMMARY_BYTES = 1_536;
 export const MAX_MEMORY_QUERY_BYTES = 1_024;
 export const MEMORY_SEARCH_LIMIT = 5;
+export const MEMORY_EXTRACTION_QUEUE_CAPACITY = 64;
 
 export type MemoryEmbeddingKind = "openai-compatible";
 
@@ -32,6 +34,7 @@ export type MemoryPaths = {
 
 export type MemoryWriteCandidate = {
   readonly text: string;
+  readonly summary: string;
   readonly embedding: Float32Array;
 };
 
@@ -57,15 +60,19 @@ export type MemoryInsertedRecord = {
 export type MemorySearchMatch = {
   readonly memoryId: string;
   readonly text: string;
+  readonly summary: string;
   readonly score: number;
   readonly sourceWorkspace: string;
+  readonly sourceSessionId: string;
   readonly createdAt: string;
 };
 
 export type StoredMemorySummary = {
   readonly memoryId: string;
   readonly text: string;
+  readonly summary: string;
   readonly sourceWorkspace: string;
+  readonly sourceSessionId: string;
   readonly createdAt: string;
 };
 
@@ -136,7 +143,7 @@ export function boundedMemoryError(error: unknown): string {
   return truncateUtf8(singleLine, 400);
 }
 
-function truncateUtf8(value: string, maxBytes: number): string {
+export function truncateUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return value;
   }
