@@ -86,6 +86,7 @@ export class FakeModelClient implements ModelClient {
         requestMaxOutputTokens: this.options.contextBudget.requestMaxOutputTokens,
         inputModalities: this.inputModalities,
         toolResultModalities: this.toolResultModalities,
+        responseFormat: input.responseFormat?.type ?? null,
       }),
     );
     const prepared: PreparedModelRequest = Object.freeze({
@@ -96,6 +97,9 @@ export class FakeModelClient implements ModelClient {
         tools: Object.freeze([...input.tools]),
         maxTokens: this.options.contextBudget.requestMaxOutputTokens,
         ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+        ...(input.responseFormat === undefined
+          ? {}
+          : { responseFormat: input.responseFormat }),
       }),
       promptSegments: Object.freeze([...toolSegments, ...messageSegments]),
       requestConfigHash,
@@ -111,6 +115,9 @@ export class FakeModelClient implements ModelClient {
     this.preparedInputs.set(prepared, {
       messages: [...input.messages],
       tools: [...input.tools],
+      ...(input.responseFormat === undefined
+        ? {}
+        : { responseFormat: input.responseFormat }),
     });
     return prepared;
   }

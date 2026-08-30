@@ -25,6 +25,7 @@ import {
   MEMORY_SEARCH_LIMIT,
   MEMORY_SEARCH_TOOL_NAME,
   MemoryError,
+  boundedMemoryErrorDetail,
   truncateUtf8,
   type MemoryEmbeddingConfig,
   type MemoryExtractionDiagnostic,
@@ -248,6 +249,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
             turnId: task.turnId,
             inputTokens,
             ms: elapsedMs(startedAt),
+            detail: boundedMemoryErrorDetail(error),
           }),
         );
         return;
@@ -272,6 +274,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
           returned,
           rejected,
           ms: elapsedMs(startedAt),
+          detail: boundedMemoryErrorDetail(error),
         }),
       );
       return;
@@ -343,6 +346,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
           returned,
           rejected,
           ms: elapsedMs(startedAt),
+          detail: boundedMemoryErrorDetail(error),
         }),
       );
       return;
@@ -401,6 +405,7 @@ export class MemoryCoordinator implements CompletedTurnHook {
           returned,
           rejected,
           ms: elapsedMs(startedAt),
+          detail: boundedMemoryErrorDetail(error),
         }),
       );
     }
@@ -663,6 +668,7 @@ function extractionDiagnostic(input: {
   readonly returned?: number;
   readonly written?: number;
   readonly rejected?: MemoryExtractionRejectedCounts;
+  readonly detail?: string;
 }): MemoryExtractionDiagnostic {
   return Object.freeze({
     at: input.clock(),
@@ -676,6 +682,7 @@ function extractionDiagnostic(input: {
     written: input.written ?? 0,
     rejected: input.rejected ?? emptyRejectedCounts(),
     ms: input.ms,
+    ...(input.detail === undefined ? {} : { detail: input.detail }),
   });
 }
 

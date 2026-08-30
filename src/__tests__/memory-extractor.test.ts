@@ -94,6 +94,7 @@ describe("MemoryExtractor", () => {
       expect(result.inputTokens).toBeGreaterThan(0);
       expect(model.requests).toBe(1);
       expect(model.inputs[0]?.tools).toEqual([]);
+      expect(model.inputs[0]?.responseFormat).toEqual({ type: "json_object" });
       expect(model.inputs[0]?.messages[0]?.content).toContain(
         'Skip by returning {"text":"","summary":""}',
       );

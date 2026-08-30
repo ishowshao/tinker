@@ -178,6 +178,9 @@ export function prepareTestModelRequest(
   preparedInputs.set(prepared, {
     messages: [...input.messages],
     tools: [...input.tools],
+    ...(input.responseFormat === undefined
+      ? {}
+      : { responseFormat: input.responseFormat }),
   });
   return prepared;
 }

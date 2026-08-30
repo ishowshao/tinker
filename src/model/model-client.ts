@@ -103,9 +103,20 @@ export type ModelRequestOptions = {
   };
 };
 
+/**
+ * Provider-enforced structured output for a single request. Distinct from
+ * prompt-level instructions: the provider constrains the decoded response to
+ * be a valid JSON object, so callers still validate shape but no longer fight
+ * markdown fences or surrounding prose.
+ */
+export type ModelResponseFormat = {
+  readonly type: "json_object";
+};
+
 export type ModelRequestInput = {
   messages: AgentMessage[];
   tools: ToolDefinition[];
+  responseFormat?: ModelResponseFormat;
 };
 
 export type PreparedPromptSegmentKind =

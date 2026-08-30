@@ -845,6 +845,7 @@ describe("MemoryCoordinator", () => {
         written: 0,
         rejected: { embedding: 1 },
       });
+      expect(typeof diagnostic.detail).toBe("string");
       coordinator.dispose();
 
       const reopened = await MemoryStore.open({
@@ -853,6 +854,52 @@ describe("MemoryCoordinator", () => {
       });
       expect(reopened.count()).toBe(0);
       reopened.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("records bounded error detail for extraction failures", async () => {
+    const fixture = await createFixture();
+    try {
+      const coordinator = await MemoryCoordinator.create({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        extractionContextBudget: TEST_CONTEXT_BUDGET,
+        createExtractionClient: () => new QueueExtractionModel(["not json at all"]),
+        createEmbeddingClient: () => new RecordingEmbeddingClient(),
+      });
+      coordinator.enqueue({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+        turnId: "invalid-output-turn" as TurnId,
+        snapshot: completedSnapshot("bad output evidence"),
+      });
+      const [invalidDiagnostic] = await waitForLogKind(fixture.paths.log, "extraction");
+      expect(invalidDiagnostic).toMatchObject({
+        outcome: "failed",
+        reason: "extraction_output_invalid",
+      });
+      expect(invalidDiagnostic.detail).toEqual(expect.any(String));
+      expect(invalidDiagnostic.detail as string).toContain("not valid JSON");
+      expect(invalidDiagnostic.detail as string).toContain("not json at all");
+
+      // The queue is now empty, so the next request throws inside the model.
+      coordinator.enqueue({
+        workspaceRoot: fixture.workspaceRoot,
+        sessionId: fixture.sessionId,
+        turnId: "model-failure-turn" as TurnId,
+        snapshot: completedSnapshot("model failure evidence"),
+      });
+      const diagnostics = await waitForLogLines(fixture.paths.log, 2);
+      expect(diagnostics[1]).toMatchObject({
+        outcome: "failed",
+        reason: "extraction_model_failed",
+      });
+      expect(diagnostics[1]?.detail as string).toContain(
+        "No extraction response is queued.",
+      );
+      coordinator.dispose();
     } finally {
       await fixture.cleanup();
     }

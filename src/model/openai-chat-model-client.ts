@@ -107,6 +107,9 @@ export class OpenAIChatModelClient implements ModelClient {
       messages,
       ...(tools === undefined ? {} : { tools, tool_choice: "auto" as const }),
       ...(reasoningEffort === undefined ? {} : { reasoning_effort: reasoningEffort }),
+      ...(input.responseFormat === undefined
+        ? {}
+        : { response_format: { type: input.responseFormat.type } }),
       max_completion_tokens: this.options.contextBudget.requestMaxOutputTokens,
       ...(this.stream
         ? {
@@ -147,7 +150,10 @@ export class OpenAIChatModelClient implements ModelClient {
         stream: this.stream,
         inputModalities: this.inputModalities,
         toolResultModalities: this.toolResultModalities,
-        requestPolicy: { toolChoice: "auto" },
+        requestPolicy: {
+          toolChoice: "auto",
+          responseFormat: input.responseFormat?.type ?? null,
+        },
         imagePolicy: {
           version: IMAGE_INPUT_POLICY_VERSION,
           ...IMAGE_INPUT_POLICY,

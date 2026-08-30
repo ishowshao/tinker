@@ -131,6 +131,12 @@ export type MemoryExtractionDiagnostic = {
   readonly written: number;
   readonly rejected: MemoryExtractionRejectedCounts;
   readonly ms: number;
+  /**
+   * Bounded single-line error detail (message plus cause chain) recorded for
+   * failed and skipped outcomes so provider/parse failures are diagnosable
+   * from the log alone. Absent on success.
+   */
+  readonly detail?: string;
 };
 
 export type MemorySearchDiagnostic = {
@@ -194,6 +200,31 @@ export function boundedMemoryError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   const singleLine = raw.replaceAll(/\s+/g, " ").trim() || "unknown memory error";
   return truncateUtf8(singleLine, 400);
+}
+
+export function boundedMemoryErrorDetail(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (
+    let depth = 0;
+    depth < 4 && current !== undefined && current !== null;
+    depth += 1
+  ) {
+    const raw =
+      current instanceof Error
+        ? current.message
+        : typeof current === "string" ||
+            typeof current === "number" ||
+            typeof current === "boolean"
+          ? String(current)
+          : "unknown non-error cause";
+    const singleLine = raw.replaceAll(/\s+/g, " ").trim();
+    if (singleLine !== "" && !parts.includes(singleLine)) {
+      parts.push(singleLine);
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return truncateUtf8(parts.join(" | ") || "unknown memory error", 400);
 }
 
 export function truncateUtf8(value: string, maxBytes: number): string {

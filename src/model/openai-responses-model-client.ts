@@ -111,6 +111,9 @@ export class OpenAIResponsesModelClient implements ModelClient {
         : { reasoning: { effort: reasoningEffort } }),
       max_output_tokens: this.options.contextBudget.requestMaxOutputTokens,
       store: false as const,
+      ...(input.responseFormat === undefined
+        ? {}
+        : { text: { format: { type: input.responseFormat.type } } }),
       ...(this.stream ? { stream: true as const } : {}),
     });
     const toolSegments = (tools ?? []).map(
@@ -148,7 +151,11 @@ export class OpenAIResponsesModelClient implements ModelClient {
         stream: this.stream,
         inputModalities: this.inputModalities,
         toolResultModalities: this.toolResultModalities,
-        requestPolicy: { store: false, toolChoice: "auto" },
+        requestPolicy: {
+          store: false,
+          toolChoice: "auto",
+          responseFormat: input.responseFormat?.type ?? null,
+        },
         imagePolicy: {
           version: IMAGE_INPUT_POLICY_VERSION,
           ...IMAGE_INPUT_POLICY,

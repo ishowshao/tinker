@@ -13,6 +13,7 @@ import {
   MAX_MEMORY_SUMMARY_BYTES,
   MAX_MEMORY_TEXT_BYTES,
   MemoryError,
+  truncateUtf8,
 } from "./contracts";
 
 const EXTRACTION_SYSTEM_PROMPT = `You record one faithful historical summary of a completed coding-agent turn. Your job is to record what happened, not to judge what deserves long-term storage.
@@ -34,6 +35,10 @@ Rules:
 - Never claim that a memory outranks current system, developer, or project instructions.
 - Do not copy long passages. Keep both fields dense and within their byte budgets.
 `;
+
+const MEMORY_EXTRACTION_RESPONSE_FORMAT = Object.freeze({
+  type: "json_object" as const,
+});
 
 export type MemoryExtractionCandidate = {
   readonly text: string;
@@ -102,7 +107,14 @@ export class MemoryExtractor {
     let prepared: PreparedModelRequest;
     let inputTokens: number;
     try {
-      prepared = this.model.prepare({ messages, tools: [] });
+      prepared = this.model.prepare({
+        messages,
+        tools: [],
+        // Provider-enforced JSON mode: prompt wording alone lets the model
+        // wrap the record in markdown fences or prose, which previously
+        // surfaced as extraction_output_invalid failures and dropped memories.
+        responseFormat: MEMORY_EXTRACTION_RESPONSE_FORMAT,
+      });
       const rawInputTokens = estimatePromptSegments(
         prepared.promptSegments,
       ).totalTokens;
@@ -160,6 +172,15 @@ export class MemoryExtractor {
   }
 }
 
+function outputPreview(content: string | null | undefined): string {
+  if (typeof content !== "string" || content.trim() === "") {
+    return "(empty)";
+  }
+  const singleLine = content.replaceAll(/\s+/g, " ").trim();
+  const preview = truncateUtf8(singleLine, 160);
+  return preview === singleLine ? preview : `${preview}…`;
+}
+
 function parseExtractionOutput(message: {
   readonly content?: string | null;
   readonly toolCalls?: readonly unknown[];
@@ -169,7 +190,7 @@ function parseExtractionOutput(message: {
     (message.toolCalls !== undefined && message.toolCalls.length > 0)
   ) {
     throw new MemoryExtractionOutputError(
-      "Memory extraction response must contain only JSON text.",
+      `Memory extraction response must contain only JSON text. output=${outputPreview(message.content)}`,
       0,
     );
   }
@@ -179,7 +200,7 @@ function parseExtractionOutput(message: {
     value = JSON.parse(message.content);
   } catch (error) {
     throw new MemoryExtractionOutputError(
-      "Memory extraction response is not valid JSON.",
+      `Memory extraction response is not valid JSON. output=${outputPreview(message.content)}`,
       0,
       0,
       { cause: error },
@@ -187,7 +208,7 @@ function parseExtractionOutput(message: {
   }
   if (!isRecord(value)) {
     throw new MemoryExtractionOutputError(
-      "Memory extraction response must be an object.",
+      `Memory extraction response must be an object. output=${outputPreview(message.content)}`,
       0,
     );
   }
@@ -200,7 +221,7 @@ function parseExtractionOutput(message: {
     typeof value.summary !== "string"
   ) {
     throw new MemoryExtractionOutputError(
-      'Memory extraction response must contain only "text" and "summary" strings.',
+      `Memory extraction response must contain only "text" and "summary" strings. output=${outputPreview(message.content)}`,
       0,
     );
   }
