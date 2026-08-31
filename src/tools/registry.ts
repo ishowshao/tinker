@@ -153,6 +153,7 @@ export function createDefaultTooling(options: {
   workspaceRoot: string;
   runtimeSession: RuntimeSessionContext;
   historyReader: SessionHistoryReader;
+  homeRoot?: string;
   maxReadContentBytes?: number;
   exaApiKey?: string;
   webFetchRefiner?: Refiner;
@@ -187,6 +188,7 @@ export function createDefaultTooling(options: {
     cwdState,
     runtimeSession,
     stopGraceMs: options.taskStopGraceMs,
+    ...(options.homeRoot === undefined ? {} : { homeRoot: options.homeRoot }),
   });
 
   registry.register(

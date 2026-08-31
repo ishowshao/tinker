@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 import {
   onlyNonEmptySession,
   promptHistoryEntries,
@@ -54,9 +55,17 @@ test(
         expect(harness.screenText()).toContain("Recall");
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
-        assertContextRevision(harness.workspaceRoot, session, "swap_only");
-        assertCanonicalRecall(harness.workspaceRoot, session);
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await assertContextRevision(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          "swap_only",
+        );
+        await assertCanonicalRecall(harness.workspaceRoot, harness.homeRoot, session);
       },
     );
   },
@@ -102,10 +111,18 @@ test(
         });
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(11);
-        assertContextRevision(harness.workspaceRoot, session, "prefix_retirement");
-        assertCanonicalRecall(harness.workspaceRoot, session);
+        await assertContextRevision(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          "prefix_retirement",
+        );
+        await assertCanonicalRecall(harness.workspaceRoot, harness.homeRoot, session);
       },
     );
   },
@@ -157,13 +174,16 @@ test(
       await quitTui(first);
       await first.dispose();
 
-      const session = (await storedSessions(fixture.workspaceRoot)).find(
-        (candidate) => candidate.turnCount === 1,
-      );
+      const session = (
+        await storedSessions(fixture.workspaceRoot, fixture.homeRoot)
+      ).find((candidate) => candidate.turnCount === 1);
       if (session === undefined) {
         throw new Error("Expected one image PTY session.");
       }
-      const assetsBeforeResume = await imageAssetNames(fixture.workspaceRoot);
+      const assetsBeforeResume = await imageAssetNames(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+      );
       expect(assetsBeforeResume).toHaveLength(1);
 
       second = await fixture.start({
@@ -187,28 +207,35 @@ test(
       await waitForPromptReady(second);
       await quitTui(second);
 
-      expect(await imageAssetNames(fixture.workspaceRoot)).toEqual(assetsBeforeResume);
-      withSessionDatabase(fixture.workspaceRoot, session, (database) => {
-        expect(
-          database
-            .query(
-              `SELECT mia.label, mia.original_name, ia.mime_type,
+      expect(await imageAssetNames(fixture.workspaceRoot, fixture.homeRoot)).toEqual(
+        assetsBeforeResume,
+      );
+      await withSessionDatabase(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+        session,
+        (database) => {
+          expect(
+            database
+              .query(
+                `SELECT mia.label, mia.original_name, ia.mime_type,
                       ia.byte_length, ia.width, ia.height
                FROM message_image_attachments mia
                JOIN image_assets ia ON ia.asset_id = mia.asset_id`,
-            )
-            .all(),
-        ).toEqual([
-          {
-            label: "[Image #1]",
-            original_name: "fixture.png",
-            mime_type: "image/png",
-            byte_length: fixturePng().byteLength,
-            width: 1,
-            height: 1,
-          },
-        ]);
-      });
+              )
+              .all(),
+          ).toEqual([
+            {
+              label: "[Image #1]",
+              original_name: "fixture.png",
+              mime_type: "image/png",
+              byte_length: fixturePng().byteLength,
+              width: 1,
+              height: 1,
+            },
+          ]);
+        },
+      );
     } finally {
       await second?.dispose();
       await first?.dispose();
@@ -244,7 +271,9 @@ test(
             path.join(harness.workspaceRoot, "model-requests.jsonl"),
           ).exists(),
         ).toBe(false);
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([]);
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual([]);
 
         await submitPrompt(harness, "PTY_LOCAL_AFTER_PANELS");
         await harness.waitForScreen("PTY_LOCAL_AFTER_PANELS_DONE");
@@ -267,11 +296,14 @@ test(
         ]);
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(1);
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
-          "PTY_LOCAL_AFTER_PANELS",
-        ]);
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual(["PTY_LOCAL_AFTER_PANELS"]);
       },
     );
   },
@@ -301,9 +333,9 @@ test(
       await quitTui(first);
       await first.dispose();
 
-      const session = (await storedSessions(fixture.workspaceRoot)).find(
-        (candidate) => candidate.turnCount === 1,
-      );
+      const session = (
+        await storedSessions(fixture.workspaceRoot, fixture.homeRoot)
+      ).find((candidate) => candidate.turnCount === 1);
       if (session === undefined) {
         throw new Error("Expected one Skill PTY session.");
       }
@@ -324,23 +356,28 @@ test(
       await second.waitForScreen("PTY_SKILL_RESUMED");
       await quitTui(second);
 
-      withSessionDatabase(fixture.workspaceRoot, session, (database) => {
-        expect(
-          database
-            .query("SELECT name, state FROM skill_activations ORDER BY created_at")
-            .all(),
-        ).toEqual([{ name: "pty-review", state: "promoted" }]);
-        expect(
-          database
-            .query("SELECT kind FROM context_revisions WHERE kind = 'skills_update'")
-            .all(),
-        ).toEqual([{ kind: "skills_update" }]);
-        expect(
-          database
-            .query("SELECT COUNT(*) AS count FROM turns WHERE status = 'completed'")
-            .get(),
-        ).toEqual({ count: 2 });
-      });
+      await withSessionDatabase(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+        session,
+        (database) => {
+          expect(
+            database
+              .query("SELECT name, state FROM skill_activations ORDER BY created_at")
+              .all(),
+          ).toEqual([{ name: "pty-review", state: "promoted" }]);
+          expect(
+            database
+              .query("SELECT kind FROM context_revisions WHERE kind = 'skills_update'")
+              .all(),
+          ).toEqual([{ kind: "skills_update" }]);
+          expect(
+            database
+              .query("SELECT COUNT(*) AS count FROM turns WHERE status = 'completed'")
+              .get(),
+          ).toEqual({ count: 2 });
+        },
+      );
     } finally {
       await second?.dispose();
       await first?.dispose();
@@ -382,19 +419,27 @@ test(
         ]);
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                `SELECT messages.name
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  `SELECT messages.name
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'mcp__fixture__echo'`,
-              )
-              .all(),
-          ).toEqual([{ name: "mcp__fixture__echo" }]);
-        });
+                )
+                .all(),
+            ).toEqual([{ name: "mcp__fixture__echo" }]);
+          },
+        );
       },
     );
   },
@@ -412,12 +457,13 @@ function contextHeavyFixture(): string {
   ].join("\n");
 }
 
-function assertContextRevision(
+async function assertContextRevision(
   workspaceRoot: string,
+  homeRoot: string,
   session: Awaited<ReturnType<typeof onlyNonEmptySession>>,
   kind: "swap_only" | "prefix_retirement",
-): void {
-  withSessionDatabase(workspaceRoot, session, (database) => {
+): Promise<void> {
+  await withSessionDatabase(workspaceRoot, homeRoot, session, (database) => {
     const revision = database
       .query(
         `SELECT kind, revision_number, keep_from_ordinal,
@@ -443,11 +489,12 @@ function assertContextRevision(
   });
 }
 
-function assertCanonicalRecall(
+async function assertCanonicalRecall(
   workspaceRoot: string,
+  homeRoot: string,
   session: Awaited<ReturnType<typeof onlyNonEmptySession>>,
-): void {
-  withSessionDatabase(workspaceRoot, session, (database) => {
+): Promise<void> {
+  await withSessionDatabase(workspaceRoot, homeRoot, session, (database) => {
     expect(
       database
         .query(
@@ -531,9 +578,18 @@ function mcpWorkspaceFiles(logCalls: boolean): Readonly<Record<string, string>> 
   };
 }
 
-async function imageAssetNames(workspaceRoot: string): Promise<string[]> {
+async function imageAssetNames(
+  workspaceRoot: string,
+  homeRoot: string,
+): Promise<string[]> {
   return (
-    await readdir(path.join(workspaceRoot, ".tinker", "assets", "images"))
+    await readdir(
+      path.join(
+        await resolveWorkspaceStorageRoot(workspaceRoot, homeRoot),
+        "assets",
+        "images",
+      ),
+    )
   ).sort();
 }
 

@@ -43,6 +43,9 @@ import {
   collectingEventSink,
   testModelOutput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const recallTools: readonly ToolDefinition[] = [
   {

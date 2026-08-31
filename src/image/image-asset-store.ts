@@ -21,6 +21,7 @@ import {
   type ImageAssetId,
   type ImageAssetRef,
 } from "./image-types";
+import { canonicalHomeRoot, workspaceStorageRoot } from "../session/workspace-storage";
 
 const STAGING_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const STAGING_PATTERN =
@@ -47,13 +48,18 @@ export class ImageAssetStore {
   static async open(input: {
     workspaceRoot: string;
     onWarning?: (message: string) => void;
+    homeRoot?: string;
   }): Promise<ImageAssetStore> {
     const workspaceRoot = await realpath(input.workspaceRoot);
     const workspaceStat = await stat(workspaceRoot);
     if (!workspaceStat.isDirectory()) {
       throw new Error(`Workspace root is not a directory: ${workspaceRoot}.`);
     }
-    const root = await ensureAssetRoot(workspaceRoot);
+    const storageRoot = workspaceStorageRoot(
+      workspaceRoot,
+      await canonicalHomeRoot(input.homeRoot),
+    );
+    const root = await ensureAssetRoot(storageRoot);
     const store = new ImageAssetStore(workspaceRoot, root, input.onWarning);
     await store.cleanupStagingFiles();
     return store;
@@ -271,9 +277,18 @@ export class ImageAssetStore {
   }
 }
 
-async function ensureAssetRoot(workspaceRoot: string): Promise<string> {
-  let current = workspaceRoot;
-  for (const name of [".tinker", "assets", "images"]) {
+async function ensureAssetRoot(storageRoot: string): Promise<string> {
+  await mkdir(storageRoot, { recursive: true, mode: 0o700 });
+  const storageEntry = await lstat(storageRoot);
+  if (storageEntry.isSymbolicLink() || !storageEntry.isDirectory()) {
+    throw new Error(
+      `Workspace storage root is not a regular directory: ${storageRoot}.`,
+    );
+  }
+  await chmod(storageRoot, 0o700);
+
+  let current = storageRoot;
+  for (const name of ["assets", "images"]) {
     current = path.join(current, name);
     try {
       const entry = await lstat(current);
@@ -288,12 +303,10 @@ async function ensureAssetRoot(workspaceRoot: string): Promise<string> {
       }
       await mkdir(current, { mode: 0o700 });
     }
-    if (name !== ".tinker") {
-      await chmod(current, 0o700);
-    }
+    await chmod(current, 0o700);
   }
   const canonical = await realpath(current);
-  assertContained(workspaceRoot, canonical, "Image asset root");
+  assertContained(storageRoot, canonical, "Image asset root");
   if (canonical !== current) {
     throw new Error("Image asset root is not canonical.");
   }

@@ -22,6 +22,9 @@ import {
   TestModelClient,
   testModelOutput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const LONG_MARKDOWN = `# Long response\n\n${"content ".repeat(700)}\n`;
 

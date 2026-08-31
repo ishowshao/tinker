@@ -18,6 +18,9 @@ import {
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("SessionHistoryReader", () => {
   test("excludes legacy and split Recall observations from the index allowlist", () => {

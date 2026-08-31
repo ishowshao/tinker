@@ -44,6 +44,7 @@ import type { SwapPlanningResult } from "../src/context/swap-planner";
 import { SqliteSessionLedger } from "../src/session/sqlite-session-ledger";
 import type { SessionHistoryReader } from "../src/session/session-history-reader";
 import { SESSION_SCHEMA_V10_FINGERPRINT } from "../src/session/session-schema";
+import { resolveWorkspaceStorageRoot } from "../src/session/workspace-storage";
 import { createDefaultTooling } from "../src/tools/registry";
 import type { ToolDefinition } from "../src/tools/types";
 import { visibleTimelineItems } from "../src/tui/event-store";
@@ -181,8 +182,13 @@ export async function runLongSessionBenchmark(
     );
   }
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-g0-long-session-"));
+  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "tinker-g0-home-"));
   const sessionId = runtimeIdFactory.createSessionId();
-  const sessionDirectory = path.join(workspace, ".tinker", "sessions", sessionId);
+  const sessionDirectory = path.join(
+    await resolveWorkspaceStorageRoot(workspace, homeRoot),
+    "sessions",
+    sessionId,
+  );
   const databasePath = path.join(sessionDirectory, "session.sqlite");
   const ledgerMetrics = new LedgerMetrics();
   const model = new BenchmarkModelClient();
@@ -209,6 +215,7 @@ export async function runLongSessionBenchmark(
     session = await createBenchmarkSession({
       mode: "new",
       workspace,
+      homeRoot,
       sessionId,
       model,
       projection,
@@ -266,6 +273,7 @@ export async function runLongSessionBenchmark(
         session = await createBenchmarkSession({
           mode: "resume",
           workspace,
+          homeRoot,
           sessionId,
           model,
           projection,
@@ -481,6 +489,7 @@ export async function runLongSessionBenchmark(
         .catch(() => undefined);
     }
     await rm(workspace, { recursive: true });
+    await rm(homeRoot, { recursive: true });
   }
 }
 
@@ -941,6 +950,7 @@ function summarizeCompactions(
 async function createBenchmarkSession(input: {
   mode: "new" | "resume";
   workspace: string;
+  homeRoot: string;
   sessionId: SessionId;
   model: BenchmarkModelClient;
   projection: BenchmarkProjectionSink;
@@ -949,6 +959,7 @@ async function createBenchmarkSession(input: {
 }): Promise<RuntimeSession> {
   const common = {
     workspaceRoot: input.workspace,
+    homeRoot: input.homeRoot,
     modelName: benchmarkModelName,
     profileName: benchmarkProfileName,
     maxIterations: 8,

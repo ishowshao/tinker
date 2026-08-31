@@ -19,6 +19,9 @@ import {
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("runtime compatibility boundary", () => {
   test("accepts every model-layer message protocol adapter", () => {

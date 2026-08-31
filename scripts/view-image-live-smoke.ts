@@ -18,6 +18,7 @@ import { runtimeIdFactory } from "../src/ids/runtime-id";
 import type { SessionId } from "../src/ids/runtime-id";
 import { OpenAIResponsesModelClient } from "../src/model/openai-responses-model-client";
 import { createReasoningEffortController } from "../src/model/reasoning-effort";
+import { resolveSessionDatabasePath } from "../src/session/session-store";
 
 const LIVE_ENABLE_ENV = "TINKER_LIVE_VIEW_IMAGE";
 
@@ -243,7 +244,7 @@ async function runMode(input: {
       throw new Error("ViewImage live request recorded no provider prompt usage.");
     }
 
-    assertNoPersistedDataUrl(input.workspace, sessionId, events);
+    await assertNoPersistedDataUrl(input.workspace, sessionId, events);
     return {
       stream: input.stream,
       firstFinalText: first.finalText,
@@ -331,13 +332,13 @@ async function requestBody(
   throw new Error("Live Responses request body is not inspectable.");
 }
 
-function assertNoPersistedDataUrl(
+async function assertNoPersistedDataUrl(
   workspaceRoot: string,
   sessionId: SessionId,
   events: readonly AgentEvent[],
-): void {
+): Promise<void> {
   const database = new Database(
-    path.join(workspaceRoot, ".tinker", "sessions", sessionId, "session.sqlite"),
+    await resolveSessionDatabasePath(workspaceRoot, sessionId),
     { readonly: true },
   );
   try {

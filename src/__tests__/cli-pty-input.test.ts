@@ -63,25 +63,31 @@ test(
         await harness.waitForScreen("PTY_PROMPT_HISTORY_DONE");
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                "SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal",
-              )
-              .all(),
-          ).toEqual([
-            { content: "first\n>second\n中文<" },
-            { content: "草稿-恢复" },
-            { content: "草稿-恢复-重提" },
-          ]);
-        });
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
-          "first\n>second\n中文<",
-          "草稿-恢复",
-          "草稿-恢复-重提",
-        ]);
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  "SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal",
+                )
+                .all(),
+            ).toEqual([
+              { content: "first\n>second\n中文<" },
+              { content: "草稿-恢复" },
+              { content: "草稿-恢复-重提" },
+            ]);
+          },
+        );
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual(["first\n>second\n中文<", "草稿-恢复", "草稿-恢复-重提"]);
       },
     );
   },
@@ -142,10 +148,12 @@ test(
         expect(
           await Bun.file(`${harness.workspaceRoot}/model-requests.jsonl`).exists(),
         ).toBe(false);
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([]);
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual([]);
         await quitTui(harness);
 
-        const sessions = await storedSessions(harness.workspaceRoot);
+        const sessions = await storedSessions(harness.workspaceRoot, harness.homeRoot);
         expect(sessions).toHaveLength(0);
       },
     );
@@ -214,22 +222,32 @@ test(
         );
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                "SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal",
-              )
-              .all(),
-          ).toEqual([
-            { content: "open src/index.ts now" },
-            {
-              content: "Review shallow and deep files.\nReturn exact marker.",
-            },
-          ]);
-        });
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  "SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal",
+                )
+                .all(),
+            ).toEqual([
+              { content: "open src/index.ts now" },
+              {
+                content: "Review shallow and deep files.\nReturn exact marker.",
+              },
+            ]);
+          },
+        );
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual([
           "open src/index.ts now",
           "Review shallow and deep files.\nReturn exact marker.",
         ]);
@@ -300,12 +318,14 @@ test(
         await harness.waitForScreen("PTY_VIEW_CONTINUED");
 
         await quitTui(harness);
-        const session = await onlyNonEmptySession(harness.workspaceRoot);
+        const session = await onlyNonEmptySession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(2);
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
-          "PTY_VIEW_SEED",
-          "PTY_VIEW_CONTINUE",
-        ]);
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual(["PTY_VIEW_SEED", "PTY_VIEW_CONTINUE"]);
       },
     );
   },

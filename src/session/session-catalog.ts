@@ -6,6 +6,7 @@ import { SessionError } from "./session-errors";
 import { inspectSessionLock } from "./session-lock";
 import { SessionStore } from "./session-store";
 import { verifyReadableSessionSchema } from "./session-schema";
+import { canonicalHomeRoot, workspaceStorageRoot } from "./workspace-storage";
 
 export type SessionSummary = {
   sessionId: SessionId;
@@ -28,9 +29,22 @@ export type SessionSummary = {
 
 export class SessionCatalog {
   private readonly workspaceRootPromise: Promise<string>;
+  private readonly sessionsRootPromise: Promise<string>;
 
-  constructor(private readonly input: { workspaceRoot: string; limit?: number }) {
+  constructor(
+    private readonly input: {
+      workspaceRoot: string;
+      limit?: number;
+      homeRoot?: string;
+    },
+  ) {
     this.workspaceRootPromise = realpath(input.workspaceRoot);
+    this.sessionsRootPromise = this.workspaceRootPromise.then(async (workspaceRoot) =>
+      path.join(
+        workspaceStorageRoot(workspaceRoot, await canonicalHomeRoot(input.homeRoot)),
+        "sessions",
+      ),
+    );
   }
 
   async list(currentSessionId?: SessionId): Promise<readonly SessionSummary[]> {
@@ -44,7 +58,7 @@ export class SessionCatalog {
 
   private async scan(currentSessionId?: SessionId): Promise<SessionSummary[]> {
     const workspaceRoot = await this.workspaceRootPromise;
-    const sessionsRoot = path.join(workspaceRoot, ".tinker", "sessions");
+    const sessionsRoot = await this.sessionsRootPromise;
     let entries;
     try {
       entries = await readdir(sessionsRoot, { withFileTypes: true });
@@ -87,7 +101,7 @@ export class SessionCatalog {
     currentSessionId?: SessionId,
   ): Promise<SessionSummary> {
     const workspaceRoot = await this.workspaceRootPromise;
-    const directory = path.join(workspaceRoot, ".tinker", "sessions", sessionId);
+    const directory = path.join(await this.sessionsRootPromise, sessionId);
     return readSummary(directory, sessionId, workspaceRoot, currentSessionId);
   }
 
@@ -105,6 +119,7 @@ export class SessionCatalog {
       workspaceRoot,
       sessionId,
       allowIncomplete: true,
+      ...(this.input.homeRoot === undefined ? {} : { homeRoot: this.input.homeRoot }),
     });
     try {
       await store.deleteFromDisk();

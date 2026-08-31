@@ -24,6 +24,7 @@ import {
   type ParsedPublicEnvironment,
   type PublicToolingConfig,
 } from "./public-config-contract";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 
 export type RunnerConfig = {
   readonly sessionId: SessionId;
@@ -227,17 +228,12 @@ function runnerConfigFromTemplate(
   });
 }
 
-export function eventLogPath(workspaceRoot: string, sessionId: SessionId): string {
-  return path.join(workspaceRoot, ".tinker", "sessions", sessionId, "events.jsonl");
-}
-
-export function observationLogPath(
+export async function promptHistoryPath(
   workspaceRoot: string,
-  sessionId: SessionId,
-): string {
-  return path.join(workspaceRoot, ".tinker", "sessions", sessionId, "observations.md");
-}
-
-export function promptHistoryPath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".tinker", "prompt-history.jsonl");
+  homeRoot?: string,
+): Promise<string> {
+  return path.join(
+    await resolveWorkspaceStorageRoot(workspaceRoot, homeRoot),
+    "prompt-history.jsonl",
+  );
 }

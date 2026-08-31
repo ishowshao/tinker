@@ -19,6 +19,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("Recall historical/current integration", () => {
   test("returns Read v1 after Edit v2 and preserves the source across resume", async () => {

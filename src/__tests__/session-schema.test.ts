@@ -16,6 +16,9 @@ import {
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("session schema identity", () => {
   test("persists all three schema identities and rejects structural drift", async () => {

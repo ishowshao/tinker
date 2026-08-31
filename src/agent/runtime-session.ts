@@ -287,6 +287,7 @@ export type CompletedTurnHook = {
 
 type CommonRuntimeSessionInput = {
   workspaceRoot: string;
+  homeRoot?: string;
   modelName: string;
   profileName?: string;
   maxIterations: number;
@@ -341,7 +342,10 @@ export type RuntimeSessionFactoryDependencies = {
     idFactory: RuntimeIdFactory,
   ) => Promise<SessionStore>;
   createLedger: (store: SessionStore, idFactory: RuntimeIdFactory) => SessionLedger;
-  createEventSink: (input: CreateRuntimeSessionInput) => EventSink;
+  createEventSink: (
+    input: CreateRuntimeSessionInput,
+    sessionDirectory: string,
+  ) => EventSink;
   selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
   onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
   selectContextAutomation: typeof selectContextAutomation;
@@ -407,10 +411,12 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
           systemPrompt: input.systemPrompt,
           projectInstruction: input.projectInstruction,
           idFactory,
+          ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
         })
       : SessionStore.openExisting({
           workspaceRoot: input.workspaceRoot,
           sessionId: input.selection.sessionId,
+          ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
         }),
   createLedger: (store, idFactory) => new SqliteSessionLedger(store, idFactory),
   createEventSink,
@@ -541,7 +547,10 @@ class DefaultRuntimeSession implements RuntimeSession {
     const store = await dependencies.openStore(input, dependencies.idFactory);
     let assetStore: ImageAssetStore;
     try {
-      assetStore = await ImageAssetStore.open({ workspaceRoot: store.workspaceRoot });
+      assetStore = await ImageAssetStore.open({
+        workspaceRoot: store.workspaceRoot,
+        ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
+      });
     } catch (error) {
       if (isNewSessionInput(input)) {
         await store
@@ -557,7 +566,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       session = new DefaultRuntimeSession(
         input,
         dependencies,
-        dependencies.createEventSink(input),
+        dependencies.createEventSink(input, store.sessionDirectory),
         dependencies.createObservationBuilder(),
         store,
         assetStore,
@@ -654,6 +663,7 @@ class DefaultRuntimeSession implements RuntimeSession {
 
       session.tooling = dependencies.createTooling({
         workspaceRoot: input.workspaceRoot,
+        ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
         runtimeSession: session.context,
         historyReader: store.historyReader(),
         imageAssetStore: assetStore,
@@ -2928,21 +2938,19 @@ export async function createRuntimeSession(
   });
 }
 
-function createEventSink(input: CreateRuntimeSessionInput): EventSink {
+function createEventSink(
+  input: CreateRuntimeSessionInput,
+  sessionDirectory: string,
+): EventSink {
   const requiredSinks: EventSink[] = [];
   if (input.persistence !== false) {
-    const basePath = path.join(
-      input.workspaceRoot,
-      ".tinker",
-      "sessions",
-      input.selection.sessionId,
-    );
     requiredSinks.push(
       new JsonlEventLog(
-        input.persistence?.eventLogPath ?? path.join(basePath, "events.jsonl"),
+        input.persistence?.eventLogPath ?? path.join(sessionDirectory, "events.jsonl"),
       ),
       new ObservationTextLog(
-        input.persistence?.observationLogPath ?? path.join(basePath, "observations.md"),
+        input.persistence?.observationLogPath ??
+          path.join(sessionDirectory, "observations.md"),
       ),
     );
   }

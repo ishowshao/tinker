@@ -29,7 +29,7 @@ import { RuntimeReasoningEffort } from "../model/reasoning-effort";
 import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
 import type { SessionHistoryReader } from "../session/session-history-reader";
-import { SessionStore } from "../session/session-store";
+import { resolveSessionDatabasePath, SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { createDefaultTooling } from "../tools/registry";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
@@ -42,6 +42,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 class CapturingModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
@@ -1072,7 +1075,7 @@ describe("RuntimeSession lifecycle", () => {
       expect(observations).not.toContain(secretReasoning);
 
       const database = new Database(
-        path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+        await resolveSessionDatabasePath(workspace, sessionId),
         { readonly: true },
       );
       expect(
@@ -1169,7 +1172,7 @@ describe("RuntimeSession lifecycle", () => {
 
       await session.dispose({ type: "oneshot_complete" });
       const database = new Database(
-        path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+        await resolveSessionDatabasePath(workspace, sessionId),
         { readonly: true },
       );
       expect(

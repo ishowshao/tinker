@@ -21,6 +21,9 @@ import {
   UnsupportedImageFormatError,
 } from "../image/image-probe";
 import type { ImageAssetId } from "../image/image-types";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("ImageAssetStore", () => {
   test("imports PNG, JPEG, and static WebP into a private content-addressed store", async () => {

@@ -11,7 +11,12 @@ import {
 import type { AgentEvent } from "../events/types";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
+import { resolveSessionDatabasePath } from "../session/session-store";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("ViewImage runtime integration", () => {
   test("executes, persists, replays, and presents a Responses image tool result safely", async () => {
@@ -141,7 +146,7 @@ describe("ViewImage runtime integration", () => {
       expect(JSON.stringify(events)).not.toContain("base64");
 
       const database = new Database(
-        path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+        await resolveSessionDatabasePath(workspace, sessionId),
         { readonly: true },
       );
       const canonicalText = JSON.stringify({
@@ -159,8 +164,7 @@ describe("ViewImage runtime integration", () => {
       database.close();
 
       const observationsPath = path.join(
-        workspace,
-        ".tinker",
+        await resolveWorkspaceStorageRoot(workspace),
         "sessions",
         sessionId,
         "observations.md",

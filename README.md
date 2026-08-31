@@ -458,13 +458,22 @@ one-shot `tinker run` command. See
 [`docs/project-custom-slash-commands-design.md`](docs/project-custom-slash-commands-design.md)
 for the full contract.
 
-### Workspace-Local Runtime Data
+### Global Runtime Data
 
-Tinker keeps private runtime state under `<workspace>/.tinker/`: each session has
-its own SQLite database, event log, and observation log, while image assets and
-Prompt history are stored at the workspace level. These locations are fixed and
-have no public path-override environment variables. MCP server configuration is
-loaded from `<workspace>/.mcp.json`; project slash commands are loaded from
+Tinker keeps private runtime state in a global home directory instead of inside
+your projects. Each workspace maps to
+`~/.tinker/projects/<workspace-slug-hash>/` — the slug comes from the workspace
+directory name and the hash from its canonical absolute path, so one project
+always resolves to one storage directory even when reached through symlinks.
+That directory holds per-session SQLite databases, event logs, and observation
+logs (`sessions/<id>/`), background Bash task logs (`bash/`), imported image
+assets (`assets/images/`), and prompt history (`prompt-history.jsonl`).
+Workspaces stay clean: no `.tinker/` directory is created inside them.
+
+Set `TINKER_HOME` to relocate the global home (default: the OS home directory).
+Global memory lives in `<home>/.tinker/memory/` and the Chrome bridge host in
+`<home>/.tinker/chrome/`. MCP server configuration is loaded from
+`<workspace>/.mcp.json`; project slash commands are loaded from
 `<workspace>/.tinker.json`.
 
 `Read` has a fixed 262144-byte (256 KiB) content limit per call. A successful
@@ -494,8 +503,9 @@ tinker/
 │   ├── context/       # Context protocol validation, protocol frame construction
 │   └── ids/           # Runtime ID generation (UUID v7)
 ├── docs/              # Design notes and planning documents
-├── .tinker/           # Runtime data (sessions, bash tasks, events)
 └── package.json
+
+Runtime data lives in ~/.tinker/ (sessions, bash tasks, assets), not in the repo.
 ```
 
 ## Design Philosophy

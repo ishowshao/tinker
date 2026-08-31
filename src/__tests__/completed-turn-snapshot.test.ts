@@ -8,6 +8,9 @@ import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("SessionStore completed-turn snapshots", () => {
   test("reads only one completed turn into frozen role-specific records", async () => {

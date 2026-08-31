@@ -24,6 +24,9 @@ import {
 } from "../model/openai-chat-model-client";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import { TEST_CONTEXT_BUDGET } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("OpenAI multimodal mapping and materialization", () => {
   test("maps ordered image blocks before the complete Prompt without local metadata", () => {

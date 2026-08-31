@@ -4,22 +4,26 @@ import { contentHash } from "../context/protocol-frame";
 import type { SessionId } from "../ids/runtime-id";
 import { SessionError, sessionOpenError, sessionReadError } from "./session-errors";
 import { verifySessionSchema } from "./session-schema";
-import { decodeStoredToolCalls, sessionDatabasePath } from "./session-store";
+import { decodeStoredToolCalls, resolveSessionDatabasePath } from "./session-store";
 
 const OPERATION = "read_last_assistant_response";
 
 export async function readLastAssistantResponse(input: {
   workspaceRoot: string;
   sessionId: SessionId;
+  homeRoot?: string;
 }): Promise<string | undefined> {
   const workspaceRoot = await realpath(input.workspaceRoot);
   let database: Database;
   try {
-    database = new Database(sessionDatabasePath(workspaceRoot, input.sessionId), {
-      readonly: true,
-      strict: true,
-      safeIntegers: true,
-    });
+    database = new Database(
+      await resolveSessionDatabasePath(workspaceRoot, input.sessionId, input.homeRoot),
+      {
+        readonly: true,
+        strict: true,
+        safeIntegers: true,
+      },
+    );
   } catch (error) {
     throw sessionOpenError(OPERATION, input.sessionId, error);
   }

@@ -69,6 +69,7 @@ export async function runRecallBenchmark(
   requirePositiveInteger(messageCount, "message count");
   requirePositiveInteger(sampleCount, "sample count");
   const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-recall-bench-"));
+  const homeRoot = await mkdtemp(path.join(os.tmpdir(), "tinker-recall-home-"));
   const sessionId = runtimeIdFactory.createSessionId();
   let database: Database | undefined;
   let store: SessionStore | undefined;
@@ -80,6 +81,7 @@ export async function runRecallBenchmark(
       modelName: benchmarkModelName,
       systemPrompt: benchmarkSystemPrompt,
       idFactory: runtimeIdFactory,
+      homeRoot,
     });
     const surface = createContextSurface({
       surfaceId: runtimeIdFactory.createContextSurfaceId(),
@@ -165,6 +167,7 @@ export async function runRecallBenchmark(
     store = await SessionStore.openExisting({
       workspaceRoot: workspace,
       sessionId,
+      homeRoot,
     });
     const sessionStoreOpenValidationMs = performance.now() - sessionStoreOpenStartedAt;
     const reader = store.historyReader();
@@ -244,6 +247,7 @@ export async function runRecallBenchmark(
     database?.close();
     await store?.abandon().catch(() => undefined);
     await rm(workspace, { recursive: true });
+    await rm(homeRoot, { recursive: true, force: true });
   }
 }
 

@@ -17,7 +17,7 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { SessionError } from "../session/session-errors";
-import { SessionStore, sessionDatabasePath } from "../session/session-store";
+import { SessionStore, resolveSessionDatabasePath } from "../session/session-store";
 import type { ToolExecutor } from "../tools/types";
 import {
   buildSystemPrompt,
@@ -33,6 +33,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome("tinker-session-resume-home-");
 
 class ResumeModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];
@@ -162,9 +165,12 @@ describe("RuntimeSession resume", () => {
       });
       await session.dispose({ type: "tui_exit" });
 
-      const database = new Database(sessionDatabasePath(workspace, sessionId), {
-        readonly: true,
-      });
+      const database = new Database(
+        await resolveSessionDatabasePath(workspace, sessionId),
+        {
+          readonly: true,
+        },
+      );
       expect(
         (
           database
@@ -220,7 +226,9 @@ describe("RuntimeSession resume", () => {
       );
       await active.dispose({ type: "tui_exit" });
 
-      const database = new Database(sessionDatabasePath(workspace, sessionId));
+      const database = new Database(
+        await resolveSessionDatabasePath(workspace, sessionId),
+      );
       const trigger = database
         .query(
           "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = 'messages_no_update'",
@@ -347,9 +355,12 @@ describe("RuntimeSession resume", () => {
         },
       ]);
 
-      const database = new Database(sessionDatabasePath(workspace, sessionId), {
-        readonly: true,
-      });
+      const database = new Database(
+        await resolveSessionDatabasePath(workspace, sessionId),
+        {
+          readonly: true,
+        },
+      );
       expect(
         database
           .query(

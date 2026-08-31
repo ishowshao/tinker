@@ -27,6 +27,9 @@ import {
 import { defineToolExecutor, type ToolExecutionContext } from "../tools/types";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 import { decodeStoredToolRawResult } from "../session/session-store";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,

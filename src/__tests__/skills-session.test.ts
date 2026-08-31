@@ -30,6 +30,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 class ActivateSkillModel extends TestModelClient {
   readonly inputs: ModelRequestInput[] = [];

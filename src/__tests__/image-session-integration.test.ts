@@ -14,6 +14,9 @@ import { ResumeProjectionReader } from "../session/resume-projection";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("image session persistence", () => {
   test("persists image relations, clones them, and renders a safe Recall omission", async () => {

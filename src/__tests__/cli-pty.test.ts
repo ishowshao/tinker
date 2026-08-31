@@ -3,7 +3,8 @@ import { Database } from "bun:sqlite";
 import { readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SessionCatalog, type SessionSummary } from "../session/session-catalog";
-import { sessionDatabasePath } from "../session/session-store";
+import { resolveSessionDatabasePath } from "../session/session-store";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { MemoryStore, resolveMemoryPaths } from "../memory/memory-store";
 import { normalizeEmbedding } from "../memory/vector";
@@ -74,30 +75,38 @@ test(
         expect(harness.screenText()).toContain("Context");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(2);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-              .all(),
-          ).toEqual([
-            { turn_number: 1, status: "completed" },
-            { turn_number: 2, status: "completed" },
-          ]);
-          expect(
-            database
-              .query(
-                "SELECT role, content FROM messages WHERE role IN ('user', 'assistant') ORDER BY ordinal",
-              )
-              .all(),
-          ).toEqual([
-            { role: "user", content: "PTY_FIRST" },
-            { role: "assistant", content: "PTY_TURN_ONE_DONE" },
-            { role: "user", content: "PTY_SECOND" },
-            { role: "assistant", content: "PTY_TURN_TWO_DONE" },
-          ]);
-        });
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+                .all(),
+            ).toEqual([
+              { turn_number: 1, status: "completed" },
+              { turn_number: 2, status: "completed" },
+            ]);
+            expect(
+              database
+                .query(
+                  "SELECT role, content FROM messages WHERE role IN ('user', 'assistant') ORDER BY ordinal",
+                )
+                .all(),
+            ).toEqual([
+              { role: "user", content: "PTY_FIRST" },
+              { role: "assistant", content: "PTY_TURN_ONE_DONE" },
+              { role: "user", content: "PTY_SECOND" },
+              { role: "assistant", content: "PTY_TURN_TWO_DONE" },
+            ]);
+          },
+        );
       },
     );
   },
@@ -209,33 +218,40 @@ test(
         expect(writes).not.toContain("\u001b[3J");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                "SELECT content FROM messages WHERE role = 'assistant' ORDER BY ordinal",
-              )
-              .all(),
-          ).toEqual([
-            {
-              content: [
-                "## PTY incremental first",
-                "PTY_INCREMENTAL_EARLY_SENTINEL",
-                "",
-                "## PTY incremental second",
-                "PTY_INCREMENTAL_SECOND_BODY",
-                "",
-                "## PTY incremental final",
-                "PTY_INCREMENTAL_FINAL_SENTINEL",
-              ].join("\n"),
-            },
-          ]);
-        });
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  "SELECT content FROM messages WHERE role = 'assistant' ORDER BY ordinal",
+                )
+                .all(),
+            ).toEqual([
+              {
+                content: [
+                  "## PTY incremental first",
+                  "PTY_INCREMENTAL_EARLY_SENTINEL",
+                  "",
+                  "## PTY incremental second",
+                  "PTY_INCREMENTAL_SECOND_BODY",
+                  "",
+                  "## PTY incremental final",
+                  "PTY_INCREMENTAL_FINAL_SENTINEL",
+                ].join("\n"),
+              },
+            ]);
+          },
+        );
         const events = await readFile(
           path.join(
-            harness.workspaceRoot,
-            ".tinker",
+            await resolveWorkspaceStorageRoot(harness.workspaceRoot, harness.homeRoot),
             "sessions",
             session.sessionId,
             "events.jsonl",
@@ -284,24 +300,32 @@ test(
         expect(harness.screenText()).toContain("PTY_AFTER_CANCEL");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-              .all(),
-          ).toEqual([
-            { turn_number: 1, status: "cancelled" },
-            { turn_number: 2, status: "completed" },
-          ]);
-          expect(
-            database
-              .query(
-                "SELECT COUNT(*) AS count FROM protocol_frames WHERE state = 'open'",
-              )
-              .get(),
-          ).toEqual({ count: 0 });
-        });
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+                .all(),
+            ).toEqual([
+              { turn_number: 1, status: "cancelled" },
+              { turn_number: 2, status: "completed" },
+            ]);
+            expect(
+              database
+                .query(
+                  "SELECT COUNT(*) AS count FROM protocol_frames WHERE state = 'open'",
+                )
+                .get(),
+            ).toEqual({ count: 0 });
+          },
+        );
       },
     );
   },
@@ -344,31 +368,39 @@ test(
         await harness.waitForScreen("PTY_TOOL_CHAIN_VERIFIED");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(2);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                `SELECT messages.name
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  `SELECT messages.name
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  ORDER BY messages.ordinal`,
-              )
-              .all(),
-          ).toEqual([{ name: "Write" }, { name: "Edit" }, { name: "Bash" }]);
-          expect(
-            database
-              .query(
-                `SELECT json_extract(tool_results.raw_json, '$.ok') AS ok,
+                )
+                .all(),
+            ).toEqual([{ name: "Write" }, { name: "Edit" }, { name: "Bash" }]);
+            expect(
+              database
+                .query(
+                  `SELECT json_extract(tool_results.raw_json, '$.ok') AS ok,
                         json_extract(tool_results.raw_json, '$.exitCode') AS exit_code
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'Bash'`,
-              )
-              .get(),
-          ).toEqual({ ok: 1, exit_code: 0 });
-        });
+                )
+                .get(),
+            ).toEqual({ ok: 1, exit_code: 0 });
+          },
+        );
       },
     );
   },
@@ -412,30 +444,38 @@ test(
         await harness.waitForScreen("Nothing to undo in this active session.");
         await quitTui(harness);
 
-        const session = await onlyStoredSession(harness.workspaceRoot);
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(1);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-              .all(),
-          ).toEqual([{ turn_number: 1, status: "completed" }]);
-          expect(
-            database
-              .query(
-                `SELECT messages.name
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+                .all(),
+            ).toEqual([{ turn_number: 1, status: "completed" }]);
+            expect(
+              database
+                .query(
+                  `SELECT messages.name
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  ORDER BY messages.ordinal`,
-              )
-              .all(),
-          ).toEqual([
-            { name: "Read" },
-            { name: "Write" },
-            { name: "Write" },
-            { name: "Delete" },
-          ]);
-        });
+                )
+                .all(),
+            ).toEqual([
+              { name: "Read" },
+              { name: "Write" },
+              { name: "Write" },
+              { name: "Delete" },
+            ]);
+          },
+        );
       },
     );
   },
@@ -467,33 +507,41 @@ test(
         expect(screen).toContain("killed");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          const names = database
-            .query(
-              `SELECT messages.name
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            const names = database
+              .query(
+                `SELECT messages.name
                FROM tool_results
                JOIN messages ON messages.message_id = tool_results.tool_message_id
                ORDER BY messages.ordinal`,
-            )
-            .all() as Array<{ name: string }>;
-          expect(names[0]?.name).toBe("Bash");
-          expect(names).toContainEqual({ name: "TaskOutput" });
-          expect(names.at(-1)?.name).toBe("TaskStop");
-          expect(
-            database
-              .query(
-                `SELECT json_extract(tool_results.raw_json, '$.status') AS status
+              )
+              .all() as Array<{ name: string }>;
+            expect(names[0]?.name).toBe("Bash");
+            expect(names).toContainEqual({ name: "TaskOutput" });
+            expect(names.at(-1)?.name).toBe("TaskStop");
+            expect(
+              database
+                .query(
+                  `SELECT json_extract(tool_results.raw_json, '$.status') AS status
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'TaskStop'`,
-              )
-              .get(),
-          ).toEqual({ status: "killed" });
-        });
-        expect(await readOnlyBackgroundLog(harness.workspaceRoot)).toContain(
-          "PTY_BACKGROUND_READY",
+                )
+                .get(),
+            ).toEqual({ status: "killed" });
+          },
         );
+        expect(
+          await readOnlyBackgroundLog(harness.workspaceRoot, harness.homeRoot),
+        ).toContain("PTY_BACKGROUND_READY");
       },
     );
   },
@@ -514,27 +562,35 @@ test(
         expect(isProcessAlive(pid)).toBe(true);
         await quitTui(harness);
         await waitForProcessExit(pid);
-        expect(await readOnlyBackgroundLog(harness.workspaceRoot)).toContain(
-          "PTY_BACKGROUND_READY",
-        );
+        expect(
+          await readOnlyBackgroundLog(harness.workspaceRoot, harness.homeRoot),
+        ).toContain("PTY_BACKGROUND_READY");
 
-        const session = await onlyStoredSession(harness.workspaceRoot);
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(1);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database.query("SELECT status FROM turns WHERE turn_number = 1").get(),
-          ).toEqual({ status: "completed" });
-          expect(
-            database
-              .query(
-                `SELECT json_extract(tool_results.raw_json, '$.status') AS status
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database.query("SELECT status FROM turns WHERE turn_number = 1").get(),
+            ).toEqual({ status: "completed" });
+            expect(
+              database
+                .query(
+                  `SELECT json_extract(tool_results.raw_json, '$.status') AS status
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'Bash'`,
-              )
-              .get(),
-          ).toEqual({ status: "running" });
-        });
+                )
+                .get(),
+            ).toEqual({ status: "running" });
+          },
+        );
       },
     );
   },
@@ -562,40 +618,48 @@ test(
         await harness.waitForScreen("PTY_INTERACTIVE_FOLLOWUP_DONE");
         await quitTui(harness);
 
-        const session = await onlyStoredSession(harness.workspaceRoot);
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         expect(session.turnCount).toBe(2);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          const names = database
-            .query(
-              `SELECT messages.name
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            const names = database
+              .query(
+                `SELECT messages.name
                FROM tool_results
                JOIN messages ON messages.message_id = tool_results.tool_message_id
                ORDER BY messages.ordinal`,
-            )
-            .all() as Array<{ name: string }>;
-          expect(names[0]?.name).toBe("Bash");
-          expect(names).toContainEqual({ name: "TaskOutput" });
-          expect(names.filter((entry) => entry.name === "TaskInput")).toHaveLength(2);
+              )
+              .all() as Array<{ name: string }>;
+            expect(names[0]?.name).toBe("Bash");
+            expect(names).toContainEqual({ name: "TaskOutput" });
+            expect(names.filter((entry) => entry.name === "TaskInput")).toHaveLength(2);
 
-          const inputs = database
-            .query(
-              `SELECT json_extract(tool_results.raw_json, '$.kind') AS kind,
+            const inputs = database
+              .query(
+                `SELECT json_extract(tool_results.raw_json, '$.kind') AS kind,
                       json_extract(tool_results.raw_json, '$.status') AS status,
                       json_extract(tool_results.raw_json, '$.screen') AS screen
                FROM tool_results
                JOIN messages ON messages.message_id = tool_results.tool_message_id
                WHERE messages.name = 'TaskInput'
                ORDER BY messages.ordinal`,
-            )
-            .all() as Array<{ kind: string; status: string; screen: string }>;
-          expect(inputs.map((entry) => entry.kind)).toEqual([
-            "task_input",
-            "task_input",
-          ]);
-          expect(inputs[0]?.screen).toContain("42");
-          expect(inputs.at(-1)?.status).toBe("completed");
-          expect(inputs.every((entry) => !entry.screen.includes("\x1b"))).toBe(true);
-        });
+              )
+              .all() as Array<{ kind: string; status: string; screen: string }>;
+            expect(inputs.map((entry) => entry.kind)).toEqual([
+              "task_input",
+              "task_input",
+            ]);
+            expect(inputs[0]?.screen).toContain("42");
+            expect(inputs.at(-1)?.status).toBe("completed");
+            expect(inputs.every((entry) => !entry.screen.includes("\x1b"))).toBe(true);
+          },
+        );
       },
     );
   },
@@ -614,7 +678,10 @@ test(
           timeoutMs: 10_000,
         });
 
-        const log = await readOnlyBackgroundLog(harness.workspaceRoot);
+        const log = await readOnlyBackgroundLog(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
         const pidMatch = log.match(/PTY_INTERACTIVE_PID=(\d+)/);
         expect(pidMatch).not.toBeNull();
         const pid = Number(pidMatch?.[1]);
@@ -624,20 +691,28 @@ test(
         await quitTui(harness);
         await waitForProcessExit(pid);
 
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query(
-                `SELECT json_extract(tool_results.raw_json, '$.status') AS status
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query(
+                  `SELECT json_extract(tool_results.raw_json, '$.status') AS status
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'TaskInput'
                  ORDER BY messages.ordinal DESC LIMIT 1`,
-              )
-              .get(),
-          ).toEqual({ status: "running" });
-        });
+                )
+                .get(),
+            ).toEqual({ status: "running" });
+          },
+        );
       },
     );
   },
@@ -662,7 +737,10 @@ test(
       await quitTui(first);
       await first.dispose();
 
-      const seedSession = await onlyStoredSession(fixture.workspaceRoot);
+      const seedSession = await onlyStoredSession(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+      );
       expect(seedSession.status).toBe("resumable");
       expect(
         await readFile(path.join(fixture.workspaceRoot, "pty-resume.txt"), "utf8"),
@@ -695,6 +773,7 @@ test(
 
       const sessions = await new SessionCatalog({
         workspaceRoot: fixture.workspaceRoot,
+        homeRoot: fixture.homeRoot,
       }).list();
       const nonEmptySessions = sessions.filter((session) => session.turnCount > 0);
       expect(nonEmptySessions).toHaveLength(1);
@@ -703,13 +782,23 @@ test(
         turnCount: 2,
         status: "resumable",
       });
-      withSessionDatabase(fixture.workspaceRoot, seedSession, (database) => {
-        expect(
-          database
-            .query("SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal")
-            .all(),
-        ).toEqual([{ content: "PTY_RESUME_SEED" }, { content: "PTY_RESUME_CONTINUE" }]);
-      });
+      await withSessionDatabase(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+        seedSession,
+        (database) => {
+          expect(
+            database
+              .query(
+                "SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal",
+              )
+              .all(),
+          ).toEqual([
+            { content: "PTY_RESUME_SEED" },
+            { content: "PTY_RESUME_CONTINUE" },
+          ]);
+        },
+      );
     } finally {
       await second?.dispose();
       await first?.dispose();
@@ -752,7 +841,10 @@ test(
       });
       await first.dispose();
 
-      const interrupted = await onlyStoredSession(fixture.workspaceRoot);
+      const interrupted = await onlyStoredSession(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+      );
       expect(interrupted.status).toBe("interrupted");
       expect(interrupted.turnCount).toBe(1);
 
@@ -779,31 +871,38 @@ test(
       expect(
         await readFile(path.join(fixture.workspaceRoot, "pty-interrupted.txt"), "utf8"),
       ).toBe("PTY_INTERRUPT_SIDE_EFFECT\n");
-      withSessionDatabase(fixture.workspaceRoot, interrupted, (database) => {
-        expect(
-          database
-            .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-            .all(),
-        ).toEqual([
-          { turn_number: 1, status: "interrupted" },
-          { turn_number: 2, status: "completed" },
-        ]);
-        expect(
-          database
-            .query(
-              `SELECT COUNT(*) AS count
+      await withSessionDatabase(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+        interrupted,
+        (database) => {
+          expect(
+            database
+              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+              .all(),
+          ).toEqual([
+            { turn_number: 1, status: "interrupted" },
+            { turn_number: 2, status: "completed" },
+          ]);
+          expect(
+            database
+              .query(
+                `SELECT COUNT(*) AS count
                FROM tool_results
                JOIN messages ON messages.message_id = tool_results.tool_message_id
                WHERE messages.name = 'Write'`,
-            )
-            .get(),
-        ).toEqual({ count: 1 });
-        expect(
-          database
-            .query("SELECT COUNT(*) AS count FROM protocol_frames WHERE state = 'open'")
-            .get(),
-        ).toEqual({ count: 0 });
-      });
+              )
+              .get(),
+          ).toEqual({ count: 1 });
+          expect(
+            database
+              .query(
+                "SELECT COUNT(*) AS count FROM protocol_frames WHERE state = 'open'",
+              )
+              .get(),
+          ).toEqual({ count: 0 });
+        },
+      );
     } finally {
       await second?.dispose();
       await first?.dispose();
@@ -833,24 +932,32 @@ test(
         expect(harness.screenText()).toContain("PTY_FAIL_RECOVER");
 
         await quitTui(harness);
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-              .all(),
-          ).toEqual([
-            { turn_number: 1, status: "failed" },
-            { turn_number: 2, status: "completed" },
-          ]);
-          expect(
-            database
-              .query("SELECT terminal_detail_json FROM turns WHERE turn_number = 1")
-              .get(),
-          ).toEqual({
-            terminal_detail_json: '{"error":"PTY_FAKE_PROVIDER_FAILURE","version":1}',
-          });
-        });
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+                .all(),
+            ).toEqual([
+              { turn_number: 1, status: "failed" },
+              { turn_number: 2, status: "completed" },
+            ]);
+            expect(
+              database
+                .query("SELECT terminal_detail_json FROM turns WHERE turn_number = 1")
+                .get(),
+            ).toEqual({
+              terminal_detail_json: '{"error":"PTY_FAKE_PROVIDER_FAILURE","version":1}',
+            });
+          },
+        );
       },
     );
   },
@@ -875,29 +982,37 @@ test(
         await harness.waitForScreen("PTY_AFTER_TOOL_FAILURE_DONE");
         await quitTui(harness);
 
-        const session = await onlyStoredSession(harness.workspaceRoot);
-        withSessionDatabase(harness.workspaceRoot, session, (database) => {
-          expect(
-            database
-              .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
-              .all(),
-          ).toEqual([
-            { turn_number: 1, status: "completed" },
-            { turn_number: 2, status: "completed" },
-          ]);
-          expect(
-            database
-              .query(
-                `SELECT json_extract(tool_results.raw_json, '$.ok') AS ok,
+        const session = await onlyStoredSession(
+          harness.workspaceRoot,
+          harness.homeRoot,
+        );
+        await withSessionDatabase(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          session,
+          (database) => {
+            expect(
+              database
+                .query("SELECT turn_number, status FROM turns ORDER BY turn_number")
+                .all(),
+            ).toEqual([
+              { turn_number: 1, status: "completed" },
+              { turn_number: 2, status: "completed" },
+            ]);
+            expect(
+              database
+                .query(
+                  `SELECT json_extract(tool_results.raw_json, '$.ok') AS ok,
                         json_extract(tool_results.raw_json, '$.status') AS status,
                         json_extract(tool_results.raw_json, '$.exitCode') AS exit_code
                  FROM tool_results
                  JOIN messages ON messages.message_id = tool_results.tool_message_id
                  WHERE messages.name = 'Bash'`,
-              )
-              .get(),
-          ).toEqual({ ok: 0, status: "failed", exit_code: 7 });
-        });
+                )
+                .get(),
+            ).toEqual({ ok: 0, status: "failed", exit_code: 7 });
+          },
+        );
       },
     );
   },
@@ -1070,8 +1185,11 @@ async function quitTui(harness: PtyTuiHarness): Promise<void> {
   expect(harness.wrapperExit()).toEqual({ code: 0, signal: null });
 }
 
-async function onlyStoredSession(workspaceRoot: string): Promise<SessionSummary> {
-  const sessions = await new SessionCatalog({ workspaceRoot }).list();
+async function onlyStoredSession(
+  workspaceRoot: string,
+  homeRoot: string,
+): Promise<SessionSummary> {
+  const sessions = await new SessionCatalog({ workspaceRoot, homeRoot }).list();
   const stored = sessions.filter((session) => session.turnCount > 0);
   expect(stored).toHaveLength(1);
   const session = stored[0];
@@ -1081,15 +1199,19 @@ async function onlyStoredSession(workspaceRoot: string): Promise<SessionSummary>
   return session;
 }
 
-function withSessionDatabase<T>(
+async function withSessionDatabase<T>(
   workspaceRoot: string,
+  homeRoot: string,
   session: Pick<SessionSummary, "sessionId">,
   inspect: (database: Database) => T,
-): T {
-  const database = new Database(sessionDatabasePath(workspaceRoot, session.sessionId), {
-    readonly: true,
-    strict: true,
-  });
+): Promise<T> {
+  const database = new Database(
+    await resolveSessionDatabasePath(workspaceRoot, session.sessionId, homeRoot),
+    {
+      readonly: true,
+      strict: true,
+    },
+  );
   try {
     return inspect(database);
   } finally {
@@ -1133,8 +1255,14 @@ async function waitForFileContent(
   }
 }
 
-async function readOnlyBackgroundLog(workspaceRoot: string): Promise<string> {
-  const directory = path.join(workspaceRoot, ".tinker", "bash");
+async function readOnlyBackgroundLog(
+  workspaceRoot: string,
+  homeRoot: string,
+): Promise<string> {
+  const directory = path.join(
+    await resolveWorkspaceStorageRoot(workspaceRoot, homeRoot),
+    "bash",
+  );
   const logs = (await readdir(directory))
     .filter((entry) => entry.endsWith(".log"))
     .sort();

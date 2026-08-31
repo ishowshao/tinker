@@ -38,6 +38,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("ViewImage capability boundary", () => {
   test("validates adapter capability before runtime startup", () => {

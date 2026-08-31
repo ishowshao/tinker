@@ -19,6 +19,9 @@ import {
   TestModelClient,
   testModelOutput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 class CompletedModel extends TestModelClient {
   async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {

@@ -51,6 +51,9 @@ import {
   TestModelClient,
   testModelOutput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const tools: readonly ToolDefinition[] = [
   {

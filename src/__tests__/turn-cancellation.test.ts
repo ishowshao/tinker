@@ -29,6 +29,9 @@ import {
   TestModelClient,
   testModelOutput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 class ArrayEventSink implements EventSink {
   readonly events: AgentEvent[] = [];

@@ -14,6 +14,9 @@ import { createDefaultTooling as createDefaultToolingBase } from "../tools/regis
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import { MAX_PREVIEW_BYTES } from "../tools/bounded-output-preview";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,
@@ -273,7 +276,8 @@ describe("Bash tool", () => {
       expect(raw.exitCode).toBe(0);
       expect(raw.preview).toBe("hello");
       expect(raw.outputLines).toBe(1);
-      expect(raw.outputFilePath).toContain(path.join(".tinker", "bash"));
+      expect(raw.outputFilePath).toContain(path.join(".tinker", "projects"));
+      expect(raw.outputFilePath).toContain(`${path.sep}bash${path.sep}`);
       expect(await readFile(raw.outputFilePath, "utf8")).toBe("hello\n");
 
       const observation = new ObservationBuilder().build({ call, raw });

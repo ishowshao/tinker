@@ -26,6 +26,9 @@ import {
   TEST_CONTEXT_BUDGET,
   prepareTestModelRequest,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("ContextRevisionCompiler", () => {
   test("is the byte-stable active rendering path and keeps candidate prompts outside it", () => {

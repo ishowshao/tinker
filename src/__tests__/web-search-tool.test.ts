@@ -13,6 +13,9 @@ import {
   createTestRuntime,
   type TestToolCallInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,

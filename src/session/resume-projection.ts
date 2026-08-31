@@ -1,4 +1,3 @@
-import path from "node:path";
 import { realpath } from "node:fs/promises";
 import { Database } from "bun:sqlite";
 import type { ToolCall } from "../agent/types";
@@ -24,7 +23,11 @@ import {
 } from "../tui/tui-projection-policy";
 import { SessionError } from "./session-errors";
 import { verifySessionSchema } from "./session-schema";
-import { decodeStoredToolCalls, decodeStoredToolRawResult } from "./session-store";
+import {
+  decodeStoredToolCalls,
+  decodeStoredToolRawResult,
+  resolveSessionDatabasePath,
+} from "./session-store";
 import {
   MAX_TIMELINE_PROMPT_CODE_POINTS,
   projectUserMessage,
@@ -46,17 +49,16 @@ export class ResumeProjectionReader {
     sessionId: SessionId;
     modelName: string;
     policy?: TuiProjectionPolicy;
+    homeRoot?: string;
   }): Promise<TuiProjectionState> {
     const policy = validateTuiProjectionPolicy(
       input.policy ?? defaultTuiProjectionPolicy,
     );
     const workspaceRoot = await realpath(input.workspaceRoot);
-    const databasePath = path.join(
+    const databasePath = await resolveSessionDatabasePath(
       workspaceRoot,
-      ".tinker",
-      "sessions",
       input.sessionId,
-      "session.sqlite",
+      input.homeRoot,
     );
     const database = new Database(databasePath, {
       readonly: true,

@@ -35,6 +35,11 @@ import {
 import type { ToolDefinition, ToolRawResult } from "../tools/types";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import {
+  canonicalHomeRoot,
+  resolveWorkspaceStorageRoot,
+  workspaceStorageRoot,
+} from "./workspace-storage";
+import {
   ContextProtocolError,
   ContextProtocolValidator,
 } from "../context/context-protocol-validator";
@@ -418,6 +423,7 @@ export type CreateNewSessionStoreInput = {
   projectInstruction?: ProjectInstructionManifest;
   idFactory: RuntimeIdFactory;
   clock?: () => string;
+  homeRoot?: string;
 };
 
 export type OpenSessionStoreInput = {
@@ -425,6 +431,7 @@ export type OpenSessionStoreInput = {
   sessionId: SessionId;
   clock?: () => string;
   allowIncomplete?: boolean;
+  homeRoot?: string;
 };
 
 export class SessionStore implements SessionLedgerCommitter {
@@ -447,6 +454,7 @@ export class SessionStore implements SessionLedgerCommitter {
       sessionDirectory: string;
       databasePath: string;
       clock: () => string;
+      homeRoot?: string;
     },
   ) {
     this.sessionId = input.sessionId;
@@ -454,14 +462,17 @@ export class SessionStore implements SessionLedgerCommitter {
     this.sessionDirectory = input.sessionDirectory;
     this.databasePath = input.databasePath;
     this.clock = input.clock;
+    this.homeRoot = input.homeRoot;
   }
+
+  private readonly homeRoot?: string;
 
   private readonly clock: () => string;
 
   static async createNew(input: CreateNewSessionStoreInput): Promise<SessionStore> {
     const clock = input.clock ?? (() => new Date().toISOString());
     const workspaceRoot = await canonicalWorkspaceRoot(input.workspaceRoot);
-    const sessionsRoot = await ensureSessionsRoot(workspaceRoot);
+    const sessionsRoot = await ensureSessionsRoot(workspaceRoot, input.homeRoot);
     const sessionDirectory = safeSessionDirectory(sessionsRoot, input.sessionId);
     try {
       await mkdir(sessionDirectory, { mode: 0o700 });
@@ -540,6 +551,7 @@ export class SessionStore implements SessionLedgerCommitter {
         sessionDirectory,
         databasePath,
         clock,
+        ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
       });
       await store.correctDatabaseModes();
       store.validateCreatingState();
@@ -558,7 +570,10 @@ export class SessionStore implements SessionLedgerCommitter {
   static async openExisting(input: OpenSessionStoreInput): Promise<SessionStore> {
     const clock = input.clock ?? (() => new Date().toISOString());
     const workspaceRoot = await canonicalWorkspaceRoot(input.workspaceRoot);
-    const sessionsRoot = path.join(workspaceRoot, ".tinker", "sessions");
+    const sessionsRoot = path.join(
+      workspaceStorageRoot(workspaceRoot, await canonicalHomeRoot(input.homeRoot)),
+      "sessions",
+    );
     await validateSessionsRoot(sessionsRoot, input.sessionId);
     const sessionDirectory = safeSessionDirectory(sessionsRoot, input.sessionId);
     await validateSecureDirectory(sessionDirectory, input.sessionId);
@@ -593,6 +608,7 @@ export class SessionStore implements SessionLedgerCommitter {
         sessionDirectory,
         databasePath,
         clock,
+        ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
       });
       store.recallIndexRebuilt = recallIndexContractUpgraded;
       const meta = store.readMeta();
@@ -2366,7 +2382,10 @@ export class SessionStore implements SessionLedgerCommitter {
     if (distinct.size === 0) {
       return;
     }
-    const store = await ImageAssetStore.open({ workspaceRoot: this.workspaceRoot });
+    const store = await ImageAssetStore.open({
+      workspaceRoot: this.workspaceRoot,
+      ...(this.homeRoot === undefined ? {} : { homeRoot: this.homeRoot }),
+    });
     for (const asset of distinct.values()) {
       await store.verify(asset);
     }
@@ -2670,6 +2689,7 @@ export class SessionStore implements SessionLedgerCommitter {
         sessionDirectory: stagingDirectory,
         databasePath: stagingDatabasePath,
         clock: this.clock,
+        ...(this.homeRoot === undefined ? {} : { homeRoot: this.homeRoot }),
       });
       clonedStore.validateAll({ allowOpenTail: false });
       await clonedStore.verifyImageAssetFiles();
@@ -3802,11 +3822,17 @@ function normalizeInputModalities(
   );
 }
 
-export function sessionDatabasePath(
+export async function resolveSessionDatabasePath(
   workspaceRoot: string,
   sessionId: SessionId,
-): string {
-  return path.join(workspaceRoot, ".tinker", "sessions", sessionId, "session.sqlite");
+  homeRoot?: string,
+): Promise<string> {
+  return path.join(
+    await resolveWorkspaceStorageRoot(workspaceRoot, homeRoot),
+    "sessions",
+    sessionId,
+    "session.sqlite",
+  );
 }
 
 function insertFrame(database: Database, frame: ProtocolFrame): void {
@@ -6081,8 +6107,14 @@ async function canonicalWorkspaceRoot(workspaceRoot: string): Promise<string> {
   return realpath(workspaceRoot);
 }
 
-async function ensureSessionsRoot(workspaceRoot: string): Promise<string> {
-  const tinkerRoot = path.join(workspaceRoot, ".tinker");
+async function ensureSessionsRoot(
+  workspaceRoot: string,
+  homeRoot?: string,
+): Promise<string> {
+  const tinkerRoot = workspaceStorageRoot(
+    workspaceRoot,
+    await canonicalHomeRoot(homeRoot),
+  );
   const sessionsRoot = path.join(tinkerRoot, "sessions");
   await mkdir(sessionsRoot, { recursive: true, mode: 0o700 });
   await validateSessionsRoot(sessionsRoot);

@@ -160,7 +160,9 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       config.sessionId,
       projectionStore,
     );
-    const promptHistory = await PromptHistory.load(promptHistoryPath(workspaceRoot));
+    const promptHistory = await PromptHistory.load(
+      await promptHistoryPath(workspaceRoot),
+    );
     const catalog = new SessionCatalog({ workspaceRoot });
 
     const openStoredSession = async (

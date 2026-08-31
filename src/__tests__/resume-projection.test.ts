@@ -26,6 +26,12 @@ import {
   testModelRequestInput,
   testModelOutput,
 } from "./test-runtime";
+import {
+  isolateTinkerHome,
+  workspaceSessionDirectory,
+} from "./helpers/workspace-storage-test-support";
+
+const tinkerHome = isolateTinkerHome();
 
 class ProjectionModel extends TestModelClient {
   async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
@@ -145,7 +151,11 @@ describe("session catalog and resume projection", () => {
       });
       await session.dispose({ type: "tui_exit" });
 
-      const logsOnlyDirectory = path.join(workspace, ".tinker", "sessions", logsOnlyId);
+      const logsOnlyDirectory = await workspaceSessionDirectory(
+        workspace,
+        tinkerHome(),
+        logsOnlyId,
+      );
       await mkdir(logsOnlyDirectory, { recursive: true, mode: 0o700 });
       await writeFile(path.join(logsOnlyDirectory, "events.jsonl"), "{}\n", {
         mode: 0o600,
@@ -239,7 +249,8 @@ describe("session catalog and resume projection", () => {
         outputPreview: ["two", "three", "four", "five", "six"],
         omittedOutputLines: 1,
       });
-      expect(resumedItems[2]?.bash?.outputFilePath).toContain(".tinker/bash/");
+      expect(resumedItems[2]?.bash?.outputFilePath).toContain(".tinker/projects/");
+      expect(resumedItems[2]?.bash?.outputFilePath).toContain("/bash/");
       expect(resumedItems.some((item) => item.label === "Bash")).toBe(false);
       expect(resumedItems.some((item) => item.text.includes("outputFilePath="))).toBe(
         false,

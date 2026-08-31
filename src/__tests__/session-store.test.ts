@@ -20,10 +20,16 @@ import { SessionCatalog } from "../session/session-catalog";
 import { SessionStore, type CloneSessionFaultStage } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
 import { finalizeTestSessionStore } from "./test-runtime";
+import {
+  createTempHomeRoot,
+  workspaceSessionDirectory,
+  workspaceSessionsRoot,
+} from "./helpers/workspace-storage-test-support";
 
 describe("SessionStore and SqliteSessionLedger", () => {
   test("clones a closed canonical session and re-keys diagnostic identity", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-clone-"));
+    const homeRoot = await createTempHomeRoot();
     const sourceSessionId = runtimeIdFactory.createSessionId();
     const targetSessionId = runtimeIdFactory.createSessionId();
     let source: SessionStore | undefined;
@@ -35,13 +41,13 @@ describe("SessionStore and SqliteSessionLedger", () => {
         modelName: "test-model",
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
+        homeRoot,
       });
       finalizeTestSessionStore(source, { systemPrompt: "system" });
       const eventSequence = source.allocateEventSequence();
-      const sourceDirectory = path.join(
+      const sourceDirectory = await workspaceSessionDirectory(
         workspace,
-        ".tinker",
-        "sessions",
+        homeRoot,
         sourceSessionId,
       );
       await writeFile(
@@ -72,6 +78,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
       target = await SessionStore.openExisting({
         workspaceRoot: workspace,
         sessionId: targetSessionId,
+        homeRoot,
       });
       const targetView = target.validateAll({ allowOpenTail: false });
       expect(targetView.sessionId).toBe(targetSessionId);
@@ -80,32 +87,26 @@ describe("SessionStore and SqliteSessionLedger", () => {
       );
       expect(target.nextTurnNumber()).toBe(source.nextTurnNumber());
 
+      const targetDirectory = await workspaceSessionDirectory(
+        workspace,
+        homeRoot,
+        targetSessionId,
+      );
       const clonedEvent = JSON.parse(
-        await readFile(
-          path.join(workspace, ".tinker", "sessions", targetSessionId, "events.jsonl"),
-          "utf8",
-        ),
+        await readFile(path.join(targetDirectory, "events.jsonl"), "utf8"),
       ) as Record<string, unknown>;
       expect(clonedEvent.sessionId).toBe(targetSessionId);
       expect((clonedEvent.data as Record<string, unknown>).literalSourceId).toBe(
         sourceSessionId,
       );
       expect(
-        await readFile(
-          path.join(
-            workspace,
-            ".tinker",
-            "sessions",
-            targetSessionId,
-            "observations.md",
-          ),
-          "utf8",
-        ),
+        await readFile(path.join(targetDirectory, "observations.md"), "utf8"),
       ).toContain(`# Tinker Session ${targetSessionId}`);
     } finally {
       await target?.abandon().catch(() => undefined);
       await source?.abandon().catch(() => undefined);
       await rm(workspace, { recursive: true, force: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 
@@ -143,7 +144,11 @@ describe("SessionStore and SqliteSessionLedger", () => {
         expect((error as Error).message).toContain(stage);
         expect(fixture.store.validateAll({ allowOpenTail: false })).toEqual(sourceView);
         expect(fixture.store.readMeta()).toEqual(sourceMeta);
-        await expectNoCloneArtifacts(fixture.workspace, targetSessionId);
+        await expectNoCloneArtifacts(
+          fixture.workspace,
+          fixture.homeRoot,
+          targetSessionId,
+        );
       }
     } finally {
       await fixture.cleanup();
@@ -192,7 +197,11 @@ describe("SessionStore and SqliteSessionLedger", () => {
           .cloneTo({ targetSessionId })
           .catch((caught: unknown) => caught);
         expect(error).toBeInstanceOf(Error);
-        await expectNoCloneArtifacts(fixture.workspace, targetSessionId);
+        await expectNoCloneArtifacts(
+          fixture.workspace,
+          fixture.homeRoot,
+          targetSessionId,
+        );
         expect(fixture.store.validateAll({ allowOpenTail: false }).sessionId).toBe(
           fixture.sessionId,
         );
@@ -204,6 +213,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
 
   test("round-trips tool history and fast-fails an unknown observation format", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-store-"));
+    const homeRoot = await createTempHomeRoot();
     const sessionId = runtimeIdFactory.createSessionId();
     try {
       let store = await SessionStore.createNew({
@@ -212,6 +222,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         modelName: "test-model",
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
+        homeRoot,
       });
       finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
@@ -347,7 +358,11 @@ describe("SessionStore and SqliteSessionLedger", () => {
       expect(lastEventSequence).toBe(1);
       await store.close("tui_exit");
 
-      store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
+      store = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+        homeRoot,
+      });
       expect(store.readMeta()).toMatchObject({
         nextTurnNumber: 3,
         nextEventSequence: 2,
@@ -379,17 +394,20 @@ describe("SessionStore and SqliteSessionLedger", () => {
       const error = await SessionStore.openExisting({
         workspaceRoot: workspace,
         sessionId,
+        homeRoot,
       }).catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(SessionError);
       expect((error as SessionError).code).toBe("SESSION_INTEGRITY_FAILED");
       expect((error as SessionError).message).toContain("observation format");
     } finally {
       await rm(workspace, { recursive: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 
   test("recovers only the missing tool-call suffix as interrupted", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-recovery-"));
+    const homeRoot = await createTempHomeRoot();
     const sessionId = runtimeIdFactory.createSessionId();
     try {
       let store = await SessionStore.createNew({
@@ -398,6 +416,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         modelName: "test-model",
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
+        homeRoot,
       });
       finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
@@ -447,7 +466,11 @@ describe("SessionStore and SqliteSessionLedger", () => {
       ]);
       await store.abandon();
 
-      store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
+      store = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+        homeRoot,
+      });
       const recovery = store.recoverInterruptedState(runtimeIdFactory);
       expect(recovery).toMatchObject({
         recoveredTurnId: turn.turnId,
@@ -472,11 +495,13 @@ describe("SessionStore and SqliteSessionLedger", () => {
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 
   test("marks an open turn without a frame interrupted without replaying it", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-open-turn-"));
+    const homeRoot = await createTempHomeRoot();
     const sessionId = runtimeIdFactory.createSessionId();
     try {
       let store = await SessionStore.createNew({
@@ -485,6 +510,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         modelName: "test-model",
         systemPrompt: "system",
         idFactory: runtimeIdFactory,
+        homeRoot,
       });
       finalizeTestSessionStore(store, { systemPrompt: "system" });
       const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
@@ -499,7 +525,11 @@ describe("SessionStore and SqliteSessionLedger", () => {
       });
       await store.abandon();
 
-      store = await SessionStore.openExisting({ workspaceRoot: workspace, sessionId });
+      store = await SessionStore.openExisting({
+        workspaceRoot: workspace,
+        sessionId,
+        homeRoot,
+      });
       expect(store.recoverInterruptedState(runtimeIdFactory)).toEqual({
         recoveredTurnId: turn.turnId,
         syntheticCompletionCount: 0,
@@ -511,6 +541,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
       await store.close("tui_exit");
     } finally {
       await rm(workspace, { recursive: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 });
@@ -518,12 +549,15 @@ describe("SessionStore and SqliteSessionLedger", () => {
 describe("SessionCatalog listing", () => {
   test("list returns the 20 most recent sessions while listAll returns every candidate", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-"));
+    const homeRoot = await createTempHomeRoot();
     try {
       const sessionIds = [];
       for (let index = 0; index < 25; index += 1) {
-        sessionIds.push(await createInterruptedCatalogSession(workspace, index));
+        sessionIds.push(
+          await createInterruptedCatalogSession(workspace, homeRoot, index),
+        );
       }
-      const catalog = new SessionCatalog({ workspaceRoot: workspace });
+      const catalog = new SessionCatalog({ workspaceRoot: workspace, homeRoot });
       const all = await catalog.listAll();
       const listed = await catalog.list();
 
@@ -555,21 +589,30 @@ describe("SessionCatalog listing", () => {
       expect(all.at(-1)?.firstUserPromptPreview).toBe("catalog prompt 0");
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 
   test("keeps a corrupt session as an unavailable summary without blocking the list", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-corrupt-"));
+    const homeRoot = await createTempHomeRoot();
     try {
-      const healthyId = await createInterruptedCatalogSession(workspace, 0);
+      const healthyId = await createInterruptedCatalogSession(workspace, homeRoot, 0);
       const corruptId = runtimeIdFactory.createSessionId();
-      const corruptDirectory = path.join(workspace, ".tinker", "sessions", corruptId);
+      const corruptDirectory = await workspaceSessionDirectory(
+        workspace,
+        homeRoot,
+        corruptId,
+      );
       await mkdir(corruptDirectory, { recursive: true });
       await writeFile(path.join(corruptDirectory, "session.sqlite"), "not sqlite", {
         mode: 0o600,
       });
 
-      const all = await new SessionCatalog({ workspaceRoot: workspace }).listAll();
+      const all = await new SessionCatalog({
+        workspaceRoot: workspace,
+        homeRoot,
+      }).listAll();
       expect(all.map((summary) => summary.sessionId)).toHaveLength(2);
       const healthy = all.find((summary) => summary.sessionId === healthyId);
       const corrupt = all.find((summary) => summary.sessionId === corruptId);
@@ -578,11 +621,16 @@ describe("SessionCatalog listing", () => {
       expect(corrupt?.turnCount).toBe(0);
     } finally {
       await rm(workspace, { recursive: true, force: true });
+      await rm(homeRoot, { recursive: true, force: true });
     }
   });
 });
 
-async function createInterruptedCatalogSession(workspace: string, index: number) {
+async function createInterruptedCatalogSession(
+  workspace: string,
+  homeRoot: string,
+  index: number,
+) {
   const sessionId = runtimeIdFactory.createSessionId();
   const store = await SessionStore.createNew({
     workspaceRoot: workspace,
@@ -590,6 +638,7 @@ async function createInterruptedCatalogSession(workspace: string, index: number)
     modelName: "test-model",
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
+    homeRoot,
   });
   finalizeTestSessionStore(store, { systemPrompt: "system" });
   const ledger = new SqliteSessionLedger(store, runtimeIdFactory);
@@ -603,7 +652,10 @@ async function createInterruptedCatalogSession(workspace: string, index: number)
   });
   await store.abandon();
   const database = new Database(
-    path.join(workspace, ".tinker", "sessions", sessionId, "session.sqlite"),
+    path.join(
+      await workspaceSessionDirectory(workspace, homeRoot, sessionId),
+      "session.sqlite",
+    ),
   );
   database.run("UPDATE session_meta SET updated_at = ? WHERE singleton = 1", [
     `2026-08-01T00:00:${String(index).padStart(2, "0")}.000Z`,
@@ -617,6 +669,7 @@ async function createCloneSource(
   options: { writeEvents?: boolean } = {},
 ) {
   const workspace = await mkdtemp(path.join(os.tmpdir(), prefix));
+  const homeRoot = await createTempHomeRoot();
   const sessionId = runtimeIdFactory.createSessionId();
   const store = await SessionStore.createNew({
     workspaceRoot: workspace,
@@ -624,9 +677,14 @@ async function createCloneSource(
     modelName: "test-model",
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
+    homeRoot,
   });
   finalizeTestSessionStore(store, { systemPrompt: "system" });
-  const sessionDirectory = path.join(workspace, ".tinker", "sessions", sessionId);
+  const sessionDirectory = await workspaceSessionDirectory(
+    workspace,
+    homeRoot,
+    sessionId,
+  );
   if (options.writeEvents !== false) {
     const sequence = store.allocateEventSequence();
     await writeFile(
@@ -637,12 +695,14 @@ async function createCloneSource(
   }
   return {
     workspace,
+    homeRoot,
     sessionId,
     sessionDirectory,
     store,
     cleanup: async () => {
       await store.abandon().catch(() => undefined);
       await rm(workspace, { recursive: true });
+      await rm(homeRoot, { recursive: true, force: true });
     },
   };
 }
@@ -663,15 +723,16 @@ function cloneTestEvent(sessionId: string, eventSequence: number) {
 
 async function expectNoCloneArtifacts(
   workspace: string,
+  homeRoot: string,
   targetSessionId: ReturnType<typeof runtimeIdFactory.createSessionId>,
 ): Promise<void> {
-  const sessionsRoot = path.join(workspace, ".tinker", "sessions");
+  const sessionsRoot = await workspaceSessionsRoot(workspace, homeRoot);
   expect(await readdir(sessionsRoot)).not.toContain(targetSessionId);
   expect(
     (await readdir(sessionsRoot)).filter((name) => name.startsWith(".cloning-")),
   ).toEqual([]);
   expect(
-    (await new SessionCatalog({ workspaceRoot: workspace }).list()).map(
+    (await new SessionCatalog({ workspaceRoot: workspace, homeRoot }).list()).map(
       (summary) => summary.sessionId,
     ),
   ).not.toContain(targetSessionId);

@@ -47,16 +47,21 @@ test(
         await harness.waitForScreen("PTY_CLEAR_CONTINUED");
 
         await quitTui(harness);
-        expect(await sessionSummary(harness.workspaceRoot, sourceId)).toMatchObject({
+        expect(
+          await sessionSummary(harness.workspaceRoot, harness.homeRoot, sourceId),
+        ).toMatchObject({
           sessionId: sourceId,
           turnCount: 2,
         });
-        expect(await sessionSummary(harness.workspaceRoot, freshId)).toMatchObject({
+        expect(
+          await sessionSummary(harness.workspaceRoot, harness.homeRoot, freshId),
+        ).toMatchObject({
           sessionId: freshId,
           turnCount: 0,
         });
-        withSessionDatabase(
+        await withSessionDatabase(
           harness.workspaceRoot,
+          harness.homeRoot,
           { sessionId: sourceId },
           (database) => {
             expect(
@@ -367,8 +372,18 @@ test(
             "utf8",
           ),
         ).toBe("PTY_FORK_SHARED_HISTORY\n");
-        assertForkBranch(harness.workspaceRoot, sourceId, "SOURCE_ONLY");
-        assertForkBranch(harness.workspaceRoot, cloneId, "CLONE_ONLY");
+        await assertForkBranch(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          sourceId,
+          "SOURCE_ONLY",
+        );
+        await assertForkBranch(
+          harness.workspaceRoot,
+          harness.homeRoot,
+          cloneId,
+          "CLONE_ONLY",
+        );
       },
     );
   },
@@ -435,23 +450,25 @@ test(
         expect(harness.screenText()).toContain("idle");
 
         await quitTui(harness);
-        const sessions = await storedSessions(harness.workspaceRoot);
+        const sessions = await storedSessions(harness.workspaceRoot, harness.homeRoot);
         expect(sessions).toHaveLength(1);
         expect(sessions[0]?.sessionId).toBe(activeAlphaId);
         expect(
-          await sessionSummary(harness.workspaceRoot, initialAlphaId),
+          await sessionSummary(harness.workspaceRoot, harness.homeRoot, initialAlphaId),
         ).toMatchObject({
           turnCount: 0,
           modelName: "alpha-model",
           profileName: "alpha",
         });
-        expect(await sessionSummary(harness.workspaceRoot, betaId)).toMatchObject({
+        expect(
+          await sessionSummary(harness.workspaceRoot, harness.homeRoot, betaId),
+        ).toMatchObject({
           turnCount: 0,
           modelName: "beta-model",
           profileName: "beta",
         });
         expect(
-          await sessionSummary(harness.workspaceRoot, activeAlphaId),
+          await sessionSummary(harness.workspaceRoot, harness.homeRoot, activeAlphaId),
         ).toMatchObject({
           turnCount: 1,
           modelName: "alpha-model",
@@ -488,9 +505,9 @@ test(
       await quitTui(first);
       await first.dispose();
 
-      const session = (await storedSessions(fixture.workspaceRoot)).find(
-        (candidate) => candidate.turnCount === 1,
-      );
+      const session = (
+        await storedSessions(fixture.workspaceRoot, fixture.homeRoot)
+      ).find((candidate) => candidate.turnCount === 1);
       if (session === undefined) {
         throw new Error("Expected the copied PTY session.");
       }
@@ -513,18 +530,23 @@ test(
       expect(await readFile(clipboardFile, "utf8")).toBe(ptyCopyMarkdownResponse());
       await quitTui(second);
 
-      withSessionDatabase(fixture.workspaceRoot, session, (database) => {
-        expect(
-          database
-            .query(
-              "SELECT content FROM messages WHERE role = 'assistant' ORDER BY ordinal",
-            )
-            .get(),
-        ).toEqual({ content: ptyCopyMarkdownResponse() });
-      });
-      expect(await promptHistoryEntries(fixture.workspaceRoot)).toEqual([
-        "PTY_COPY_MARKDOWN",
-      ]);
+      await withSessionDatabase(
+        fixture.workspaceRoot,
+        fixture.homeRoot,
+        session,
+        (database) => {
+          expect(
+            database
+              .query(
+                "SELECT content FROM messages WHERE role = 'assistant' ORDER BY ordinal",
+              )
+              .get(),
+          ).toEqual({ content: ptyCopyMarkdownResponse() });
+        },
+      );
+      expect(
+        await promptHistoryEntries(fixture.workspaceRoot, fixture.homeRoot),
+      ).toEqual(["PTY_COPY_MARKDOWN"]);
     } finally {
       await second?.dispose();
       await first?.dispose();
@@ -635,7 +657,9 @@ test(
             requestNumber: 1,
           },
         ]);
-        expect(await promptHistoryEntries(harness.workspaceRoot)).toEqual([
+        expect(
+          await promptHistoryEntries(harness.workspaceRoot, harness.homeRoot),
+        ).toEqual([
           "PTY_REASONING_HIGH",
           "PTY_REASONING_DEFAULT",
           "PTY_REASONING_RESUMED",
@@ -672,12 +696,13 @@ if (process.platform === "darwin" && process.env.TINKER_TEST_LIVE_CLIPBOARD === 
   );
 }
 
-function assertForkBranch(
+async function assertForkBranch(
   workspaceRoot: string,
+  homeRoot: string,
   sessionId: ReturnType<typeof currentSessionId>,
   branchPrompt: "SOURCE_ONLY" | "CLONE_ONLY",
-): void {
-  withSessionDatabase(workspaceRoot, { sessionId }, (database) => {
+): Promise<void> {
+  await withSessionDatabase(workspaceRoot, homeRoot, { sessionId }, (database) => {
     const prompts = database
       .query("SELECT content FROM messages WHERE role = 'user' ORDER BY ordinal")
       .all();

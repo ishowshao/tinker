@@ -5,6 +5,17 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+### Changed
+
+- Store per-workspace runtime state in the global Tinker home instead of inside
+  the project. Sessions (`sessions/<id>/`), background Bash logs (`bash/`),
+  image assets (`assets/images/`), and prompt history now live under
+  `~/.tinker/projects/<workspace-slug-hash>/`, keyed by the workspace's
+  canonical absolute path. Projects no longer grow a `.tinker/` directory.
+  Existing in-project `.tinker/` state is left in place but no longer read.
+- Add `TINKER_HOME` to relocate the global Tinker home directory (default: the
+  OS home directory).
+
 ## [2.2.0] - 2026-08-29
 
 ### Added

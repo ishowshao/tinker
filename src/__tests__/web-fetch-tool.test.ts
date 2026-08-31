@@ -16,6 +16,9 @@ import type { ToolCall } from "../agent/types";
 import { createTestHistoryReader, createTestRuntime } from "./test-runtime";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { ToolExecutionContext, WebFetchRawResult } from "../tools/types";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,

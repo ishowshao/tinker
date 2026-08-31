@@ -23,6 +23,9 @@ import type {
   ToolRawResult,
   ToolExecutionContext,
 } from "../tools/types";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 const testToolContext: ToolExecutionContext = {
   signal: new AbortController().signal,

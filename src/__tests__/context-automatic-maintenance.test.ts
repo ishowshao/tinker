@@ -29,6 +29,9 @@ import {
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 class ToolObservationModel extends TestModelClient {
   requestCount = 0;

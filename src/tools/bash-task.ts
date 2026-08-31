@@ -20,6 +20,7 @@ import {
   TERMINAL_SCREEN_ROWS,
   type TerminalScreen,
 } from "./terminal-screen";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 
 export type ShellTaskStatus =
   | "running"
@@ -112,6 +113,7 @@ export type ShellTaskManagerOptions = {
   cwdState: CwdState;
   runtimeSession: RuntimeSessionContext;
   stopGraceMs?: number;
+  homeRoot?: string;
 };
 
 const defaultStopGraceMs = 2_000;
@@ -121,12 +123,21 @@ export class ShellTaskManager {
   private readonly stopGraceMs: number;
   private acceptingTasks = true;
   private shutdownPromise?: Promise<ShutdownResult>;
+  private bashDirectoryPromise?: Promise<string>;
 
   constructor(private readonly options: ShellTaskManagerOptions) {
     this.stopGraceMs = options.stopGraceMs ?? defaultStopGraceMs;
     if (!Number.isInteger(this.stopGraceMs) || this.stopGraceMs < 1) {
       throw new Error("ShellTaskManager.stopGraceMs must be a positive integer.");
     }
+  }
+
+  private bashDirectory(): Promise<string> {
+    this.bashDirectoryPromise ??= resolveWorkspaceStorageRoot(
+      this.options.workspaceRoot,
+      this.options.homeRoot,
+    ).then((storageRoot) => path.join(storageRoot, "bash"));
+    return this.bashDirectoryPromise;
   }
 
   async start(input: {
@@ -140,18 +151,9 @@ export class ShellTaskManager {
     }
 
     const id = createUuidV7();
-    const outputFilePath = path.join(
-      this.options.workspaceRoot,
-      ".tinker",
-      "bash",
-      `${id}.log`,
-    );
-    const cwdFilePath = path.join(
-      this.options.workspaceRoot,
-      ".tinker",
-      "bash",
-      `${id}.cwd`,
-    );
+    const bashDirectory = await this.bashDirectory();
+    const outputFilePath = path.join(bashDirectory, `${id}.log`);
+    const cwdFilePath = path.join(bashDirectory, `${id}.cwd`);
     await ensureEmptyFile(cwdFilePath);
 
     const output = await TaskOutput.create(outputFilePath);

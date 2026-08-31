@@ -15,6 +15,12 @@ import type {
 } from "../model/model-client";
 import type { SessionId } from "../ids/runtime-id";
 import {
+  isolateTinkerHome,
+  workspaceSessionDirectory,
+} from "./helpers/workspace-storage-test-support";
+
+const tinkerHome = isolateTinkerHome();
+import {
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
   TestModelClient,
@@ -182,7 +188,10 @@ describe("runOneShot", () => {
       expect(stdout.output).toContain("decision=deny");
       const events = (
         await readFile(
-          path.join(workspace, ".tinker", "sessions", config.sessionId, "events.jsonl"),
+          path.join(
+            await workspaceSessionDirectory(workspace, tinkerHome(), config.sessionId),
+            "events.jsonl",
+          ),
           "utf8",
         )
       )
@@ -271,10 +280,11 @@ describe("runOneShot", () => {
 
       const eventText = await readFile(
         path.join(
-          workspace,
-          ".tinker",
-          "sessions",
-          "instruction-session",
+          await workspaceSessionDirectory(
+            workspace,
+            tinkerHome(),
+            "instruction-session",
+          ),
           "events.jsonl",
         ),
         "utf8",
@@ -342,7 +352,11 @@ describe("runOneShot", () => {
       expect(model.prepared).toHaveLength(0);
       expect(
         await access(
-          path.join(workspace, ".tinker", "sessions", "invalid-instruction-session"),
+          await workspaceSessionDirectory(
+            workspace,
+            tinkerHome(),
+            "invalid-instruction-session",
+          ),
         ).then(
           () => true,
           () => false,
@@ -386,8 +400,13 @@ describe("runOneShot", () => {
         "hello.\n",
       );
 
+      const testSessionDirectory = await workspaceSessionDirectory(
+        workspace,
+        tinkerHome(),
+        "test-session",
+      );
       const jsonl = await readFile(
-        path.join(workspace, ".tinker", "sessions", "test-session", "events.jsonl"),
+        path.join(testSessionDirectory, "events.jsonl"),
         "utf8",
       );
       expect(jsonl).toContain('"type":"session.started"');
@@ -410,12 +429,7 @@ describe("runOneShot", () => {
       expect(turnFinishedData).not.toHaveProperty("result");
       expect(JSON.stringify(turnFinished)).not.toContain('"messages"');
 
-      const sessionDirectory = path.join(
-        workspace,
-        ".tinker",
-        "sessions",
-        "test-session",
-      );
+      const sessionDirectory = testSessionDirectory;
       expect((await stat(sessionDirectory)).mode & 0o777).toBe(0o700);
       expect(
         (await stat(path.join(sessionDirectory, "session.sqlite"))).mode & 0o777,
@@ -425,7 +439,7 @@ describe("runOneShot", () => {
       ).toBe(0o600);
 
       const observations = await readFile(
-        path.join(workspace, ".tinker", "sessions", "test-session", "observations.md"),
+        path.join(testSessionDirectory, "observations.md"),
         "utf8",
       );
       expect(observations).toContain("# Tinker Session test-session");
@@ -465,10 +479,11 @@ describe("runOneShot", () => {
 
       const jsonl = await readFile(
         path.join(
-          workspace,
-          ".tinker",
-          "sessions",
-          "background-session",
+          await workspaceSessionDirectory(
+            workspace,
+            tinkerHome(),
+            "background-session",
+          ),
           "events.jsonl",
         ),
         "utf8",

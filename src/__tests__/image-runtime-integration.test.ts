@@ -19,6 +19,10 @@ import {
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
 } from "./test-runtime";
+import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("RuntimeSession image admission", () => {
   test("classifies regular files before rejecting image input for a text-only model", async () => {
@@ -161,7 +165,12 @@ describe("RuntimeSession image admission", () => {
         1,
       );
       await rm(
-        path.join(workspace, ".tinker", "assets", "images", imported.asset.assetId),
+        path.join(
+          await resolveWorkspaceStorageRoot(workspace),
+          "assets",
+          "images",
+          imported.asset.assetId,
+        ),
       );
       const error = await session
         .admitTurn({

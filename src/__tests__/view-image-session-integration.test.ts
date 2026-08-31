@@ -23,6 +23,9 @@ import {
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
 } from "./test-runtime";
+import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+
+isolateTinkerHome();
 
 describe("ViewImage session persistence", () => {
   test("round-trips blocks through resume and clone with safe Recall and timeline projections", async () => {

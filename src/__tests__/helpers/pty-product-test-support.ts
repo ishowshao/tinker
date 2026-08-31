@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parseSessionId, type SessionId } from "../../ids/runtime-id";
 import { SessionCatalog, type SessionSummary } from "../../session/session-catalog";
-import { sessionDatabasePath } from "../../session/session-store";
+import { resolveSessionDatabasePath } from "../../session/session-store";
 import { promptHistoryPath } from "../../cli/config";
 import { PromptHistory } from "../../tui/prompt-history";
 import type { PtyTuiHarness } from "./pty-tui-harness";
@@ -50,22 +50,25 @@ export async function quitTui(harness: PtyTuiHarness): Promise<void> {
 
 export async function storedSessions(
   workspaceRoot: string,
+  homeRoot: string,
 ): Promise<readonly SessionSummary[]> {
-  return new SessionCatalog({ workspaceRoot }).list();
+  return new SessionCatalog({ workspaceRoot, homeRoot }).list();
 }
 
 export async function nonEmptySessions(
   workspaceRoot: string,
+  homeRoot: string,
 ): Promise<readonly SessionSummary[]> {
-  return (await storedSessions(workspaceRoot)).filter(
+  return (await storedSessions(workspaceRoot, homeRoot)).filter(
     (session) => session.turnCount > 0,
   );
 }
 
 export async function onlyNonEmptySession(
   workspaceRoot: string,
+  homeRoot: string,
 ): Promise<SessionSummary> {
-  const sessions = await nonEmptySessions(workspaceRoot);
+  const sessions = await nonEmptySessions(workspaceRoot, homeRoot);
   expect(sessions).toHaveLength(1);
   const session = sessions[0];
   if (session === undefined) {
@@ -76,9 +79,10 @@ export async function onlyNonEmptySession(
 
 export async function sessionSummary(
   workspaceRoot: string,
+  homeRoot: string,
   sessionId: SessionId,
 ): Promise<SessionSummary> {
-  return new SessionCatalog({ workspaceRoot }).get(sessionId);
+  return new SessionCatalog({ workspaceRoot, homeRoot }).get(sessionId);
 }
 
 export function currentSessionId(screen: string): SessionId {
@@ -89,15 +93,19 @@ export function currentSessionId(screen: string): SessionId {
   return parseSessionId(value);
 }
 
-export function withSessionDatabase<T>(
+export async function withSessionDatabase<T>(
   workspaceRoot: string,
+  homeRoot: string,
   session: Pick<SessionSummary, "sessionId">,
   inspect: (database: Database) => T,
-): T {
-  const database = new Database(sessionDatabasePath(workspaceRoot, session.sessionId), {
-    readonly: true,
-    strict: true,
-  });
+): Promise<T> {
+  const database = new Database(
+    await resolveSessionDatabasePath(workspaceRoot, session.sessionId, homeRoot),
+    {
+      readonly: true,
+      strict: true,
+    },
+  );
   try {
     return inspect(database);
   } finally {
@@ -107,8 +115,10 @@ export function withSessionDatabase<T>(
 
 export async function promptHistoryEntries(
   workspaceRoot: string,
+  homeRoot: string,
 ): Promise<readonly string[]> {
-  return (await PromptHistory.load(promptHistoryPath(workspaceRoot))).entries;
+  return (await PromptHistory.load(await promptHistoryPath(workspaceRoot, homeRoot)))
+    .entries;
 }
 
 export async function waitForFileText(
