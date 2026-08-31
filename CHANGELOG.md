@@ -5,6 +5,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-31
+
 ### Changed
 
 - Store per-workspace runtime state in the global Tinker home instead of inside
@@ -275,7 +277,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/ishowshao/tinker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ishowshao/tinker/releases/tag/v2.2.0
 [2.1.0]: https://github.com/ishowshao/tinker/releases/tag/v2.1.0
 [2.0.0]: https://github.com/ishowshao/tinker/releases/tag/v2.0.0
