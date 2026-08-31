@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -16,11 +16,23 @@ class MemoryWriter {
   }
 }
 
+const repositoryPackageJsonUrl = new URL("../../package.json", import.meta.url);
+
+async function repositoryVersion(): Promise<string> {
+  const parsed = JSON.parse(await readFile(repositoryPackageJsonUrl, "utf8")) as {
+    version?: unknown;
+  };
+  if (typeof parsed.version !== "string" || parsed.version.trim() === "") {
+    throw new Error("Repository package.json does not declare a version.");
+  }
+  return parsed.version;
+}
+
 describe("CLI executable boundaries", () => {
   test("loads version from the installed package metadata source", async () => {
     expect(await loadPackageMetadata()).toMatchObject({
       name: "tinker-agent",
-      version: "2.3.0",
+      version: await repositoryVersion(),
     });
   });
 
@@ -158,7 +170,7 @@ describe("CLI executable boundaries", () => {
     expect(result.stderr.toString()).toBe("");
   });
 
-  test("real Node launcher exposes help and bare package version", () => {
+  test("real Node launcher exposes help and bare package version", async () => {
     const repositoryRoot = path.join(import.meta.dir, "../..");
     const version = Bun.spawnSync({
       cmd: ["node", "bin/tinker.js", "--version"],
@@ -167,7 +179,7 @@ describe("CLI executable boundaries", () => {
       stderr: "pipe",
     });
     expect(version.exitCode).toBe(0);
-    expect(version.stdout.toString()).toBe("2.3.0\n");
+    expect(version.stdout.toString()).toBe(`${await repositoryVersion()}\n`);
     expect(version.stderr.toString()).toBe("");
 
     const help = Bun.spawnSync({
