@@ -1,6 +1,6 @@
 export const swapOnlyPolicyV1 = Object.freeze({
   version: "swap-only-v1",
-  minimumObservationBytes: 8 * 1_024,
+  minimumObservationBytes: 2 * 1_024,
   targetInputRatio: 0.3,
 } as const);
 
