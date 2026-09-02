@@ -1,0 +1,4 @@
+[test]
+# Shared CI runners (notably ubuntu-latest) run the heavier SQLite integration
+# tests 5-10x slower than local hardware, right at Bun's 5000ms default.
+testTimeout = 20_000
