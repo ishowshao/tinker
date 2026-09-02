@@ -103,6 +103,11 @@ export class StdoutEventPrinter implements EventSink {
           `context.revision.failed stage=${event.data.stage} code=${event.data.errorCode}\n`,
         );
         break;
+      case "context.pressure_notice.sent":
+        this.stdout.write(
+          `context.pressure_notice.sent pressure=${event.data.pressure} used=${event.data.usedInputTokens}/${event.data.inputBudgetTokens} trigger=${event.data.triggerTokens}\n`,
+        );
+        break;
       case "assistant.progress":
         this.stdout.write(
           `assistant.progress iteration=${event.iterationNumber}\n${event.data.content}\n`,

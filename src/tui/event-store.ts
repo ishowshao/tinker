@@ -170,6 +170,15 @@ export function reduceTuiProjection(
         }),
       );
     }
+    case "context.pressure_notice.sent":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `turn-${event.turnId}-pressure-notice-${event.eventSequence}`,
+          label: "context notice",
+          text: `input pressure ${event.data.pressure} (${event.data.usedInputTokens}/${event.data.inputBudgetTokens} tokens) — model notified to self-manage`,
+          status: "text",
+        }),
+      );
     case "model.request.started":
       return updateActiveTurn(state, event, policy, (turn) =>
         event.data.attemptNumber === 1

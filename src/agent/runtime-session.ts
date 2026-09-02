@@ -118,7 +118,8 @@ import type {
   ToolCallIdentity,
   TurnIdentity,
 } from "./types";
-import { ContextMeter } from "./context-meter";
+import { ContextMeter, type ContextUsageSnapshot } from "./context-meter";
+import { contextPressureNoticeText } from "./context-pressure-notice";
 import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
 import {
   selectContextAutomation,
@@ -482,6 +483,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private pendingAutomaticContextMaintenance = false;
   private pendingModelDirectedSwap?: Set<MessageId>;
   private modelDirectedSwapLease = false;
+  private pressureNoticeSentThisTurn = false;
   private readonly skillCatalog: SkillCatalogSnapshot;
   private skillCoordinator = new SkillActivationCoordinator();
   private bashGuardMode: "guard" | "yolo";
@@ -2355,6 +2357,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       this.pendingAutomaticContextMaintenance = false;
       this.pendingModelDirectedSwap = undefined;
       this.modelDirectedSwapLease = false;
+      this.pressureNoticeSentThisTurn = false;
       if (this.state === "executing") {
         this.state = "ready";
       }
@@ -2399,31 +2402,64 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
     const pendingModelDirectedSwap = this.pendingModelDirectedSwap;
     this.pendingModelDirectedSwap = undefined;
-    if (pendingModelDirectedSwap === undefined && this.modelDirectedSwapLease) {
-      this.modelDirectedSwapLease = false;
-      return;
-    }
 
     const automation = this.requireContextAutomation();
-    if (pendingModelDirectedSwap === undefined && !automation.automaticSwapOnly) {
-      return;
-    }
     const manager = this.requireContextManager();
     this.pendingAutomaticContextMaintenance = false;
+
+    let suppressAutomaticSwap = this.modelDirectedSwapLease;
     this.modelDirectedSwapLease = false;
-    this.state = "maintaining_context";
-    try {
-      if (pendingModelDirectedSwap !== undefined) {
+
+    if (pendingModelDirectedSwap !== undefined) {
+      suppressAutomaticSwap = false;
+      this.state = "maintaining_context";
+      try {
         await this.performModelDirectedCompaction({
           turn: input.turn,
           consumedThroughOrdinal: input.consumedThroughOrdinal,
           ledger: input.ledger,
           messageIds: Object.freeze([...pendingModelDirectedSwap]),
         });
+      } finally {
+        if (this.state === "maintaining_context") {
+          this.state = "executing";
+        }
       }
-      if (!automation.automaticSwapOnly) return;
+    }
 
-      const usage = manager.measureCurrent(input.turn.turnId, input.ledger);
+    let measured: ContextUsageSnapshot | undefined;
+    if (
+      pendingModelDirectedSwap === undefined &&
+      (suppressAutomaticSwap ||
+        !this.pressureNoticeSentThisTurn ||
+        automation.automaticSwapOnly)
+    ) {
+      measured = manager.measureCurrent(input.turn.turnId, input.ledger);
+      if (!this.pressureNoticeSentThisTurn && measured.pressure !== "normal") {
+        await this.injectContextPressureNotice({
+          turn: input.turn,
+          ledger: input.ledger,
+          usage: measured,
+          automaticSwapEnabled: automation.automaticSwapOnly,
+        });
+        this.pressureNoticeSentThisTurn = true;
+        suppressAutomaticSwap = true;
+      }
+      if (measured.pressure === "blocked") {
+        // Emergency override: a lease or notice must never hold automatic
+        // compaction past the budget line; the next preflight would fail the
+        // turn before the model could act.
+        suppressAutomaticSwap = false;
+      }
+    }
+
+    if (suppressAutomaticSwap || !automation.automaticSwapOnly) {
+      return;
+    }
+
+    this.state = "maintaining_context";
+    try {
+      const usage = measured ?? manager.measureCurrent(input.turn.turnId, input.ledger);
       if (usage.pressure === "normal") return;
 
       const qualificationId = requireAutomationQualificationId(automation);
@@ -2528,6 +2564,39 @@ class DefaultRuntimeSession implements RuntimeSession {
         this.state = "executing";
       }
     }
+  }
+
+  private async injectContextPressureNotice(input: {
+    turn: TurnIdentity;
+    ledger: AgentTurnLedger;
+    usage: ContextUsageSnapshot;
+    automaticSwapEnabled: boolean;
+  }): Promise<void> {
+    const userMessage: UserMessage = Object.freeze({
+      role: "user",
+      content: contextPressureNoticeText({
+        usage: input.usage,
+        toolPressure: toolContextPressure(input.usage.pressure) as "high" | "critical",
+        automaticSwapEnabled: input.automaticSwapEnabled,
+      }),
+    });
+    const records = input.ledger.appendSteeringUserMessages([userMessage]);
+    const record = records[0];
+    if (records.length !== 1 || record === undefined) {
+      throw new Error("Pressure notice steering did not append exactly one message.");
+    }
+    await this.append({
+      type: "context.pressure_notice.sent",
+      ...input.turn,
+      data: {
+        usedInputTokens: input.usage.usedInputTokens,
+        inputBudgetTokens: input.usage.inputBudgetTokens,
+        triggerTokens: input.usage.triggerTokens,
+        pressure: input.usage.pressure === "blocked" ? "blocked" : "triggered",
+        automaticSwapEnabled: input.automaticSwapEnabled,
+        ordinal: record.ordinal,
+      },
+    });
   }
 
   private async performModelDirectedCompaction(input: {

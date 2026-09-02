@@ -311,6 +311,14 @@ export type AgentEventDataMap = {
     userPrompt: UserPromptProjection;
     ordinal: number;
   };
+  "context.pressure_notice.sent": {
+    usedInputTokens: number;
+    inputBudgetTokens: number;
+    triggerTokens: number;
+    pressure: "triggered" | "blocked";
+    automaticSwapEnabled: boolean;
+    ordinal: number;
+  };
   "turn.finished": TurnFinishedData;
   "turn.failed": { error: string };
   "turn.cancelled": { cancellation: TurnCancellation };
@@ -415,7 +423,12 @@ export type AgentEventInput =
     >
   | SessionEventInput<"mcp.server.connected" | "mcp.server.failed">
   | SessionEventInput<"diagnostic.sink_failed">
-  | TurnEventInput<"turn.started" | "turn.steering.applied" | "turn.finished">
+  | TurnEventInput<
+      | "turn.started"
+      | "turn.steering.applied"
+      | "context.pressure_notice.sent"
+      | "turn.finished"
+    >
   | (
       | TurnEventInput<"turn.failed" | "turn.cancelled">
       | IterationEventInput<"turn.failed" | "turn.cancelled">

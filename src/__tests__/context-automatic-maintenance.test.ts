@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRuntimeSession } from "../agent/runtime-session";
+import { isContextPressureNotice } from "../agent/context-pressure-notice";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
 import { toolResultDisplayText } from "../agent/tool-result-content";
 import {
@@ -42,7 +43,11 @@ class ToolObservationModel extends TestModelClient {
   ): Promise<ModelRequestOutput> {
     this.requestCount += 1;
     const input = testModelRequestInput(prepared);
-    const last = input.messages.at(-1);
+    // Pressure notices are runtime-injected user messages; scripted fixtures
+    // ignore them when deciding the next scripted step.
+    const last = input.messages
+      .filter((entry) => !isContextPressureNotice(entry))
+      .at(-1);
     let message: AssistantMessage;
     if (last?.role === "user") {
       if (options.identity === undefined) {
@@ -574,11 +579,18 @@ describe("I4 automatic context maintenance", () => {
             event.type === "context.revision.finished" &&
             event.data.reason === "runtime_pressure",
         );
+        // Pressure notices add canonical user frames during pressured turns,
+        // which can shift retirement eligibility; the resume maintenance must
+        // still begin with a swap and may retire the newly complete prefix.
+        const resumeStrategies = resumeMaintenance.map((event) =>
+          event.type === "context.revision.finished" ? event.data.strategy : "",
+        );
+        expect(resumeStrategies[0]).toBe("swap");
         expect(
-          resumeMaintenance.map((event) =>
-            event.type === "context.revision.finished" ? event.data.strategy : "",
+          resumeStrategies.every(
+            (strategy) => strategy === "swap" || strategy === "retire_prefix",
           ),
-        ).toEqual(["swap"]);
+        ).toBe(true);
         expect(resumedModel.requestCount).toBe(0);
         expect(resumed.canSwitchSession()).toBe(true);
       } finally {

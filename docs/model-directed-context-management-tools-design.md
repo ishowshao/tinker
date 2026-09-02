@@ -285,12 +285,54 @@ revision readback 与 `/resume` 直接抛错，严重时会话 fault。注意不
 5. 测试：持久化往返（写入→readback 逐字段相等）、`/resume` 投影、context
    revision 加载路径覆盖新 kind。
 
-## 六、后续阶段（不在本方案范围）
+## 六、后续阶段
 
 - P2：`ContextRetirePrefix`，按 turn 边界退休前缀，复用 `retirePrefix` 管线，
-  选择粒度为 turnId。
-- P3：主动暴露压力——loop 在 pressure 升级时向模型追加轻量提示，引导使用
-  本工具组，把拉取变为推送。需求方已认可该方向。
+  选择粒度为 turnId。未实施。
+
+### P3：压力主动引导（已实施，2026-09-02）
+
+把"拉取"（模型主动调 ContextStatus）补充为"推送"（runtime 在升压时主动告知）。
+分两层：
+
+**静态引导**：`RUNTIME_INSTRUCTIONS`（`src/cli/runner-dependencies.ts`）增加一节，
+告知模型 context 压力由它自己管理、三个工具的职责、换出可经 RecallGet 恢复、
+收到压力通知或 ContextStatus 报 high 时应审查并换出。I4 资格门禁只绑定 Recall
+contract 文本与 Recall 工具定义 hash，不覆盖系统提示词，此改动不触发 drift
+fast-fail。
+
+**动态通知（pressure notice）**：
+
+- 触发：`performActiveTurnContextMaintenance` 在每次迭代收尾测量；压力非
+  `normal` 且本 turn 未通知时注入。per-turn 标志使每次升压只发一次；turn 结束
+  重置，下一 turn 仍高压则重发一次（迟滞在 turn 粒度）。
+- 通道：复用 steering（`appendSteeringUserMessages`）注入 canonical user 消息，
+  零协议改动、持久化与 resume 安全。通知消息本身是 user role，永不成为候选。
+- 与 lease 协同：注入通知即登记 `modelDirectedSwapLease`，恰好抑制一次自动
+  swap，模型获得一个 iteration 的决策窗口；模型不行动则自动策略下一迭代接管。
+  模型本迭代已调度换出（pending 非空）或刚通过 Candidates 建立 lease 时，不发
+  通知。
+- **blocked 紧急覆盖**（实施中发现并修正）：triggered 与 blocked 之间的余量
+  可能不足一次迭代的增长——单次迭代径直冲过两条线时，抑制自动化会让下一次
+  预检直接 fail turn，模型连行动机会都没有。因此压力为 `blocked` 时任何
+  lease/通知抑制都让位，自动化立即执行（文案相应变为 "Automatic compaction
+  is running immediately…"）。
+- 通知的可识别性：通知文本以共享常量 `CONTEXT_PRESSURE_NOTICE_PREFIX`
+  （`src/agent/context-pressure-notice.ts`）开头。脚本化测试模型（FakeModelClient
+  的 `lastUserMessage`/`lastMessageIndex` 与测试 fixtures）用
+  `isContextPressureNotice` 过滤通知——通知是 user-role 消息，会改变"最后一条
+  user 消息"的位置，keyed 于消息序列的脚本模型必须感知这一点。
+- 文案两种变体（需求方拍板）：自动化开启时承诺"Automatic compaction will
+  resume next iteration if you do not act"；自动化关闭（无 profile 或未过门禁）
+  时明确告知"Automatic compaction is disabled…"，此时通知照常发送——模型是
+  唯一的管理者。通知中的压力用词与 ContextStatus 的工具层枚举一致
+  （triggered→high、blocked→critical）。
+- 事件：`context.pressure_notice.sent`（pressure、用量、automationEnabled、
+  注入消息 ordinal），TUI 渲染为 "context notice" 项，stdout 打印单行。
+
+测试覆盖：升压仅发一次且顺序先于下一次模型请求、lease 恰好抑制一次后自动
+维护恢复、自动化关闭的文案变体与逐 turn 重发、关闭自动化时不产生任何
+revision。
 
 ## 七、开放问题
 

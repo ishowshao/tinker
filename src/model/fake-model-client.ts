@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFile } from "node:fs/promises";
+import { isContextPressureNotice } from "../agent/context-pressure-notice";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
 import { toolResultDisplayText } from "../agent/tool-result-content";
 import { cancellationError } from "../agent/turn-cancellation";
@@ -1333,7 +1334,8 @@ function waitForCancellation(signal: AbortSignal): Promise<ModelRequestOutput> {
 
 function lastUserMessage(messages: AgentMessage[]): string {
   const users = messages.filter(
-    (message): message is { role: "user"; content: string } => message.role === "user",
+    (message): message is { role: "user"; content: string } =>
+      message.role === "user" && !isContextPressureNotice(message),
   );
   return users.at(-1)?.content ?? "";
 }
@@ -1451,7 +1453,11 @@ function lastMessageIndex(
   role: AgentMessage["role"],
 ): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index]?.role === role) {
+    const message = messages[index];
+    if (message === undefined || isContextPressureNotice(message)) {
+      continue;
+    }
+    if (message.role === role) {
       return index;
     }
   }
