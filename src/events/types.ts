@@ -53,7 +53,7 @@ export type ContextUsageUpdatedData = {
 export type ContextRevisionStartedData =
   | {
       strategy: "swap";
-      reason: "manual" | "runtime_pressure";
+      reason: "manual" | "runtime_pressure" | "model_directed";
       policyVersion: "swap-only-v1";
       rendererFormat: "swap-observation-v1";
       qualificationId?: string;
@@ -81,7 +81,7 @@ export type ContextRevisionStartedData =
 export type ContextRevisionFinishedData =
   | {
       strategy: "swap";
-      reason: "manual" | "runtime_pressure";
+      reason: "manual" | "runtime_pressure" | "model_directed";
       policyVersion: "swap-only-v1";
       outcome:
         | "below_trigger"
@@ -162,7 +162,7 @@ export type ContextRevisionFinishedData =
 export type ContextRevisionFailedData =
   | {
       strategy: "swap";
-      reason: "manual" | "runtime_pressure";
+      reason: "manual" | "runtime_pressure" | "model_directed";
       stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
       errorCode: string;
       error: string;

@@ -56,7 +56,7 @@ export type RunAgentInput = {
       preflight: ReturnType<ContextMeter["measure"]>;
     }):
       | {
-          trigger: Exclude<SwapPlanningTrigger, "manual">;
+          trigger: Exclude<SwapPlanningTrigger, "manual" | "model_directed">;
           forcedTargetTokens?: number;
         }
       | undefined;

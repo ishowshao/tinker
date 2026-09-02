@@ -31,6 +31,7 @@ import { runtimeIdFactory } from "../ids/runtime-id";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
 import { promptPrefixFingerprint } from "../model/prompt-prefix-hash";
 import type {
+  ModelRequestInput,
   ModelRequestOptions,
   ModelRequestOutput,
   PreparedModelRequest,
@@ -625,6 +626,37 @@ describe("I2 deterministic context compaction", () => {
     }
   });
 
+  test("classifies a stale swap plan as nonfatal before commit", async () => {
+    const model = new StaleCurrentPreparingModel();
+    const fixture = await createFixture("tinker-i2-stale-plan-", { model });
+    try {
+      appendReadTurn(fixture, `stale-plan-source-${"s".repeat(10_000)}`);
+      model.arm();
+      let failure: unknown;
+      try {
+        await fixture.manager.compact({
+          kind: "benchmark_forced",
+          targetTokens: 0,
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(ContextManagerError);
+      expect(failure).toMatchObject({
+        stage: "validate",
+        code: "SwapPlanStaleError",
+        fatal: false,
+        committed: false,
+      });
+      expect(fixture.store.loadContextSnapshot().revision).toMatchObject({
+        revisionNumber: 1,
+        activeOverrideCount: 0,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("keeps the committed revision after activation fails and resumes it", async () => {
     const fixture = await createFixture("tinker-i2-post-commit-", {
       meter: new FailingRevisionContextMeter(),
@@ -843,7 +875,10 @@ describe("I2 deterministic context compaction", () => {
   });
 });
 
-async function createFixture(prefix: string, options: { meter?: ContextMeter } = {}) {
+async function createFixture(
+  prefix: string,
+  options: { meter?: ContextMeter; model?: PreparingModel } = {},
+) {
   const workspace = await mkdtemp(path.join(os.tmpdir(), prefix));
   const sessionId = runtimeIdFactory.createSessionId();
   const store = await SessionStore.createNew({
@@ -853,7 +888,7 @@ async function createFixture(prefix: string, options: { meter?: ContextMeter } =
     systemPrompt: "system",
     idFactory: runtimeIdFactory,
   });
-  const model = new PreparingModel();
+  const model = options.model ?? new PreparingModel();
   finalizeTestSessionStore(store, {
     systemPrompt: "system",
     tools,
@@ -1052,6 +1087,25 @@ class PreparingModel extends OpenAIChatModelClient {
   override async request(...args: Parameters<OpenAIChatModelClient["request"]>) {
     this.requestCount += 1;
     return super.request(...args);
+  }
+}
+
+class StaleCurrentPreparingModel extends PreparingModel {
+  private armed = false;
+  private prepareCount = 0;
+
+  arm(): void {
+    this.armed = true;
+    this.prepareCount = 0;
+  }
+
+  override prepare(input: ModelRequestInput): PreparedModelRequest {
+    const prepared = super.prepare(input);
+    if (!this.armed) return prepared;
+    this.prepareCount += 1;
+    return this.prepareCount === 4
+      ? { ...prepared, requestConfigHash: "stale-request-config" }
+      : prepared;
   }
 }
 

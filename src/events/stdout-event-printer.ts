@@ -227,6 +227,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "context_maintenance":
     case "memory_search":
     case "memory_get":
     case "wait":

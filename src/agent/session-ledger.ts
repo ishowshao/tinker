@@ -116,7 +116,10 @@ export type AgentTurnLedger = {
   commitToolCompletions(
     completions: readonly ToolCompletionInput[],
   ): readonly CommittedToolCompletion[];
-  buildModelRequest(tools: readonly ToolDefinition[]): BuiltContextRequest;
+  buildModelRequest(
+    tools: readonly ToolDefinition[],
+    options?: { readonly allowOpenTail?: boolean },
+  ): BuiltContextRequest;
   activateContextSnapshot(snapshot: StoredContextSnapshotV8): void;
 };
 
@@ -657,9 +660,10 @@ export class InMemorySessionLedger implements SessionLedger {
   buildTurnModelRequest(
     pending: InMemoryPendingLedgerTurn,
     tools: readonly ToolDefinition[],
+    options: { readonly allowOpenTail?: boolean } = {},
   ): BuiltContextRequest {
     this.requirePending(pending, "build a model request");
-    return this.buildRequest(tools);
+    return this.buildRequest(tools, undefined, options);
   }
 
   finishTurn(pending: InMemoryPendingLedgerTurn, result: RunAgentResult): void {
@@ -702,11 +706,13 @@ export class InMemorySessionLedger implements SessionLedger {
   private buildRequest(
     tools: readonly ToolDefinition[],
     candidateUserMessage?: UserMessage,
+    options: { readonly allowOpenTail?: boolean } = {},
   ): BuiltContextRequest {
     try {
       const canonical = this.view;
       const compiled = this.revisionCompiler.compileActive(
         snapshotFor(canonical, this.revision, this.surface, this.activeOverrides),
+        { allowOpenTail: options.allowOpenTail },
       );
       return this.contextBuilder.build({
         canonical,
@@ -865,7 +871,8 @@ class InMemoryPendingLedgerTurn implements PendingLedgerTurn {
       assertCanExecuteTool: (call) => this.ledger.assertCanExecuteTool(this, call),
       commitToolCompletions: (completions) =>
         this.ledger.commitToolCompletions(this, completions),
-      buildModelRequest: (tools) => this.ledger.buildTurnModelRequest(this, tools),
+      buildModelRequest: (tools, options) =>
+        this.ledger.buildTurnModelRequest(this, tools, options),
       activateContextSnapshot: (snapshot) =>
         this.ledger.activateContextSnapshot(snapshot),
     };

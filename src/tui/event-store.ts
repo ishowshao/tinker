@@ -883,6 +883,19 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       return raw.mode === "search"
         ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}`
         : `${base} -> ${raw.page.returnedBytes} historical bytes`;
+    case "context_maintenance":
+      if (!raw.ok) {
+        return raw.operation === "swap"
+          ? `${base} -> 0 scheduled, ${raw.rejected.length} rejected`
+          : base;
+      }
+      if (raw.operation === "status") {
+        return `${base} -> ${raw.pressure}, ${raw.usedInputTokens}/${raw.inputBudgetTokens} tokens`;
+      }
+      if (raw.operation === "candidates") {
+        return `${base} -> ${raw.candidates.length}/${raw.total} candidates`;
+      }
+      return `${base} -> ${raw.scheduled.length} scheduled, ${raw.rejected.length} rejected`;
     case "memory_search":
       if (!raw.ok) {
         return base;
@@ -980,6 +993,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "context_maintenance":
     case "memory_search":
     case "memory_get":
     case "wait":
@@ -1021,6 +1035,7 @@ function toolRawResultDiff(
     case "web_search":
     case "web_fetch":
     case "recall":
+    case "context_maintenance":
     case "memory_search":
     case "memory_get":
     case "wait":

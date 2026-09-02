@@ -11,6 +11,7 @@ import type {
 } from "../events/types";
 import {
   runtimeIdFactory,
+  type MessageId,
   type RuntimeIdFactory,
   type SessionId,
   type TurnId,
@@ -27,6 +28,7 @@ import {
   type MaterializedModelRequest,
   type ModelClient,
 } from "../model/model-client";
+import type { ContextPressure } from "../model/model-request-preflight";
 import { ImageAssetStore, type ImportedImageAsset } from "../image/image-asset-store";
 import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import {
@@ -72,7 +74,14 @@ import {
   renderedMessageHash,
 } from "../context/compiled-context-hash";
 import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
-import type { ToolExecutor } from "../tools/types";
+import {
+  ToolExecutionFatalError,
+  type ContextMaintenanceHandle,
+  type ContextStatusRawResult,
+  type ContextSwapCandidatesRawResult,
+  type ContextSwapRawResult,
+  type ToolExecutor,
+} from "../tools/types";
 import type { TurnUndoResult } from "../tools/turn-undo-manager";
 import type { Refiner } from "../tools/web-fetch/refiner";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
@@ -105,6 +114,7 @@ import type { PublicToolingConfig } from "../cli/public-config-contract";
 import type {
   IterationIdentity,
   RunAgentResult,
+  ToolCall,
   ToolCallIdentity,
   TurnIdentity,
 } from "./types";
@@ -221,6 +231,7 @@ export type RuntimeSkillsSnapshot = {
 
 export type RuntimeSessionContext = {
   readonly sessionId: SessionId;
+  readonly contextMaintenance: ContextMaintenanceHandle;
   createIteration(turn: TurnIdentity, iterationNumber: number): IterationIdentity;
   createToolCall(
     iteration: IterationIdentity,
@@ -379,6 +390,8 @@ type RuntimeSessionState =
 
 type ActiveTurn = {
   turn: TurnIdentity;
+  ledger: AgentTurnLedger;
+  consumedThroughOrdinal?: number;
   controller: AbortController;
   completion: Promise<RunAgentResult>;
 };
@@ -467,6 +480,8 @@ class DefaultRuntimeSession implements RuntimeSession {
   private contextManager?: ContextManager;
   private contextAutomationDecision?: ContextAutomationDecision;
   private pendingAutomaticContextMaintenance = false;
+  private pendingModelDirectedSwap?: Set<MessageId>;
+  private modelDirectedSwapLease = false;
   private readonly skillCatalog: SkillCatalogSnapshot;
   private skillCoordinator = new SkillActivationCoordinator();
   private bashGuardMode: "guard" | "yolo";
@@ -517,6 +532,11 @@ class DefaultRuntimeSession implements RuntimeSession {
     this.shadowPlanner = new SwapPlanner(input.modelClient);
     this.context = {
       sessionId: this.sessionId,
+      contextMaintenance: {
+        status: (call) => this.contextStatus(call),
+        candidates: (call, page) => this.contextSwapCandidates(call, page),
+        swap: (call, selection) => this.contextSwap(call, selection),
+      },
       createIteration: (turn, iterationNumber) =>
         this.createIteration(turn, iterationNumber),
       createToolCall: (iteration, toolCallNumber) =>
@@ -1248,6 +1268,133 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.contextAutomationDecision;
   }
 
+  private async contextStatus(call: ToolCall): Promise<ContextStatusRawResult> {
+    const active = this.requireActiveContextTool(call, "ContextStatus");
+    try {
+      const usage = this.requireContextManager().measureActive(
+        active.turn.turnId,
+        active.ledger,
+      );
+      return Object.freeze({
+        ok: true,
+        operation: "status",
+        usedInputTokens: usage.usedInputTokens,
+        inputBudgetTokens: usage.inputBudgetTokens,
+        pressure: toolContextPressure(usage.pressure),
+        triggerTokens: usage.triggerTokens,
+        source: usage.source,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        operation: "status",
+        error: this.contextToolFailure("status", error),
+      };
+    }
+  }
+
+  private async contextSwapCandidates(
+    call: ToolCall,
+    page: { readonly limit: number; readonly offset: number },
+  ): Promise<ContextSwapCandidatesRawResult> {
+    const active = this.requireActiveContextTool(call, "ContextSwapCandidates");
+    try {
+      const result = this.requireContextManager().listActiveSwapCandidates({
+        turnId: active.turn.turnId,
+        consumedThroughOrdinal: active.consumedThroughOrdinal,
+        activeLedger: active.ledger,
+        limit: page.limit,
+        offset: page.offset,
+      });
+      if (result.total > 0 && result.usage.pressure !== "normal") {
+        this.modelDirectedSwapLease = true;
+      }
+      return Object.freeze({
+        ok: true,
+        operation: "candidates",
+        total: result.total,
+        candidates: result.candidates,
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        operation: "candidates",
+        error: this.contextToolFailure("candidate listing", error),
+      };
+    }
+  }
+
+  private async contextSwap(
+    call: ToolCall,
+    selection: { readonly candidateIds: readonly MessageId[] },
+  ): Promise<ContextSwapRawResult> {
+    const active = this.requireActiveContextTool(call, "ContextSwap");
+    try {
+      const result = this.requireContextManager().validateActiveSwapSelection({
+        turnId: active.turn.turnId,
+        consumedThroughOrdinal: active.consumedThroughOrdinal,
+        activeLedger: active.ledger,
+        messageIds: selection.candidateIds,
+      });
+      if (result.scheduled.length === 0) {
+        return Object.freeze({
+          ok: false,
+          operation: "swap",
+          scheduled: Object.freeze([]),
+          rejected: result.rejected,
+        });
+      }
+      const pending = (this.pendingModelDirectedSwap ??= new Set<MessageId>());
+      for (const candidate of result.scheduled) pending.add(candidate.candidateId);
+      this.modelDirectedSwapLease = false;
+      return Object.freeze({
+        ok: true,
+        operation: "swap",
+        scheduled: result.scheduled,
+        rejected: result.rejected,
+        note: "Swap executes when this iteration's tool frames close.",
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        operation: "swap",
+        scheduled: [],
+        rejected: [],
+        error: this.contextToolFailure("swap scheduling", error),
+      };
+    }
+  }
+
+  private requireActiveContextTool(
+    call: ToolCall,
+    expectedName: "ContextStatus" | "ContextSwapCandidates" | "ContextSwap",
+  ): ActiveTurn & { consumedThroughOrdinal: number } {
+    this.requireToolCall(call);
+    const active = this.activeTurn;
+    if (
+      call.name !== expectedName ||
+      active === undefined ||
+      active.turn.turnId !== call.turnId ||
+      active.consumedThroughOrdinal === undefined ||
+      this.state !== "executing"
+    ) {
+      throw new ToolExecutionFatalError(
+        `${expectedName} was called outside an active model iteration.`,
+      );
+    }
+    return active as ActiveTurn & { consumedThroughOrdinal: number };
+  }
+
+  private contextToolFailure(operation: string, error: unknown): string {
+    if (error instanceof ContextManagerError && !error.fatal) {
+      return `Context ${operation} failed (${boundedContextErrorCode(error.code)}).`;
+    }
+    throw new ToolExecutionFatalError(
+      `Context ${operation} required canonical session state that could not be read safely.`,
+      { cause: error },
+    );
+  }
+
   private appendSkillsCatalogLoaded(): Promise<void> {
     const activeNames = this.skillCoordinator
       .activeEntries()
@@ -1307,6 +1454,15 @@ class DefaultRuntimeSession implements RuntimeSession {
     iteration: IterationIdentity;
     built: BuiltContextRequest;
   }): void {
+    const active = this.activeTurn;
+    if (
+      active === undefined ||
+      active.turn.turnId !== input.iteration.turnId ||
+      active.turn.sessionId !== input.iteration.sessionId
+    ) {
+      throw new Error("Model dispatch does not belong to the active runtime turn.");
+    }
+    active.consumedThroughOrdinal = input.built.canonical.messages.length;
     const pending = this.store.loadSkillActivations(["pending"]);
     if (pending.length === 0) {
       return;
@@ -1675,7 +1831,12 @@ class DefaultRuntimeSession implements RuntimeSession {
           usage: admissionSnapshot,
         },
       });
-      this.activeTurn = { turn, controller, completion };
+      this.activeTurn = {
+        turn,
+        ledger: pendingLedgerTurn.agent,
+        controller,
+        completion,
+      };
       this.notifyPromptScheduler();
       return Object.freeze({
         turnId: turn.turnId,
@@ -2192,6 +2353,8 @@ class DefaultRuntimeSession implements RuntimeSession {
       this.activeTurn = undefined;
       this.notifyPromptScheduler();
       this.pendingAutomaticContextMaintenance = false;
+      this.pendingModelDirectedSwap = undefined;
+      this.modelDirectedSwapLease = false;
       if (this.state === "executing") {
         this.state = "ready";
       }
@@ -2229,28 +2392,48 @@ class DefaultRuntimeSession implements RuntimeSession {
     consumedThroughOrdinal: number;
     ledger: AgentTurnLedger;
   }): Promise<void> {
-    const automation = this.requireContextAutomation();
-    if (!automation.automaticSwapOnly) return;
     if (this.state !== "executing") {
       throw new Error(
         `Cannot maintain active-turn context while RuntimeSession is ${this.state}.`,
       );
     }
-    const manager = this.requireContextManager();
-    const usage = manager.measureCurrent(input.turn.turnId, input.ledger);
-    if (usage.pressure === "normal") return;
+    const pendingModelDirectedSwap = this.pendingModelDirectedSwap;
+    this.pendingModelDirectedSwap = undefined;
+    if (pendingModelDirectedSwap === undefined && this.modelDirectedSwapLease) {
+      this.modelDirectedSwapLease = false;
+      return;
+    }
 
-    const qualificationId = requireAutomationQualificationId(automation);
-    const compactionTrigger = {
-      kind: "runtime_pressure",
-      activeTurn: {
-        turnId: input.turn.turnId,
-        consumedThroughOrdinal: input.consumedThroughOrdinal,
-      },
-    } as const;
+    const automation = this.requireContextAutomation();
+    if (pendingModelDirectedSwap === undefined && !automation.automaticSwapOnly) {
+      return;
+    }
+    const manager = this.requireContextManager();
     this.pendingAutomaticContextMaintenance = false;
+    this.modelDirectedSwapLease = false;
     this.state = "maintaining_context";
     try {
+      if (pendingModelDirectedSwap !== undefined) {
+        await this.performModelDirectedCompaction({
+          turn: input.turn,
+          consumedThroughOrdinal: input.consumedThroughOrdinal,
+          ledger: input.ledger,
+          messageIds: Object.freeze([...pendingModelDirectedSwap]),
+        });
+      }
+      if (!automation.automaticSwapOnly) return;
+
+      const usage = manager.measureCurrent(input.turn.turnId, input.ledger);
+      if (usage.pressure === "normal") return;
+
+      const qualificationId = requireAutomationQualificationId(automation);
+      const compactionTrigger = {
+        kind: "runtime_pressure",
+        activeTurn: {
+          turnId: input.turn.turnId,
+          consumedThroughOrdinal: input.consumedThroughOrdinal,
+        },
+      } as const;
       await this.append({
         type: "context.revision.started",
         sessionId: this.sessionId,
@@ -2344,6 +2527,56 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (this.state === "maintaining_context") {
         this.state = "executing";
       }
+    }
+  }
+
+  private async performModelDirectedCompaction(input: {
+    turn: TurnIdentity;
+    consumedThroughOrdinal: number;
+    ledger: AgentTurnLedger;
+    messageIds: readonly MessageId[];
+  }): Promise<void> {
+    await this.append({
+      type: "context.revision.started",
+      sessionId: this.sessionId,
+      data: {
+        strategy: "swap",
+        reason: "model_directed",
+        policyVersion: "swap-only-v1",
+        rendererFormat: "swap-observation-v1",
+      },
+    });
+    try {
+      const result = await this.requireContextManager().compact(
+        {
+          kind: "model_directed",
+          messageIds: input.messageIds,
+          activeTurn: {
+            turnId: input.turn.turnId,
+            consumedThroughOrdinal: input.consumedThroughOrdinal,
+          },
+        },
+        input.ledger,
+      );
+      await this.append({
+        type: "context.revision.finished",
+        sessionId: this.sessionId,
+        data: contextRevisionFinishedData(result, "model_directed"),
+      });
+    } catch (error) {
+      const failure = automaticContextFailure(error, "compaction");
+      await this.append({
+        type: "context.revision.failed",
+        sessionId: this.sessionId,
+        data: {
+          strategy: "swap",
+          reason: "model_directed",
+          stage: failure.stage,
+          errorCode: boundedContextErrorCode(failure.code),
+          error: `Model-directed context compaction failed at ${failure.stage}.`,
+        },
+      }).catch(() => undefined);
+      if (failure.fatal) throw error;
     }
   }
 
@@ -3086,7 +3319,7 @@ function errorMessage(error: unknown): string {
 
 function contextRevisionFinishedData(
   result: ContextCompactionResult,
-  reason: "manual" | "runtime_pressure" = "manual",
+  reason: "manual" | "runtime_pressure" | "model_directed" = "manual",
   qualificationId?: string,
 ): ContextRevisionFinishedData {
   if (result.status === "unchanged") {
@@ -3222,6 +3455,16 @@ function boundedContextErrorCode(code: string): string {
   return /^[A-Za-z0-9_]+$/.test(code) && code.length <= 80
     ? code
     : "CONTEXT_COMPACTION_FAILED";
+}
+
+function toolContextPressure(
+  pressure: ContextPressure,
+): "normal" | "high" | "critical" {
+  return pressure === "triggered"
+    ? "high"
+    : pressure === "blocked"
+      ? "critical"
+      : "normal";
 }
 
 function requirePositiveNumber(value: number, name: string): void {

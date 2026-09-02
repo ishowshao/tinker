@@ -1,6 +1,11 @@
 import { createBashToolExecutor } from "./bash";
 import { ShellTaskManager } from "./bash-task";
 import { createCwdState } from "./cwd-state";
+import {
+  createContextStatusToolExecutor,
+  createContextSwapCandidatesToolExecutor,
+  createContextSwapToolExecutor,
+} from "./context-maintenance";
 import { createDeleteToolExecutor } from "./delete";
 import { createEditToolExecutor } from "./edit";
 import { createGlobToolExecutor } from "./glob";
@@ -26,6 +31,7 @@ import type {
 } from "../agent/runtime-session";
 import type {
   FileSnapshotStore,
+  ContextMaintenanceHandle,
   ToolDefinition,
   ToolExecutionContext,
   ToolExecutor,
@@ -79,6 +85,7 @@ export class ToolRuntime {
         signal: AbortSignal,
       ): Promise<"allow" | "deny">;
     },
+    private readonly contextMaintenance?: ContextMaintenanceHandle,
   ) {}
 
   async execute(call: ToolCall, context: ToolExecutionContext): Promise<ToolRawResult> {
@@ -107,6 +114,9 @@ export class ToolRuntime {
     try {
       return await tool.execute(call.args, call, {
         ...context,
+        ...(this.contextMaintenance === undefined
+          ? {}
+          : { contextMaintenance: this.contextMaintenance }),
         ...(this.bashGuard === undefined
           ? {}
           : {
@@ -228,6 +238,9 @@ export function createDefaultTooling(options: {
   registry.register(
     createRecallGetToolExecutor({ historyReader: options.historyReader }),
   );
+  registry.register(createContextStatusToolExecutor());
+  registry.register(createContextSwapCandidatesToolExecutor());
+  registry.register(createContextSwapToolExecutor());
   if (options.memorySearch !== undefined) {
     registry.register(options.memorySearch);
   }
@@ -304,7 +317,11 @@ export function createDefaultTooling(options: {
 
   return {
     registry,
-    runtime: new ToolRuntime(registry, options.bashGuard),
+    runtime: new ToolRuntime(
+      registry,
+      options.bashGuard,
+      options.runtimeSession.contextMaintenance,
+    ),
     snapshots,
     taskManager,
     ...(turnUndoManager === undefined ? {} : { turnUndoManager }),

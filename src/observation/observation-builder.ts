@@ -6,6 +6,7 @@ import {
 } from "../agent/tool-result-content";
 import type {
   BashRawResult,
+  ContextMaintenanceRawResult,
   DeleteFileRawResult,
   EditFileRawResult,
   GenericToolRawResult,
@@ -48,6 +49,8 @@ export class ObservationBuilder {
         return renderViewImageObservation(input.raw);
       case "recall":
         return textObservation(renderRecallObservation(input.raw));
+      case "context_maintenance":
+        return textObservation(renderContextMaintenanceObservation(input.raw));
       case "memory_search":
         return textObservation(renderMemorySearchObservation(input.raw));
       case "memory_get":
@@ -115,6 +118,39 @@ function renderWaitObservation(raw: WaitRawResult): string {
   return raw.ok
     ? `Waited ${raw.seconds} second${raw.seconds === 1 ? "" : "s"}.`
     : `Wait failed: ${raw.error}`;
+}
+
+function renderContextMaintenanceObservation(raw: ContextMaintenanceRawResult): string {
+  if (!raw.ok) {
+    if (raw.operation === "swap" && raw.rejected.length > 0) {
+      return JSON.stringify({ ok: false, rejected: raw.rejected });
+    }
+    return JSON.stringify({ ok: false, error: raw.error });
+  }
+  switch (raw.operation) {
+    case "status":
+      return JSON.stringify({
+        ok: true,
+        usedInputTokens: raw.usedInputTokens,
+        inputBudgetTokens: raw.inputBudgetTokens,
+        pressure: raw.pressure,
+        triggerTokens: raw.triggerTokens,
+        source: raw.source,
+      });
+    case "candidates":
+      return JSON.stringify({
+        ok: true,
+        total: raw.total,
+        candidates: raw.candidates,
+      });
+    case "swap":
+      return JSON.stringify({
+        ok: true,
+        scheduled: raw.scheduled,
+        rejected: raw.rejected,
+        note: raw.note,
+      });
+  }
 }
 
 function assertNever(value: never): never {

@@ -15,6 +15,7 @@ import {
   assertPlanBaseCurrent,
   SwapPlanStaleError,
   SwapPlanner,
+  SwapPlanningDiagnosticError,
 } from "../context/swap-planner";
 import { ContextSwapRenderer } from "../context/context-swap-renderer";
 import {
@@ -420,6 +421,74 @@ describe("SwapPlanner", () => {
     expect(result.plan?.addedOverrides).toHaveLength(result.eligibleCandidateCount);
     expect(result.plan?.guardedTokensAfter).toBeGreaterThan(0);
     expect(result.plan?.guardedTokensAfter).toBeLessThan(result.guardedTokensBefore);
+  });
+
+  test("projects exactly the model-selected eligible IDs and rejects a stale selection", () => {
+    const fixture = planningFixture();
+    const built = fixture.ledger.buildCommittedModelRequest([]);
+    const model = new PreparingOnlyModel();
+    const activePrepared = model.prepare(built.request);
+    const activeUsage = new ContextMeter(TEST_CONTEXT_BUDGET).measure(activePrepared);
+    const planner = new SwapPlanner(model);
+    const scan = planner.scanCandidates(
+      built.canonical,
+      built.activeOverrides,
+      swapOnlyPolicyV1,
+      built.revision.keepFromOrdinal,
+      undefined,
+    );
+    const selected = scan.eligible.at(-1);
+    const activeMessage = built.canonical.messages.at(-1);
+    if (
+      selected === undefined ||
+      activeMessage === undefined ||
+      activeMessage.role === "system"
+    ) {
+      throw new Error("Expected an eligible candidate and an active turn boundary.");
+    }
+    const baseInput = {
+      active: built.compiled,
+      revision: built.revision,
+      surface: built.surface,
+      activeOverrides: built.activeOverrides,
+      canonical: built.canonical,
+      activePrepared,
+      activeUsage,
+      tools: [],
+      policy: swapOnlyPolicyV1,
+      trigger: "model_directed" as const,
+      activeTurn: {
+        turnId: activeMessage.turnId,
+        consumedThroughOrdinal: built.canonical.messages.length,
+      },
+    };
+
+    const result = planner.plan({
+      ...baseInput,
+      selectedMessageIds: [selected.message.messageId],
+    });
+    expect(result.plan?.addedOverrides.map((entry) => entry.messageId)).toEqual([
+      selected.message.messageId,
+    ]);
+    expect(result.plan?.guardedTokensAfter).toBeLessThan(result.guardedTokensBefore);
+
+    const stale = [...scan.excludedByMessageId].find(
+      ([, reason]) => reason === "observation_too_small",
+    );
+    if (stale === undefined) {
+      throw new Error("Expected an ineligible observation fixture.");
+    }
+    let error: unknown;
+    try {
+      planner.plan({ ...baseInput, selectedMessageIds: [stale[0]] });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SwapPlanningDiagnosticError);
+    expect(error).toMatchObject({
+      stage: "candidate",
+      code: "selected_candidate_observation_too_small",
+    });
   });
 
   test("swaps only observations already consumed inside the active turn", () => {
@@ -903,7 +972,7 @@ function planningFixture() {
     {
       name: "Read",
       raw: readRaw("small"),
-      observation: "a".repeat(8_191),
+      observation: "a".repeat(2_047),
     },
     {
       name: "RecallSearch",
@@ -1009,6 +1078,17 @@ function runtimeFor(
 ): RuntimeSessionContext {
   return {
     sessionId: turn.sessionId,
+    contextMaintenance: {
+      async status() {
+        throw new Error("Shadow test runtime has no context maintenance coordinator.");
+      },
+      async candidates() {
+        throw new Error("Shadow test runtime has no context maintenance coordinator.");
+      },
+      async swap() {
+        throw new Error("Shadow test runtime has no context maintenance coordinator.");
+      },
+    },
     createIteration(inputTurn, iterationNumber) {
       if (inputTurn.turnId !== turn.turnId || iterationNumber !== 1) {
         throw new Error("Unexpected runtime iteration identity.");

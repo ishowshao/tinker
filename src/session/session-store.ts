@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
+import { parseMessageId } from "../ids/runtime-id";
 import type {
   ContextRevisionId,
   ContextSurfaceId,
@@ -5096,6 +5097,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "web_search",
       "web_fetch",
       "recall",
+      "context_maintenance",
       "memory_search",
       "memory_get",
       "wait",
@@ -5114,7 +5116,280 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
   if (kind === "view_image") {
     return decodeStoredViewImageRawResult(raw);
   }
+  if (kind === "context_maintenance") {
+    return decodeStoredContextMaintenanceRawResult(raw);
+  }
   return immutableCanonicalClone(raw) as ToolRawResult;
+}
+
+function decodeStoredContextMaintenanceRawResult(
+  raw: Record<string, unknown>,
+): Extract<ToolRawResult, { kind: "context_maintenance" }> {
+  const operation = enumFromSql(
+    raw.operation,
+    ["status", "candidates", "swap"] as const,
+    "context maintenance operation",
+  );
+  if (raw.ok === false) {
+    if (operation !== "swap") {
+      assertObjectKeys(
+        raw,
+        ["kind", "ok", "operation", "error"],
+        ["kind", "ok", "operation", "error"],
+        `failed context ${operation} result`,
+      );
+      return immutableRecord({
+        kind: "context_maintenance" as const,
+        ok: false as const,
+        operation,
+        error: nonEmptyStringFromJson(raw.error, `context ${operation} error`),
+      });
+    }
+    assertObjectKeys(
+      raw,
+      ["kind", "ok", "operation", "scheduled", "rejected", "error"],
+      ["kind", "ok", "operation", "scheduled", "rejected"],
+      "failed context swap result",
+    );
+    if (!Array.isArray(raw.scheduled) || raw.scheduled.length !== 0) {
+      throw new Error("Failed context swap result must schedule no candidates.");
+    }
+    const rejected = decodeContextSwapRejected(raw.rejected);
+    const error =
+      raw.error === undefined
+        ? undefined
+        : nonEmptyStringFromJson(raw.error, "context swap error");
+    if (rejected.length === 0 && error === undefined) {
+      throw new Error("Failed context swap result must explain its failure.");
+    }
+    return immutableRecord({
+      kind: "context_maintenance" as const,
+      ok: false as const,
+      operation,
+      scheduled: Object.freeze([]),
+      rejected,
+      ...(error === undefined ? {} : { error }),
+    });
+  }
+  if (raw.ok !== true) {
+    throw new Error("Context maintenance raw result ok must be a boolean.");
+  }
+  if (operation === "status") {
+    assertObjectKeys(
+      raw,
+      [
+        "kind",
+        "ok",
+        "operation",
+        "usedInputTokens",
+        "inputBudgetTokens",
+        "pressure",
+        "triggerTokens",
+        "source",
+      ],
+      [
+        "kind",
+        "ok",
+        "operation",
+        "usedInputTokens",
+        "inputBudgetTokens",
+        "pressure",
+        "triggerTokens",
+        "source",
+      ],
+      "context status result",
+    );
+    return immutableRecord({
+      kind: "context_maintenance" as const,
+      ok: true as const,
+      operation,
+      usedInputTokens: nonNegativeJsonInteger(
+        raw.usedInputTokens,
+        "context status usedInputTokens",
+      ),
+      inputBudgetTokens: positiveJsonInteger(
+        raw.inputBudgetTokens,
+        "context status inputBudgetTokens",
+      ),
+      pressure: enumFromSql(
+        raw.pressure,
+        ["normal", "high", "critical"] as const,
+        "context status pressure",
+      ),
+      triggerTokens: positiveJsonInteger(
+        raw.triggerTokens,
+        "context status triggerTokens",
+      ),
+      source: enumFromSql(
+        raw.source,
+        [
+          "estimated_full",
+          "provider_measured",
+          "measured_plus_estimated_delta",
+        ] as const,
+        "context status source",
+      ),
+    });
+  }
+  if (operation === "candidates") {
+    assertObjectKeys(
+      raw,
+      ["kind", "ok", "operation", "total", "candidates"],
+      ["kind", "ok", "operation", "total", "candidates"],
+      "context swap candidates result",
+    );
+    if (!Array.isArray(raw.candidates) || raw.candidates.length > 50) {
+      throw new Error("Context swap candidates result has an invalid page.");
+    }
+    const candidates = raw.candidates.map((value, index) => {
+      const candidate = recordFromSql(value, `context candidate ${index}`);
+      assertObjectKeys(
+        candidate,
+        ["candidateId", "label", "ordinal", "savingsBytes"],
+        ["candidateId", "label", "ordinal", "savingsBytes"],
+        `context candidate ${index}`,
+      );
+      const label = stringFromSql(candidate.label, `context candidate ${index} label`);
+      if (
+        label === "" ||
+        label !== label.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim() ||
+        Buffer.byteLength(label, "utf8") > 80
+      ) {
+        throw new Error(`Context candidate ${index} label is invalid or too large.`);
+      }
+      return immutableRecord({
+        candidateId: parseMessageId(
+          stringFromSql(candidate.candidateId, `context candidate ${index} ID`),
+        ),
+        label,
+        ordinal: positiveJsonInteger(
+          candidate.ordinal,
+          `context candidate ${index} ordinal`,
+        ),
+        savingsBytes: positiveJsonInteger(
+          candidate.savingsBytes,
+          `context candidate ${index} savingsBytes`,
+        ),
+      });
+    });
+    if (
+      new Set(candidates.map((candidate) => candidate.candidateId)).size !==
+        candidates.length ||
+      candidates.some(
+        (candidate, index) =>
+          index > 0 &&
+          candidate.ordinal <= (candidates[index - 1]?.ordinal ?? candidate.ordinal),
+      )
+    ) {
+      throw new Error(
+        "Context swap candidates must have unique IDs and ascending ordinals.",
+      );
+    }
+    const total = nonNegativeJsonInteger(raw.total, "context candidates total");
+    if (total < candidates.length) {
+      throw new Error("Context candidates total is smaller than its page.");
+    }
+    return immutableRecord({
+      kind: "context_maintenance" as const,
+      ok: true as const,
+      operation,
+      total,
+      candidates: Object.freeze(candidates),
+    });
+  }
+
+  assertObjectKeys(
+    raw,
+    ["kind", "ok", "operation", "scheduled", "rejected", "note"],
+    ["kind", "ok", "operation", "scheduled", "rejected", "note"],
+    "context swap result",
+  );
+  if (!Array.isArray(raw.scheduled) || raw.scheduled.length < 1) {
+    throw new Error("Successful context swap result must schedule candidates.");
+  }
+  const scheduled = raw.scheduled.map((value, index) => {
+    const candidate = recordFromSql(value, `scheduled context candidate ${index}`);
+    assertObjectKeys(
+      candidate,
+      ["candidateId", "savingsBytes"],
+      ["candidateId", "savingsBytes"],
+      `scheduled context candidate ${index}`,
+    );
+    return immutableRecord({
+      candidateId: parseMessageId(
+        stringFromSql(candidate.candidateId, `scheduled candidate ${index} ID`),
+      ),
+      savingsBytes: positiveJsonInteger(
+        candidate.savingsBytes,
+        `scheduled candidate ${index} savingsBytes`,
+      ),
+    });
+  });
+  if (
+    scheduled.length > 16 ||
+    new Set(scheduled.map((candidate) => candidate.candidateId)).size !==
+      scheduled.length
+  ) {
+    throw new Error("Successful context swap result has invalid scheduled IDs.");
+  }
+  const rejected = decodeContextSwapRejected(raw.rejected);
+  if (
+    scheduled.length + rejected.length > 16 ||
+    scheduled.some((scheduledCandidate) =>
+      rejected.some(
+        (rejectedCandidate) =>
+          rejectedCandidate.candidateId === scheduledCandidate.candidateId,
+      ),
+    )
+  ) {
+    throw new Error("Context swap result candidate partitions are invalid.");
+  }
+  const note = stringFromSql(raw.note, "context swap note");
+  return immutableRecord({
+    kind: "context_maintenance" as const,
+    ok: true as const,
+    operation,
+    scheduled: Object.freeze(scheduled),
+    rejected,
+    note,
+  });
+}
+
+function decodeContextSwapRejected(value: unknown): readonly {
+  readonly candidateId: MessageId;
+  readonly reason: string;
+}[] {
+  if (!Array.isArray(value) || value.length > 16) {
+    throw new Error("Context swap rejected candidates must be an array of at most 16.");
+  }
+  const rejected = value.map((entry, index) => {
+    const candidate = recordFromSql(entry, `rejected context candidate ${index}`);
+    assertObjectKeys(
+      candidate,
+      ["candidateId", "reason"],
+      ["candidateId", "reason"],
+      `rejected context candidate ${index}`,
+    );
+    const reason = stringFromSql(
+      candidate.reason,
+      `rejected context candidate ${index} reason`,
+    );
+    if (!/^[a-z][a-z0-9_]{0,79}$/.test(reason)) {
+      throw new Error(`Rejected context candidate ${index} reason is invalid.`);
+    }
+    return immutableRecord({
+      candidateId: parseMessageId(
+        stringFromSql(candidate.candidateId, `rejected candidate ${index} ID`),
+      ),
+      reason,
+    });
+  });
+  if (
+    new Set(rejected.map((candidate) => candidate.candidateId)).size !== rejected.length
+  ) {
+    throw new Error("Context swap rejected candidate IDs must be unique.");
+  }
+  return Object.freeze(rejected);
 }
 
 function decodeStoredViewImageRawResult(
@@ -6428,6 +6703,31 @@ function numberFromJson(value: unknown, name: string): number {
     throw new Error(`${name} must be a positive safe integer.`);
   }
   return value as number;
+}
+
+function safeJsonInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} must be a safe integer.`);
+  }
+  return value as number;
+}
+
+function nonNegativeJsonInteger(value: unknown, name: string): number {
+  const number = safeJsonInteger(value, name);
+  if (number < 0) throw new Error(`${name} must be non-negative.`);
+  return number;
+}
+
+function positiveJsonInteger(value: unknown, name: string): number {
+  const number = safeJsonInteger(value, name);
+  if (number < 1) throw new Error(`${name} must be positive.`);
+  return number;
+}
+
+function nonEmptyStringFromJson(value: unknown, name: string): string {
+  const text = stringFromSql(value, name);
+  if (text.trim() === "") throw new Error(`${name} must not be empty.`);
+  return text;
 }
 
 function enumFromSql<const T extends readonly string[]>(

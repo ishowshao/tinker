@@ -3,7 +3,11 @@
 ## 文档状态
 
 - 日期：2026-07-18
-- 状态：草稿（设计已与需求方对齐，待实现）
+- 状态：已实现并验证（P1）
+- 实现验证：2026-09-01；自动化覆盖 open-tail 读取、一次性 lease、两阶段提交、
+  显式候选规划、stale-plan 非致命分层、SQLite 严格往返与 resume/TUI 投影；真实模型
+  覆盖 `gpt-5.6-sol`（OpenAI Responses）与 `k3`（OpenAI Chat）完整
+  Read → Candidates → Swap → placeholder → RecallGet → Status 链路
 - 前置阶段：Context Revision I2 温层确定性换出、I3 Recall-first 冷前缀退休、
   I4 主动 Recall 评测与自动化门禁
 - 当前基线：SessionStore schema v10、immutable `ContextSurface`、线性
@@ -161,8 +165,9 @@ token）；Status 与 Swap 响应各约 150–300 token。
 - Candidates 扫描经同一路径取 canonical 视图后调用
   `SwapPlanner.scanCandidates`；`frame_not_closed` 过滤天然排除 open tail，
   候选语义与提交时完全一致。
-- loop.ts 零改动仍然成立：执行体在 loop 内部被调用，新增代码位于
-  ContextManager 与 ledger 层。
+- loop.ts 的执行流程零改动仍然成立：执行体在 loop 内部被调用，新增执行代码位于
+  ContextManager 与 ledger 层；类型层仅从 shadow-planning trigger 排除
+  `model_directed`。
 
 ### 4.2 自动维护仲裁：model-directed lease
 
@@ -257,7 +262,7 @@ ContextStatus。延期提交非致命失败仅发 `context.revision.failed` 事�
 | `src/session/sqlite-session-ledger.ts` | 确认/暴露 `allowOpenTail` 读取路径供 mid-turn 视图构建（选项已存在，按需接线） |
 | `src/context/context-swap-renderer.ts`（或相邻新文件） | 新增 label 渲染器：按 raw kind 从 tool call args 提取，单行净化截断 |
 | `src/agent/runtime-session.ts` | 新增 `pendingModelDirectedSwap` 与 `modelDirectedSwapLease` 状态；`maintainContextAfterIteration` 中增加 model-directed 分支（`maintaining_context` state、`context.revision.started/finished/failed` 事件，reason `"model_directed"`）；`performActiveTurnContextMaintenance` 入口增加 lease 检查（恰好抑制一次自动 swap）；turn 结束一并清理 pending 与 lease |
-| `src/agent/loop.ts` | 零改动（`maintainContextAfterIteration` 钩子已存在且位置正确） |
+| `src/agent/loop.ts` | 执行流程零改动（`maintainContextAfterIteration` 钩子已存在且位置正确）；仅收窄 shadow-planning trigger 类型 |
 | `src/tools/types.ts` | `ToolExecutionContext` 增加 `contextMaintenance` 句柄（仿 `confirmBashCommand` 注入模式）；`ToolRawResultByKind` 增加 `context_maintenance` 类型 |
 | `src/tools/context-maintenance.ts`（新） | 三个 ToolDefinition 与 executor，参数解析风格参照 `recall.ts` |
 | `src/tools/registry.ts` 与 `src/cli` 组合根 | 注册三个工具并注入 session 句柄，常驻 schema |
@@ -294,5 +299,11 @@ revision readback 与 `/resume` 直接抛错，严重时会话 fault。注意不
 2. one-shot 与 benchmark 模式下默认开放，以便量化模型自主管理与自动策略的
    效果差异；是否需要在 qualification 中增加 model-directed 维度，待 P1 落地
    后评估。
-3. `minimumObservationBytes`（当前 8KiB）保留为 policy 常量还是提升为 plan
-   输入，本方案暂不改变，模型驱动场景下小片段换出无收益。
+3. ~~`minimumObservationBytes` 取值~~ **已定（2026-07-18）**：直接全局下调
+   `swapOnlyPolicyV1.minimumObservationBytes` 至 2KiB（`2 * 1_024`），自动
+   compact、ContextSwapCandidates、ContextSwap 与 shadow planning 共用同一
+   常量、同时生效。下调理由：模型驱动场景的主流用法是批量圈选多个中等观察
+   （ContextSwap 单次最多 16 个 id），8KiB 地板会掐掉该用法；硬下限仅由
+   `placeholder_not_smaller` 校验（placeholder 约 300–400 字节）保证，2KiB
+   有足够安全边际。注意：自动贪心路径在压力下也会开始选择 2–8KiB 的候选，
+   相关行为回归测试需同步校准；`policyVersion` 保持 `"swap-only-v1"` 不变。

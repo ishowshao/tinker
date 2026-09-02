@@ -238,6 +238,17 @@ export function createTestRuntime(eventSink: EventSink = collectingEventSink()) 
 
   const runtimeSession: RuntimeSessionContext = {
     sessionId,
+    contextMaintenance: {
+      async status() {
+        throw new Error("Test runtime has no context maintenance coordinator.");
+      },
+      async candidates() {
+        throw new Error("Test runtime has no context maintenance coordinator.");
+      },
+      async swap() {
+        throw new Error("Test runtime has no context maintenance coordinator.");
+      },
+    },
     createIteration(inputTurn, iterationNumber) {
       if (
         inputTurn.sessionId !== turn.sessionId ||

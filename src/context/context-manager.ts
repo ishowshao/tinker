@@ -1,7 +1,7 @@
 import { ContextBuilder } from "../agent/context-builder";
 import type { ContextMeter, ContextUsageSnapshot } from "../agent/context-meter";
 import type { AgentTurnLedger, SessionLedger } from "../agent/session-ledger";
-import type { RuntimeIdFactory, TurnId } from "../ids/runtime-id";
+import type { MessageId, RuntimeIdFactory, TurnId } from "../ids/runtime-id";
 import {
   CommittedPrefixAuditError,
   type CommittedPrefixAuditor,
@@ -15,7 +15,12 @@ import {
   type CommitSkillsUpdateInput,
   type SessionStore,
 } from "../session/session-store";
-import type { ToolDefinition } from "../tools/types";
+import type {
+  ContextSwapCandidate,
+  ContextSwapRejectedCandidate,
+  ContextSwapScheduledCandidate,
+  ToolDefinition,
+} from "../tools/types";
 import {
   activeOverrideManifestHash,
   canonicalSequenceHash,
@@ -36,10 +41,11 @@ import {
 } from "./context-surface";
 import {
   assertPlanBaseCurrent,
+  swapCandidateRejectionReason,
   SwapPlanner,
   SwapPlanningDiagnosticError,
-  SwapPlanStaleError,
 } from "./swap-planner";
+import { renderContextSwapCandidateLabel } from "./context-swap-label";
 import {
   assertRetirementPlanBaseCurrent,
   PrefixRetirementPlanner,
@@ -59,7 +65,27 @@ export type ContextCompactionTrigger =
         consumedThroughOrdinal: number;
       };
     }
+  | {
+      kind: "model_directed";
+      messageIds: readonly MessageId[];
+      activeTurn: {
+        turnId: TurnId;
+        consumedThroughOrdinal: number;
+      };
+    }
   | { kind: "benchmark_forced"; targetTokens: number };
+
+export type ActiveSwapCandidatePage = {
+  readonly usage: ContextUsageSnapshot;
+  readonly total: number;
+  readonly candidates: readonly ContextSwapCandidate[];
+};
+
+export type ActiveSwapSelection = {
+  readonly usage: ContextUsageSnapshot;
+  readonly scheduled: readonly ContextSwapScheduledCandidate[];
+  readonly rejected: readonly ContextSwapRejectedCandidate[];
+};
 
 export type ContextRetirementTrigger =
   | { kind: "manual" }
@@ -267,6 +293,155 @@ export class ContextManager {
     return this.input.contextMeter.measure(prepared);
   }
 
+  measureActive(turnId: TurnId, activeLedger: AgentTurnLedger): ContextUsageSnapshot {
+    return this.inspectActive(turnId, activeLedger).usage;
+  }
+
+  listActiveSwapCandidates(input: {
+    turnId: TurnId;
+    consumedThroughOrdinal: number;
+    activeLedger: AgentTurnLedger;
+    limit: number;
+    offset: number;
+  }): ActiveSwapCandidatePage {
+    if (
+      !Number.isSafeInteger(input.limit) ||
+      input.limit < 1 ||
+      input.limit > 50 ||
+      !Number.isSafeInteger(input.offset) ||
+      input.offset < 0
+    ) {
+      throw new Error("Active swap candidate pagination is invalid.");
+    }
+    const inspected = this.inspectActive(input.turnId, input.activeLedger);
+    let scan;
+    try {
+      scan = this.planner.scanCandidates(
+        inspected.built.canonical,
+        inspected.built.activeOverrides,
+        swapOnlyPolicyV1,
+        inspected.built.revision.keepFromOrdinal,
+        {
+          turnId: input.turnId,
+          consumedThroughOrdinal: input.consumedThroughOrdinal,
+        },
+      );
+    } catch (error) {
+      throw managerError("plan", error);
+    }
+    const chronological = [...scan.eligible].sort(
+      (left, right) =>
+        left.message.ordinal - right.message.ordinal ||
+        left.message.messageId.localeCompare(right.message.messageId),
+    );
+    const candidates = chronological
+      .slice(input.offset, input.offset + input.limit)
+      .map((candidate) =>
+        Object.freeze({
+          candidateId: candidate.message.messageId,
+          label: renderContextSwapCandidateLabel({
+            canonical: inspected.built.canonical,
+            message: candidate.message,
+            result: candidate.result,
+          }),
+          ordinal: candidate.message.ordinal,
+          savingsBytes: candidate.override.byteSavings,
+        }),
+      );
+    return Object.freeze({
+      usage: inspected.usage,
+      total: chronological.length,
+      candidates: Object.freeze(candidates),
+    });
+  }
+
+  validateActiveSwapSelection(input: {
+    turnId: TurnId;
+    consumedThroughOrdinal: number;
+    activeLedger: AgentTurnLedger;
+    messageIds: readonly MessageId[];
+  }): ActiveSwapSelection {
+    if (
+      input.messageIds.length < 1 ||
+      input.messageIds.length > 16 ||
+      new Set(input.messageIds).size !== input.messageIds.length
+    ) {
+      throw new Error("Active swap selection must contain 1 to 16 unique IDs.");
+    }
+    const inspected = this.inspectActive(input.turnId, input.activeLedger);
+    let scan;
+    try {
+      scan = this.planner.scanCandidates(
+        inspected.built.canonical,
+        inspected.built.activeOverrides,
+        swapOnlyPolicyV1,
+        inspected.built.revision.keepFromOrdinal,
+        {
+          turnId: input.turnId,
+          consumedThroughOrdinal: input.consumedThroughOrdinal,
+        },
+      );
+    } catch (error) {
+      throw managerError("plan", error);
+    }
+    const eligibleById = new Map(
+      scan.eligible.map((candidate) => [candidate.message.messageId, candidate]),
+    );
+    const scheduled: ContextSwapScheduledCandidate[] = [];
+    const rejected: ContextSwapRejectedCandidate[] = [];
+    for (const messageId of input.messageIds) {
+      const candidate = eligibleById.get(messageId);
+      if (candidate === undefined) {
+        rejected.push(
+          Object.freeze({
+            candidateId: messageId,
+            reason: swapCandidateRejectionReason(
+              scan,
+              inspected.built.canonical,
+              messageId,
+            ),
+          }),
+        );
+      } else {
+        scheduled.push(
+          Object.freeze({
+            candidateId: messageId,
+            savingsBytes: candidate.override.byteSavings,
+          }),
+        );
+      }
+    }
+    return Object.freeze({
+      usage: inspected.usage,
+      scheduled: Object.freeze(scheduled),
+      rejected: Object.freeze(rejected),
+    });
+  }
+
+  private inspectActive(turnId: TurnId, activeLedger: AgentTurnLedger) {
+    const tools = this.input.tools();
+    try {
+      const built = activeLedger.buildModelRequest(tools, {
+        allowOpenTail: true,
+      });
+      if (
+        !built.canonical.messages.some(
+          (message) => message.role !== "system" && message.turnId === turnId,
+        )
+      ) {
+        throw new ContextRevisionError(
+          "Active context view does not contain the requested turn.",
+        );
+      }
+      const prepared = this.input.model.prepare(built.request);
+      this.input.committedPrefixAuditor.audit(built.compiled.revisionId, prepared);
+      const usage = this.input.contextMeter.measure(prepared);
+      return Object.freeze({ built, prepared, usage });
+    } catch (error) {
+      throw managerError("snapshot", error);
+    }
+  }
+
   async compact(
     trigger: ContextCompactionTrigger,
     activeLedger?: AgentTurnLedger,
@@ -299,8 +474,12 @@ export class ContextManager {
         tools,
         policy: swapOnlyPolicyV1,
         trigger: trigger.kind,
-        ...(trigger.kind === "runtime_pressure" && trigger.activeTurn !== undefined
+        ...((trigger.kind === "runtime_pressure" && trigger.activeTurn !== undefined) ||
+        trigger.kind === "model_directed"
           ? { activeTurn: trigger.activeTurn }
+          : {}),
+        ...(trigger.kind === "model_directed"
+          ? { selectedMessageIds: trigger.messageIds }
           : {}),
         ...(trigger.kind === "benchmark_forced"
           ? { forcedTargetTokens: trigger.targetTokens }
@@ -763,7 +942,6 @@ function isFatalContextError(error: unknown): boolean {
     error instanceof ContextProtocolError ||
     error instanceof ContextRevisionError ||
     error instanceof CompiledContextError ||
-    error instanceof SwapPlanStaleError ||
     error instanceof PrefixRetirementPlanStaleError ||
     error instanceof CommittedPrefixAuditError ||
     error instanceof SessionError
@@ -787,9 +965,8 @@ function elapsedMs(startedAt: number): number {
 function activeTurnId(
   trigger: ContextCompactionTrigger | ContextRetirementTrigger,
 ): TurnId | undefined {
-  if (trigger.kind !== "runtime_pressure") {
-    return undefined;
-  }
+  if (trigger.kind === "model_directed") return trigger.activeTurn.turnId;
+  if (trigger.kind !== "runtime_pressure") return undefined;
   if ("activeTurnId" in trigger) {
     return trigger.activeTurnId;
   }

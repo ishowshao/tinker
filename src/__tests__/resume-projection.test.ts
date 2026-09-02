@@ -136,6 +136,49 @@ class PlanProjectionModel extends TestModelClient {
   }
 }
 
+class ContextStatusProjectionModel extends TestModelClient {
+  private requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Expected model request identity.");
+      }
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...options.identity.runtimeSession.createToolCall(
+              options.identity.iteration,
+              1,
+            ),
+            providerToolCallId: "provider-projection-context-status",
+            name: "ContextStatus",
+            args: {},
+          },
+        ],
+      });
+    }
+    const status = testModelRequestInput(prepared).messages.find(
+      (message) => message.role === "tool" && message.name === "ContextStatus",
+    );
+    if (
+      status?.role !== "tool" ||
+      !toolResultDisplayText(status.content).includes('"pressure":"normal"')
+    ) {
+      throw new Error("The next model iteration did not receive ContextStatus.");
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "stored answer after context status",
+    });
+  }
+}
+
 describe("session catalog and resume projection", () => {
   test("lists independently, hydrates a bounded view, and deletes explicitly", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-"));
@@ -298,6 +341,48 @@ describe("session catalog and resume projection", () => {
           ],
         },
       });
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("restores context-maintenance summaries from strict persisted raw results", async () => {
+    const workspace = await mkdtemp(
+      path.join(os.tmpdir(), "tinker-context-projection-"),
+    );
+    const sessionId = runtimeIdFactory.createSessionId();
+    const liveProjection = new TuiProjectionStore({
+      sessionId,
+      modelName: "test-model",
+      workspaceRoot: workspace,
+    });
+    try {
+      const session = await createRuntimeSession(
+        runtimeInput(
+          workspace,
+          sessionId,
+          new ContextStatusProjectionModel(),
+          liveProjection,
+        ),
+        { loadMcpConfig: async () => undefined },
+      );
+      await session.executeTurn({
+        userMessage: { role: "user", content: "inspect context pressure" },
+        signal: new AbortController().signal,
+      });
+      const liveItems = visibleTimelineItems(liveProjection.getSnapshot());
+      await session.dispose({ type: "tui_exit" });
+
+      const resumed = await ResumeProjectionReader.read({
+        workspaceRoot: workspace,
+        sessionId,
+        modelName: "test-model",
+      });
+      const resumedItems = visibleTimelineItems(resumed);
+      expect(resumedItems.map(displayShape)).toEqual(liveItems.map(displayShape));
+      expect(
+        resumedItems.find((item) => item.text.startsWith("ContextStatus ->"))?.text,
+      ).toMatch(/^ContextStatus -> normal, \d+\/196608 tokens$/);
     } finally {
       await rm(workspace, { recursive: true });
     }

@@ -1,6 +1,7 @@
 import type { ToolCall } from "../agent/types";
 import type { ImageAssetRef } from "../image/image-types";
-import type { SessionId } from "../ids/runtime-id";
+import type { MessageId, SessionId } from "../ids/runtime-id";
+import type { ContextUsageSource } from "../model/model-request-preflight";
 import type {
   RecallGetPage,
   RecallSearchFilters,
@@ -310,6 +311,85 @@ export type RecallGetRawResult =
 
 export type RecallRawResult = RecallSearchRawResult | RecallGetRawResult;
 
+export type ContextMaintenancePressure = "normal" | "high" | "critical";
+
+export type ContextSwapCandidate = {
+  candidateId: MessageId;
+  label: string;
+  ordinal: number;
+  savingsBytes: number;
+};
+
+export type ContextSwapScheduledCandidate = {
+  candidateId: MessageId;
+  savingsBytes: number;
+};
+
+export type ContextSwapRejectedCandidate = {
+  candidateId: MessageId;
+  reason: string;
+};
+
+type ContextMaintenanceFailure<TOperation extends "status" | "candidates" | "swap"> = {
+  ok: false;
+  operation: TOperation;
+  error: string;
+};
+
+export type ContextStatusRawResult =
+  | {
+      ok: true;
+      operation: "status";
+      usedInputTokens: number;
+      inputBudgetTokens: number;
+      pressure: ContextMaintenancePressure;
+      triggerTokens: number;
+      source: ContextUsageSource;
+    }
+  | ContextMaintenanceFailure<"status">;
+
+export type ContextSwapCandidatesRawResult =
+  | {
+      ok: true;
+      operation: "candidates";
+      total: number;
+      candidates: readonly ContextSwapCandidate[];
+    }
+  | ContextMaintenanceFailure<"candidates">;
+
+export type ContextSwapRawResult =
+  | {
+      ok: true;
+      operation: "swap";
+      scheduled: readonly ContextSwapScheduledCandidate[];
+      rejected: readonly ContextSwapRejectedCandidate[];
+      note: string;
+    }
+  | {
+      ok: false;
+      operation: "swap";
+      scheduled: readonly ContextSwapScheduledCandidate[];
+      rejected: readonly ContextSwapRejectedCandidate[];
+      error?: string;
+    };
+
+export type ContextMaintenanceRawResult =
+  | ContextStatusRawResult
+  | ContextSwapCandidatesRawResult
+  | ContextSwapRawResult;
+
+export type ContextMaintenanceHandle = {
+  status(call: ToolCall): Promise<ContextStatusRawResult>;
+  candidates(
+    call: ToolCall,
+    input: { readonly limit: number; readonly offset: number },
+  ): Promise<ContextSwapCandidatesRawResult>;
+  swap(
+    call: ToolCall,
+    input: { readonly candidateIds: readonly MessageId[] },
+  ): Promise<ContextSwapRawResult>;
+};
+
 export type MemorySearchRawResult =
   | {
       ok: true;
@@ -425,6 +505,7 @@ export type ToolRawResultByKind = {
   web_search: WebSearchRawResult;
   web_fetch: WebFetchRawResult;
   recall: RecallRawResult;
+  context_maintenance: ContextMaintenanceRawResult;
   memory_search: MemorySearchRawResult;
   memory_get: MemoryGetRawResult;
   wait: WaitRawResult;
@@ -472,6 +553,7 @@ export function defineToolExecutor<TKind extends ToolRawResultKind>(
 
 export type ToolExecutionContext = {
   signal: AbortSignal;
+  contextMaintenance?: ContextMaintenanceHandle;
   confirmBashCommand?: (request: {
     command: string;
     reason: string;

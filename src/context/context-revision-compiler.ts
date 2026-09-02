@@ -36,9 +36,14 @@ export class ContextRevisionCompiler {
     private readonly compiledValidator = new CompiledContextValidator(),
   ) {}
 
-  compileActive(snapshot: StoredContextSnapshotV8): CompiledRevisionContext {
+  compileActive(
+    snapshot: StoredContextSnapshotV8,
+    options: { readonly allowOpenTail?: boolean } = {},
+  ): CompiledRevisionContext {
     validateSnapshotIdentity(snapshot);
-    this.protocolValidator.validate(snapshot.canonical);
+    this.protocolValidator.validate(snapshot.canonical, {
+      allowOpenTail: options.allowOpenTail,
+    });
     const overrides = overrideMap(snapshot.activeOverrides);
     const compiled = compileEntries({
       canonical: snapshot.canonical,

@@ -1,6 +1,6 @@
 import { ContextBuilder } from "../agent/context-builder";
 import type { ContextUsageSnapshot } from "../agent/context-meter";
-import type { TurnId } from "../ids/runtime-id";
+import type { MessageId, TurnId } from "../ids/runtime-id";
 import type { ModelClient, PreparedModelRequest } from "../model/model-client";
 import {
   promptPrefixFingerprint,
@@ -39,7 +39,11 @@ import type {
   ToolResultRecord,
 } from "./protocol-frame";
 
-export type SwapPlanningTrigger = "manual" | "runtime_pressure" | "benchmark_forced";
+export type SwapPlanningTrigger =
+  | "manual"
+  | "runtime_pressure"
+  | "benchmark_forced"
+  | "model_directed";
 
 export type SwapPlanningOutcome =
   | "below_trigger"
@@ -86,6 +90,7 @@ export type SwapPlanningInput = {
     readonly consumedThroughOrdinal: number;
   };
   readonly forcedTargetTokens?: number;
+  readonly selectedMessageIds?: readonly MessageId[];
 };
 
 export type SwapPlanningResult = {
@@ -123,14 +128,17 @@ export class SwapPlanStaleError extends Error {
 
 type ModelPreparer = Pick<ModelClient, "prepare">;
 
-type EligibleCandidate = {
+export type EligibleSwapCandidate = {
   readonly override: SwapOverride;
   readonly rawKind: SwappableRawKind;
+  readonly message: Extract<CanonicalMessageRecord, { role: "tool" }>;
+  readonly result: ToolResultRecord;
 };
 
-type CandidateScan = {
-  readonly eligible: readonly EligibleCandidate[];
+export type SwapCandidateScan = {
+  readonly eligible: readonly EligibleSwapCandidate[];
   readonly excludedByReason: Readonly<Record<string, number>>;
+  readonly excludedByMessageId: ReadonlyMap<MessageId, string>;
 };
 
 type Projection = {
@@ -172,7 +180,7 @@ export class SwapPlanner {
         targetTokens,
       );
     }
-    if (guardedTokensBefore <= targetTokens) {
+    if (input.trigger !== "model_directed" && guardedTokensBefore <= targetTokens) {
       return emptyResult(
         input,
         input.trigger === "runtime_pressure" ? "below_trigger" : "below_target",
@@ -189,6 +197,16 @@ export class SwapPlanner {
       input.revision.keepFromOrdinal,
       input.activeTurn,
     );
+    if (input.trigger === "model_directed") {
+      return this.planSelected({
+        input,
+        scan,
+        activeFingerprint,
+        rawTokensBefore,
+        guardedTokensBefore,
+        targetTokens,
+      });
+    }
     if (scan.eligible.length === 0) {
       return {
         ...emptyResult(
@@ -208,47 +226,7 @@ export class SwapPlanner {
       if (existing !== undefined) {
         return existing;
       }
-      const addedOverrides = scan.eligible
-        .slice(0, count)
-        .map((entry) => entry.override);
-      let prepared: PreparedModelRequest;
-      try {
-        const compiled = this.compiler.compileProspective({
-          active: input.active,
-          canonical: input.canonical,
-          activeOverrides: input.activeOverrides,
-          addedOverrides,
-          activeSurface: input.surface,
-        });
-        const built = this.requestBuilder.build({
-          canonical: input.canonical,
-          revision: input.revision,
-          surface: input.surface,
-          activeOverrides: [...input.activeOverrides, ...addedOverrides],
-          compiled,
-          tools: input.tools,
-        });
-        prepared = this.model.prepare(built.request);
-      } catch (error) {
-        if (isCanonicalPlanningError(error)) {
-          throw error;
-        }
-        throw new SwapPlanningDiagnosticError(
-          "prepare",
-          "prospective_prepare_failed",
-          "Prospective request preparation failed.",
-          { cause: error },
-        );
-      }
-      assertProspectiveConfiguration(input.activePrepared, prepared);
-      const breakdown = estimatePromptSegments(prepared.promptSegments);
-      const rawTokens = breakdown.totalTokens;
-      const projection = Object.freeze({
-        count,
-        prepared,
-        rawTokens,
-        guardedTokens: guardTokens(breakdown, input.activeUsage.correctionFactor),
-      });
+      const projection = this.projectCandidates(input, scan.eligible.slice(0, count));
       projectionCache.set(count, projection);
       return projection;
     };
@@ -355,13 +333,147 @@ export class SwapPlanner {
     });
   }
 
-  private scanCandidates(
+  private planSelected(input: {
+    input: SwapPlanningInput;
+    scan: SwapCandidateScan;
+    activeFingerprint: PromptPrefixFingerprint;
+    rawTokensBefore: number;
+    guardedTokensBefore: number;
+    targetTokens: number;
+  }): SwapPlanningResult {
+    const selectedMessageIds = input.input.selectedMessageIds;
+    if (selectedMessageIds === undefined || selectedMessageIds.length === 0) {
+      throw new SwapPlanningDiagnosticError(
+        "validate",
+        "missing_selected_candidates",
+        "Model-directed swap planning requires selected candidates.",
+      );
+    }
+    const eligibleById = new Map(
+      input.scan.eligible.map((candidate) => [candidate.message.messageId, candidate]),
+    );
+    const selected: EligibleSwapCandidate[] = [];
+    for (const messageId of selectedMessageIds) {
+      const candidate = eligibleById.get(messageId);
+      if (candidate === undefined) {
+        const reason = swapCandidateRejectionReason(
+          input.scan,
+          input.input.canonical,
+          messageId,
+        );
+        throw new SwapPlanningDiagnosticError(
+          "candidate",
+          `selected_candidate_${reason}`,
+          `A model-directed swap candidate is no longer eligible (${reason}).`,
+        );
+      }
+      selected.push(candidate);
+    }
+
+    const projection = this.projectCandidates(input.input, selected);
+    if (
+      projection.rawTokens >= input.rawTokensBefore ||
+      projection.guardedTokens >= input.guardedTokensBefore
+    ) {
+      throw new SwapPlanningDiagnosticError(
+        "validate",
+        "no_token_reduction",
+        "Prospective request did not strictly reduce raw and guarded tokens.",
+      );
+    }
+    const addedOverrides = Object.freeze(
+      selected.map((candidate) => candidate.override),
+    );
+    const plan = createPlan({
+      input: input.input,
+      activeFingerprint: input.activeFingerprint,
+      projectedFingerprint: promptPrefixFingerprint(projection.prepared),
+      addedOverrides,
+      targetTokens: input.targetTokens,
+      rawTokensBefore: input.rawTokensBefore,
+      rawTokensAfter: projection.rawTokens,
+      guardedTokensBefore: input.guardedTokensBefore,
+      guardedTokensAfter: projection.guardedTokens,
+    });
+    assertPlanBaseCurrent(plan, {
+      active: input.input.active,
+      revision: input.input.revision,
+      activeOverrides: input.input.activeOverrides,
+      activePrepared: input.input.activePrepared,
+    });
+    return Object.freeze({
+      outcome:
+        projection.guardedTokens <= input.targetTokens
+          ? "target_reached"
+          : "insufficient_candidates",
+      canonicalMessageCount: input.input.canonical.messages.length,
+      eligibleCandidateCount: input.scan.eligible.length,
+      excludedByReason: input.scan.excludedByReason,
+      selectedByRawKind: countRawKinds(selected),
+      originalObservationBytes: addedOverrides.reduce(
+        (total, override) => total + override.originalBytes,
+        0,
+      ),
+      projectedObservationBytes: addedOverrides.reduce(
+        (total, override) => total + override.renderedBytes,
+        0,
+      ),
+      rawTokensBefore: input.rawTokensBefore,
+      guardedTokensBefore: input.guardedTokensBefore,
+      targetTokens: input.targetTokens,
+      plan,
+    });
+  }
+
+  private projectCandidates(
+    input: SwapPlanningInput,
+    candidates: readonly EligibleSwapCandidate[],
+  ): Projection {
+    const addedOverrides = candidates.map((candidate) => candidate.override);
+    let prepared: PreparedModelRequest;
+    try {
+      const compiled = this.compiler.compileProspective({
+        active: input.active,
+        canonical: input.canonical,
+        activeOverrides: input.activeOverrides,
+        addedOverrides,
+        activeSurface: input.surface,
+      });
+      const built = this.requestBuilder.build({
+        canonical: input.canonical,
+        revision: input.revision,
+        surface: input.surface,
+        activeOverrides: [...input.activeOverrides, ...addedOverrides],
+        compiled,
+        tools: input.tools,
+      });
+      prepared = this.model.prepare(built.request);
+    } catch (error) {
+      if (isCanonicalPlanningError(error)) throw error;
+      throw new SwapPlanningDiagnosticError(
+        "prepare",
+        "prospective_prepare_failed",
+        "Prospective request preparation failed.",
+        { cause: error },
+      );
+    }
+    assertProspectiveConfiguration(input.activePrepared, prepared);
+    const breakdown = estimatePromptSegments(prepared.promptSegments);
+    return Object.freeze({
+      count: candidates.length,
+      prepared,
+      rawTokens: breakdown.totalTokens,
+      guardedTokens: guardTokens(breakdown, input.activeUsage.correctionFactor),
+    });
+  }
+
+  scanCandidates(
     canonical: ProtocolContextView,
     activeOverrides: readonly SwapOverride[],
     policy: SwapOnlyPolicyV1,
     keepFromOrdinal: number,
     activeTurn: SwapPlanningInput["activeTurn"],
-  ): CandidateScan {
+  ): SwapCandidateScan {
     const alreadySwapped = new Set(
       activeOverrides.map((override) => override.messageId),
     );
@@ -373,19 +485,28 @@ export class SwapPlanner {
     const resultsByMessage = new Map(
       canonical.toolResults.map((result) => [result.toolMessageId, result] as const),
     );
-    const eligible: EligibleCandidate[] = [];
+    const eligible: EligibleSwapCandidate[] = [];
     const exclusions = new Map<string, number>();
+    const excludedByMessageId = new Map<MessageId, string>();
+
+    const exclude = (
+      message: Extract<CanonicalMessageRecord, { role: "tool" }>,
+      reason: string,
+    ) => {
+      increment(exclusions, reason);
+      excludedByMessageId.set(message.messageId, reason);
+    };
 
     for (const message of canonical.messages) {
       if (message.role !== "tool") {
         continue;
       }
       if (message.ordinal < keepFromOrdinal) {
-        increment(exclusions, "retired_prefix");
+        exclude(message, "retired_prefix");
         continue;
       }
       if (alreadySwapped.has(message.messageId)) {
-        increment(exclusions, "already_swapped");
+        exclude(message, "already_swapped");
         continue;
       }
       const reason = basicExclusionReason({
@@ -396,7 +517,7 @@ export class SwapPlanner {
         minimumObservationBytes: policy.minimumObservationBytes,
       });
       if (reason !== undefined) {
-        increment(exclusions, reason);
+        exclude(message, reason);
         continue;
       }
       const result = resultsByMessage.get(message.messageId);
@@ -415,6 +536,8 @@ export class SwapPlanner {
           Object.freeze({
             override: this.renderer.render({ message, result }),
             rawKind: result.completion.raw.kind,
+            message,
+            result,
           }),
         );
       } catch (error) {
@@ -429,7 +552,7 @@ export class SwapPlanner {
         if (error.code === "source_hash_mismatch") {
           throw new ContextRevisionError(error.message);
         }
-        increment(exclusions, error.code);
+        exclude(message, error.code);
       }
     }
 
@@ -437,8 +560,24 @@ export class SwapPlanner {
     return Object.freeze({
       eligible: Object.freeze(eligible),
       excludedByReason: frozenCountRecord(exclusions),
+      excludedByMessageId,
     });
   }
+}
+
+export function swapCandidateRejectionReason(
+  scan: SwapCandidateScan,
+  canonical: ProtocolContextView,
+  messageId: MessageId,
+): string {
+  if (scan.eligible.some((candidate) => candidate.message.messageId === messageId)) {
+    throw new Error("Eligible swap candidate has no rejection reason.");
+  }
+  const recorded = scan.excludedByMessageId.get(messageId);
+  if (recorded !== undefined) return recorded;
+  return canonical.messages.some((message) => message.messageId === messageId)
+    ? "not_tool_message"
+    : "candidate_not_found";
 }
 
 export function assertPlanBaseCurrent(
@@ -521,6 +660,27 @@ function validatePlanningInput(input: SwapPlanningInput): void {
       "validate",
       "invalid_target",
       "Forced swap target must be a non-negative safe integer.",
+    );
+  }
+  if (input.trigger === "model_directed") {
+    if (
+      input.activeTurn === undefined ||
+      input.selectedMessageIds === undefined ||
+      input.selectedMessageIds.length < 1 ||
+      input.selectedMessageIds.length > 16 ||
+      new Set(input.selectedMessageIds).size !== input.selectedMessageIds.length
+    ) {
+      throw new SwapPlanningDiagnosticError(
+        "validate",
+        "invalid_selected_candidates",
+        "Model-directed swap planning requires 1 to 16 unique candidates and an active turn boundary.",
+      );
+    }
+  } else if (input.selectedMessageIds !== undefined) {
+    throw new SwapPlanningDiagnosticError(
+      "validate",
+      "unexpected_selected_candidates",
+      "Only model-directed swap planning accepts selected candidates.",
     );
   }
 }
@@ -647,7 +807,10 @@ function basicExclusionReason(input: {
   return undefined;
 }
 
-function compareCandidates(left: EligibleCandidate, right: EligibleCandidate): number {
+function compareCandidates(
+  left: EligibleSwapCandidate,
+  right: EligibleSwapCandidate,
+): number {
   return (
     right.override.byteSavings - left.override.byteSavings ||
     right.override.originalBytes - left.override.originalBytes ||
@@ -724,7 +887,7 @@ function createPlan(input: {
 }
 
 function countRawKinds(
-  candidates: readonly EligibleCandidate[],
+  candidates: readonly EligibleSwapCandidate[],
 ): Readonly<Record<string, number>> {
   const counts = new Map<string, number>();
   for (const candidate of candidates) {
