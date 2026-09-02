@@ -5,6 +5,26 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-02
+
+### Added
+
+- Add model-directed context management. Three new built-in tools open context
+  maintenance to the model itself: `ContextStatus` reports live input-token
+  usage and pressure, `ContextSwapCandidates` lists swappable historical tool
+  observations with short labels and byte savings, and `ContextSwap` schedules
+  selected observations for eviction. Scheduled swaps are validated immediately
+  and committed as one context revision when the iteration's tool frames close,
+  leaving Recall-recoverable placeholders behind. A one-shot lease pauses
+  automatic compaction for exactly one iteration after a candidate listing so
+  the model keeps the choice under real pressure.
+
+### Changed
+
+- Lower the swap eligibility floor from 8 KiB to 2 KiB per observation. Both
+  automatic compaction and model-directed swaps can now evict medium-sized
+  tool observations, individually or in batches of up to 16 per swap.
+
 ## [2.3.0] - 2026-08-31
 
 ### Changed
@@ -277,7 +297,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/ishowshao/tinker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/ishowshao/tinker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ishowshao/tinker/releases/tag/v2.2.0
 [2.1.0]: https://github.com/ishowshao/tinker/releases/tag/v2.1.0
