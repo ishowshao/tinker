@@ -5,6 +5,16 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-03
+
+### Added
+
+- Proactively notify the model when input context reaches high or critical
+  pressure, prompting it to review and swap evictable historical tool
+  observations while keeping swapped content recoverable through Recall. The
+  runtime gives the model one iteration to act before automatic compaction
+  resumes, while critical pressure still triggers immediate maintenance.
+
 ## [2.4.0] - 2026-09-02
 
 ### Added
@@ -297,7 +307,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/ishowshao/tinker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/ishowshao/tinker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/ishowshao/tinker/releases/tag/v2.3.0
 [2.2.0]: https://github.com/ishowshao/tinker/releases/tag/v2.2.0
