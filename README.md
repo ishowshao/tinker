@@ -43,7 +43,7 @@ If you already use a coding agent, you can ask it to read Tinker's documentation
 Copy and send this prompt to your existing agent:
 
 ```text
-Read Tinker's README and linked model-configuration documentation, then install and configure Tinker on this machine.
+Open https://github.com/ishowshao/tinker and read Tinker's README and linked model-configuration documentation, then install and configure Tinker on this machine.
 
 Create a complete model profile configuration in an appropriate local file. Use clearly named placeholders for any required values that cannot be determined from the documentation or the current environment; do not invent API credentials, endpoint URLs, model names, or model limits. Configure Tinker to use that file, and verify the installation and configuration as far as possible without making a live model request.
 
