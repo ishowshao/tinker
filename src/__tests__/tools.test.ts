@@ -2109,6 +2109,24 @@ describe("Grep tool", () => {
     });
   });
 
+  test("preserves brace expansion in glob filters", async () => {
+    await withGrepWorkspace(async (workspace) => {
+      await writeFile(path.join(workspace, "a.ts"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "b.tsx"), "foo\n", "utf8");
+      await writeFile(path.join(workspace, "c.js"), "foo\n", "utf8");
+
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const raw = await tooling.runtime.execute({
+        providerToolCallId: "call_1",
+        name: "Grep",
+        args: { pattern: "foo", glob: "**/*.{ts,tsx}" },
+      });
+
+      expect(raw.ok).toBe(true);
+      expect("filenames" in raw ? raw.filenames : []).toEqual(["a.ts", "b.tsx"]);
+    });
+  });
+
   test("supports case-insensitive and multiline search", async () => {
     await withGrepWorkspace(async (workspace) => {
       await writeFile(path.join(workspace, "a.ts"), "FOO\nbar\n", "utf8");

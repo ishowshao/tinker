@@ -315,9 +315,7 @@ export function buildRipgrepArgs(
   }
 
   if (input.glob !== undefined) {
-    for (const pattern of input.glob.split(/[,\s]+/).filter((part) => part !== "")) {
-      args.push("--glob", pattern);
-    }
+    args.push("--glob", input.glob);
   }
 
   args.push("-e", input.pattern, absoluteSearchPath);
