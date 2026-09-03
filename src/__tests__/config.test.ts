@@ -113,7 +113,7 @@ describe("public environment parser", () => {
     expect(environment).toMatchObject({
       mode: "env",
       workspaceRoot: path.join(TEST_CWD, "workspace"),
-      maxIterations: 512,
+      maxIterations: 65_536,
       modelName: "test-model",
       api: "chat-completions",
       includeReasoningContent: false,

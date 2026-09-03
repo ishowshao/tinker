@@ -135,7 +135,7 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     valueKind: "positive-integer",
     requiredIn: "never",
     appliesIn: "always",
-    defaultValue: 512,
+    defaultValue: 65_536,
     secret: false,
     section: "workspace",
     description: "Maximum agent-loop iterations per turn.",

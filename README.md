@@ -171,7 +171,7 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 | `TINKER_STREAM` | Model | Env mode | No | Boolean | `true` | No | Use streaming transport for the selected model API. |
 | `TINKER_WEBFETCH_REFINE_MODEL` | Model | Env mode | No | Non-empty string | — | No | Optional WebFetch refiner model; currently must match TINKER_MODEL. |
 | `TINKER_WORKSPACE` | Workspace | All modes | No | Non-empty string | Process cwd | No | Workspace path. A leading ~ expands to the home directory; other relative paths resolve from the process cwd. |
-| `TINKER_MAX_ITERATIONS` | Workspace | All modes | No | Positive integer | `512` | No | Maximum agent-loop iterations per turn. |
+| `TINKER_MAX_ITERATIONS` | Workspace | All modes | No | Positive integer | `65536` | No | Maximum agent-loop iterations per turn. |
 | `EXA_API_KEY` | Tooling | All modes | No | Non-empty string | — | Yes | Enables WebSearch and the Exa WebFetch backend when set. |
 | `TINKER_MCP_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `60000` | No | MCP tool-call timeout in milliseconds. |
 | `TINKER_MCP_MAX_OBSERVATION_CHARS` | Tooling | All modes | No | Positive integer | `40000` | No | Maximum model-visible characters in one MCP result. |
