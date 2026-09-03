@@ -61,6 +61,7 @@ export type PromptSubmissionOutcome =
 export type PromptInputProps = {
   modelName: string;
   reasoningEffort?: string;
+  version?: string;
   workspaceRoot: string;
   gitBranch?: string;
   contextUsage?: ContextUsageSnapshot;
@@ -775,6 +776,9 @@ export function PromptInput(props: PromptInputProps) {
                 <Text dimColor> · </Text>
                 <Text color={FOOTER_COLORS.cacheRate}>{cacheRate}</Text>
               </>
+            )}
+            {props.version === undefined ? null : (
+              <Text dimColor> · tinker {props.version}</Text>
             )}
           </Text>
         </Box>

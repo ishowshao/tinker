@@ -35,6 +35,7 @@ import type { SessionSummary } from "../session/session-catalog";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { parseModelProfiles } from "../cli/model-profiles";
 import { ContextBudgetExceededError } from "../model/model-request-preflight";
+import { loadPackageMetadata } from "../cli/package-metadata";
 import type { ViewFile } from "../tui/view-file";
 import type { McpInventorySnapshot } from "../mcp/mcp-manager";
 import {
@@ -322,10 +323,12 @@ describe("tui components", () => {
     running.cleanup();
   });
 
-  test("renders context usage in the prompt input status bar", () => {
+  test("renders context usage in the prompt input status bar", async () => {
+    const { version } = await loadPackageMetadata();
     const normal = render(
       <PromptInput
         modelName="deepseek-v4-flash"
+        version={version}
         workspaceRoot="/tmp/tinker"
         gitBranch="main"
         contextUsage={contextSnapshot({
@@ -338,6 +341,7 @@ describe("tui components", () => {
     expect(normal.lastFrame()).toContain(
       "deepseek-v4-flash · /tmp/tinker · main · context 700K / 896K (78% used)",
     );
+    expect(normal.lastFrame()).toEndWith(`· tinker ${version}`);
     normal.cleanup();
 
     const blocked = render(

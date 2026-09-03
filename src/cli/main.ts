@@ -51,6 +51,7 @@ type TuiRunner = {
     readonly publicConfig: ResolvedPublicConfig;
     readonly initialRunnerConfig: RunnerConfig;
     readonly env: NodeJS.ProcessEnv;
+    readonly version: string;
   }) => Promise<void>;
 };
 
@@ -187,6 +188,7 @@ export async function main(
           publicConfig,
           initialRunnerConfig: runnerConfig,
           env,
+          version: metadata.version,
         });
         return finish(0);
       } catch (error) {

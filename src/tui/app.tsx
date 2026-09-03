@@ -67,6 +67,7 @@ import {
 
 export type AppProps = {
   sessionController: TuiSessionController;
+  version?: string;
   readGitBranch?: (workspaceRoot: string) => Promise<string | undefined>;
   history?: PromptHistory;
   projectSlashCommands?: readonly ProjectSlashCommand[];
@@ -940,6 +941,7 @@ export function App(props: AppProps) {
                 <PromptInput
                   modelName={binding.modelName}
                   reasoningEffort={reasoningEffort?.effort}
+                  version={props.version}
                   workspaceRoot={binding.workspaceRoot}
                   gitBranch={gitBranch}
                   contextUsage={state.contextUsage}

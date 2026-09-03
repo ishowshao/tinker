@@ -54,6 +54,7 @@ export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
   readonly initialRunnerConfig: RunnerConfig;
   readonly env: NodeJS.ProcessEnv;
+  readonly version: string;
 };
 
 export async function runTui(options: RunTuiOptions): Promise<void> {
@@ -286,6 +287,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     instance = render(
       <App
         sessionController={controller}
+        version={options.version}
         readGitBranch={readCurrentGitBranch}
         history={promptHistory}
         projectSlashCommands={projectSlashCommands}
