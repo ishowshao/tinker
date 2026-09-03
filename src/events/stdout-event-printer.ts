@@ -235,6 +235,9 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "context_maintenance":
     case "memory_search":
     case "memory_get":
+    case "memory_create":
+    case "memory_update":
+    case "memory_delete":
     case "wait":
     case "mcp":
     case "generic":

@@ -7,13 +7,17 @@ import { createUuidV7, isCanonicalUuidV7 } from "../ids/uuid-v7";
 import {
   MAX_MEMORY_SUMMARY_BYTES,
   MAX_MEMORY_TEXT_BYTES,
+  MAX_MEMORY_ID_BYTES,
   MEMORY_SCHEMA_VERSION,
   MEMORY_SEARCH_LIMIT,
   MemoryError,
   type MemoryEmbeddingIdentity,
   type MemoryFtsMatch,
+  type MemoryDeleteStoreResult,
   type MemoryPaths,
   type MemorySearchMatch,
+  type MemoryUpdateStoreResult,
+  type StoredMemoryMutationRecord,
   type StoredMemoryRecord,
   type StoredMemorySummary,
   type MemoryWriteBatch,
@@ -417,6 +421,164 @@ export class MemoryStore {
     });
   }
 
+  getByTextHash(text: string): StoredMemoryRecord | undefined {
+    this.requireOpen();
+    const rowValue = this.database
+      .query(
+        `SELECT memory_id, text, summary, source_workspace, source_session_id,
+                source_turn_id, created_at
+         FROM memories
+         WHERE text_sha256 = ?`,
+      )
+      .get(sha256(text));
+    return rowValue === null ? undefined : storedMemoryRecord(rowValue);
+  }
+
+  getByIdForMutation(memoryId: string): StoredMemoryMutationRecord | undefined {
+    this.requireOpen();
+    const rowValue = this.database
+      .query(
+        `SELECT memory_id, text, summary, embedding, source_workspace,
+                source_session_id, source_turn_id, created_at
+         FROM memories
+         WHERE memory_id = ?`,
+      )
+      .get(memoryId);
+    if (rowValue === null) {
+      return undefined;
+    }
+    const row = sqlRecord(rowValue, "memory row");
+    return Object.freeze({
+      ...storedMemoryRecord(row),
+      embedding: decodeEmbedding(
+        row.embedding,
+        expectedEmbeddingBlobBytes(this.dimensions),
+      ),
+    });
+  }
+
+  updateMemory(input: {
+    readonly memoryId: string;
+    readonly text: string;
+    readonly summary: string;
+    readonly embedding: Float32Array;
+  }): MemoryUpdateStoreResult {
+    this.requireOpen();
+    validateMemoryMutationInput(input, this.dimensions);
+    let outcome: MemoryUpdateStoreResult = Object.freeze({
+      ok: false,
+      code: "memory_not_found",
+    });
+    runImmediateTransaction(this.database, () => {
+      const targetValue = this.database
+        .query(
+          `SELECT rowid, text, summary
+           FROM memories
+           WHERE memory_id = ?`,
+        )
+        .get(input.memoryId);
+      if (targetValue === null) {
+        return;
+      }
+      const target = sqlRecord(targetValue, "memory update target");
+      const conflictValue = this.database
+        .query(
+          `SELECT memory_id
+           FROM memories
+           WHERE text_sha256 = ? AND memory_id <> ?`,
+        )
+        .get(sha256(input.text), input.memoryId);
+      if (conflictValue !== null) {
+        const conflict = sqlRecord(conflictValue, "memory update conflict");
+        outcome = Object.freeze({
+          ok: false,
+          code: "memory_duplicate",
+          conflictMemoryId: sqlString(conflict.memory_id, "memory_id"),
+        });
+        return;
+      }
+
+      const rowid = sqlInteger(target.rowid, "memory rowid");
+      if (this.ftsAvailable) {
+        deleteFtsEntry(
+          this.database,
+          rowid,
+          sqlString(target.text, "memory text"),
+          sqlSummary(target.summary, "memory summary"),
+        );
+      }
+      const result = this.database
+        .query(
+          `UPDATE memories
+           SET text = ?, summary = ?, text_sha256 = ?, embedding = ?
+           WHERE memory_id = ?`,
+        )
+        .run(
+          input.text,
+          input.summary,
+          sha256(input.text),
+          encodeEmbedding(input.embedding),
+          input.memoryId,
+        );
+      if (Number(result.changes) !== 1) {
+        throw new MemoryError(
+          "memory_write_failed",
+          `Memory update changed ${String(result.changes)} rows.`,
+        );
+      }
+      if (this.ftsAvailable) {
+        this.database
+          .query(
+            `INSERT INTO ${MEMORIES_FTS_TABLE}(rowid, text, summary) VALUES (?, ?, ?)`,
+          )
+          .run(rowid, input.text, input.summary);
+      }
+      outcome = Object.freeze({ ok: true, memoryId: input.memoryId });
+    });
+    return outcome;
+  }
+
+  deleteMemory(memoryId: string): MemoryDeleteStoreResult {
+    this.requireOpen();
+    validateMemoryId(memoryId);
+    let outcome: MemoryDeleteStoreResult = Object.freeze({
+      ok: false,
+      code: "memory_not_found",
+    });
+    runImmediateTransaction(this.database, () => {
+      const targetValue = this.database
+        .query(
+          `SELECT rowid, text, summary
+           FROM memories
+           WHERE memory_id = ?`,
+        )
+        .get(memoryId);
+      if (targetValue === null) {
+        return;
+      }
+      const target = sqlRecord(targetValue, "memory delete target");
+      if (this.ftsAvailable) {
+        deleteFtsEntry(
+          this.database,
+          sqlInteger(target.rowid, "memory rowid"),
+          sqlString(target.text, "memory text"),
+          sqlSummary(target.summary, "memory summary"),
+        );
+      }
+      const result = this.database
+        .query("DELETE FROM memories WHERE memory_id = ?")
+        .run(memoryId);
+      if (Number(result.changes) !== 1) {
+        throw new MemoryError(
+          "memory_write_failed",
+          `Memory delete changed ${String(result.changes)} rows.`,
+        );
+      }
+      outcome = Object.freeze({ ok: true, memoryId });
+    });
+    return outcome;
+  }
+
   count(): number {
     this.requireOpen();
     const row = this.database.query("SELECT COUNT(*) AS count FROM memories").get();
@@ -662,6 +824,20 @@ function backfillFtsIndex(database: Database): void {
   );
 }
 
+function deleteFtsEntry(
+  database: Database,
+  rowid: number,
+  text: string,
+  summary: string,
+): void {
+  database
+    .query(
+      `INSERT INTO ${MEMORIES_FTS_TABLE}(${MEMORIES_FTS_TABLE}, rowid, text, summary)
+       VALUES ('delete', ?, ?, ?)`,
+    )
+    .run(rowid, text, summary);
+}
+
 function countRows(database: Database, table: string): number {
   const row = sqlRecord(
     database.query(`SELECT COUNT(*) AS count FROM ${table}`).get(),
@@ -737,6 +913,42 @@ function validateWriteBatch(input: MemoryWriteBatch, dimensions: number): void {
         "Memory candidate text, summary, or embedding is invalid.",
       );
     }
+  }
+}
+
+function validateMemoryMutationInput(
+  input: {
+    readonly memoryId: string;
+    readonly text: string;
+    readonly summary: string;
+    readonly embedding: Float32Array;
+  },
+  dimensions: number,
+): void {
+  validateMemoryId(input.memoryId);
+  if (
+    input.text.trim() !== input.text ||
+    Buffer.byteLength(input.text, "utf8") < 1 ||
+    Buffer.byteLength(input.text, "utf8") > MAX_MEMORY_TEXT_BYTES ||
+    input.summary.trim() !== input.summary ||
+    Buffer.byteLength(input.summary, "utf8") > MAX_MEMORY_SUMMARY_BYTES ||
+    input.embedding.length !== dimensions ||
+    [...input.embedding].some((value) => !Number.isFinite(value))
+  ) {
+    throw new MemoryError(
+      "memory_write_invalid",
+      "Memory update text, summary, or embedding is invalid.",
+    );
+  }
+}
+
+function validateMemoryId(memoryId: string): void {
+  if (
+    memoryId.trim() !== memoryId ||
+    Buffer.byteLength(memoryId, "utf8") < 1 ||
+    Buffer.byteLength(memoryId, "utf8") > MAX_MEMORY_ID_BYTES
+  ) {
+    throw new MemoryError("memory_write_invalid", "Memory ID is invalid.");
   }
 }
 
@@ -869,6 +1081,33 @@ function sqlSummary(value: unknown, name: string): string {
     throw new MemoryError("memory_store_read_failed", `${name} must be a string.`);
   }
   return value;
+}
+
+function sqlInteger(value: unknown, name: string): number {
+  const integer = typeof value === "bigint" ? Number(value) : value;
+  if (!Number.isSafeInteger(integer) || (integer as number) < 1) {
+    throw new MemoryError(
+      "memory_store_read_failed",
+      `${name} must be a positive safe integer.`,
+    );
+  }
+  return integer as number;
+}
+
+function storedMemoryRecord(value: unknown): StoredMemoryRecord {
+  const row = sqlRecord(value, "memory row");
+  return Object.freeze({
+    memoryId: sqlString(row.memory_id, "memory_id"),
+    text: sqlString(row.text, "memory text"),
+    summary: sqlSummary(row.summary, "memory summary"),
+    sourceWorkspace: sqlString(row.source_workspace, "memory source_workspace"),
+    sourceSessionId: sqlString(row.source_session_id, "memory source_session_id"),
+    sourceTurnId: sqlString(row.source_turn_id, "memory source_turn_id"),
+    createdAt: requireUtcTimestamp(
+      sqlString(row.created_at, "memory created_at"),
+      "memory created_at",
+    ),
+  });
 }
 
 function requireUtcTimestamp(value: string, name: string): string {

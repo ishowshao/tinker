@@ -302,6 +302,235 @@ describe("MemoryStore", () => {
     }
   });
 
+  test("updates memory content and FTS atomically while preserving identity and unchanged embeddings", async () => {
+    const fixture = await createFixture();
+    const ids = [
+      "00000000-0000-7000-8000-00000000000a",
+      "00000000-0000-7000-8000-00000000000b",
+    ];
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        clock: () => "2026-07-25T10:00:00.000Z",
+        createMemoryId: () => ids.shift()!,
+      });
+      const firstId = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "original searchable memory",
+            summary: "legacy detail marker",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      }).inserted[0].memoryId;
+      const secondId = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "duplicate target memory",
+            summary: "conflict record",
+            embedding: normalizeEmbedding([0, 1, 0], 3),
+          },
+        ],
+      }).inserted[0].memoryId;
+      const target = store.getByIdForMutation(firstId);
+      if (target === undefined) {
+        throw new Error("Expected a mutation target.");
+      }
+      const originalEmbedding = [...target.embedding];
+      const originalEmbeddingBytes = storedEmbeddingBytes(
+        fixture.paths.database,
+        firstId,
+      );
+
+      expect(
+        store.updateMemory({
+          memoryId: firstId,
+          text: target.text,
+          summary: "replacement detail marker",
+          embedding: target.embedding,
+        }),
+      ).toEqual({ ok: true, memoryId: firstId });
+      expect([...store.getByIdForMutation(firstId)!.embedding]).toEqual(
+        originalEmbedding,
+      );
+      expect(storedEmbeddingBytes(fixture.paths.database, firstId)).toEqual(
+        originalEmbeddingBytes,
+      );
+      expect(store.searchFts(["legacy detail"])).toEqual([]);
+      expect(store.searchFts(["replacement detail"])[0]?.memoryId).toBe(firstId);
+
+      expect(
+        store.updateMemory({
+          memoryId: firstId,
+          text: "new searchable memory",
+          summary: "replacement detail marker",
+          embedding: normalizeEmbedding([0, 0, 1], 3),
+        }),
+      ).toEqual({ ok: true, memoryId: firstId });
+      expect(store.searchFts(["original searchable"])).toEqual([]);
+      expect(store.searchFts(["new searchable"])[0]?.memoryId).toBe(firstId);
+      expect(store.search(normalizeEmbedding([0, 0, 1], 3))[0]?.memoryId).toBe(firstId);
+      expect(store.getById(firstId)).toMatchObject({
+        memoryId: firstId,
+        sourceWorkspace: fixture.source.workspaceRoot,
+        sourceSessionId: fixture.source.sessionId,
+        sourceTurnId: fixture.source.turnId,
+        createdAt: "2026-07-25T10:00:00.000Z",
+      });
+
+      expect(
+        store.updateMemory({
+          memoryId: firstId,
+          text: "duplicate target memory",
+          summary: "must not be written",
+          embedding: normalizeEmbedding([1, 1, 0], 3),
+        }),
+      ).toEqual({
+        ok: false,
+        code: "memory_duplicate",
+        conflictMemoryId: secondId,
+      });
+      expect(store.getById(firstId)).toMatchObject({
+        text: "new searchable memory",
+        summary: "replacement detail marker",
+      });
+      expect(
+        store.updateMemory({
+          memoryId: "00000000-0000-7000-8000-00000000000c",
+          text: "missing target",
+          summary: "",
+          embedding: normalizeEmbedding([1, 0, 0], 3),
+        }),
+      ).toEqual({ ok: false, code: "memory_not_found" });
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("deletes memory with its FTS row and allows the same text to be recreated", async () => {
+    const fixture = await createFixture();
+    const ids = [
+      "00000000-0000-7000-8000-00000000000a",
+      "00000000-0000-7000-8000-00000000000b",
+    ];
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        createMemoryId: () => ids.shift()!,
+      });
+      const text = "recreatable deletion target";
+      const firstId = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text,
+            summary: "delete this record",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      }).inserted[0].memoryId;
+
+      expect(store.deleteMemory(firstId)).toEqual({
+        ok: true,
+        memoryId: firstId,
+      });
+      expect(store.getById(firstId)).toBeUndefined();
+      expect(store.searchFts(["deletion target"])).toEqual([]);
+      expect(store.deleteMemory(firstId)).toEqual({
+        ok: false,
+        code: "memory_not_found",
+      });
+
+      const recreated = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          { text, summary: "new record", embedding: normalizeEmbedding([0, 1, 0], 3) },
+        ],
+      });
+      expect(recreated).toMatchObject({ written: 1, duplicate: 0 });
+      expect(recreated.inserted[0]?.memoryId).not.toBe(firstId);
+      expect(store.searchFts(["deletion target"])).toHaveLength(1);
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  test("rolls back create, update, and delete when a transaction fails", async () => {
+    const fixture = await createFixture();
+    try {
+      const store = await MemoryStore.open({
+        paths: fixture.paths,
+        embedding: EMBEDDING,
+        createMemoryId: () => "00000000-0000-7000-8000-00000000000a",
+      });
+      const database = new Database(fixture.paths.database);
+      database.exec(
+        "CREATE TRIGGER reject_memory_insert AFTER INSERT ON memories BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END",
+      );
+      expect(() =>
+        store.insertBatch({
+          ...fixture.source,
+          candidates: [
+            {
+              text: "rolled back insertion",
+              summary: "",
+              embedding: normalizeEmbedding([1, 0, 0], 3),
+            },
+          ],
+        }),
+      ).toThrow("write transaction failed");
+      expect(store.count()).toBe(0);
+      expect(store.searchFts(["rolled back"])).toEqual([]);
+      database.exec("DROP TRIGGER reject_memory_insert");
+
+      const memoryId = store.insertBatch({
+        ...fixture.source,
+        candidates: [
+          {
+            text: "stable transaction target",
+            summary: "stable summary",
+            embedding: normalizeEmbedding([1, 0, 0], 3),
+          },
+        ],
+      }).inserted[0].memoryId;
+      database.exec(
+        "CREATE TRIGGER reject_memory_update AFTER UPDATE ON memories BEGIN SELECT RAISE(ABORT, 'injected update failure'); END",
+      );
+      expect(() =>
+        store.updateMemory({
+          memoryId,
+          text: "corrupt update target",
+          summary: "corrupt summary",
+          embedding: normalizeEmbedding([0, 1, 0], 3),
+        }),
+      ).toThrow("write transaction failed");
+      expect(store.getById(memoryId)).toMatchObject({
+        text: "stable transaction target",
+        summary: "stable summary",
+      });
+      expect(store.searchFts(["stable transaction"])).toHaveLength(1);
+      expect(store.searchFts(["corrupt update"])).toEqual([]);
+      database.exec("DROP TRIGGER reject_memory_update");
+
+      database.exec(
+        "CREATE TRIGGER reject_memory_delete AFTER DELETE ON memories BEGIN SELECT RAISE(ABORT, 'injected delete failure'); END",
+      );
+      expect(() => store.deleteMemory(memoryId)).toThrow("write transaction failed");
+      expect(store.getById(memoryId)).toBeDefined();
+      expect(store.searchFts(["stable transaction"])).toHaveLength(1);
+      database.close();
+      store.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   test("builds FTS match expressions with quoting, escaping, and short-term drops", () => {
     expect(buildFtsMatchExpression(["memory"])).toBe('"memory"');
     expect(buildFtsMatchExpression(['we"ird', "bun run"])).toBe(
@@ -972,4 +1201,24 @@ async function createFixture() {
     },
     cleanup: () => rm(homeRoot, { recursive: true }),
   };
+}
+
+function storedEmbeddingBytes(databasePath: string, memoryId: string): number[] {
+  const database = new Database(databasePath);
+  try {
+    const row = database
+      .query("SELECT embedding FROM memories WHERE memory_id = ?")
+      .get(memoryId);
+    if (
+      typeof row !== "object" ||
+      row === null ||
+      !("embedding" in row) ||
+      !(row.embedding instanceof Uint8Array)
+    ) {
+      throw new Error(`Missing stored memory ${memoryId}.`);
+    }
+    return [...row.embedding];
+  } finally {
+    database.close();
+  }
 }

@@ -2,6 +2,9 @@ import type { SessionId, TurnId } from "../ids/runtime-id";
 
 export const MEMORY_SEARCH_TOOL_NAME = "MemorySearch" as const;
 export const MEMORY_GET_TOOL_NAME = "MemoryGet" as const;
+export const MEMORY_CREATE_TOOL_NAME = "MemoryCreate" as const;
+export const MEMORY_UPDATE_TOOL_NAME = "MemoryUpdate" as const;
+export const MEMORY_DELETE_TOOL_NAME = "MemoryDelete" as const;
 export const MEMORY_SCHEMA_VERSION = 2 as const;
 export const MAX_MEMORY_TEXT_BYTES = 512;
 export const MAX_MEMORY_SUMMARY_BYTES = 4_096;
@@ -112,6 +115,35 @@ export type StoredMemoryRecord = StoredMemorySummary & {
   readonly sourceTurnId: string;
 };
 
+export type StoredMemoryMutationRecord = StoredMemoryRecord & {
+  readonly embedding: Float32Array;
+};
+
+export type MemoryUpdateStoreResult =
+  | {
+      readonly ok: true;
+      readonly memoryId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly code: "memory_not_found";
+    }
+  | {
+      readonly ok: false;
+      readonly code: "memory_duplicate";
+      readonly conflictMemoryId: string;
+    };
+
+export type MemoryDeleteStoreResult =
+  | {
+      readonly ok: true;
+      readonly memoryId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly code: "memory_not_found";
+    };
+
 export type MemoryExtractionRejectedCounts = {
   readonly duplicate: number;
   readonly secret: number;
@@ -175,10 +207,24 @@ export type MemoryGetDiagnostic = {
   readonly ms: number;
 };
 
+export type MemoryMutationDiagnostic = {
+  readonly at: string;
+  readonly kind: "create" | "update" | "delete";
+  readonly outcome: "ok" | "failed" | "skipped";
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly toolCallId: string;
+  readonly memoryId: string | null;
+  readonly ms: number;
+};
+
 export type MemoryDiagnostic =
   | MemoryExtractionDiagnostic
   | MemorySearchDiagnostic
   | MemoryGetDiagnostic
+  | MemoryMutationDiagnostic
   | MemoryInitDiagnostic;
 
 export class MemoryError extends Error {

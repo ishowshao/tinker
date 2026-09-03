@@ -322,6 +322,9 @@ type CommonRuntimeSessionInput = {
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
   memoryGet?: ToolExecutor;
+  memoryCreate?: ToolExecutor;
+  memoryUpdate?: ToolExecutor;
+  memoryDelete?: ToolExecutor;
   completedTurnHook?: CompletedTurnHook;
   enableTurnUndo?: boolean;
   bashGuard?: {
@@ -704,6 +707,15 @@ class DefaultRuntimeSession implements RuntimeSession {
           ? {}
           : { memorySearch: input.memorySearch }),
         ...(input.memoryGet === undefined ? {} : { memoryGet: input.memoryGet }),
+        ...(input.memoryCreate === undefined
+          ? {}
+          : { memoryCreate: input.memoryCreate }),
+        ...(input.memoryUpdate === undefined
+          ? {}
+          : { memoryUpdate: input.memoryUpdate }),
+        ...(input.memoryDelete === undefined
+          ? {}
+          : { memoryDelete: input.memoryDelete }),
         ...(session.skillCatalog.skills.size === 0
           ? {}
           : {

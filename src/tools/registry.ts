@@ -173,6 +173,9 @@ export function createDefaultTooling(options: {
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
   memoryGet?: ToolExecutor;
+  memoryCreate?: ToolExecutor;
+  memoryUpdate?: ToolExecutor;
+  memoryDelete?: ToolExecutor;
   enableTurnUndo?: boolean;
   imageAssetStore?: ImageAssetStore;
   supportsViewImage?: boolean;
@@ -246,6 +249,15 @@ export function createDefaultTooling(options: {
   }
   if (options.memoryGet !== undefined) {
     registry.register(options.memoryGet);
+  }
+  if (options.memoryCreate !== undefined) {
+    registry.register(options.memoryCreate);
+  }
+  if (options.memoryUpdate !== undefined) {
+    registry.register(options.memoryUpdate);
+  }
+  if (options.memoryDelete !== undefined) {
+    registry.register(options.memoryDelete);
   }
   if (options.skillCatalog !== undefined) {
     if (options.skillCatalog.skills.size === 0) {

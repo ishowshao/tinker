@@ -399,6 +399,100 @@ describe("tui event store", () => {
     );
   });
 
+  test("summarizes memory mutations with ids and never displays their bodies", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+    const createCall = {
+      providerToolCallId: "mem_create_1",
+      name: "MemoryCreate",
+      args: { text: "private memory body", summary: "private details" },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: createCall,
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("MemoryCreate");
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: createCall,
+      raw: {
+        kind: "memory_create",
+        ok: true,
+        status: "created",
+        memoryId: "memory-1",
+        createdAt: "2026-09-03T10:00:00.000Z",
+      },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemoryCreate memory-1 -> created",
+    );
+
+    const updateCall = {
+      providerToolCallId: "mem_update_1",
+      name: "MemoryUpdate",
+      args: {
+        id: "memory-1",
+        text: "replacement private body",
+        summary: "replacement private details",
+      },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: updateCall,
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe("MemoryUpdate memory-1");
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: updateCall,
+      raw: {
+        kind: "memory_update",
+        ok: true,
+        status: "updated",
+        memoryId: "memory-1",
+      },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemoryUpdate memory-1 -> updated",
+    );
+
+    const deleteCall = {
+      providerToolCallId: "mem_delete_1",
+      name: "MemoryDelete",
+      args: { id: "memory-1" },
+    };
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call: deleteCall,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: deleteCall,
+      raw: {
+        kind: "memory_delete",
+        ok: true,
+        status: "deleted",
+        memoryId: "memory-1",
+      },
+    });
+    const visibleText = visibleTimelineItems(state)
+      .map((item) => item.text)
+      .join("\n");
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "MemoryDelete memory-1 -> deleted",
+    );
+    expect(visibleText).not.toContain("private memory body");
+    expect(visibleText).not.toContain("private details");
+  });
+
   test("summarizes Wait calls with the requested seconds", () => {
     let state = createInitialTuiState({
       sessionId: "run-1",

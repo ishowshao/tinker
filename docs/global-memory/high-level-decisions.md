@@ -163,14 +163,15 @@ Embedding model 独立于工作模型和记忆提取模型配置。全局记忆�
 - 每个进程使用独立连接；
 - 模型和 embedding 网络请求必须在数据库 transaction 之外完成；
 - 记忆正文、FTS 和 vector 变更在同一个短 transaction 中提交；
-- 修改、删除和整理提交使用记录版本的 compare-and-swap；
+- 整理提交是否使用记录版本的 compare-and-swap，留待 GM5 关系结构设计；模型修改和删除
+  按 `memory_id` 直接提交；
 - 整理批次通过带过期时间的 SQLite lease 避免被多个进程重复处理；
 - schema 迁移通过 `BEGIN IMMEDIATE` 串行化；
 - `clear` 推进全局 store generation，使清空前的 worker 结果失效。
 
 等待写锁超时后，本次记忆操作以普通失败结束，不使 RuntimeSession fault。
-`MemoryUpdate` 和 `MemoryDelete` 通过 `expected_version` 执行 compare-and-swap；版本冲突
-的具体 observation 形状留待后续设计。
+模型 `MemoryUpdate` 和 `MemoryDelete` 不执行版本 compare-and-swap；单用户、低频写入下接受
+极小概率的静默覆盖，GM5 开始处理 supersede/conflict 时再重新评估版本机制。
 
 ## 六、模型能力
 
@@ -199,46 +200,45 @@ MemoryGet {
 }
 
 MemoryCreate {
-  keywords: string[]
-  semantic_cues: string[]
-  content: string
+  text: string
+  summary?: string
 }
 
 MemoryUpdate {
   id: string
-  expected_version: number
-  keywords: string[]
-  semantic_cues: string[]
-  content: string
+  text: string
+  summary: string
 }
 
 MemoryDelete {
   id: string
-  expected_version: number
 }
 ```
 
 `MemorySearch` 的两个输入分别驱动不同的召回路径：
 
-- `keywords` 由模型显式提供，只与记忆条目的 `keywords` 执行关键词匹配；系统不先从
-  `query` 中自动提取关键词；
+- `keywords` 由模型显式提供，与记忆条目的 `text` 和 `summary` 执行关键词匹配；系统
+  不先从 `query` 中自动提取关键词；
 - `query` 是模型对所需记忆的语义描述。系统为它生成一个 embedding，并与每条记忆的各个
-  `semantic_cues` embedding 执行向量匹配；
-- `content` 不参与关键词或向量搜索，只在按 ID 精确读取记忆时提供相对完整的内容；
-- 关键词候选与向量候选最终在逻辑 Memory 层聚合，同一条记忆的多个 semantic cue 不能被
-  当成多条独立结果。
+  `text` embedding 执行向量匹配；
+- `summary` 不进入向量空间，但参与关键词搜索，并在按 ID 精确读取时完整返回；
+- 关键词候选与向量候选最终在逻辑 Memory 层聚合。
 
 第一版 `MemorySearch` 不向模型提供分页或返回数量参数，服务端使用固定的有界结果数量。
-关键词规范化和匹配规则、单条记忆的 semantic cue 数量上限、向量候选按 Memory 折叠的
-规则，以及关键词和向量结果的聚合与排序算法留待完整设计确定。
+关键词规范化、候选上限以及关键词和向量结果的聚合与排序算法由
+[`fts-hybrid-search-design.md`](fts-hybrid-search-design.md) 冻结。
 
-`MemoryCreate` 和 `MemoryUpdate` 都接收完整的 `keywords`、`semantic_cues` 和 `content`。
-三部分作为同一条逻辑记忆原子提交，避免检索入口与完整正文来自不同版本。
-`MemoryUpdate.expected_version` 和 `MemoryDelete.expected_version` 是必须满足的提交
-前置条件；版本不匹配时不能覆盖或删除更新后的记忆。
+`MemoryCreate` 和 `MemoryUpdate` 直接暴露 memory schema v2 的 `text` + `summary` 数据
+模型，并把它们作为同一条逻辑记忆原子提交。`MemoryUpdate` 和 `MemoryDelete` 只按
+`memory_id` 定位，不携带 `expected_version`，也不做版本校验。
 
-批量 `clear` 当前只出现在用户管理 API 中，没有被纳入模型工具能力。各工具的完整 JSON
-Schema、字段长度和数组数量限制、成功与失败 observation 形状尚未冻结。
+> 2026-09-04 修订：模型写工具的最终契约由
+> [`model-memory-mutation-tools-design.md`](model-memory-mutation-tools-design.md) 冻结；基于
+> 当前单用户、低频模型写入条件，去掉原定的 `expected_version` CAS。GM5 引入关系结构时
+> 再重新评估版本机制。
+
+批量 `clear` 当前只出现在用户管理 API 中，没有被纳入模型工具能力。三个 mutation 工具
+的完整 JSON Schema、字段长度限制及成功与失败 observation 形状由上述模型写工具设计冻结。
 
 不同运行入口拥有不同的 memory tool surface：
 
@@ -368,10 +368,12 @@ tinker memory organize
 
 写入路径只做便宜、确定性的幂等：
 
-- 当前 agent loop 不重放已执行 ToolCall；模型 mutation 使用 `expected_version` CAS；
+- 当前 agent loop 不重放已执行 ToolCall；模型 mutation 直接按 `memory_id` 提交，不使用
+  `expected_version` CAS；
 - 自动提取把 Session、Turn 和候选内容 hash 合成非空 source fingerprint，防止同一候选
   重放；
-- 完全相同的规范化内容不创建新记录，而是记录新的 evidence/reinforcement；
+- 完全相同的规范化内容不创建新记录；当前 v2 不增加 evidence/reinforcement，相关计数留给
+  GM5；
 - `clear` 之后，旧 store generation 的任务不能再回写结果。
 
 写入时不使用向量相似度执行语义合并。近似重复、措辞不同的重复，以及同一 Turn 中模型

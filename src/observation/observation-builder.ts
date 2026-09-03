@@ -12,8 +12,11 @@ import type {
   GenericToolRawResult,
   GlobRawResult,
   GrepRawResult,
+  MemoryCreateRawResult,
+  MemoryDeleteRawResult,
   MemoryGetRawResult,
   MemorySearchRawResult,
+  MemoryUpdateRawResult,
   McpToolRawResult,
   ReadFileRawResult,
   RecallRawResult,
@@ -30,6 +33,7 @@ import type {
   WebSearchRawResult,
   WriteFileRawResult,
 } from "../tools/types";
+import { MAX_MEMORY_TEXT_BYTES, truncateUtf8 } from "../memory/contracts";
 
 export type ToolObservation = {
   readonly content: readonly ToolResultContent[];
@@ -55,6 +59,12 @@ export class ObservationBuilder {
         return textObservation(renderMemorySearchObservation(input.raw));
       case "memory_get":
         return textObservation(renderMemoryGetObservation(input.raw));
+      case "memory_create":
+        return textObservation(renderMemoryCreateObservation(input.raw, input.call));
+      case "memory_update":
+        return textObservation(renderMemoryUpdateObservation(input.raw, input.call));
+      case "memory_delete":
+        return textObservation(renderMemoryDeleteObservation(input.raw));
       case "skill":
         return textObservation(renderSkillObservation(input.raw));
       case "write":
@@ -369,6 +379,54 @@ function renderMemoryGetObservation(raw: MemoryGetRawResult): string {
     ].join("\n"),
     footer,
   ].join("\n\n");
+}
+
+function renderMemoryCreateObservation(
+  raw: MemoryCreateRawResult,
+  call: ToolCall,
+): string {
+  if (!raw.ok) {
+    return `MemoryCreate failed: ${raw.error}`;
+  }
+  const text = memoryMutationText(call);
+  const result = `MemoryCreate ${raw.status} memory=${raw.memoryId} created_at=${raw.createdAt}.`;
+  return text === undefined ? result : `${result}\ntext: ${text}`;
+}
+
+function renderMemoryUpdateObservation(
+  raw: MemoryUpdateRawResult,
+  call: ToolCall,
+): string {
+  if (!raw.ok) {
+    if (raw.code === "memory_duplicate") {
+      return `MemoryUpdate failed: code=${raw.code} conflict_memory=${raw.conflictMemoryId} error=${raw.error}`;
+    }
+    return raw.code === "memory_not_found"
+      ? `MemoryUpdate failed: code=${raw.code} error=${raw.error}`
+      : `MemoryUpdate failed: ${raw.error}`;
+  }
+  const text = memoryMutationText(call);
+  const result = `MemoryUpdate ${raw.status} memory=${raw.memoryId}.`;
+  return text === undefined ? result : `${result}\ntext: ${text}`;
+}
+
+function renderMemoryDeleteObservation(raw: MemoryDeleteRawResult): string {
+  if (!raw.ok) {
+    return raw.code === "memory_not_found"
+      ? `MemoryDelete failed: code=${raw.code} error=${raw.error}`
+      : `MemoryDelete failed: ${raw.error}`;
+  }
+  return `MemoryDelete ${raw.status} memory=${raw.memoryId}.`;
+}
+
+function memoryMutationText(call: ToolCall): string | undefined {
+  if (typeof call.args !== "object" || call.args === null || Array.isArray(call.args)) {
+    return undefined;
+  }
+  const text = (call.args as Record<string, unknown>).text;
+  return typeof text === "string"
+    ? truncateUtf8(text.trim(), MAX_MEMORY_TEXT_BYTES)
+    : undefined;
 }
 
 export function renderSkillObservation(raw: SkillRawResult): string {

@@ -18,7 +18,9 @@ import {
   TEST_CONTEXT_PROFILE,
   TestModelClient,
   testModelOutput,
+  testModelRequestInput,
 } from "./test-runtime";
+import { defineToolExecutor, type ToolExecutor } from "../tools/types";
 import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
 
 isolateTinkerHome();
@@ -43,6 +45,20 @@ class FailsOnceModel extends TestModelClient {
     return testModelOutput(prepared, {
       role: "assistant",
       content: "recovered answer",
+    });
+  }
+}
+
+class ToolRecordingModel extends TestModelClient {
+  readonly toolNames: string[][] = [];
+
+  async request(prepared: PreparedModelRequest): Promise<ModelRequestOutput> {
+    this.toolNames.push(
+      testModelRequestInput(prepared).tools.map((definition) => definition.name),
+    );
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "completed answer",
     });
   }
 }
@@ -236,7 +252,115 @@ describe("RuntimeSession completed-turn hook", () => {
       await fixture.cleanup();
     }
   });
+
+  test("a session created without memory tools gains the full supplied surface on resume", async () => {
+    const fixture = await createFixture();
+    const initialModel = new ToolRecordingModel();
+    const resumedModel = new ToolRecordingModel();
+    const base = {
+      workspaceRoot: fixture.workspaceRoot,
+      modelName: "test-model",
+      maxIterations: 2,
+      includeReasoningContent: false,
+      contextProfile: TEST_CONTEXT_PROFILE,
+      contextBudget: TEST_CONTEXT_BUDGET,
+      systemPrompt: "system",
+    };
+    try {
+      const initial = await createRuntimeSession({
+        ...base,
+        selection: { mode: "new", sessionId: fixture.sessionId },
+        modelClient: initialModel,
+      });
+      await initial.executeTurn({
+        userMessage: { role: "user", content: "one-shot turn" },
+        signal: new AbortController().signal,
+      });
+      expect(
+        initialModel.toolNames[0]?.filter((name) => name.startsWith("Memory")),
+      ).toEqual([]);
+      await initial.dispose({ type: "oneshot_complete" });
+
+      const memoryTools = testMemoryToolSurface();
+      const resumed = await createRuntimeSession({
+        ...base,
+        selection: { mode: "resume", sessionId: fixture.sessionId },
+        modelClient: resumedModel,
+        ...memoryTools,
+      });
+      await resumed.executeTurn({
+        userMessage: { role: "user", content: "TUI turn" },
+        signal: new AbortController().signal,
+      });
+      expect(
+        resumedModel.toolNames[0]?.filter((name) => name.startsWith("Memory")),
+      ).toEqual([
+        "MemorySearch",
+        "MemoryGet",
+        "MemoryCreate",
+        "MemoryUpdate",
+        "MemoryDelete",
+      ]);
+      await resumed.dispose({ type: "tui_exit" });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
 });
+
+function testMemoryToolSurface(): {
+  readonly memorySearch: ToolExecutor;
+  readonly memoryGet: ToolExecutor;
+  readonly memoryCreate: ToolExecutor;
+  readonly memoryUpdate: ToolExecutor;
+  readonly memoryDelete: ToolExecutor;
+} {
+  return {
+    memorySearch: defineToolExecutor("memory_search", {
+      definition: memoryToolDefinition("MemorySearch"),
+      async execute() {
+        return { ok: true, degraded: null, matches: [] };
+      },
+    }),
+    memoryGet: defineToolExecutor("memory_get", {
+      definition: memoryToolDefinition("MemoryGet"),
+      async execute() {
+        return { ok: true, memory: null };
+      },
+    }),
+    memoryCreate: defineToolExecutor("memory_create", {
+      definition: memoryToolDefinition("MemoryCreate"),
+      async execute() {
+        return {
+          ok: true,
+          status: "created",
+          memoryId: "memory-1",
+          createdAt: "2026-09-03T10:00:00.000Z",
+        };
+      },
+    }),
+    memoryUpdate: defineToolExecutor("memory_update", {
+      definition: memoryToolDefinition("MemoryUpdate"),
+      async execute() {
+        return { ok: true, status: "updated", memoryId: "memory-1" };
+      },
+    }),
+    memoryDelete: defineToolExecutor("memory_delete", {
+      definition: memoryToolDefinition("MemoryDelete"),
+      async execute() {
+        return { ok: true, status: "deleted", memoryId: "memory-1" };
+      },
+    }),
+  };
+}
+
+function memoryToolDefinition(name: string) {
+  return {
+    name,
+    description: `test ${name}`,
+    parameters: { type: "object", properties: {} },
+  };
+}
 
 async function createFixture() {
   const workspaceRoot = await mkdtemp(

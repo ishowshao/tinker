@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-09-04
-- 状态：待审阅
+- 状态：已实施
 - 上位文档：[`high-level-decisions.md`](high-level-decisions.md)
 - 前置实现：
   [`atomic-memory-mvp-design.md`](atomic-memory-mvp-design.md)、

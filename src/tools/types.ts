@@ -428,6 +428,58 @@ export type MemoryGetRawResult =
       error: string;
     };
 
+export type MemoryCreateRawResult =
+  | {
+      ok: true;
+      status: "created" | "already_exists";
+      memoryId: string;
+      createdAt: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type MemoryUpdateRawResult =
+  | {
+      ok: true;
+      status: "updated";
+      memoryId: string;
+    }
+  | {
+      ok: false;
+      code: "memory_not_found";
+      error: string;
+    }
+  | {
+      ok: false;
+      code: "memory_duplicate";
+      conflictMemoryId: string;
+      error: string;
+    }
+  | {
+      ok: false;
+      code?: undefined;
+      error: string;
+    };
+
+export type MemoryDeleteRawResult =
+  | {
+      ok: true;
+      status: "deleted";
+      memoryId: string;
+    }
+  | {
+      ok: false;
+      code: "memory_not_found";
+      error: string;
+    }
+  | {
+      ok: false;
+      code?: undefined;
+      error: string;
+    };
+
 export type SkillRawResult =
   | {
       ok: true;
@@ -508,6 +560,9 @@ export type ToolRawResultByKind = {
   context_maintenance: ContextMaintenanceRawResult;
   memory_search: MemorySearchRawResult;
   memory_get: MemoryGetRawResult;
+  memory_create: MemoryCreateRawResult;
+  memory_update: MemoryUpdateRawResult;
+  memory_delete: MemoryDeleteRawResult;
   wait: WaitRawResult;
   skill: SkillRawResult;
   mcp: McpToolRawResult;

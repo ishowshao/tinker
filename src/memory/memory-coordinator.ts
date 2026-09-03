@@ -4,18 +4,25 @@ import type {
   CompletedTurnHookFailure,
   CompletedTurnHookInput,
 } from "../agent/runtime-session";
+import { throwIfTurnCancelled } from "../agent/turn-cancellation";
+import type { ToolCall } from "../agent/types";
 import type { SessionId } from "../ids/runtime-id";
 import type { ModelContextBudget } from "../model/model-context-profile";
 import type { ModelClient } from "../model/model-client";
 import type { CompletedTurnSnapshot } from "../session/session-store";
 import type {
   MemoryGetRawResult,
+  MemoryCreateRawResult,
+  MemoryDeleteRawResult,
   MemorySearchRawResult,
+  MemoryUpdateRawResult,
   ToolExecutor,
 } from "../tools/types";
 import {
   boundedMemoryError,
   MAX_SEARCH_RESULT_SUMMARY_BYTES,
+  MEMORY_CREATE_TOOL_NAME,
+  MEMORY_DELETE_TOOL_NAME,
   MEMORY_EXTRACTION_QUEUE_CAPACITY,
   memoryErrorCode,
   MEMORY_GET_TOOL_NAME,
@@ -24,6 +31,7 @@ import {
   MEMORY_SEARCH_DIAGNOSTIC_VECTOR_SCORES_LIMIT,
   MEMORY_SEARCH_LIMIT,
   MEMORY_SEARCH_TOOL_NAME,
+  MEMORY_UPDATE_TOOL_NAME,
   MemoryError,
   boundedMemoryErrorDetail,
   truncateUtf8,
@@ -33,6 +41,7 @@ import {
   type MemoryFtsMatch,
   type MemoryGetDiagnostic,
   type MemoryHybridMatch,
+  type MemoryMutationDiagnostic,
   type MemoryPaths,
   type MemoryRecallDegraded,
   type MemoryRecallPath,
@@ -53,7 +62,10 @@ import {
 } from "./memory-extractor";
 import { ExtractedMemoryLog, MemoryLog } from "./memory-log";
 import { createMemoryGetToolExecutor } from "./memory-get-tool";
+import { createMemoryCreateToolExecutor } from "./memory-create-tool";
+import { createMemoryDeleteToolExecutor } from "./memory-delete-tool";
 import { createMemorySearchToolExecutor } from "./memory-search-tool";
+import { createMemoryUpdateToolExecutor } from "./memory-update-tool";
 import { MemoryStore, resolveMemoryPaths } from "./memory-store";
 import { normalizeEmbedding } from "./vector";
 
@@ -69,6 +81,19 @@ type ActiveMemoryTask = {
   readonly controller: AbortController;
   completion?: Promise<void>;
 };
+
+type MemoryToolSource = {
+  readonly workspaceRoot: string;
+  readonly sessionId: SessionId;
+};
+
+const MEMORY_TOOL_NAMES: readonly string[] = Object.freeze([
+  MEMORY_SEARCH_TOOL_NAME,
+  MEMORY_GET_TOOL_NAME,
+  MEMORY_CREATE_TOOL_NAME,
+  MEMORY_UPDATE_TOOL_NAME,
+  MEMORY_DELETE_TOOL_NAME,
+]);
 
 export type CreateMemoryCoordinatorInput = {
   readonly paths?: MemoryPaths;
@@ -180,6 +205,30 @@ export class MemoryCoordinator implements CompletedTurnHook {
     return createMemoryGetToolExecutor({
       get: (memoryId, signal) => this.get(memoryId, signal, input),
       recordInvalidCall: () => this.recordInvalidGet(input),
+    });
+  }
+
+  createCreateToolExecutor(input: MemoryToolSource): ToolExecutor {
+    return createMemoryCreateToolExecutor({
+      create: (text, summary, call, signal) =>
+        this.createMemory(text, summary, call, signal, input),
+      recordInvalidCall: (call) => this.recordInvalidMutation("create", call, input),
+    });
+  }
+
+  createUpdateToolExecutor(input: MemoryToolSource): ToolExecutor {
+    return createMemoryUpdateToolExecutor({
+      update: (memoryId, text, summary, call, signal) =>
+        this.updateMemory(memoryId, text, summary, call, signal, input),
+      recordInvalidCall: (call) => this.recordInvalidMutation("update", call, input),
+    });
+  }
+
+  createDeleteToolExecutor(input: MemoryToolSource): ToolExecutor {
+    return createMemoryDeleteToolExecutor({
+      delete: (memoryId, call, signal) =>
+        this.deleteMemory(memoryId, call, signal, input),
+      recordInvalidCall: (call) => this.recordInvalidMutation("delete", call, input),
     });
   }
 
@@ -411,6 +460,375 @@ export class MemoryCoordinator implements CompletedTurnHook {
     }
   }
 
+  private async createMemory(
+    text: string,
+    summary: string,
+    call: ToolCall,
+    signal: AbortSignal,
+    source: MemoryToolSource,
+  ): Promise<MemoryCreateRawResult> {
+    const startedAt = performance.now();
+    try {
+      throwIfTurnCancelled(signal);
+      if (containsSensitiveMemory(text) || containsSensitiveMemory(summary)) {
+        await this.logMutation({
+          kind: "create",
+          outcome: "failed",
+          reason: "memory_sensitive_rejected",
+          source,
+          call,
+          memoryId: null,
+          startedAt,
+        });
+        return {
+          ok: false,
+          error:
+            "MemoryCreate rejected content that may contain sensitive information.",
+        };
+      }
+
+      let embedding: Float32Array;
+      try {
+        embedding = await this.embedMutationText(text, signal);
+      } catch (error) {
+        if (signal.aborted) {
+          throw error;
+        }
+        await this.logMutation({
+          kind: "create",
+          outcome: "failed",
+          reason: "memory_embedding_failed",
+          source,
+          call,
+          memoryId: null,
+          startedAt,
+        });
+        return {
+          ok: false,
+          error: "MemoryCreate could not generate a memory embedding.",
+        };
+      }
+
+      throwIfTurnCancelled(signal);
+      const result = this.store.insertBatch({
+        workspaceRoot: source.workspaceRoot,
+        sessionId: source.sessionId,
+        turnId: call.turnId,
+        candidates: [{ text, summary, embedding }],
+      });
+      const inserted = result.inserted[0];
+      const existing =
+        inserted === undefined ? this.store.getByTextHash(text) : undefined;
+      const resolved = inserted ?? existing;
+      if (resolved === undefined) {
+        throw new MemoryError(
+          "memory_write_failed",
+          "MemoryCreate did not produce a stored record.",
+        );
+      }
+      const memoryId = resolved.memoryId;
+      const createdAt = resolved.createdAt;
+      const status = inserted === undefined ? "already_exists" : "created";
+      await this.logMutation({
+        kind: "create",
+        outcome: "ok",
+        reason: null,
+        source,
+        call,
+        memoryId,
+        startedAt,
+      });
+      return { ok: true, status, memoryId, createdAt };
+    } catch (error) {
+      if (signal.aborted) {
+        await this.logMutation({
+          kind: "create",
+          outcome: "skipped",
+          reason: "memory_create_cancelled",
+          source,
+          call,
+          memoryId: null,
+          startedAt,
+        });
+        throw error;
+      }
+      await this.logMutation({
+        kind: "create",
+        outcome: "failed",
+        reason: memoryErrorCode(error, "memory_create_failed"),
+        source,
+        call,
+        memoryId: null,
+        startedAt,
+      });
+      return { ok: false, error: boundedMemoryError(error) };
+    }
+  }
+
+  private async updateMemory(
+    memoryId: string,
+    text: string,
+    summary: string,
+    call: ToolCall,
+    signal: AbortSignal,
+    source: MemoryToolSource,
+  ): Promise<MemoryUpdateRawResult> {
+    const startedAt = performance.now();
+    try {
+      throwIfTurnCancelled(signal);
+      if (containsSensitiveMemory(text) || containsSensitiveMemory(summary)) {
+        await this.logMutation({
+          kind: "update",
+          outcome: "failed",
+          reason: "memory_sensitive_rejected",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        return {
+          ok: false,
+          error:
+            "MemoryUpdate rejected content that may contain sensitive information.",
+        };
+      }
+
+      const target = this.store.getByIdForMutation(memoryId);
+      if (target === undefined) {
+        await this.logMutation({
+          kind: "update",
+          outcome: "failed",
+          reason: "memory_not_found",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        return {
+          ok: false,
+          code: "memory_not_found",
+          error: `No global memory exists with id ${memoryId}.`,
+        };
+      }
+
+      let embedding = target.embedding;
+      if (text !== target.text) {
+        try {
+          embedding = await this.embedMutationText(text, signal);
+        } catch (error) {
+          if (signal.aborted) {
+            throw error;
+          }
+          await this.logMutation({
+            kind: "update",
+            outcome: "failed",
+            reason: "memory_embedding_failed",
+            source,
+            call,
+            memoryId,
+            startedAt,
+          });
+          return {
+            ok: false,
+            error: "MemoryUpdate could not generate a memory embedding.",
+          };
+        }
+      }
+
+      throwIfTurnCancelled(signal);
+      const result = this.store.updateMemory({
+        memoryId,
+        text,
+        summary,
+        embedding,
+      });
+      if (!result.ok && result.code === "memory_not_found") {
+        await this.logMutation({
+          kind: "update",
+          outcome: "failed",
+          reason: "memory_not_found",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        return {
+          ok: false,
+          code: "memory_not_found",
+          error: `No global memory exists with id ${memoryId}.`,
+        };
+      }
+      if (!result.ok && result.code === "memory_duplicate") {
+        await this.logMutation({
+          kind: "update",
+          outcome: "failed",
+          reason: "memory_duplicate",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        return {
+          ok: false,
+          code: "memory_duplicate",
+          conflictMemoryId: result.conflictMemoryId,
+          error: `Another global memory already has the replacement text (memoryId ${result.conflictMemoryId}).`,
+        };
+      }
+
+      await this.logMutation({
+        kind: "update",
+        outcome: "ok",
+        reason: null,
+        source,
+        call,
+        memoryId,
+        startedAt,
+      });
+      return { ok: true, status: "updated", memoryId };
+    } catch (error) {
+      if (signal.aborted) {
+        await this.logMutation({
+          kind: "update",
+          outcome: "skipped",
+          reason: "memory_update_cancelled",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        throw error;
+      }
+      await this.logMutation({
+        kind: "update",
+        outcome: "failed",
+        reason: memoryErrorCode(error, "memory_update_failed"),
+        source,
+        call,
+        memoryId,
+        startedAt,
+      });
+      return { ok: false, error: boundedMemoryError(error) };
+    }
+  }
+
+  private async deleteMemory(
+    memoryId: string,
+    call: ToolCall,
+    signal: AbortSignal,
+    source: MemoryToolSource,
+  ): Promise<MemoryDeleteRawResult> {
+    const startedAt = performance.now();
+    try {
+      throwIfTurnCancelled(signal);
+      const result = this.store.deleteMemory(memoryId);
+      if (!result.ok) {
+        await this.logMutation({
+          kind: "delete",
+          outcome: "failed",
+          reason: "memory_not_found",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        return {
+          ok: false,
+          code: "memory_not_found",
+          error: `No global memory exists with id ${memoryId}.`,
+        };
+      }
+      await this.logMutation({
+        kind: "delete",
+        outcome: "ok",
+        reason: null,
+        source,
+        call,
+        memoryId,
+        startedAt,
+      });
+      return { ok: true, status: "deleted", memoryId };
+    } catch (error) {
+      if (signal.aborted) {
+        await this.logMutation({
+          kind: "delete",
+          outcome: "skipped",
+          reason: "memory_delete_cancelled",
+          source,
+          call,
+          memoryId,
+          startedAt,
+        });
+        throw error;
+      }
+      await this.logMutation({
+        kind: "delete",
+        outcome: "failed",
+        reason: memoryErrorCode(error, "memory_delete_failed"),
+        source,
+        call,
+        memoryId,
+        startedAt,
+      });
+      return { ok: false, error: boundedMemoryError(error) };
+    }
+  }
+
+  private async embedMutationText(
+    text: string,
+    signal: AbortSignal,
+  ): Promise<Float32Array> {
+    const raw = await this.embeddingClient.embed([text], signal);
+    if (raw.length !== 1 || raw[0] === undefined) {
+      throw new MemoryError(
+        "memory_embedding_response_invalid",
+        "Embedding response did not contain the memory vector.",
+      );
+    }
+    return normalizeEmbedding(raw[0], this.embeddingDimensions);
+  }
+
+  private recordInvalidMutation(
+    kind: MemoryMutationDiagnostic["kind"],
+    call: ToolCall,
+    source: MemoryToolSource,
+  ): Promise<void> {
+    return this.logMutation({
+      kind,
+      outcome: "failed",
+      reason: `memory_${kind}_args_invalid`,
+      source,
+      call,
+      memoryId: null,
+      startedAt: performance.now(),
+    });
+  }
+
+  private logMutation(input: {
+    readonly kind: MemoryMutationDiagnostic["kind"];
+    readonly outcome: MemoryMutationDiagnostic["outcome"];
+    readonly reason: string | null;
+    readonly source: MemoryToolSource;
+    readonly call: ToolCall;
+    readonly memoryId: string | null;
+    readonly startedAt: number;
+  }): Promise<void> {
+    return this.log.append(
+      mutationDiagnostic({
+        clock: this.clock,
+        kind: input.kind,
+        outcome: input.outcome,
+        reason: input.reason,
+        workspace: input.source.workspaceRoot,
+        sessionId: input.source.sessionId,
+        turnId: input.call.turnId,
+        toolCallId: input.call.toolCallId,
+        memoryId: input.memoryId,
+        ms: elapsedMs(input.startedAt),
+      }),
+    );
+  }
+
   private async search(
     query: string | null,
     keywords: readonly string[],
@@ -631,10 +1049,7 @@ export function buildExtractionEvidenceText(
   }
   const messages = snapshot.messages
     .filter(
-      (message) =>
-        message.role !== "tool" ||
-        (message.name !== MEMORY_SEARCH_TOOL_NAME &&
-          message.name !== MEMORY_GET_TOOL_NAME),
+      (message) => message.role !== "tool" || !MEMORY_TOOL_NAMES.includes(message.name),
     )
     .map((message) => ({ ...message }));
   return JSON.stringify(
@@ -738,6 +1153,32 @@ function getDiagnostic(input: {
     workspace: input.workspace,
     sessionId: input.sessionId,
     found: input.found,
+    ms: input.ms,
+  });
+}
+
+function mutationDiagnostic(input: {
+  readonly clock: () => string;
+  readonly kind: MemoryMutationDiagnostic["kind"];
+  readonly outcome: MemoryMutationDiagnostic["outcome"];
+  readonly reason: string | null;
+  readonly workspace: string;
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly toolCallId: string;
+  readonly memoryId: string | null;
+  readonly ms: number;
+}): MemoryMutationDiagnostic {
+  return Object.freeze({
+    at: input.clock(),
+    kind: input.kind,
+    outcome: input.outcome,
+    reason: input.reason,
+    workspace: input.workspace,
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    toolCallId: input.toolCallId,
+    memoryId: input.memoryId,
     ms: input.ms,
   });
 }

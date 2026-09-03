@@ -800,6 +800,12 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "MemorySearch") {
     return `MemorySearch ${memorySearchDetail(input.args)}`.trim();
   }
+  if (input.name === "MemoryCreate") {
+    return "MemoryCreate";
+  }
+  if (input.name === "MemoryUpdate" || input.name === "MemoryDelete") {
+    return `${input.name} ${memoryMutationId(input.args) ?? ""}`.trim();
+  }
   if (input.name === "WebFetch") {
     return `WebFetch ${toolUrl(input.args) ?? ""}`.trim();
   }
@@ -915,6 +921,12 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         return base;
       }
       return raw.memory === null ? `${base} -> not found` : `${base} -> found`;
+    case "memory_create":
+    case "memory_update":
+    case "memory_delete":
+      return raw.ok
+        ? `${name} ${raw.memoryId} -> ${raw.status.replaceAll("_", " ")}`
+        : base;
     case "skill":
       if (!raw.ok) {
         return `${base} failed -> ${boundedToolError(raw.error)}`;
@@ -1005,6 +1017,9 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "context_maintenance":
     case "memory_search":
     case "memory_get":
+    case "memory_create":
+    case "memory_update":
+    case "memory_delete":
     case "wait":
     case "skill":
     case "mcp":
@@ -1047,6 +1062,9 @@ function toolRawResultDiff(
     case "context_maintenance":
     case "memory_search":
     case "memory_get":
+    case "memory_create":
+    case "memory_update":
+    case "memory_delete":
     case "wait":
     case "skill":
     case "mcp":
@@ -1125,6 +1143,10 @@ function memorySearchDetail(args: unknown): string {
     parts.push(`[${keywords}]`);
   }
   return parts.join(" ");
+}
+
+function memoryMutationId(args: unknown): string | undefined {
+  return stringProperty(asRecord(args), "id");
 }
 
 function toolKeywords(args: unknown): string | undefined {

@@ -134,6 +134,18 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
                 workspaceRoot,
                 sessionId,
               }),
+              memoryCreate: memoryCoordinator.createCreateToolExecutor({
+                workspaceRoot,
+                sessionId,
+              }),
+              memoryUpdate: memoryCoordinator.createUpdateToolExecutor({
+                workspaceRoot,
+                sessionId,
+              }),
+              memoryDelete: memoryCoordinator.createDeleteToolExecutor({
+                workspaceRoot,
+                sessionId,
+              }),
               completedTurnHook: memoryCoordinator,
             }),
       };
@@ -323,7 +335,6 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
   } finally {
     instance?.unmount();
     restoreStdin();
-    memoryCoordinator?.dispose();
     if (controller !== undefined) {
       try {
         await controller.dispose(disposeReason);
@@ -337,6 +348,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
               );
       }
     }
+    memoryCoordinator?.dispose();
   }
 
   if (primaryError !== undefined) {
