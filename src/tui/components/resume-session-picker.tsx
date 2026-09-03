@@ -15,10 +15,16 @@ import {
   type LineEditorState,
 } from "../line-editor";
 
-const SESSION_ROWS = 3;
+const SESSION_ROWS = 1;
 const BROWSE_CHROME_ROWS = 3;
 const SEARCH_CHROME_ROWS = 4;
 const MAX_DISPLAYED_SESSIONS = 20;
+const MARKER_COLUMN_WIDTH = 2;
+const TIME_COLUMN_WIDTH = 10;
+const TURN_COLUMN_WIDTH = 11;
+const STATUS_COLUMN_WIDTH = 13;
+const PROFILE_COLUMN_WIDTH = 16;
+const SESSION_ROW_BACKGROUNDS = ["#1c1c1c", "#101010"] as const;
 
 export type ResumeSessionPickerProps = {
   sessions: readonly SessionSummary[];
@@ -26,6 +32,7 @@ export type ResumeSessionPickerProps = {
   error?: string;
   now?: Date;
   viewportRows?: number;
+  viewportColumns?: number;
   visibleItemCount?: number;
   onCancel: () => void;
   onSelect: (session: SessionSummary) => void;
@@ -56,6 +63,7 @@ export function ResumeSessionPicker(props: ResumeSessionPickerProps) {
 function ResumeSessionPickerContent(props: ResumeSessionPickerProps) {
   const windowSize = useWindowSize();
   const rows = props.viewportRows ?? windowSize.rows - 1;
+  const columns = Math.max(1, props.viewportColumns ?? windowSize.columns);
 
   const displayedFor = (value: string): readonly SessionSummary[] => {
     const nextCandidates =
@@ -287,7 +295,7 @@ function ResumeSessionPickerContent(props: ResumeSessionPickerProps) {
 
   const now = props.now ?? new Date();
   return (
-    <Box flexDirection="column">
+    <Box width={columns} flexDirection="column" overflow="hidden">
       <Text bold>Resume session</Text>
       {state.mode === "search" ? <SearchLine editor={state.editor} /> : null}
       <Text dimColor>
@@ -303,6 +311,8 @@ function ResumeSessionPickerContent(props: ResumeSessionPickerProps) {
           session={session}
           isSelected={windowStart + offset === selectedIndex}
           now={now}
+          rowIndex={windowStart + offset}
+          columns={columns}
         />
       ))}
       <Text
@@ -318,6 +328,7 @@ function ResumeSessionPickerContent(props: ResumeSessionPickerProps) {
               windowStart,
               windowEnd,
               totalCount: props.sessions.length,
+              selectedSession,
             })
           : `Resume failed: ${singleLine(props.error)}`}
       </Text>
@@ -368,38 +379,92 @@ function SessionOption(props: {
   session: SessionSummary;
   isSelected: boolean;
   now: Date;
+  rowIndex: number;
+  columns: number;
 }) {
   const selectable = isSessionSelectable(props.session);
   const marker = props.isSelected ? "❯ " : "  ";
   const preview =
     singleLine(props.session.firstUserPromptPreview ?? "") || "(no prompt)";
+  const profile = singleLine(props.session.profileName ?? "") || "—";
 
   return (
-    <Box flexDirection="column">
+    <Box
+      width={props.columns}
+      height={SESSION_ROWS}
+      overflow="hidden"
+      backgroundColor={
+        SESSION_ROW_BACKGROUNDS[props.rowIndex % SESSION_ROW_BACKGROUNDS.length]
+      }
+    >
+      <SessionCell
+        value={marker}
+        width={MARKER_COLUMN_WIDTH}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+      />
+      <SessionCell
+        value={formatRelativeTime(props.session.updatedAt, props.now)}
+        width={TIME_COLUMN_WIDTH}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+        padRight
+      />
+      <SessionCell
+        value={`${props.session.turnCount} ${props.session.turnCount === 1 ? "turn" : "turns"}`}
+        width={TURN_COLUMN_WIDTH}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+        padRight
+      />
+      <SessionCell
+        value={sessionStatusLabel(props.session)}
+        width={STATUS_COLUMN_WIDTH}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+        padRight
+      />
+      <SessionCell
+        value={profile}
+        width={PROFILE_COLUMN_WIDTH}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+        padRight
+      />
+      <SessionCell
+        value={preview}
+        isSelected={props.isSelected}
+        isDisabled={!selectable}
+      />
+    </Box>
+  );
+}
+
+function SessionCell(props: {
+  value: string;
+  width?: number;
+  isSelected: boolean;
+  isDisabled: boolean;
+  padRight?: boolean;
+}) {
+  const selected = props.isSelected && !props.isDisabled;
+  return (
+    <Box
+      width={props.width}
+      minWidth={props.width === undefined ? 0 : undefined}
+      flexGrow={props.width === undefined ? 1 : 0}
+      flexShrink={props.width === undefined ? 1 : 0}
+      paddingRight={props.padRight === true ? 1 : 0}
+      overflow="hidden"
+    >
       <Text
-        color={props.isSelected && selectable ? "cyan" : undefined}
-        bold={props.isSelected && selectable}
-        dimColor={!selectable}
+        color={selected ? "cyan" : undefined}
+        bold={selected}
+        dimColor={props.isDisabled}
         wrap="truncate-end"
       >
-        {marker}
-        {formatRelativeTime(props.session.updatedAt, props.now)} ·{" "}
-        {props.session.turnCount} {props.session.turnCount === 1 ? "turn" : "turns"} ·{" "}
-        {sessionStatusText(props.session)}
+        {props.value}
       </Text>
-      <Box marginLeft={2} overflow="hidden">
-        <Text dimColor={!selectable} wrap="truncate-end">
-          {preview}
-        </Text>
-      </Box>
-      <Box marginLeft={2} overflow="hidden">
-        <Box flexGrow={1} overflow="hidden">
-          <Text dimColor wrap="truncate-end">
-            {singleLine(props.session.modelName)}
-          </Text>
-        </Box>
-        <Text dimColor> {shortSessionId(props.session.sessionId)}</Text>
-      </Box>
     </Box>
   );
 }
@@ -416,20 +481,20 @@ export function formatRelativeTime(updatedAt: string, now: Date): string {
 
   const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - timestamp) / 1000));
   if (elapsedSeconds < 60) {
-    return "just now";
+    return "now";
   }
 
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
   if (elapsedMinutes < 60) {
-    return formatAgo(elapsedMinutes, "minute");
+    return `${elapsedMinutes}m ago`;
   }
 
   const elapsedHours = Math.floor(elapsedMinutes / 60);
   if (elapsedHours < 24) {
-    return formatAgo(elapsedHours, "hour");
+    return `${elapsedHours}h ago`;
   }
 
-  return formatAgo(Math.floor(elapsedHours / 24), "day");
+  return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
 function initialSelectedIndex(sessions: readonly SessionSummary[]): number {
@@ -453,10 +518,14 @@ function keepSelectionVisible(
   return clamp(nextWindowStart, 0, maxWindowStart);
 }
 
-function sessionStatusText(session: SessionSummary): string {
+function sessionStatusLabel(session: SessionSummary): string {
+  return session.status;
+}
+
+function sessionStatusDetail(session: SessionSummary): string | undefined {
   switch (session.status) {
     case "resumable":
-      return "resumable";
+      return undefined;
     case "interrupted":
       return "interrupted · completes record; no tool retry";
     case "current":
@@ -481,20 +550,36 @@ function formatFooter(input: {
   windowStart: number;
   windowEnd: number;
   totalCount: number;
+  selectedSession?: SessionSummary;
 }): string {
+  const detail =
+    input.selectedSession === undefined
+      ? undefined
+      : sessionStatusDetail(input.selectedSession);
+  const withDetail = (status: string) =>
+    detail === undefined ? status : `${status} · ${detail}`;
+
   if (input.searching) {
     if (input.matchCount === 0) {
       return `No sessions match "${singleLine(input.query)}" · Esc to clear search`;
     }
     if (input.matchCount > MAX_DISPLAYED_SESSIONS) {
-      return `Showing ${input.windowStart + 1}–${input.windowEnd} / ${MAX_DISPLAYED_SESSIONS} results · ${input.matchCount} matches total`;
+      return withDetail(
+        `Showing ${input.windowStart + 1}–${input.windowEnd} / ${MAX_DISPLAYED_SESSIONS} results · ${input.matchCount} matches total`,
+      );
     }
-    return `${input.matchCount} ${input.matchCount === 1 ? "match" : "matches"}`;
+    return withDetail(
+      `${input.matchCount} ${input.matchCount === 1 ? "match" : "matches"}`,
+    );
   }
   if (input.totalCount > MAX_DISPLAYED_SESSIONS) {
-    return `Showing ${input.windowStart + 1}–${input.windowEnd} / ${MAX_DISPLAYED_SESSIONS} recent · ${input.totalCount} sessions total`;
+    return withDetail(
+      `Showing ${input.windowStart + 1}–${input.windowEnd} / ${MAX_DISPLAYED_SESSIONS} recent · ${input.totalCount} sessions total`,
+    );
   }
-  return formatWindowStatus(input.windowStart, input.windowEnd, input.totalCount);
+  return withDetail(
+    formatWindowStatus(input.windowStart, input.windowEnd, input.totalCount),
+  );
 }
 
 function formatWindowStatus(start: number, end: number, total: number): string {
@@ -514,8 +599,4 @@ function clamp(value: number, minimum: number, maximum: number): number {
 
 function singleLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function formatAgo(value: number, unit: "minute" | "hour" | "day"): string {
-  return `${value} ${unit}${value === 1 ? "" : "s"} ago`;
 }

@@ -23,19 +23,33 @@ const PASTE_END = "\u001b[201~";
 const NOW = new Date("2026-07-12T12:00:00.000Z");
 
 describe("resume session picker", () => {
-  test("renders session metadata, availability reasons, and interrupted recovery guidance", () => {
+  test("renders full-width aligned session rows with compact status labels", () => {
     const sessions = [
-      summary(0, "current", { minutesAgo: 1, prompt: "current prompt" }),
+      summary(0, "current", {
+        minutesAgo: 1,
+        prompt: "current prompt ".repeat(10),
+      }),
       summary(1, "resumable", {
         minutesAgo: 12,
         turns: 3,
-        prompt: "帮我提交推送",
+        prompt: "帮我提交推送并验证末列只截断不换行".repeat(5),
       }),
-      summary(2, "interrupted", { minutesAgo: 30 }),
-      summary(3, "active", { minutesAgo: 40 }),
-      summary(4, "incomplete", { minutesAgo: 50 }),
+      summary(2, "interrupted", {
+        minutesAgo: 30,
+        prompt: "interrupted prompt ".repeat(10),
+      }),
+      summary(3, "active", {
+        minutesAgo: 40,
+        prompt: "active prompt ".repeat(10),
+      }),
+      summary(4, "incomplete", {
+        minutesAgo: 50,
+        prompt: "incomplete prompt ".repeat(10),
+      }),
       summary(5, "unavailable", {
         minutesAgo: 60,
+        prompt: "unavailable prompt ".repeat(10),
+        profileName: null,
         statusDetail: "lock is corrupt",
       }),
     ];
@@ -43,6 +57,7 @@ describe("resume session picker", () => {
       <ResumeSessionPicker
         sessions={sessions}
         now={NOW}
+        viewportColumns={90}
         visibleItemCount={6}
         onCancel={() => undefined}
         onSelect={() => undefined}
@@ -50,15 +65,23 @@ describe("resume session picker", () => {
     );
 
     const frame = stripAnsi(lastFrame());
-    expect(frame).toContain("❯ 12 minutes ago · 3 turns · resumable");
+    const rows = frame.split("\n").slice(2, 8);
+    expect(rows).toHaveLength(6);
+    expect(
+      rows.every((row) => {
+        const width = Bun.stringWidth(row);
+        return width >= 89 && width <= 90;
+      }),
+    ).toBe(true);
+    expect(frame).toContain("❯ 12m ago   3 turns    resumable    deepseek");
     expect(frame).toContain("帮我提交推送");
-    expect(frame).toContain("deepseek-v4-flash");
-    expect(frame).toContain("019f0001…");
-    expect(frame).toContain("current session · not selectable");
-    expect(frame).toContain("interrupted · completes record; no tool retry");
-    expect(frame).toContain("in use by another Tinker process");
-    expect(frame).toContain("initialization incomplete · cannot resume");
-    expect(frame).toContain("unavailable: lock is corrupt");
+    expect(frame).toContain("current");
+    expect(frame).toContain("interrupted");
+    expect(frame).toContain("active");
+    expect(frame).toContain("incomplete");
+    expect(frame).toContain("unavailable  —");
+    expect(frame).not.toContain("deepseek-v4-flash");
+    expect(frame).not.toContain("019f0001…");
     cleanup();
   });
 
@@ -84,8 +107,9 @@ describe("resume session picker", () => {
 
     await press(stdin, ARROW_UP, "\r");
     expect(selected).toEqual([]);
+    expect(stripAnsi(lastFrame())).toContain("❯ 5m ago    1 turn     active");
     expect(stripAnsi(lastFrame())).toContain(
-      "❯ 5 minutes ago · 1 turn · in use by another Tinker process",
+      "3 sessions · in use by another Tinker process",
     );
 
     await press(stdin, "j", "\r");
@@ -93,6 +117,9 @@ describe("resume session picker", () => {
 
     await press(stdin, ARROW_DOWN, "\r");
     expect(selected).toEqual([sessions[1]?.sessionId, sessions[2]?.sessionId]);
+    expect(stripAnsi(lastFrame())).toContain(
+      "3 sessions · interrupted · completes record; no tool retry",
+    );
 
     await press(stdin, "k");
     stdin.write("\u001b");
@@ -121,7 +148,7 @@ describe("resume session picker", () => {
     expect(stripAnsi(lastFrame())).toContain("prompt-0");
     expect(stripAnsi(lastFrame())).toContain("prompt-1");
     expect(stripAnsi(lastFrame())).not.toContain("prompt-2");
-    expect(stripAnsi(lastFrame()).split("\n")).toHaveLength(9);
+    expect(stripAnsi(lastFrame()).split("\n")).toHaveLength(5);
 
     for (let selectedIndex = 1; selectedIndex < sessions.length; selectedIndex += 1) {
       await press(stdin, selectedIndex % 2 === 0 ? "j" : ARROW_DOWN);
@@ -207,7 +234,7 @@ describe("resume session picker", () => {
     for (let index = 0; index < 24; index += 1) {
       await press(stdin, "j");
     }
-    expect(stripAnsi(lastFrame())).toContain("❯ 20 minutes ago");
+    expect(stripAnsi(lastFrame())).toContain("❯ 20m ago");
     expect(stripAnsi(lastFrame())).not.toContain("default-prompt-20");
     cleanup();
   });
@@ -462,12 +489,12 @@ describe("resume session picker", () => {
     );
 
     await press(stdin, ARROW_DOWN);
-    expect(stripAnsi(lastFrame())).toContain("❯ 5 minutes ago · 1 turn · resumable");
+    expect(stripAnsi(lastFrame())).toContain("❯ 5m ago    1 turn     resumable");
 
     await press(stdin, "/", "alpha");
     const frame = stripAnsi(lastFrame());
     expect(frame).toContain("2 matches");
-    expect(frame).toContain("❯ 5 minutes ago · 1 turn · resumable");
+    expect(frame).toContain("❯ 5m ago    1 turn     resumable");
     expect(frame).not.toContain("beta third");
 
     await press(stdin, "\r");
@@ -493,9 +520,8 @@ describe("resume session picker", () => {
 
     await press(stdin, "/", "beta");
     const frame = stripAnsi(lastFrame());
-    expect(frame).toContain(
-      "❯ 5 minutes ago · 1 turn · in use by another Tinker process",
-    );
+    expect(frame).toContain("❯ 5m ago    1 turn     active");
+    expect(frame).toContain("1 match · in use by another Tinker process");
     expect(frame).toContain("1 match");
 
     await press(stdin, "\r");
@@ -514,7 +540,7 @@ describe("resume session picker", () => {
       <ResumeSessionPicker
         sessions={sessions}
         now={NOW}
-        viewportRows={12}
+        viewportRows={6}
         onCancel={() => undefined}
         onSelect={() => undefined}
       />,
@@ -523,12 +549,12 @@ describe("resume session picker", () => {
     expect(stripAnsi(lastFrame())).toContain("chrome-prompt-2");
 
     await press(stdin, ARROW_DOWN, ARROW_DOWN);
-    expect(stripAnsi(lastFrame())).toContain("❯ 3 minutes ago");
+    expect(stripAnsi(lastFrame())).toContain("❯ 3m ago");
 
     await press(stdin, "/");
     const frame = stripAnsi(lastFrame());
     expect(frame).toContain("Search:");
-    expect(frame).toContain("❯ 3 minutes ago");
+    expect(frame).toContain("❯ 3m ago");
     expect(frame).toContain("chrome-prompt-2");
     expect(frame).toContain("chrome-prompt-1");
     expect(frame).not.toContain("chrome-prompt-0");
@@ -584,13 +610,13 @@ describe("resume session picker", () => {
   });
 
   test("formats relative timestamps at stable unit boundaries", () => {
-    expect(formatRelativeTime("2026-07-12T11:59:30.000Z", NOW)).toBe("just now");
-    expect(formatRelativeTime("2026-07-12T11:59:00.000Z", NOW)).toBe("1 minute ago");
-    expect(formatRelativeTime("2026-07-12T11:48:00.000Z", NOW)).toBe("12 minutes ago");
-    expect(formatRelativeTime("2026-07-12T11:00:00.000Z", NOW)).toBe("1 hour ago");
-    expect(formatRelativeTime("2026-07-12T09:00:00.000Z", NOW)).toBe("3 hours ago");
-    expect(formatRelativeTime("2026-07-11T12:00:00.000Z", NOW)).toBe("1 day ago");
-    expect(formatRelativeTime("2026-07-10T12:00:00.000Z", NOW)).toBe("2 days ago");
+    expect(formatRelativeTime("2026-07-12T11:59:30.000Z", NOW)).toBe("now");
+    expect(formatRelativeTime("2026-07-12T11:59:00.000Z", NOW)).toBe("1m ago");
+    expect(formatRelativeTime("2026-07-12T11:48:00.000Z", NOW)).toBe("12m ago");
+    expect(formatRelativeTime("2026-07-12T11:00:00.000Z", NOW)).toBe("1h ago");
+    expect(formatRelativeTime("2026-07-12T09:00:00.000Z", NOW)).toBe("3h ago");
+    expect(formatRelativeTime("2026-07-11T12:00:00.000Z", NOW)).toBe("1d ago");
+    expect(formatRelativeTime("2026-07-10T12:00:00.000Z", NOW)).toBe("2d ago");
   });
 });
 
@@ -601,12 +627,16 @@ function summary(
     minutesAgo?: number;
     turns?: number;
     prompt?: string;
+    profileName?: string | null;
     statusDetail?: string;
   } = {},
 ): SessionSummary {
   return {
     sessionId: `019f000${index}-0000-7000-8000-00000000000${index}` as SessionId,
     modelName: "deepseek-v4-flash",
+    ...(overrides.profileName === null
+      ? {}
+      : { profileName: overrides.profileName ?? "deepseek" }),
     createdAt: "2026-07-12T10:00:00.000Z",
     updatedAt: new Date(
       NOW.getTime() - (overrides.minutesAgo ?? 5) * 60_000,

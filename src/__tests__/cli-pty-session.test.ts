@@ -182,7 +182,7 @@ test(
       });
       await waitForInitialFrame(second);
       await submitPrompt(second, "/resume");
-      await second.waitForScreen("Showing 1–14 / 16");
+      await second.waitForScreen("16 sessions");
       for (let index = 0; index < 15; index += 1) {
         await second.press("down");
       }
@@ -282,7 +282,7 @@ test(
       observeRestoredViewport("memory", memoryCloseMark);
 
       await submitPrompt(harness, "/resume");
-      await harness.waitForScreen("Showing 1–6 / 8");
+      await harness.waitForScreen("8 sessions");
       const resumeCloseMark = harness.markTranscript();
       await harness.press("escape");
       await harness.waitForPromptReady();
