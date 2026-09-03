@@ -5,6 +5,23 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-09-03
+
+### Added
+
+- Show the installed Tinker version at the end of the interactive prompt status
+  bar.
+
+### Changed
+
+- Raise the default maximum agent-loop iterations per turn from 512 to 65,536,
+  allowing longer autonomous tasks without requiring configuration changes.
+
+### Fixed
+
+- Preserve brace expressions in Grep glob filters, so patterns such as
+  `**/*.{ts,tsx}` are passed to ripgrep intact.
+
 ## [2.5.0] - 2026-09-03
 
 ### Added
@@ -307,7 +324,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/ishowshao/tinker/releases/tag/v2.6.0
 [2.5.0]: https://github.com/ishowshao/tinker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/ishowshao/tinker/releases/tag/v2.4.0
 [2.3.0]: https://github.com/ishowshao/tinker/releases/tag/v2.3.0
