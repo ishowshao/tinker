@@ -1,8 +1,10 @@
 # Tinker
 
-**Tinker** is a personal coding agent — an interactive TUI (Terminal User Interface) and one-shot CLI tool that drives an LLM in an agent loop with file, search, shell, and MCP tools to read and modify a local workspace.
+**Tinker** is a personal coding-agent harness — an interactive TUI (Terminal User Interface) and one-shot CLI that drives an LLM in an agent loop with file, search, shell, and MCP tools to read and modify a local workspace.
 
-Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://github.com/vadimdemedes/ink) (React for CLIs).
+**Tinker is designed for models that work over extremely long horizons — potentially as persistent agents that continue indefinitely, rather than as disposable chat sessions.** Its architecture treats the model's context window as a bounded working set, not as the source of truth. Immutable canonical history, durable sessions, protocol-safe recovery, deterministic context revisions, Recall-addressable cold state, and context-pressure management allow work to continue across compaction, process restarts, and context-window limits.
+
+This does not pretend that any model has infinite tokens or guarantee that it will recall every relevant fact. It means the harness is designed so that history remains durable and recoverable while the model repeatedly operates on a bounded, valid view of an ongoing session.
 
 ## Features
 
@@ -27,10 +29,7 @@ Built with [Bun](https://bun.sh) + TypeScript ESM, powered by [Ink](https://gith
 - **Turn cancellation**: Users can cancel an ongoing turn safely, with protocol-safe synthetic tool messages.
 - **Context metering**: Budget-aware context management with protocol validation before sending requests to the model.
 - **Deterministic context compaction**: Idle sessions can swap eligible historical tool output into Recall-addressable placeholders without calling the model.
-- **Infinite Context architecture**: Immutable canonical history, deterministic
-  context revisions, Recall-addressable cold state, and qualified prefix retirement
-  keep long-running sessions recoverable without pretending the model has infinite
-  tokens. See the [technical design](docs/infinite-context-technical-design.md).
+- **Infinite Context architecture**: Immutable canonical history, deterministic context revisions, Recall-addressable cold state, and qualified prefix retirement support sessions designed to continue indefinitely without pretending the model has infinite tokens. See the [technical design](docs/infinite-context-technical-design.md).
 - **Choice of models**: Uses an OpenAI-compatible Chat Completions transport with
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
@@ -513,6 +512,7 @@ Runtime data lives in ~/.tinker/ (sessions, bash tasks, assets), not in the repo
 - **Fast-fail**: Validate assumptions early and return clear errors close to the source. Structured failures allow the model to correct and retry.
 - **Model sees only text**: Tool execution results are rendered into readable text for the model. Raw result data with extra detail is kept for event logs and the TUI.
 - **Protocol safety**: All tool calls produce protocol-safe messages — even cancellations, fatal errors, or interruptions generate well-formed tool messages so the agent loop can continue.
+- **Long-horizon continuity**: Treat the context window as a replaceable working set over durable canonical history. Sessions should remain resumable and historically recoverable across compaction, interruption, and process restarts.
 - **Session durability**: Every turn, iteration, and tool call is committed to the SQLite ledger before the model is called, enabling reliable resume and history recall.
 
 ## Requirements
