@@ -36,6 +36,29 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
 
 ## Quick Start
 
+### Install with your existing agent
+
+If you already use a coding agent, you can ask it to read Tinker's documentation, install the package, and prepare a complete local configuration for you. Values it cannot safely determine can be left as clearly named placeholders; when setup is complete, the agent should tell you exactly which file to edit and what each placeholder expects.
+
+Copy and send this prompt to your existing agent:
+
+```text
+Read Tinker's README and linked model-configuration documentation, then install and configure Tinker on this machine.
+
+Create a complete model profile configuration in an appropriate local file. Use clearly named placeholders for any required values that cannot be determined from the documentation or the current environment; do not invent API credentials, endpoint URLs, model names, or model limits. Configure Tinker to use that file, and verify the installation and configuration as far as possible without making a live model request.
+
+When finished, tell me:
+1. the exact path of the configuration file you created;
+2. every placeholder I still need to replace;
+3. what value each placeholder expects;
+4. any command I need to run after filling them in;
+5. the command to start Tinker.
+
+Do not ask me for the missing values during setup unless proceeding would be unsafe. Prefer creating a structurally complete configuration with placeholders so I can fill them in locally afterward.
+```
+
+### Install manually
+
 ```bash
 npm install --global tinker-agent
 
