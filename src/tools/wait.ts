@@ -13,9 +13,7 @@ export function createWaitToolExecutor(): ToolExecutor {
   return defineToolExecutor("wait", {
     definition: {
       name: "Wait",
-      description:
-        `Wait for a given number of integer seconds before continuing, from ${MIN_WAIT_SECONDS} to ${MAX_WAIT_SECONDS}. ` +
-        "Use this to pause between polling attempts or to give an external process time to make progress.",
+      description: `Wait for a given number of integer seconds before continuing, from ${MIN_WAIT_SECONDS} to ${MAX_WAIT_SECONDS}. `,
       parameters: {
         type: "object",
         additionalProperties: false,

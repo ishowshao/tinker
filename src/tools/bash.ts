@@ -44,7 +44,7 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
   return defineToolExecutor("bash", {
     definition: {
       name: "Bash",
-      description: "Run a shell command in the local workspace.",
+      description: "Run a shell command locally.",
       parameters: {
         type: "object",
         additionalProperties: false,

@@ -53,7 +53,7 @@ export const CONTEXT_SWAP_CANDIDATES_TOOL_DEFINITION: ToolDefinition = Object.fr
 export const CONTEXT_SWAP_TOOL_DEFINITION: ToolDefinition = Object.freeze({
   name: "ContextSwap",
   description:
-    "Schedule selected ContextSwapCandidates for replacement by compact Recall-backed placeholders. The swap runs after this iteration's tool frame closes and preserves canonical history for RecallGet. Pass only candidate IDs returned by ContextSwapCandidates.",
+    "Schedule selected ContextSwapCandidates for replacement by compact Recall-backed placeholders and preserve canonical history for RecallGet. Pass only candidate IDs returned by ContextSwapCandidates.",
   parameters: {
     type: "object",
     additionalProperties: false,

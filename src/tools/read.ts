@@ -32,7 +32,7 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
     definition: {
       name: "Read",
       description:
-        "Read a file from the local workspace. Use offset and limit for line ranges.",
+        "Read a file from the local filesystem. Use offset and limit for line ranges.",
       parameters: {
         type: "object",
         additionalProperties: false,
