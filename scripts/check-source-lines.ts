@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const MAX_SOURCE_LINES = 2600;
+export const MAX_SOURCE_LINES = 2000;
 
 export function countSourceLines(text: string): number {
   if (text.length === 0) return 0;
