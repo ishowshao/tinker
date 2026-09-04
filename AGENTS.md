@@ -47,6 +47,12 @@ linting, and every test except the real-process end-to-end tier — the PTY TUI
 journeys and the Chrome native host, which hold most of the suite's wall-clock
 time. `bun run test:e2e` runs that tier alone.
 
+Every file under `src/`, including tests and fixtures, must stay at or below 2600
+lines, counting comments and blank lines. Both gates start with
+`bun run check:source-lines`. Lower `MAX_SOURCE_LINES` in `scripts/check-source-lines.ts`
+as refactoring reduces the largest files; split responsibilities instead of
+adding exclusions.
+
 When a change includes source code, tests, executable scripts, dependencies, or
 build/runtime configuration, run `bun run check` before considering it complete.
 It must pass type checking, formatting, linting, tests, and the benchmark smoke

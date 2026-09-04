@@ -1,34 +1,26 @@
 import path from "node:path";
+import { CompiledContextError } from "../context/compiled-context-validator";
+import {
+  selectContextAutomation,
+  type ContextAutomationDecision,
+} from "../context/context-automation-policy";
+import {
+  ContextManager,
+  type ContextCompactionResult,
+  type ContextRetirementResult,
+} from "../context/context-manager";
+import { ContextProtocolError } from "../context/context-protocol-validator";
+import type { BuiltContextRequest } from "../context/context-revision";
+import { ContextRevisionError } from "../context/context-revision-compiler";
+import { createContextSurface } from "../context/context-surface";
+import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
+import { SwapPlanner } from "../context/swap-planner";
 import { CompositeEventSink } from "../events/composite-event-sink";
 import type { EventSink } from "../events/event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { ObservationTextLog } from "../events/observation-text-log";
-import type {
-  AgentEvent,
-  AgentEventInput,
-  AgentEventType,
-  ContextRevisionFinishedData,
-} from "../events/types";
-import {
-  runtimeIdFactory,
-  type MessageId,
-  type RuntimeIdFactory,
-  type SessionId,
-  type TurnId,
-} from "../ids/runtime-id";
-import { loadMcpConfig } from "../mcp/mcp-config";
-import {
-  createMcpManager,
-  type McpInventorySnapshot,
-  type McpManager,
-} from "../mcp/mcp-manager";
-import {
-  materializeModelRequest,
-  ModelRequestMediaAggregateError,
-  type MaterializedModelRequest,
-  type ModelClient,
-} from "../model/model-client";
-import type { ContextPressure } from "../model/model-request-preflight";
+import type { AgentEvent, AgentEventInput } from "../events/types";
+import { runtimeIdFactory, type SessionId, type TurnId } from "../ids/runtime-id";
 import { ImageAssetStore, type ImportedImageAsset } from "../image/image-asset-store";
 import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import {
@@ -36,83 +28,80 @@ import {
   type ImageAssetRef,
   type UserMessage,
 } from "../image/image-types";
-import { projectUserMessage } from "./user-prompt-projection";
+import { loadMcpConfig } from "../mcp/mcp-config";
+import {
+  createMcpManager,
+  type McpInventorySnapshot,
+  type McpManager,
+} from "../mcp/mcp-manager";
 import { CommittedPrefixAuditor } from "../model/committed-prefix-auditor";
-import { SwapPlanner } from "../context/swap-planner";
 import {
-  commitAgentSkillsContextUpdate,
-  ContextManager,
-  ContextManagerError,
-  type ContextCompactionResult,
-  type ContextCompactionTrigger,
-  type ContextRetirementResult,
-  type ContextRetirementTrigger,
-} from "../context/context-manager";
-import {
-  assertMatchingContextBudget,
-  type ModelContextBudget,
-  type ModelContextProfile,
-} from "../model/model-context-profile";
+  materializeModelRequest,
+  ModelRequestMediaAggregateError,
+  type MaterializedModelRequest,
+} from "../model/model-client";
+import { assertMatchingContextBudget } from "../model/model-context-profile";
+import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import { ObservationBuilder } from "../observation/observation-builder";
-import { ContextProtocolError } from "../context/context-protocol-validator";
-import { CompiledContextError } from "../context/compiled-context-validator";
+import { SessionError } from "../session/session-errors";
 import {
-  ContextRevisionCompiler,
-  ContextRevisionError,
-} from "../context/context-revision-compiler";
-import {
-  changedContextSurfaceComponents,
-  contextSurfaceChangeManifestHash,
-  contextSurfaceChanges,
-  createContextSurface,
-  sameContextSurface,
-  type ContextSurfaceComponent,
-  type StoredContextSurfaceV8,
-} from "../context/context-surface";
-import {
-  canonicalSequenceHash,
-  renderedMessageHash,
-} from "../context/compiled-context-hash";
-import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
-import {
-  ToolExecutionFatalError,
-  type ContextMaintenanceHandle,
-  type ContextStatusRawResult,
-  type ContextSwapCandidatesRawResult,
-  type ContextSwapRawResult,
-  type AskUserRequest,
-  type AskUserResponse,
-  type ToolExecutor,
-} from "../tools/types";
-import type { TurnUndoResult } from "../tools/turn-undo-manager";
-import type { Refiner } from "../tools/web-fetch/refiner";
-import type { ProjectInstructionManifest } from "../instructions/project-instructions";
-import type {
-  AssistantTextDeltaSink,
-  AssistantTextDeltaUpdate,
-} from "./assistant-text-delta";
-import {
-  SessionStore,
   createSessionCompatibilityContract,
+  SessionStore,
   type CompletedTurnSnapshot,
   type SessionRecoveryResult,
   type StoredSkillActivation,
 } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
-import { SessionError } from "../session/session-errors";
+import {
+  createSkillCatalogSnapshot,
+  skillCatalogManifest,
+} from "../skills/skill-catalog";
+import {
+  buildActiveSystemPrompt,
+  rebindActiveSkills,
+  SkillActivationCoordinator,
+} from "../skills/skill-context";
+import type { SkillCatalogSnapshot } from "../skills/skill-loader";
+import { createDefaultTooling, type DefaultTooling } from "../tools/registry";
+import type { TurnUndoResult } from "../tools/turn-undo-manager";
+import { ToolExecutionFatalError, type AskUserRequest } from "../tools/types";
+import type { AssistantTextDeltaUpdate } from "./assistant-text-delta";
+import { ContextMeter } from "./context-meter";
 import { FatalAgentTurnError, runAgent, type RunAgentInput } from "./loop";
+import { assertPreparedMatchesSurface } from "./runtime-context-events";
+import { RuntimeContextMaintenance } from "./runtime-context-maintenance";
+import { RuntimeInteractions } from "./runtime-interactions";
+import { RuntimePromptScheduler } from "./runtime-prompt-scheduler";
+import {
+  RuntimeEventAppendError,
+  type AcceptedTurn,
+  type AskUserResolution,
+  type AskUserSnapshot,
+  type BashGuardSnapshot,
+  type CompletedTurnHook,
+  type CompletedTurnHookFailure,
+  type CreateNewRuntimeSessionInput,
+  type CreateRuntimeSessionInput,
+  type ExecuteTurnInput,
+  type PromptSchedulerSnapshot,
+  type QueueFollowUpResult,
+  type RuntimeSession,
+  type RuntimeSessionContext,
+  type RuntimeSessionFactoryDependencies,
+  type RuntimeSessionState,
+  type RuntimeSkillsSnapshot,
+  type SessionDisposeReason,
+  type SkillsUpdateSummary,
+} from "./runtime-session-contracts";
+import { RuntimeSkills } from "./runtime-skills";
 import {
   AdmissionStaleError,
   SessionLedgerWriteError,
-  type AgentTurnLedger,
   type AdmissionBaseToken,
+  type AgentTurnLedger,
   type SessionLedger,
 } from "./session-ledger";
-import { cancellationError, TurnCancelledError } from "./turn-cancellation";
-import type { ToolCompletionInput } from "../context/protocol-frame";
-import type { BuiltContextRequest } from "../context/context-revision";
-import type { CommittedToolCompletion } from "./session-ledger";
-import type { PublicToolingConfig } from "../cli/public-config-contract";
+import { TurnCancelledError } from "./turn-cancellation";
 import type {
   IterationIdentity,
   RunAgentResult,
@@ -120,291 +109,34 @@ import type {
   ToolCallIdentity,
   TurnIdentity,
 } from "./types";
-import { ContextMeter, type ContextUsageSnapshot } from "./context-meter";
-import { contextPressureNoticeText } from "./context-pressure-notice";
-import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
-import {
-  selectContextAutomation,
-  type ContextAutomationDecision,
-} from "../context/context-automation-policy";
-import type { SkillCatalogSnapshot } from "../skills/skill-loader";
-import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
-import {
-  activeSkillManifestEntry,
-  createSkillCatalogSnapshot,
-  skillCatalogManifest,
-} from "../skills/skill-catalog";
-import {
-  buildActiveSystemPrompt,
-  rebindActiveSkills,
-  renderSkillActivationReceipt,
-  SkillActivationCoordinator,
-} from "../skills/skill-context";
+import { projectUserMessage } from "./user-prompt-projection";
 
-export type ExecuteTurnInput = {
-  userMessage: UserMessage;
-  signal: AbortSignal;
-};
-
-export type AcceptedTurn = {
-  readonly turnId: TurnIdentity["turnId"];
-  readonly userMessage: UserMessage;
-  readonly completion: Promise<RunAgentResult>;
-};
-
-export type PromptSchedulerSnapshot = {
-  readonly state: "idle" | "running";
-  readonly activeTurnId?: TurnIdentity["turnId"];
-  readonly pendingCount: number;
-};
-
-export type QueueFollowUpResult = {
-  readonly kind: "queued";
-  readonly pendingCount: number;
-  readonly activeTurnId?: TurnIdentity["turnId"];
-};
-
-export type SessionDisposeReason =
-  | { type: "oneshot_complete" }
-  | { type: "tui_exit" }
-  | { type: "session_switch" }
-  | { type: "runner_failed"; error: string }
-  | { type: "initialization_failed"; error: string };
-
-export type RuntimeSession = {
-  readonly sessionId: SessionId;
-  readonly resumed: boolean;
-  readonly recovery: SessionRecoveryResult;
-  skills(): RuntimeSkillsSnapshot;
-  mcp(): McpInventorySnapshot;
-  supportsImageInput(): boolean;
-  reasoningEffort(): ReasoningEffortSnapshot | undefined;
-  setReasoningEffort(effort: string): ReasoningEffortSnapshot;
-  resetReasoningEffort(): ReasoningEffortSnapshot;
-  importImage(
-    sourcePath: string,
-    signal: AbortSignal,
-    prospectiveMessageImageCount: number,
-  ): Promise<ImportedImageAsset>;
-  verifyImageAssets(
-    assets: readonly ImageAssetRef[],
-    signal: AbortSignal,
-  ): Promise<void>;
-  admitTurn(input: ExecuteTurnInput): Promise<AcceptedTurn>;
-  executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult>;
-  promptScheduler(): PromptSchedulerSnapshot;
-  subscribePromptScheduler(listener: () => void): () => void;
-  queueFollowUp(userMessage: UserMessage): QueueFollowUpResult;
-  compactContext(): Promise<ContextCompactionResult>;
-  retireContext(): Promise<ContextRetirementResult>;
-  undoLatestFileMutationTurn(): Promise<TurnUndoResult>;
-  cloneSession(targetSessionId: SessionId): Promise<void>;
-  canSwitchSession(): boolean;
-  bashGuard(): BashGuardSnapshot;
-  subscribeBashGuard(listener: () => void): () => void;
-  setYoloMode(enabled: boolean): void;
-  resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
-  askUser(): AskUserSnapshot;
-  subscribeAskUser(listener: () => void): () => void;
-  resolveAskUser(response: AskUserResolution): Promise<void>;
-  dispose(reason: SessionDisposeReason): Promise<void>;
-};
-
-export type AskUserSnapshot = {
-  readonly pending?: AskUserRequest;
-};
-
-export type AskUserResolution =
-  | { readonly outcome: "selected"; readonly selectedIndex: number }
-  | { readonly outcome: "dismissed" };
-
-export type BashGuardSource = "default" | "environment" | "cli" | "session";
-
-export type BashGuardSnapshot = {
-  readonly mode: "guard" | "yolo";
-  readonly source: BashGuardSource;
-  readonly pending?: {
-    readonly command: string;
-    readonly reason: string;
-  };
-};
+export {
+  RuntimeEventAppendError,
+  type AcceptedTurn,
+  type AskUserResolution,
+  type AskUserSnapshot,
+  type BashGuardSnapshot,
+  type BashGuardSource,
+  type CompletedTurnHook,
+  type CompletedTurnHookFailure,
+  type CompletedTurnHookInput,
+  type ContextSurfaceRefreshSummary,
+  type CreateRuntimeSessionInput,
+  type ExecuteTurnInput,
+  type PromptSchedulerSnapshot,
+  type QueueFollowUpResult,
+  type RuntimeSession,
+  type RuntimeSessionContext,
+  type RuntimeSessionFactoryDependencies,
+  type RuntimeSkillsSnapshot,
+  type SessionDisposeReason,
+  type SkillsUpdateSummary,
+} from "./runtime-session-contracts";
 
 const EMPTY_MCP_INVENTORY: McpInventorySnapshot = Object.freeze({
   servers: Object.freeze([]),
 });
-
-export type RuntimeSkillsSnapshot = {
-  readonly skills: readonly {
-    readonly name: string;
-    readonly description: string;
-    readonly scope: "project" | "user";
-    readonly active: boolean;
-  }[];
-  readonly shadowedNames: readonly string[];
-};
-
-export type RuntimeSessionContext = {
-  readonly sessionId: SessionId;
-  readonly contextMaintenance: ContextMaintenanceHandle;
-  createIteration(turn: TurnIdentity, iterationNumber: number): IterationIdentity;
-  createToolCall(
-    iteration: IterationIdentity,
-    toolCallNumber: number,
-  ): ToolCallIdentity;
-  finishIterationForContinuation(iteration: IterationIdentity): void;
-  append(input: AgentEventInput): Promise<void>;
-  updateAssistantTextDelta?(update: AssistantTextDeltaUpdate): void;
-  onToolCompletionsCommitted?(input: {
-    completions: readonly ToolCompletionInput[];
-    committed: readonly CommittedToolCompletion[];
-  }): void;
-  prepareModelDispatch?(input: {
-    iteration: IterationIdentity;
-    built: BuiltContextRequest;
-  }): void;
-  maintainContextAfterIteration?(input: {
-    turn: TurnIdentity;
-    consumedThroughOrdinal: number;
-    ledger: AgentTurnLedger;
-  }): Promise<void>;
-  applyQueuedSteering?(input: {
-    turn: TurnIdentity;
-    ledger: AgentTurnLedger;
-  }): Promise<number>;
-};
-
-export type ContextSurfaceRefreshSummary = {
-  readonly previousRevisionNumber: number;
-  readonly revisionNumber: number;
-  readonly changed: readonly ContextSurfaceComponent[];
-  readonly toolCountBefore: number;
-  readonly toolCountAfter: number;
-};
-
-export type SkillsUpdateSummary = {
-  readonly previousRevisionNumber: number;
-  readonly revisionNumber: number;
-  readonly activated: readonly string[];
-  readonly refreshed: readonly string[];
-  readonly deactivated: readonly string[];
-  readonly unavailable: readonly string[];
-  readonly addedOverrideCount: number;
-};
-
-export type CompletedTurnHookInput = {
-  readonly workspaceRoot: string;
-  readonly sessionId: SessionId;
-  readonly turnId: TurnId;
-  readonly snapshot: CompletedTurnSnapshot;
-};
-
-export type CompletedTurnHookFailure = {
-  readonly workspaceRoot: string;
-  readonly sessionId: SessionId;
-  readonly turnId: TurnId;
-  readonly reason: "completed_turn_snapshot_failed" | "completed_turn_enqueue_failed";
-};
-
-export type CompletedTurnHook = {
-  enqueue(input: CompletedTurnHookInput): void;
-  recordFailure(input: CompletedTurnHookFailure): void;
-};
-
-type CommonRuntimeSessionInput = {
-  workspaceRoot: string;
-  homeRoot?: string;
-  modelName: string;
-  profileName?: string;
-  maxIterations: number;
-  includeReasoningContent: boolean;
-  contextProfile: ModelContextProfile;
-  contextBudget: ModelContextBudget;
-  modelClient: ModelClient;
-  systemPrompt: string;
-  projectInstruction?: ProjectInstructionManifest;
-  skillCatalog?: SkillCatalogSnapshot;
-  presentationSinks?: EventSink[];
-  assistantTextDeltaSink?: AssistantTextDeltaSink;
-  persistence?:
-    | false
-    | {
-        eventLogPath?: string;
-        observationLogPath?: string;
-      };
-  webFetchRefiner?: Refiner;
-  toolingConfig?: PublicToolingConfig;
-  memorySearch?: ToolExecutor;
-  memoryGet?: ToolExecutor;
-  memoryCreate?: ToolExecutor;
-  memoryUpdate?: ToolExecutor;
-  memoryDelete?: ToolExecutor;
-  completedTurnHook?: CompletedTurnHook;
-  enableTurnUndo?: boolean;
-  enableAskUser?: boolean;
-  bashGuard?: {
-    readonly mode: "guard" | "yolo";
-    readonly source: Exclude<BashGuardSource, "session">;
-    readonly surface: "tui" | "one-shot";
-  };
-};
-
-type CreateNewRuntimeSessionInput = CommonRuntimeSessionInput & {
-  selection: { mode: "new"; sessionId: SessionId };
-};
-
-type ResumeRuntimeSessionInput = CommonRuntimeSessionInput & {
-  selection: { mode: "resume"; sessionId: SessionId };
-};
-
-export type CreateRuntimeSessionInput =
-  | CreateNewRuntimeSessionInput
-  | ResumeRuntimeSessionInput;
-
-export type RuntimeSessionFactoryDependencies = {
-  idFactory: RuntimeIdFactory;
-  createTooling: typeof createDefaultTooling;
-  loadMcpConfig: typeof loadMcpConfig;
-  createMcpManager: typeof createMcpManager;
-  createObservationBuilder: () => ObservationBuilder;
-  openStore: (
-    input: CreateRuntimeSessionInput,
-    idFactory: RuntimeIdFactory,
-  ) => Promise<SessionStore>;
-  createLedger: (store: SessionStore, idFactory: RuntimeIdFactory) => SessionLedger;
-  createEventSink: (
-    input: CreateRuntimeSessionInput,
-    sessionDirectory: string,
-  ) => EventSink;
-  selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
-  onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
-  selectContextAutomation: typeof selectContextAutomation;
-  automaticCompactionTrigger: () => ContextCompactionTrigger;
-  automaticRetirementTrigger: () => ContextRetirementTrigger;
-  manualCompactionTrigger: () => ContextCompactionTrigger;
-  manualRetirementTrigger: () => ContextRetirementTrigger;
-};
-
-export class RuntimeEventAppendError extends Error {
-  readonly eventType: AgentEventType;
-
-  constructor(eventType: AgentEventType, options?: ErrorOptions) {
-    super(`Failed to append runtime event ${eventType}.`, options);
-    this.name = "RuntimeEventAppendError";
-    this.eventType = eventType;
-  }
-}
-
-type RuntimeSessionState =
-  | "initializing"
-  | "admitting"
-  | "ready"
-  | "executing"
-  | "compacting"
-  | "maintaining_context"
-  | "undoing"
-  | "faulted"
-  | "disposing"
-  | "disposed";
 
 type ActiveTurn = {
   turn: TurnIdentity;
@@ -413,13 +145,6 @@ type ActiveTurn = {
   controller: AbortController;
   completion: Promise<RunAgentResult>;
 };
-
-type QueuedPrompt = {
-  readonly userMessage: UserMessage;
-};
-
-const MAX_QUEUED_PROMPTS = 8;
-const MAX_QUEUED_PROMPT_TEXT_BYTES = 64 * 1024;
 
 type ActiveAdmission = {
   controller: AbortController;
@@ -467,6 +192,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     syntheticCompletionCount: 0,
     recallIndexRebuilt: false,
   };
+
   private state: RuntimeSessionState = "initializing";
   private nextTurnNumber: number;
   private readonly turns = new Map<string, TurnIdentity>();
@@ -480,13 +206,6 @@ class DefaultRuntimeSession implements RuntimeSession {
   private ledger?: SessionLedger;
   private activeAdmission?: ActiveAdmission;
   private activeTurn?: ActiveTurn;
-  private executionChainRunning = false;
-  private readonly queuedPrompts: QueuedPrompt[] = [];
-  private promptSchedulerSnapshot: PromptSchedulerSnapshot = Object.freeze({
-    state: "idle",
-    pendingCount: 0,
-  });
-  private readonly promptSchedulerListeners = new Set<() => void>();
   private activeContextRevision?: Promise<
     ContextCompactionResult | ContextRetirementResult
   >;
@@ -497,37 +216,13 @@ class DefaultRuntimeSession implements RuntimeSession {
   private readonly shadowPlanner: SwapPlanner;
   private contextManager?: ContextManager;
   private contextAutomationDecision?: ContextAutomationDecision;
-  private pendingAutomaticContextMaintenance = false;
-  private pendingModelDirectedSwap?: Set<MessageId>;
-  private modelDirectedSwapLease = false;
-  private pressureNoticeSentThisTurn = false;
-  private readonly skillCatalog: SkillCatalogSnapshot;
-  private skillCoordinator = new SkillActivationCoordinator();
-  private bashGuardMode: "guard" | "yolo";
-  private bashGuardSource: BashGuardSource;
-  private bashGuardSnapshot: BashGuardSnapshot;
-  private readonly bashGuardListeners = new Set<() => void>();
-  private askUserSnapshot: AskUserSnapshot = Object.freeze({});
-  private readonly askUserListeners = new Set<() => void>();
-  private pendingAskUser?: {
-    readonly request: AskUserRequest;
-    readonly startedAt: number;
-    readonly call: ToolCallIdentity;
-    readonly resolve: (response: AskUserResponse) => void;
-    readonly reject: (error: unknown) => void;
-    readonly removeAbortListener: () => void;
-  };
   private assistantTextDeltaSinkDisabled = false;
-  private pendingBashConfirmation?: {
-    readonly command: string;
-    readonly reason: string;
-    readonly startedAt: number;
-    readonly call: ToolCallIdentity;
-    readonly resolve: (decision: "allow" | "deny") => void;
-    readonly reject: (error: unknown) => void;
-    readonly removeAbortListener: () => void;
-  };
 
+  private readonly skillCatalog: SkillCatalogSnapshot;
+  private readonly interactions: RuntimeInteractions;
+  private readonly scheduler: RuntimePromptScheduler;
+  private readonly contextMaintenance: RuntimeContextMaintenance;
+  private readonly runtimeSkills: RuntimeSkills;
   private readonly context: RuntimeSessionContext;
 
   private constructor(
@@ -540,12 +235,15 @@ class DefaultRuntimeSession implements RuntimeSession {
   ) {
     this.sessionId = input.selection.sessionId;
     this.resumed = input.selection.mode === "resume";
-    this.bashGuardMode = input.bashGuard?.mode ?? "guard";
-    this.bashGuardSource = input.bashGuard?.source ?? "default";
-    this.bashGuardSnapshot = Object.freeze({
-      mode: this.bashGuardMode,
-      source: this.bashGuardSource,
-    });
+    this.scheduler = new RuntimePromptScheduler(
+      () => this.state,
+      () => this.activeTurn,
+      (input) => this.admitSingleTurn(input),
+      (event) => this.append(event),
+    );
+    this.interactions = new RuntimeInteractions(input.bashGuard, (event) =>
+      this.append(event),
+    );
     this.skillCatalog =
       input.skillCatalog ??
       createSkillCatalogSnapshot({
@@ -559,12 +257,40 @@ class DefaultRuntimeSession implements RuntimeSession {
       onMeasuredAnchor: (anchor) => store.writeMeasuredContextAnchor(anchor),
     });
     this.shadowPlanner = new SwapPlanner(input.modelClient);
+    this.contextMaintenance = new RuntimeContextMaintenance(
+      this.sessionId,
+      store,
+      () => this.requireContextManager(),
+      () => this.requireContextAutomation(),
+      (call, expectedName) => this.requireActiveContextTool(call, expectedName),
+      (event) => this.append(event),
+      {
+        getState: () => this.state,
+        setState: (state) => {
+          this.state = state;
+        },
+        hasActiveTurn: () => this.activeTurn !== undefined,
+        fault: (error) => this.fault(error),
+      },
+      dependencies,
+    );
+    this.runtimeSkills = new RuntimeSkills(
+      this.sessionId,
+      store,
+      input,
+      this.skillCatalog,
+      dependencies.idFactory,
+      this.contextMeter,
+      () => this.requireTooling().registry.definitions(),
+      (event) => this.append(event),
+    );
     this.context = {
       sessionId: this.sessionId,
       contextMaintenance: {
-        status: (call) => this.contextStatus(call),
-        candidates: (call, page) => this.contextSwapCandidates(call, page),
-        swap: (call, selection) => this.contextSwap(call, selection),
+        status: (call) => this.contextMaintenance.contextStatus(call),
+        candidates: (call, page) =>
+          this.contextMaintenance.contextSwapCandidates(call, page),
+        swap: (call, selection) => this.contextMaintenance.contextSwap(call, selection),
       },
       createIteration: (turn, iterationNumber) =>
         this.createIteration(turn, iterationNumber),
@@ -580,11 +306,11 @@ class DefaultRuntimeSession implements RuntimeSession {
               this.updateAssistantTextDelta(update),
           }),
       onToolCompletionsCommitted: (completion) =>
-        this.onToolCompletionsCommitted(completion),
+        this.runtimeSkills.onToolCompletionsCommitted(completion),
       prepareModelDispatch: (dispatch) => this.prepareModelDispatch(dispatch),
       maintainContextAfterIteration: (maintenance) =>
-        this.performActiveTurnContextMaintenance(maintenance),
-      applyQueuedSteering: (steering) => this.applyQueuedSteering(steering),
+        this.contextMaintenance.performActiveTurnContextMaintenance(maintenance),
+      applyQueuedSteering: (steering) => this.scheduler.applyQueuedSteering(steering),
     };
   }
 
@@ -669,9 +395,9 @@ class DefaultRuntimeSession implements RuntimeSession {
           active: storedSurface.activeSkills,
           promotionNames,
         });
-        session.skillCoordinator = new SkillActivationCoordinator({
-          active: rebound.active,
-        });
+        session.runtimeSkills.restoreCoordinator(
+          new SkillActivationCoordinator({ active: rebound.active }),
+        );
         const activated = promotionNames
           .filter((entry) => session.skillCatalog.skills.has(entry.name))
           .map((entry) => entry.name)
@@ -728,13 +454,13 @@ class DefaultRuntimeSession implements RuntimeSession {
                 call: ToolCallIdentity,
                 request: AskUserRequest,
                 signal: AbortSignal,
-              ) => session.requestUserAnswer(call, request, signal),
+              ) => session.interactions.requestUserAnswer(call, request, signal),
             }
           : {}),
         bashGuard: {
           surface: input.bashGuard?.surface ?? "one-shot",
           confirm: (call, request, signal) =>
-            session.confirmBashCommand(call, request, signal),
+            session.interactions.confirmBashCommand(call, request, signal),
         },
         ...(input.memorySearch === undefined
           ? {}
@@ -753,7 +479,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           ? {}
           : {
               skillCatalog: session.skillCatalog,
-              skillCoordinator: session.skillCoordinator,
+              skillCoordinator: session.runtimeSkills.coordinator,
             }),
       });
 
@@ -774,7 +500,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       const definitions = session.requireTooling().registry.definitions();
       const activeSystemPrompt = buildActiveSystemPrompt({
         baseSystemPrompt: input.systemPrompt,
-        activeSkills: session.skillCoordinator.activeEntries(),
+        activeSkills: session.runtimeSkills.coordinator.activeEntries(),
       });
       const surfacePrepared = input.modelClient.prepare({
         messages: [{ role: "system", content: activeSystemPrompt }],
@@ -789,7 +515,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           ? {}
           : { projectInstruction: input.projectInstruction }),
         skillCatalog: skillCatalogManifest(session.skillCatalog.skills.values()),
-        activeSkills: session.skillCoordinator.activeManifest(),
+        activeSkills: session.runtimeSkills.coordinator.activeManifest(),
         toolDefinitions: definitions,
         prepared: surfacePrepared,
         createdAt: new Date().toISOString(),
@@ -807,10 +533,10 @@ class DefaultRuntimeSession implements RuntimeSession {
         let skillsUpdate: SkillsUpdateSummary | undefined;
         const refresh =
           resumeSkills.unresolved.length === 0
-            ? await session.refreshContextSurface(candidateSurface)
+            ? await session.runtimeSkills.refreshContextSurface(candidateSurface)
             : undefined;
         if (resumeSkills.unresolved.length > 0) {
-          skillsUpdate = await session.commitSkillSettlements({
+          skillsUpdate = await session.runtimeSkills.commitSkillSettlements({
             reason: "resume",
             candidateSurface,
             unresolved: resumeSkills.unresolved,
@@ -884,7 +610,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         }
       }
 
-      await session.appendSkillsCatalogLoaded();
+      await session.runtimeSkills.appendSkillsCatalogLoaded();
 
       session.ledger = dependencies.createLedger(store, dependencies.idFactory);
       session.contextManager = new ContextManager({
@@ -936,9 +662,9 @@ class DefaultRuntimeSession implements RuntimeSession {
         initialSnapshot.pressure !== "normal" &&
         session.contextAutomationDecision.automaticSwapOnly
       ) {
-        session.pendingAutomaticContextMaintenance = true;
+        session.contextMaintenance.scheduleAutomaticMaintenance();
         session.state = "executing";
-        await session.performAutomaticContextMaintenance();
+        await session.contextMaintenance.performAutomaticContextMaintenance();
       }
 
       session.state = "ready";
@@ -948,139 +674,36 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
   }
 
-  private async refreshContextSurface(
-    candidateSurface: StoredContextSurfaceV8,
-  ): Promise<ContextSurfaceRefreshSummary | undefined> {
-    const snapshot = this.store.loadContextSnapshot();
-    if (sameContextSurface(snapshot.surface, candidateSurface)) {
-      return undefined;
-    }
+  bashGuard(): BashGuardSnapshot {
+    return this.interactions.bashGuard();
+  }
 
-    const changes = contextSurfaceChanges(snapshot.surface, candidateSurface);
-    const changed = changedContextSurfaceComponents(changes);
-    if (changed.length === 0) {
-      throw new Error("Changed context surface has an empty change manifest.");
-    }
-    const startedAt = performance.now();
-    await this.append({
-      type: "context.revision.started",
-      sessionId: this.sessionId,
-      data: {
-        strategy: "surface_refresh",
-        reason: "resume",
-        baseRevisionNumber: snapshot.revision.revisionNumber,
-        changed,
-      },
-    });
+  subscribeBashGuard(listener: () => void): () => void {
+    return this.interactions.subscribeBashGuard(listener);
+  }
 
-    let stage: "prepare" | "commit" | "activate" = "prepare";
-    let committed = false;
-    try {
-      const compiler = new ContextRevisionCompiler();
-      const active = compiler.compileActive(snapshot);
-      const candidateCompiled = compiler.compileProspective({
-        active,
-        canonical: snapshot.canonical,
-        activeOverrides: snapshot.activeOverrides,
-        addedOverrides: [],
-        activeSurface: snapshot.surface,
-        surface: candidateSurface,
-      });
-      const prepared = this.input.modelClient.prepare({
-        messages: candidateCompiled.entries.map((entry) => entry.message),
-        tools: [...candidateSurface.toolDefinitions],
-      });
-      assertPreparedMatchesSurface(prepared, candidateSurface);
+  setYoloMode(enabled: boolean): void {
+    return this.interactions.setYoloMode(enabled);
+  }
 
-      stage = "commit";
-      const revision = this.store.commitSurfaceRefresh({
-        revisionId: this.dependencies.idFactory.createContextRevisionId(),
-        expectedBaseRevisionId: snapshot.revision.revisionId,
-        expectedBaseRevisionNumber: snapshot.revision.revisionNumber,
-        expectedCanonicalThroughOrdinal: snapshot.canonical.messages.length,
-        expectedBaseActiveOverrideManifestSha256:
-          snapshot.revision.activeOverrideManifestSha256,
-        surface: candidateSurface,
-        changes,
-        changeManifestSha256: contextSurfaceChangeManifestHash(changes),
-        canonicalSequenceSha256: canonicalSequenceHash(snapshot.canonical),
-        renderedMessageSha256: renderedMessageHash(candidateCompiled.entries),
-      });
-      committed = true;
+  resolveBashConfirmation(decision: "allow" | "deny"): Promise<void> {
+    return this.interactions.resolveBashConfirmation(decision);
+  }
 
-      stage = "activate";
-      this.contextMeter.startRevision({
-        reason: "context_rebuilt",
-        requestConfigHash: prepared.requestConfigHash,
-        toolSchemaHash: prepared.toolSchemaHash,
-      });
-      const summary = Object.freeze({
-        previousRevisionNumber: snapshot.revision.revisionNumber,
-        revisionNumber: revision.revisionNumber,
-        changed,
-        toolCountBefore: snapshot.surface.toolDefinitions.length,
-        toolCountAfter: candidateSurface.toolDefinitions.length,
-      });
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "surface_refresh",
-          reason: "resume",
-          baseRevisionNumber: summary.previousRevisionNumber,
-          revisionNumber: summary.revisionNumber,
-          changed: summary.changed,
-          toolCountBefore: summary.toolCountBefore,
-          toolCountAfter: summary.toolCountAfter,
-          measuredAnchorCleared: true,
-          durationMs: elapsedMs(startedAt),
-        },
-      });
-      return summary;
-    } catch (error) {
-      await this.append({
-        type: "context.revision.failed",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "surface_refresh",
-          reason: "resume",
-          stage,
-          errorCode: boundedContextErrorCode(
-            error instanceof SessionError
-              ? error.code
-              : error instanceof Error
-                ? error.name
-                : "CONTEXT_SURFACE_REFRESH_FAILED",
-          ),
-          error: `Context surface refresh failed at ${stage}.`,
-          committed,
-        },
-      }).catch(() => undefined);
-      throw error;
-    }
+  askUser(): AskUserSnapshot {
+    return this.interactions.askUser();
+  }
+
+  subscribeAskUser(listener: () => void): () => void {
+    return this.interactions.subscribeAskUser(listener);
+  }
+
+  resolveAskUser(response: AskUserResolution): Promise<void> {
+    return this.interactions.resolveAskUser(response);
   }
 
   skills(): RuntimeSkillsSnapshot {
-    const activeNames = new Set(
-      this.skillCoordinator.activeEntries().map((entry) => entry.skill.name),
-    );
-    return Object.freeze({
-      skills: Object.freeze(
-        [...this.skillCatalog.skills.values()]
-          .sort((left, right) => compareText(left.name, right.name))
-          .map((skill) =>
-            Object.freeze({
-              name: skill.name,
-              description: skill.description,
-              scope: skill.scope,
-              active: activeNames.has(skill.name),
-            }),
-          ),
-      ),
-      shadowedNames: Object.freeze(
-        this.skillCatalog.shadowed.map((entry) => entry.name),
-      ),
-    });
+    return this.runtimeSkills.skills();
   }
 
   mcp(): McpInventorySnapshot {
@@ -1119,247 +742,6 @@ class DefaultRuntimeSession implements RuntimeSession {
       throw new Error("Current model profile does not configure reasoning effort.");
     }
     return reasoningEffort.reset();
-  }
-
-  bashGuard(): BashGuardSnapshot {
-    return this.bashGuardSnapshot;
-  }
-
-  private refreshBashGuardSnapshot(): void {
-    this.bashGuardSnapshot = Object.freeze({
-      mode: this.bashGuardMode,
-      source: this.bashGuardSource,
-      ...(this.pendingBashConfirmation === undefined
-        ? {}
-        : {
-            pending: Object.freeze({
-              command: this.pendingBashConfirmation.command,
-              reason: this.pendingBashConfirmation.reason,
-            }),
-          }),
-    });
-  }
-
-  subscribeBashGuard(listener: () => void): () => void {
-    this.bashGuardListeners.add(listener);
-    return () => this.bashGuardListeners.delete(listener);
-  }
-
-  setYoloMode(enabled: boolean): void {
-    this.bashGuardMode = enabled ? "yolo" : "guard";
-    this.bashGuardSource = "session";
-    this.refreshBashGuardSnapshot();
-    this.notifyBashGuardListeners();
-  }
-
-  async resolveBashConfirmation(decision: "allow" | "deny"): Promise<void> {
-    const pending = this.pendingBashConfirmation;
-    if (pending === undefined) {
-      throw new Error("No Bash confirmation is pending.");
-    }
-    this.pendingBashConfirmation = undefined;
-    this.refreshBashGuardSnapshot();
-    pending.removeAbortListener();
-    await this.append({
-      type: "tool.confirmation.resolved",
-      ...pending.call,
-      data: {
-        command: pending.command,
-        reason: pending.reason,
-        decision,
-        durationMs: Date.now() - pending.startedAt,
-      },
-    });
-    pending.resolve(decision);
-    this.notifyBashGuardListeners();
-  }
-
-  private async confirmBashCommand(
-    call: ToolCallIdentity,
-    request: { command: string; reason: string },
-    signal: AbortSignal,
-  ): Promise<"allow" | "deny"> {
-    const startedAt = Date.now();
-    await this.append({
-      type: "tool.confirmation.requested",
-      ...call,
-      data: request,
-    });
-
-    const surface = this.input.bashGuard?.surface ?? "one-shot";
-    if (this.bashGuardMode === "yolo" || surface === "one-shot") {
-      const decision = this.bashGuardMode === "yolo" ? "allow" : "deny";
-      await this.append({
-        type: "tool.confirmation.resolved",
-        ...call,
-        data: {
-          ...request,
-          decision,
-          durationMs: Date.now() - startedAt,
-        },
-      });
-      return decision;
-    }
-
-    if (this.pendingBashConfirmation !== undefined) {
-      throw new Error("Another Bash confirmation is already pending.");
-    }
-
-    return new Promise<"allow" | "deny">((resolve, reject) => {
-      const onAbort = () => {
-        const pending = this.pendingBashConfirmation;
-        if (pending?.call.toolCallId !== call.toolCallId) {
-          return;
-        }
-        this.pendingBashConfirmation = undefined;
-        this.refreshBashGuardSnapshot();
-        void this.append({
-          type: "tool.confirmation.resolved",
-          ...call,
-          data: {
-            ...request,
-            decision: "cancelled",
-            durationMs: Date.now() - startedAt,
-          },
-        }).finally(() => {
-          reject(cancellationError(signal));
-          this.notifyBashGuardListeners();
-        });
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      this.pendingBashConfirmation = {
-        ...request,
-        startedAt,
-        call,
-        resolve,
-        reject,
-        removeAbortListener: () => signal.removeEventListener("abort", onAbort),
-      };
-      this.refreshBashGuardSnapshot();
-      this.notifyBashGuardListeners();
-      if (signal.aborted) {
-        onAbort();
-      }
-    });
-  }
-
-  private notifyBashGuardListeners(): void {
-    for (const listener of this.bashGuardListeners) {
-      listener();
-    }
-  }
-
-  askUser(): AskUserSnapshot {
-    return this.askUserSnapshot;
-  }
-
-  subscribeAskUser(listener: () => void): () => void {
-    this.askUserListeners.add(listener);
-    return () => this.askUserListeners.delete(listener);
-  }
-
-  async resolveAskUser(response: AskUserResolution): Promise<void> {
-    const pending = this.pendingAskUser;
-    if (pending === undefined) {
-      throw new Error("No AskUser question is pending.");
-    }
-    let result: AskUserResponse;
-    if (response.outcome === "selected") {
-      if (!Number.isSafeInteger(response.selectedIndex)) {
-        throw new Error("AskUser selectedIndex must be an integer.");
-      }
-      const option = pending.request.options[response.selectedIndex];
-      if (option === undefined) {
-        throw new Error("AskUser selectedIndex is out of range.");
-      }
-      result = { outcome: "selected", answer: option.description };
-    } else {
-      result = { outcome: "dismissed" };
-    }
-    this.pendingAskUser = undefined;
-    this.askUserSnapshot = Object.freeze({});
-    pending.removeAbortListener();
-    await this.append({
-      type: "tool.user_question.resolved",
-      ...pending.call,
-      data: {
-        ...result,
-        durationMs: Date.now() - pending.startedAt,
-      },
-    });
-    pending.resolve(result);
-    this.notifyAskUserListeners();
-  }
-
-  private async requestUserAnswer(
-    call: ToolCallIdentity,
-    request: AskUserRequest,
-    signal: AbortSignal,
-  ): Promise<AskUserResponse> {
-    if (this.pendingAskUser !== undefined) {
-      throw new Error("Another AskUser question is already pending.");
-    }
-    if (this.pendingBashConfirmation !== undefined) {
-      throw new Error("Cannot ask the user while a Bash confirmation is pending.");
-    }
-    if (signal.aborted) {
-      throw cancellationError(signal);
-    }
-    const startedAt = Date.now();
-    await this.append({
-      type: "tool.user_question.requested",
-      ...call,
-      data: request,
-    });
-    return new Promise<AskUserResponse>((resolve, reject) => {
-      const onAbort = () => {
-        const pending = this.pendingAskUser;
-        if (pending?.call.toolCallId !== call.toolCallId) {
-          return;
-        }
-        this.pendingAskUser = undefined;
-        this.askUserSnapshot = Object.freeze({});
-        void this.append({
-          type: "tool.user_question.resolved",
-          ...call,
-          data: {
-            outcome: "cancelled",
-            durationMs: Date.now() - startedAt,
-          },
-        }).finally(() => {
-          reject(cancellationError(signal));
-          this.notifyAskUserListeners();
-        });
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-      const immutableRequest = Object.freeze({
-        question: request.question,
-        options: Object.freeze(
-          request.options.map((option) =>
-            Object.freeze({ description: option.description }),
-          ),
-        ),
-      });
-      this.pendingAskUser = {
-        request: immutableRequest,
-        startedAt,
-        call,
-        resolve,
-        reject,
-        removeAbortListener: () => signal.removeEventListener("abort", onAbort),
-      };
-      this.askUserSnapshot = Object.freeze({ pending: immutableRequest });
-      this.notifyAskUserListeners();
-      if (signal.aborted) {
-        onAbort();
-      }
-    });
-  }
-
-  private notifyAskUserListeners(): void {
-    for (const listener of this.askUserListeners) {
-      listener();
-    }
   }
 
   async importImage(
@@ -1428,103 +810,6 @@ class DefaultRuntimeSession implements RuntimeSession {
     return this.contextAutomationDecision;
   }
 
-  private async contextStatus(call: ToolCall): Promise<ContextStatusRawResult> {
-    const active = this.requireActiveContextTool(call, "ContextStatus");
-    try {
-      const usage = this.requireContextManager().measureActive(
-        active.turn.turnId,
-        active.ledger,
-      );
-      return Object.freeze({
-        ok: true,
-        operation: "status",
-        usedInputTokens: usage.usedInputTokens,
-        inputBudgetTokens: usage.inputBudgetTokens,
-        pressure: toolContextPressure(usage.pressure),
-        triggerTokens: usage.triggerTokens,
-        source: usage.source,
-      });
-    } catch (error) {
-      return {
-        ok: false,
-        operation: "status",
-        error: this.contextToolFailure("status", error),
-      };
-    }
-  }
-
-  private async contextSwapCandidates(
-    call: ToolCall,
-    page: { readonly limit: number; readonly offset: number },
-  ): Promise<ContextSwapCandidatesRawResult> {
-    const active = this.requireActiveContextTool(call, "ContextSwapCandidates");
-    try {
-      const result = this.requireContextManager().listActiveSwapCandidates({
-        turnId: active.turn.turnId,
-        consumedThroughOrdinal: active.consumedThroughOrdinal,
-        activeLedger: active.ledger,
-        limit: page.limit,
-        offset: page.offset,
-      });
-      if (result.total > 0 && result.usage.pressure !== "normal") {
-        this.modelDirectedSwapLease = true;
-      }
-      return Object.freeze({
-        ok: true,
-        operation: "candidates",
-        total: result.total,
-        candidates: result.candidates,
-      });
-    } catch (error) {
-      return {
-        ok: false,
-        operation: "candidates",
-        error: this.contextToolFailure("candidate listing", error),
-      };
-    }
-  }
-
-  private async contextSwap(
-    call: ToolCall,
-    selection: { readonly candidateIds: readonly MessageId[] },
-  ): Promise<ContextSwapRawResult> {
-    const active = this.requireActiveContextTool(call, "ContextSwap");
-    try {
-      const result = this.requireContextManager().validateActiveSwapSelection({
-        turnId: active.turn.turnId,
-        consumedThroughOrdinal: active.consumedThroughOrdinal,
-        activeLedger: active.ledger,
-        messageIds: selection.candidateIds,
-      });
-      if (result.scheduled.length === 0) {
-        return Object.freeze({
-          ok: false,
-          operation: "swap",
-          scheduled: Object.freeze([]),
-          rejected: result.rejected,
-        });
-      }
-      const pending = (this.pendingModelDirectedSwap ??= new Set<MessageId>());
-      for (const candidate of result.scheduled) pending.add(candidate.candidateId);
-      this.modelDirectedSwapLease = false;
-      return Object.freeze({
-        ok: true,
-        operation: "swap",
-        scheduled: result.scheduled,
-        rejected: result.rejected,
-        note: "Swap executes when this iteration's tool frames close.",
-      });
-    } catch (error) {
-      return {
-        ok: false,
-        operation: "swap",
-        scheduled: [],
-        rejected: [],
-        error: this.contextToolFailure("swap scheduling", error),
-      };
-    }
-  }
-
   private requireActiveContextTool(
     call: ToolCall,
     expectedName: "ContextStatus" | "ContextSwapCandidates" | "ContextSwap",
@@ -1545,71 +830,6 @@ class DefaultRuntimeSession implements RuntimeSession {
     return active as ActiveTurn & { consumedThroughOrdinal: number };
   }
 
-  private contextToolFailure(operation: string, error: unknown): string {
-    if (error instanceof ContextManagerError && !error.fatal) {
-      return `Context ${operation} failed (${boundedContextErrorCode(error.code)}).`;
-    }
-    throw new ToolExecutionFatalError(
-      `Context ${operation} required canonical session state that could not be read safely.`,
-      { cause: error },
-    );
-  }
-
-  private appendSkillsCatalogLoaded(): Promise<void> {
-    const activeNames = this.skillCoordinator
-      .activeEntries()
-      .map((entry) => entry.skill.name);
-    if (
-      this.skillCatalog.skills.size === 0 &&
-      activeNames.length === 0 &&
-      this.skillCatalog.shadowed.length === 0
-    ) {
-      return Promise.resolve();
-    }
-    const skills = [...this.skillCatalog.skills.values()];
-    return this.append({
-      type: "skills.catalog.loaded",
-      sessionId: this.sessionId,
-      data: {
-        availableCount: skills.length,
-        projectCount: skills.filter((skill) => skill.scope === "project").length,
-        userCount: skills.filter((skill) => skill.scope === "user").length,
-        activeNames: Object.freeze(activeNames),
-        shadowedNames: Object.freeze(
-          this.skillCatalog.shadowed.map((entry) => entry.name),
-        ),
-      },
-    });
-  }
-
-  private onToolCompletionsCommitted(input: {
-    completions: readonly ToolCompletionInput[];
-    committed: readonly CommittedToolCompletion[];
-  }): void {
-    if (input.completions.length !== input.committed.length) {
-      throw new Error("Committed tool completion identity count does not match.");
-    }
-    for (let index = 0; index < input.completions.length; index += 1) {
-      const completion = input.completions[index];
-      const committed = input.committed[index];
-      if (
-        completion === undefined ||
-        committed === undefined ||
-        completion.call.toolCallId !== committed.toolCallId
-      ) {
-        throw new Error("Committed tool completion identity is invalid.");
-      }
-      if (
-        completion.kind === "returned" &&
-        completion.raw.kind === "skill" &&
-        completion.raw.ok &&
-        completion.raw.status === "loaded"
-      ) {
-        this.skillCoordinator.markPending(completion.raw.name);
-      }
-    }
-  }
-
   private prepareModelDispatch(input: {
     iteration: IterationIdentity;
     built: BuiltContextRequest;
@@ -1623,317 +843,27 @@ class DefaultRuntimeSession implements RuntimeSession {
       throw new Error("Model dispatch does not belong to the active runtime turn.");
     }
     active.consumedThroughOrdinal = input.built.canonical.messages.length;
-    const pending = this.store.loadSkillActivations(["pending"]);
-    if (pending.length === 0) {
-      return;
-    }
-    const visibleCanonicalMessageIds = new Set(
-      input.built.compiled.entries
-        .filter(
-          (entry) =>
-            entry.representation === "canonical" && entry.message.role === "tool",
-        )
-        .map((entry) => entry.messageId),
-    );
-    const included = pending.filter((activation) =>
-      visibleCanonicalMessageIds.has(activation.activationMessageId),
-    );
-    if (included.length === 0) {
-      return;
-    }
-    const dispatched = this.store.markSkillActivationsDispatched({
-      iterationId: input.iteration.iterationId,
-      activationMessageIds: included.map(
-        (activation) => activation.activationMessageId,
-      ),
-    });
-    this.skillCoordinator.markDispatched(
-      dispatched.map((activation) => activation.name),
-    );
-  }
-
-  private async commitSkillSettlements(input: {
-    reason: "activation" | "resume";
-    unresolved: readonly StoredSkillActivation[];
-    candidateSurface?: StoredContextSurfaceV8;
-    activated?: readonly string[];
-    refreshed?: readonly string[];
-    deactivated?: readonly string[];
-  }): Promise<SkillsUpdateSummary> {
-    if (input.unresolved.length === 0) {
-      throw new Error("Agent Skills update requires unresolved activations.");
-    }
-    const snapshot = this.store.loadContextSnapshot();
-    const canonicalMessages = new Map(
-      snapshot.canonical.messages.map((message) => [message.messageId, message]),
-    );
-    const activeByName = new Map(
-      this.skillCoordinator
-        .activeEntries()
-        .map((entry) => [entry.skill.name, entry] as const),
-    );
-    const activated = new Set(input.activated ?? []);
-    const unavailable = new Set<string>();
-    const settlements: Array<{
-      activationMessageId: StoredSkillActivation["activationMessageId"];
-      name: string;
-      state: "promoted" | "rejected";
-      rejectionReason?: string;
-    }> = [];
-    const receipts = [];
-    for (const activation of [...input.unresolved].sort((left, right) =>
-      compareText(left.name, right.name),
-    )) {
-      const skill = this.skillCatalog.skills.get(activation.name);
-      const canPromote = activation.state === "dispatched" && skill !== undefined;
-      if (canPromote) {
-        const existing = activeByName.get(activation.name);
-        if (
-          existing !== undefined &&
-          existing.activationMessageId !== activation.activationMessageId
-        ) {
-          throw new Error(
-            `Agent Skill ${activation.name} already has another active activation.`,
-          );
-        }
-        activeByName.set(activation.name, {
-          skill,
-          activationMessageId: activation.activationMessageId,
-        });
-        activated.add(activation.name);
-      }
-      const state = canPromote ? "promoted" : "rejected";
-      const rejectionReason =
-        state === "promoted"
-          ? undefined
-          : activation.state === "pending"
-            ? "not_dispatched"
-            : "unavailable";
-      if (rejectionReason === "unavailable") {
-        unavailable.add(activation.name);
-      }
-      settlements.push({
-        activationMessageId: activation.activationMessageId,
-        name: activation.name,
-        state,
-        ...(rejectionReason === undefined ? {} : { rejectionReason }),
-      });
-      const message = canonicalMessages.get(activation.activationMessageId);
-      if (message?.role !== "tool") {
-        throw new Error(
-          `Agent Skill activation message ${activation.activationMessageId} is missing.`,
-        );
-      }
-      receipts.push(
-        renderSkillActivationReceipt({
-          message: {
-            messageId: message.messageId,
-            frameId: message.frameId,
-            ordinal: message.ordinal,
-            content: message.displayText,
-            contentSha256: message.contentSha256,
-          },
-          name: activation.name,
-          outcome:
-            state === "promoted"
-              ? "promoted"
-              : rejectionReason === "unavailable"
-                ? "unavailable"
-                : "rejected",
-        }),
-      );
-    }
-    const nextActive = Object.freeze(
-      [...activeByName.values()].sort((left, right) =>
-        compareText(left.skill.name, right.skill.name),
-      ),
-    );
-    const createdAt = new Date().toISOString();
-    const definitions = this.requireTooling().registry.definitions();
-    const renderedSystemPrompt = buildActiveSystemPrompt({
-      baseSystemPrompt: this.input.systemPrompt,
-      activeSkills: nextActive,
-    });
-    const surfacePrepared = this.input.modelClient.prepare({
-      messages: [{ role: "system", content: renderedSystemPrompt }],
-      tools: definitions,
-    });
-    const generatedSurface =
-      input.candidateSurface ??
-      createContextSurface({
-        surfaceId: this.dependencies.idFactory.createContextSurfaceId(),
-        sessionId: this.sessionId,
-        systemPrompt: renderedSystemPrompt,
-        recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-        ...(this.input.projectInstruction === undefined
-          ? {}
-          : { projectInstruction: this.input.projectInstruction }),
-        skillCatalog: skillCatalogManifest(this.skillCatalog.skills.values()),
-        activeSkills: nextActive.map((entry) =>
-          activeSkillManifestEntry(entry.skill, entry.activationMessageId),
-        ),
-        toolDefinitions: definitions,
-        prepared: surfacePrepared,
-        createdAt,
-      });
-    assertPreparedMatchesSurface(surfacePrepared, generatedSurface);
-    const surface = sameContextSurface(snapshot.surface, generatedSurface)
-      ? snapshot.surface
-      : generatedSurface;
-    const startedAt = performance.now();
-    await this.append({
-      type: "context.revision.started",
-      sessionId: this.sessionId,
-      data: {
-        strategy: "skills_update",
-        reason: input.reason,
-        baseRevisionNumber: snapshot.revision.revisionNumber,
-        names: Object.freeze(
-          input.unresolved.map((entry) => entry.name).sort(compareText),
-        ),
-      },
-    });
-    let stage: "prepare" | "commit" | "activate" = "prepare";
-    let committed = false;
-    try {
-      const revision = commitAgentSkillsContextUpdate({
-        store: this.store,
-        contextMeter: this.contextMeter,
-        idFactory: this.dependencies.idFactory,
-        snapshot,
-        surface,
-        addedOverrides: receipts,
-        settlements,
-      });
-      committed = true;
-      stage = "activate";
-      this.skillCoordinator.replaceActive(nextActive);
-      this.skillCoordinator.settle(
-        input.unresolved.map((activation) => activation.name),
-      );
-      const summary = Object.freeze({
-        previousRevisionNumber: snapshot.revision.revisionNumber,
-        revisionNumber: revision.revisionNumber,
-        activated: Object.freeze([...activated].sort()),
-        refreshed: Object.freeze([...(input.refreshed ?? [])].sort()),
-        deactivated: Object.freeze([...(input.deactivated ?? [])].sort()),
-        unavailable: Object.freeze([...unavailable].sort()),
-        addedOverrideCount: receipts.length,
-      });
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "skills_update",
-          reason: input.reason,
-          baseRevisionNumber: summary.previousRevisionNumber,
-          revisionNumber: summary.revisionNumber,
-          activated: summary.activated,
-          refreshed: summary.refreshed,
-          deactivated: summary.deactivated,
-          unavailable: summary.unavailable,
-          addedOverrideCount: summary.addedOverrideCount,
-          measuredAnchorCleared: true,
-          durationMs: elapsedMs(startedAt),
-        },
-      });
-      return summary;
-    } catch (error) {
-      if (error instanceof ContextManagerError) {
-        committed = error.committed;
-        stage =
-          error.stage === "commit"
-            ? "commit"
-            : error.stage === "activate"
-              ? "activate"
-              : "prepare";
-      }
-      await this.append({
-        type: "context.revision.failed",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "skills_update",
-          reason: input.reason,
-          stage,
-          errorCode: boundedContextErrorCode(
-            error instanceof ContextManagerError
-              ? error.code
-              : error instanceof SessionError
-                ? error.code
-                : error instanceof Error
-                  ? error.name
-                  : "SKILLS_UPDATE_VALIDATION_FAILED",
-          ),
-          error: `Agent Skills update failed at ${stage}.`,
-          committed,
-        },
-      }).catch(() => undefined);
-      throw error;
-    }
+    this.runtimeSkills.markModelDispatch(input);
   }
 
   promptScheduler(): PromptSchedulerSnapshot {
-    return this.promptSchedulerSnapshot;
+    return this.scheduler.promptScheduler();
   }
 
   subscribePromptScheduler(listener: () => void): () => void {
-    this.promptSchedulerListeners.add(listener);
-    return () => this.promptSchedulerListeners.delete(listener);
+    return this.scheduler.subscribePromptScheduler(listener);
   }
 
   queueFollowUp(userMessage: UserMessage): QueueFollowUpResult {
-    if (!this.executionChainRunning) {
-      throw new Error("Cannot queue a follow-up while no execution chain is running.");
-    }
-    validateUserMessage(userMessage);
-    if (userMessage.attachments !== undefined) {
-      throw new Error("Active-turn follow-ups do not support image attachments.");
-    }
-    if (this.queuedPrompts.length >= MAX_QUEUED_PROMPTS) {
-      throw new Error(`At most ${MAX_QUEUED_PROMPTS} follow-ups may be queued.`);
-    }
-    const queuedBytes = this.queuedPrompts.reduce(
-      (total, entry) => total + Buffer.byteLength(entry.userMessage.content, "utf8"),
-      0,
-    );
-    const nextBytes = Buffer.byteLength(userMessage.content, "utf8");
-    if (queuedBytes + nextBytes > MAX_QUEUED_PROMPT_TEXT_BYTES) {
-      throw new Error("Queued follow-ups exceed the 64 KiB text limit.");
-    }
-    this.queuedPrompts.push({
-      userMessage: Object.freeze({ ...userMessage }),
-    });
-    this.notifyPromptScheduler();
-    return Object.freeze({
-      kind: "queued",
-      pendingCount: this.queuedPrompts.length,
-      ...(this.activeTurn === undefined
-        ? {}
-        : { activeTurnId: this.activeTurn.turn.turnId }),
-    });
+    return this.scheduler.queueFollowUp(userMessage);
+  }
+
+  admitTurn(input: ExecuteTurnInput): Promise<AcceptedTurn> {
+    return this.scheduler.admitTurn(input);
   }
 
   async executeTurn(input: ExecuteTurnInput): Promise<RunAgentResult> {
     return (await this.admitTurn(input)).completion;
-  }
-
-  async admitTurn(input: ExecuteTurnInput): Promise<AcceptedTurn> {
-    if (this.executionChainRunning) {
-      throw new Error(
-        `Cannot execute a turn while RuntimeSession is ${this.state}; a prompt chain is already executing.`,
-      );
-    }
-    this.executionChainRunning = true;
-    this.notifyPromptScheduler();
-    try {
-      const accepted = await this.admitSingleTurn(input);
-      const completion = this.continueExecutionChain(accepted.completion, input.signal);
-      return Object.freeze({ ...accepted, completion });
-    } catch (error) {
-      this.executionChainRunning = false;
-      this.notifyPromptScheduler();
-      throw error;
-    }
   }
 
   private async admitSingleTurn(input: ExecuteTurnInput): Promise<AcceptedTurn> {
@@ -1997,7 +927,7 @@ class DefaultRuntimeSession implements RuntimeSession {
         controller,
         completion,
       };
-      this.notifyPromptScheduler();
+      this.scheduler.notifyPromptScheduler();
       return Object.freeze({
         turnId: turn.turnId,
         userMessage: input.userMessage,
@@ -2017,79 +947,6 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
       throw error;
     }
-  }
-
-  private async continueExecutionChain(
-    initialCompletion: Promise<RunAgentResult>,
-    signal: AbortSignal,
-  ): Promise<RunAgentResult> {
-    let completion = initialCompletion;
-    let finalResult: RunAgentResult;
-    try {
-      for (;;) {
-        finalResult = await completion;
-        if (finalResult.status !== "completed" || this.queuedPrompts.length === 0) {
-          return finalResult;
-        }
-        const next = this.queuedPrompts[0];
-        if (next === undefined) {
-          return finalResult;
-        }
-        const accepted = await this.admitSingleTurn({
-          userMessage: next.userMessage,
-          signal,
-        });
-        this.queuedPrompts.shift();
-        this.notifyPromptScheduler();
-        completion = accepted.completion;
-      }
-    } finally {
-      this.queuedPrompts.splice(0);
-      this.executionChainRunning = false;
-      this.notifyPromptScheduler();
-    }
-  }
-
-  private notifyPromptScheduler(): void {
-    this.promptSchedulerSnapshot = Object.freeze({
-      state: this.executionChainRunning ? "running" : "idle",
-      ...(this.activeTurn === undefined
-        ? {}
-        : { activeTurnId: this.activeTurn.turn.turnId }),
-      pendingCount: this.queuedPrompts.length,
-    });
-    for (const listener of this.promptSchedulerListeners) listener();
-  }
-
-  private async applyQueuedSteering(input: {
-    turn: TurnIdentity;
-    ledger: AgentTurnLedger;
-  }): Promise<number> {
-    if (this.activeTurn?.turn.turnId !== input.turn.turnId) {
-      throw new Error("Cannot apply steering outside the active turn.");
-    }
-    if (this.queuedPrompts.length === 0) return 0;
-    const drained = this.queuedPrompts.splice(0);
-    const records = input.ledger.appendSteeringUserMessages(
-      drained.map((entry) => entry.userMessage),
-    );
-    this.notifyPromptScheduler();
-    for (let index = 0; index < records.length; index += 1) {
-      const record = records[index];
-      const queued = drained[index];
-      if (record === undefined || queued === undefined) {
-        throw new Error("Steering ledger result did not match the drained queue.");
-      }
-      await this.append({
-        type: "turn.steering.applied",
-        ...input.turn,
-        data: {
-          userPrompt: projectUserMessage(queued.userMessage),
-          ordinal: record.ordinal,
-        },
-      });
-    }
-    return records.length;
   }
 
   private settleAdmission(admission: ActiveAdmission): void {
@@ -2131,7 +988,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     if (this.activeTurn !== undefined) {
       throw new Error("Cannot compact context while a turn is active.");
     }
-    const completion = this.performCompactContext();
+    const completion = this.contextMaintenance.performCompactContext();
     this.activeContextRevision = completion;
     void completion.then(
       () => {
@@ -2146,74 +1003,6 @@ class DefaultRuntimeSession implements RuntimeSession {
       },
     );
     return completion;
-  }
-
-  private async performCompactContext(): Promise<ContextCompactionResult> {
-    if (this.state !== "ready") {
-      throw new Error(`Cannot compact context while RuntimeSession is ${this.state}.`);
-    }
-    if (this.activeTurn !== undefined) {
-      throw new Error("Cannot compact context while a turn is active.");
-    }
-    this.store.assertContextRevisionIdle();
-    this.state = "compacting";
-    let started = false;
-    try {
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "swap",
-          reason: "manual",
-          policyVersion: "swap-only-v1",
-          rendererFormat: "swap-observation-v1",
-        },
-      });
-      started = true;
-      const result = await this.requireContextManager().compact(
-        this.dependencies.manualCompactionTrigger(),
-      );
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: contextRevisionFinishedData(result),
-      });
-      if (this.state === "compacting") {
-        this.state = "ready";
-      }
-      return result;
-    } catch (error) {
-      if (started && !(error instanceof RuntimeEventAppendError)) {
-        const failure =
-          error instanceof ContextManagerError
-            ? error
-            : new ContextManagerError(
-                "activate",
-                error instanceof Error ? error.name : "CONTEXT_COMPACTION_FAILED",
-                true,
-                false,
-                "Context compaction failed.",
-                { cause: error },
-              );
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "swap",
-            reason: "manual",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Context compaction failed at ${failure.stage}.`,
-          },
-        }).catch(() => undefined);
-      }
-      if (!(error instanceof ContextManagerError) || error.fatal) {
-        this.fault(error);
-      } else if (this.state === "compacting") {
-        this.state = "ready";
-      }
-      throw error;
-    }
   }
 
   retireContext(): Promise<ContextRetirementResult> {
@@ -2225,7 +1014,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     if (this.activeTurn !== undefined) {
       throw new Error("Cannot retire context prefix while a turn is active.");
     }
-    const completion = this.performRetireContext();
+    const completion = this.contextMaintenance.performRetireContext();
     this.activeContextRevision = completion;
     void completion.then(
       () => {
@@ -2242,78 +1031,6 @@ class DefaultRuntimeSession implements RuntimeSession {
     return completion;
   }
 
-  private async performRetireContext(): Promise<ContextRetirementResult> {
-    if (this.state !== "ready") {
-      throw new Error(
-        `Cannot retire context prefix while RuntimeSession is ${this.state}.`,
-      );
-    }
-    if (this.activeTurn !== undefined) {
-      throw new Error("Cannot retire context prefix while a turn is active.");
-    }
-    this.store.assertContextRevisionIdle();
-    const baseRevisionNumber = this.store.loadContextSnapshot().revision.revisionNumber;
-    this.state = "compacting";
-    let started = false;
-    try {
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "retire_prefix",
-          reason: "manual",
-          policyVersion: "recall-first-retirement-v1",
-          baseRevisionNumber,
-        },
-      });
-      started = true;
-      const result = await this.requireContextManager().retirePrefix(
-        this.dependencies.manualRetirementTrigger(),
-      );
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: contextRetirementFinishedData(result),
-      });
-      if (this.state === "compacting") {
-        this.state = "ready";
-      }
-      return result;
-    } catch (error) {
-      if (started && !(error instanceof RuntimeEventAppendError)) {
-        const failure =
-          error instanceof ContextManagerError
-            ? error
-            : new ContextManagerError(
-                "activate",
-                error instanceof Error ? error.name : "CONTEXT_RETIREMENT_FAILED",
-                true,
-                false,
-                "Context prefix retirement failed.",
-                { cause: error },
-              );
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "retire_prefix",
-            reason: "manual",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Context prefix retirement failed at ${failure.stage}.`,
-            committed: failure.committed,
-          },
-        }).catch(() => undefined);
-      }
-      if (!(error instanceof ContextManagerError) || error.fatal) {
-        this.fault(error);
-      } else if (this.state === "compacting") {
-        this.state = "ready";
-      }
-      throw error;
-    }
-  }
-
   dispose(reason: SessionDisposeReason): Promise<void> {
     this.disposePromise ??= this.performDispose(reason);
     return this.disposePromise;
@@ -2322,8 +1039,8 @@ class DefaultRuntimeSession implements RuntimeSession {
   canSwitchSession(): boolean {
     return (
       this.state === "ready" &&
-      !this.executionChainRunning &&
-      this.queuedPrompts.length === 0 &&
+      !this.scheduler.isRunning &&
+      this.scheduler.pendingCount === 0 &&
       this.activeTurn === undefined &&
       (this.tooling?.taskManager
         .listBackgroundTasks()
@@ -2447,7 +1164,7 @@ class DefaultRuntimeSession implements RuntimeSession {
                 selection?.trigger === "runtime_pressure" &&
                 this.requireContextAutomation().automaticSwapOnly
               ) {
-                this.pendingAutomaticContextMaintenance = true;
+                this.contextMaintenance.scheduleAutomaticMaintenance();
               }
               return selection;
             },
@@ -2477,7 +1194,7 @@ class DefaultRuntimeSession implements RuntimeSession {
           );
           pendingLedgerTurn.finish(error.result);
           settled = true;
-          await this.settleClosedTurnSkills();
+          await this.runtimeSkills.settleClosedTurnSkills();
           throw error;
         }
 
@@ -2497,10 +1214,10 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (result.status === "completed") {
         this.notifyCompletedTurn(turn);
       }
-      await this.settleClosedTurnSkills();
+      await this.runtimeSkills.settleClosedTurnSkills();
       if (result.status === "completed") {
-        await this.evaluateClosedTurnContextPressure();
-        await this.performAutomaticContextMaintenance();
+        await this.contextMaintenance.evaluateClosedTurnContextPressure();
+        await this.contextMaintenance.performAutomaticContextMaintenance();
       }
       return result;
     } catch (error) {
@@ -2512,314 +1229,11 @@ class DefaultRuntimeSession implements RuntimeSession {
     } finally {
       removeExternalAbortListener();
       this.activeTurn = undefined;
-      this.notifyPromptScheduler();
-      this.pendingAutomaticContextMaintenance = false;
-      this.pendingModelDirectedSwap = undefined;
-      this.modelDirectedSwapLease = false;
-      this.pressureNoticeSentThisTurn = false;
+      this.scheduler.notifyPromptScheduler();
+      this.contextMaintenance.finishTurn();
       if (this.state === "executing") {
         this.state = "ready";
       }
-    }
-  }
-
-  private async evaluateClosedTurnContextPressure(): Promise<void> {
-    const automation = this.requireContextAutomation();
-    if (!automation.automaticSwapOnly) return;
-
-    const snapshot = this.requireContextManager().measureCurrent();
-    await this.append({
-      type: "context.usage.updated",
-      sessionId: this.sessionId,
-      data: { phase: "turn_close", snapshot },
-    });
-    if (snapshot.pressure !== "normal") {
-      this.pendingAutomaticContextMaintenance = true;
-    }
-  }
-
-  private async performAutomaticContextMaintenance(): Promise<void> {
-    if (!this.pendingAutomaticContextMaintenance) return;
-    this.pendingAutomaticContextMaintenance = false;
-    const automation = this.requireContextAutomation();
-    if (!automation.automaticSwapOnly) return;
-    if (this.state !== "executing") {
-      throw new Error(
-        `Cannot run automatic context maintenance while RuntimeSession is ${this.state}.`,
-      );
-    }
-    this.store.assertContextRevisionIdle();
-    const qualificationId = requireAutomationQualificationId(automation);
-    this.state = "maintaining_context";
-    try {
-      const swap = await this.performAutomaticCompaction(qualificationId);
-      if (swap === undefined) return;
-      if (automation.automaticPrefixRetirement && automaticSwapNeedsRetirement(swap)) {
-        await this.performAutomaticRetirement(qualificationId);
-      }
-    } finally {
-      if (this.state === "maintaining_context") {
-        this.state = "executing";
-      }
-    }
-  }
-
-  private async performActiveTurnContextMaintenance(input: {
-    turn: TurnIdentity;
-    consumedThroughOrdinal: number;
-    ledger: AgentTurnLedger;
-  }): Promise<void> {
-    if (this.state !== "executing") {
-      throw new Error(
-        `Cannot maintain active-turn context while RuntimeSession is ${this.state}.`,
-      );
-    }
-    const pendingModelDirectedSwap = this.pendingModelDirectedSwap;
-    this.pendingModelDirectedSwap = undefined;
-
-    const automation = this.requireContextAutomation();
-    const manager = this.requireContextManager();
-    this.pendingAutomaticContextMaintenance = false;
-
-    let suppressAutomaticSwap = this.modelDirectedSwapLease;
-    this.modelDirectedSwapLease = false;
-
-    if (pendingModelDirectedSwap !== undefined) {
-      suppressAutomaticSwap = false;
-      this.state = "maintaining_context";
-      try {
-        await this.performModelDirectedCompaction({
-          turn: input.turn,
-          consumedThroughOrdinal: input.consumedThroughOrdinal,
-          ledger: input.ledger,
-          messageIds: Object.freeze([...pendingModelDirectedSwap]),
-        });
-      } finally {
-        if (this.state === "maintaining_context") {
-          this.state = "executing";
-        }
-      }
-    }
-
-    let measured: ContextUsageSnapshot | undefined;
-    if (
-      pendingModelDirectedSwap === undefined &&
-      (suppressAutomaticSwap ||
-        !this.pressureNoticeSentThisTurn ||
-        automation.automaticSwapOnly)
-    ) {
-      measured = manager.measureCurrent(input.turn.turnId, input.ledger);
-      if (!this.pressureNoticeSentThisTurn && measured.pressure !== "normal") {
-        await this.injectContextPressureNotice({
-          turn: input.turn,
-          ledger: input.ledger,
-          usage: measured,
-          automaticSwapEnabled: automation.automaticSwapOnly,
-        });
-        this.pressureNoticeSentThisTurn = true;
-        suppressAutomaticSwap = true;
-      }
-      if (measured.pressure === "blocked") {
-        // Emergency override: a lease or notice must never hold automatic
-        // compaction past the budget line; the next preflight would fail the
-        // turn before the model could act.
-        suppressAutomaticSwap = false;
-      }
-    }
-
-    if (suppressAutomaticSwap || !automation.automaticSwapOnly) {
-      return;
-    }
-
-    this.state = "maintaining_context";
-    try {
-      const usage = measured ?? manager.measureCurrent(input.turn.turnId, input.ledger);
-      if (usage.pressure === "normal") return;
-
-      const qualificationId = requireAutomationQualificationId(automation);
-      const compactionTrigger = {
-        kind: "runtime_pressure",
-        activeTurn: {
-          turnId: input.turn.turnId,
-          consumedThroughOrdinal: input.consumedThroughOrdinal,
-        },
-      } as const;
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "swap",
-          reason: "runtime_pressure",
-          policyVersion: "swap-only-v1",
-          rendererFormat: "swap-observation-v1",
-          qualificationId,
-        },
-      });
-      let swap: ContextCompactionResult;
-      try {
-        swap = await manager.compact(compactionTrigger, input.ledger);
-        await this.append({
-          type: "context.revision.finished",
-          sessionId: this.sessionId,
-          data: contextRevisionFinishedData(swap, "runtime_pressure", qualificationId),
-        });
-      } catch (error) {
-        const failure = automaticContextFailure(error, "compaction");
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "swap",
-            reason: "runtime_pressure",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Automatic context compaction failed at ${failure.stage}.`,
-            qualificationId,
-          },
-        }).catch(() => undefined);
-        if (failure.fatal) throw error;
-        return;
-      }
-
-      if (
-        !automation.automaticPrefixRetirement ||
-        !automaticSwapNeedsRetirement(swap)
-      ) {
-        return;
-      }
-
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "retire_prefix",
-          reason: "runtime_pressure",
-          policyVersion: "recall-first-retirement-v1",
-          baseRevisionNumber: this.store.loadContextSnapshot().revision.revisionNumber,
-          qualificationId,
-        },
-      });
-      try {
-        const retirement = await manager.retirePrefix(
-          {
-            kind: "runtime_pressure",
-            activeTurnId: input.turn.turnId,
-          },
-          input.ledger,
-        );
-        await this.append({
-          type: "context.revision.finished",
-          sessionId: this.sessionId,
-          data: contextRetirementFinishedData(
-            retirement,
-            "runtime_pressure",
-            qualificationId,
-          ),
-        });
-      } catch (error) {
-        const failure = automaticContextFailure(error, "retirement");
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "retire_prefix",
-            reason: "runtime_pressure",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Automatic context retirement failed at ${failure.stage}.`,
-            committed: failure.committed,
-            qualificationId,
-          },
-        }).catch(() => undefined);
-        if (failure.fatal) throw error;
-      }
-    } finally {
-      if (this.state === "maintaining_context") {
-        this.state = "executing";
-      }
-    }
-  }
-
-  private async injectContextPressureNotice(input: {
-    turn: TurnIdentity;
-    ledger: AgentTurnLedger;
-    usage: ContextUsageSnapshot;
-    automaticSwapEnabled: boolean;
-  }): Promise<void> {
-    const userMessage: UserMessage = Object.freeze({
-      role: "user",
-      content: contextPressureNoticeText({
-        usage: input.usage,
-        toolPressure: toolContextPressure(input.usage.pressure) as "high" | "critical",
-        automaticSwapEnabled: input.automaticSwapEnabled,
-      }),
-    });
-    const records = input.ledger.appendSteeringUserMessages([userMessage]);
-    const record = records[0];
-    if (records.length !== 1 || record === undefined) {
-      throw new Error("Pressure notice steering did not append exactly one message.");
-    }
-    await this.append({
-      type: "context.pressure_notice.sent",
-      ...input.turn,
-      data: {
-        usedInputTokens: input.usage.usedInputTokens,
-        inputBudgetTokens: input.usage.inputBudgetTokens,
-        triggerTokens: input.usage.triggerTokens,
-        pressure: input.usage.pressure === "blocked" ? "blocked" : "triggered",
-        automaticSwapEnabled: input.automaticSwapEnabled,
-        ordinal: record.ordinal,
-      },
-    });
-  }
-
-  private async performModelDirectedCompaction(input: {
-    turn: TurnIdentity;
-    consumedThroughOrdinal: number;
-    ledger: AgentTurnLedger;
-    messageIds: readonly MessageId[];
-  }): Promise<void> {
-    await this.append({
-      type: "context.revision.started",
-      sessionId: this.sessionId,
-      data: {
-        strategy: "swap",
-        reason: "model_directed",
-        policyVersion: "swap-only-v1",
-        rendererFormat: "swap-observation-v1",
-      },
-    });
-    try {
-      const result = await this.requireContextManager().compact(
-        {
-          kind: "model_directed",
-          messageIds: input.messageIds,
-          activeTurn: {
-            turnId: input.turn.turnId,
-            consumedThroughOrdinal: input.consumedThroughOrdinal,
-          },
-        },
-        input.ledger,
-      );
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: contextRevisionFinishedData(result, "model_directed"),
-      });
-    } catch (error) {
-      const failure = automaticContextFailure(error, "compaction");
-      await this.append({
-        type: "context.revision.failed",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "swap",
-          reason: "model_directed",
-          stage: failure.stage,
-          errorCode: boundedContextErrorCode(failure.code),
-          error: `Model-directed context compaction failed at ${failure.stage}.`,
-        },
-      }).catch(() => undefined);
-      if (failure.fatal) throw error;
     }
   }
 
@@ -2872,133 +1286,6 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
   }
 
-  private async performAutomaticCompaction(
-    qualificationId: string,
-  ): Promise<ContextCompactionResult | undefined> {
-    let started = false;
-    try {
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "swap",
-          reason: "runtime_pressure",
-          policyVersion: "swap-only-v1",
-          rendererFormat: "swap-observation-v1",
-          qualificationId,
-        },
-      });
-      started = true;
-      const result = await this.requireContextManager().compact(
-        this.dependencies.automaticCompactionTrigger(),
-      );
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: contextRevisionFinishedData(result, "runtime_pressure", qualificationId),
-      });
-      return result;
-    } catch (error) {
-      if (started && !(error instanceof RuntimeEventAppendError)) {
-        const failure = automaticContextFailure(error, "compaction");
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "swap",
-            reason: "runtime_pressure",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Automatic context compaction failed at ${failure.stage}.`,
-            qualificationId,
-          },
-        }).catch(() => undefined);
-      }
-      if (error instanceof ContextManagerError && !error.fatal) {
-        return undefined;
-      }
-      throw error;
-    }
-  }
-
-  private async performAutomaticRetirement(
-    qualificationId: string,
-  ): Promise<ContextRetirementResult | undefined> {
-    const baseRevisionNumber = this.store.loadContextSnapshot().revision.revisionNumber;
-    let started = false;
-    try {
-      await this.append({
-        type: "context.revision.started",
-        sessionId: this.sessionId,
-        data: {
-          strategy: "retire_prefix",
-          reason: "runtime_pressure",
-          policyVersion: "recall-first-retirement-v1",
-          baseRevisionNumber,
-          qualificationId,
-        },
-      });
-      started = true;
-      const result = await this.requireContextManager().retirePrefix(
-        this.dependencies.automaticRetirementTrigger(),
-      );
-      await this.append({
-        type: "context.revision.finished",
-        sessionId: this.sessionId,
-        data: contextRetirementFinishedData(
-          result,
-          "runtime_pressure",
-          qualificationId,
-        ),
-      });
-      return result;
-    } catch (error) {
-      if (started && !(error instanceof RuntimeEventAppendError)) {
-        const failure = automaticContextFailure(error, "retirement");
-        await this.append({
-          type: "context.revision.failed",
-          sessionId: this.sessionId,
-          data: {
-            strategy: "retire_prefix",
-            reason: "runtime_pressure",
-            stage: failure.stage,
-            errorCode: boundedContextErrorCode(failure.code),
-            error: `Automatic context retirement failed at ${failure.stage}.`,
-            committed: failure.committed,
-            qualificationId,
-          },
-        }).catch(() => undefined);
-      }
-      if (error instanceof ContextManagerError && !error.fatal) {
-        return undefined;
-      }
-      throw error;
-    }
-  }
-
-  private async settleClosedTurnSkills(): Promise<void> {
-    const unresolved = this.store.loadSkillActivations(["pending", "dispatched"]);
-    if (unresolved.length === 0) {
-      return;
-    }
-    const summary = await this.commitSkillSettlements({
-      reason: "activation",
-      unresolved,
-    });
-    await this.append({
-      type: "skills.updated",
-      sessionId: this.sessionId,
-      data: {
-        reason: "activation",
-        activated: summary.activated,
-        refreshed: summary.refreshed,
-        deactivated: summary.deactivated,
-        unavailable: summary.unavailable,
-        revisionNumber: summary.revisionNumber,
-      },
-    });
-  }
-
   private async appendTerminalEvent(
     turn: TurnIdentity,
     result: RunAgentResult,
@@ -3040,9 +1327,7 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
 
     this.state = "disposing";
-    this.queuedPrompts.splice(0);
-    this.executionChainRunning = false;
-    this.notifyPromptScheduler();
+    this.scheduler.clear();
     const errors: unknown[] = this.faultCause === undefined ? [] : [this.faultCause];
     const activeAdmission = this.activeAdmission;
     if (activeAdmission !== undefined) {
@@ -3452,6 +1737,7 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
   if (input.modelName.trim() === "") {
     throw new Error("RuntimeSession modelName must not be empty.");
   }
+
   requirePositiveNumber(input.maxIterations, "maxIterations");
   if (input.systemPrompt.trim() === "") {
     throw new Error("RuntimeSession systemPrompt must not be empty.");
@@ -3468,24 +1754,8 @@ function validateCreateInput(input: CreateRuntimeSessionInput): void {
       "RuntimeSession modelClient must implement prepare() and request().",
     );
   }
+
   assertMatchingContextBudget(input.contextProfile, input.contextBudget);
-}
-
-function assertPreparedMatchesSurface(
-  prepared: ReturnType<ModelClient["prepare"]>,
-  surface: StoredContextSurfaceV8,
-): void {
-  if (
-    prepared.requestConfigHash !== surface.requestConfigSha256 ||
-    prepared.toolSchemaHash !== surface.toolSchemaSha256 ||
-    prepared.requestMaxOutputTokens !== surface.requestMaxOutputTokens
-  ) {
-    throw new Error("Prepared model request does not match its context surface.");
-  }
-}
-
-function elapsedMs(startedAt: number): number {
-  return Math.round((performance.now() - startedAt) * 100) / 100;
 }
 
 function isNewSessionInput(
@@ -3560,164 +1830,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function contextRevisionFinishedData(
-  result: ContextCompactionResult,
-  reason: "manual" | "runtime_pressure" | "model_directed" = "manual",
-  qualificationId?: string,
-): ContextRevisionFinishedData {
-  if (result.status === "unchanged") {
-    return {
-      strategy: "swap",
-      reason,
-      policyVersion: "swap-only-v1",
-      outcome: result.outcome,
-      baseRevisionNumber: result.revisionNumber,
-      addedOverrideCount: 0,
-      activeOverrideCount: result.activeOverrideCount,
-      originalObservationBytes: 0,
-      projectedObservationBytes: 0,
-      rawTokensBefore: result.rawTokensBefore,
-      guardedTokensBefore: result.guardedTokensBefore,
-      targetTokens: result.targetTokens,
-      durationMs: result.durationMs,
-      ...(qualificationId === undefined ? {} : { qualificationId }),
-    };
-  }
-  return {
-    strategy: "swap",
-    reason,
-    policyVersion: "swap-only-v1",
-    outcome: result.outcome,
-    baseRevisionNumber: result.previousRevisionNumber,
-    revisionNumber: result.revisionNumber,
-    addedOverrideCount: result.addedOverrideCount,
-    activeOverrideCount: result.activeOverrideCount,
-    originalObservationBytes: result.originalObservationBytes,
-    projectedObservationBytes: result.projectedObservationBytes,
-    rawTokensBefore: result.rawTokensBefore,
-    rawTokensAfter: result.rawTokensAfter,
-    guardedTokensBefore: result.guardedTokensBefore,
-    guardedTokensAfter: result.guardedTokensAfter,
-    targetTokens: result.targetTokens,
-    planHash: result.planHash,
-    durationMs: result.durationMs,
-    ...(qualificationId === undefined ? {} : { qualificationId }),
-  };
-}
-
-function contextRetirementFinishedData(
-  result: ContextRetirementResult,
-  reason: "manual" | "runtime_pressure" = "manual",
-  qualificationId?: string,
-): ContextRevisionFinishedData {
-  if (result.status === "unchanged") {
-    return {
-      strategy: "retire_prefix",
-      reason,
-      policyVersion: "recall-first-retirement-v1",
-      outcome: result.outcome,
-      baseRevisionNumber: result.revisionNumber,
-      previousKeepFromOrdinal: result.keepFromOrdinal,
-      keepFromOrdinal: result.keepFromOrdinal,
-      retiredTurnCount: 0,
-      retiredFrameCount: 0,
-      retiredMessageCount: 0,
-      activeOverrideCount: result.activeOverrideCount,
-      guardedTokensBefore: result.guardedTokensBefore,
-      targetTokens: result.targetTokens,
-      planningDurationMs: result.planningDurationMs,
-      durationMs: result.durationMs,
-      ...(qualificationId === undefined ? {} : { qualificationId }),
-    };
-  }
-  return {
-    strategy: "retire_prefix",
-    reason,
-    policyVersion: "recall-first-retirement-v1",
-    outcome: result.outcome,
-    baseRevisionNumber: result.previousRevisionNumber,
-    revisionNumber: result.revisionNumber,
-    previousKeepFromOrdinal: result.previousKeepFromOrdinal,
-    keepFromOrdinal: result.keepFromOrdinal,
-    retiredTurnCount: result.retiredTurnCount,
-    retiredFrameCount: result.retiredFrameCount,
-    retiredMessageCount: result.retiredMessageCount,
-    activeOverrideCount: result.activeOverrideCount,
-    rawTokensBefore: result.rawTokensBefore,
-    rawTokensAfter: result.rawTokensAfter,
-    guardedTokensBefore: result.guardedTokensBefore,
-    guardedTokensAfter: result.guardedTokensAfter,
-    targetTokens: result.targetTokens,
-    planHash: result.planHash,
-    planningDurationMs: result.planningDurationMs,
-    validationDurationMs: result.validationDurationMs,
-    transactionDurationMs: result.transactionDurationMs,
-    activationDurationMs: result.activationDurationMs,
-    durationMs: result.durationMs,
-    ...(qualificationId === undefined ? {} : { qualificationId }),
-  };
-}
-
-function requireAutomationQualificationId(decision: ContextAutomationDecision): string {
-  if (
-    !decision.automaticSwapOnly ||
-    (decision.reason !== "qualified" && decision.reason !== "swap_only_qualified") ||
-    decision.qualificationId === undefined
-  ) {
-    throw new Error("Automatic context maintenance has no qualification identity.");
-  }
-  return decision.qualificationId;
-}
-
-function automaticSwapNeedsRetirement(result: ContextCompactionResult): boolean {
-  return (
-    result.outcome === "no_eligible_candidates" ||
-    result.outcome === "insufficient_candidates"
-  );
-}
-
-function automaticContextFailure(
-  error: unknown,
-  strategy: "compaction" | "retirement",
-): ContextManagerError {
-  return error instanceof ContextManagerError
-    ? error
-    : new ContextManagerError(
-        "activate",
-        error instanceof Error
-          ? error.name
-          : `AUTOMATIC_CONTEXT_${strategy.toUpperCase()}_FAILED`,
-        true,
-        false,
-        `Automatic context ${strategy} failed.`,
-        { cause: error },
-      );
-}
-
-function boundedContextErrorCode(code: string): string {
-  return /^[A-Za-z0-9_]+$/.test(code) && code.length <= 80
-    ? code
-    : "CONTEXT_COMPACTION_FAILED";
-}
-
-function toolContextPressure(
-  pressure: ContextPressure,
-): "normal" | "high" | "critical" {
-  return pressure === "triggered"
-    ? "high"
-    : pressure === "blocked"
-      ? "critical"
-      : "normal";
-}
-
 function requirePositiveNumber(value: number, name: string): void {
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${name} must be a positive integer; received ${value}.`);
   }
-}
-
-function compareText(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isCanonicalRuntimeFault(error: unknown): boolean {
