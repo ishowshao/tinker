@@ -152,7 +152,9 @@ test(
       let activeSessionId = sourceId;
       for (let turn = 1; turn <= 3; turn += 1) {
         await submitPrompt(first, `PTY_RESUME_LAYOUT_${turn}`);
-        await first.waitForScreen(`PTY_RESUME_LAYOUT_${turn}_FINAL_08`);
+        await first.waitForScreen(`PTY_RESUME_LAYOUT_${turn}_FINAL_08`, {
+          timeoutMs: 20_000,
+        });
       }
       for (let index = 1; index <= 15; index += 1) {
         await submitPrompt(first, "/clear");

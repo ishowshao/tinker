@@ -5,6 +5,28 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-09-04
+
+### Added
+
+- Add `AskUser`, an interactive tool that lets the agent pause on a material
+  ambiguity and present two to six complete choices in the TUI before resuming
+  the same turn with the selected answer.
+- Add model-accessible `MemoryCreate`, `MemoryUpdate`, and `MemoryDelete` tools
+  for explicitly maintaining global memories shared across sessions and
+  workspaces.
+
+### Changed
+
+- Redesign the session resume picker as a compact table, making session metadata
+  easier to scan while preserving keyboard navigation and search.
+
+### Fixed
+
+- Give the long-history PTY resume fixture enough time on slower Linux CI
+  runners, avoiding a false timeout while the model is still producing the
+  expected response.
+
 ## [2.6.0] - 2026-09-03
 
 ### Added
@@ -324,7 +346,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.7.0...HEAD
+[2.7.0]: https://github.com/ishowshao/tinker/releases/tag/v2.7.0
 [2.6.0]: https://github.com/ishowshao/tinker/releases/tag/v2.6.0
 [2.5.0]: https://github.com/ishowshao/tinker/releases/tag/v2.5.0
 [2.4.0]: https://github.com/ishowshao/tinker/releases/tag/v2.4.0
