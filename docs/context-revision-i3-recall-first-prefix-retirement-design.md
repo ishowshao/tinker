@@ -4,7 +4,6 @@
 
 - 日期：2026-07-18
 - 状态：已实施并通过 I3 门禁
-- 所属阶段：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I3
 - 前置阶段：I1 Context Revision 影子规划、I2 温层确定性换出与手动 `/compact`
 - 当前基线：SessionStore schema v7、immutable `ContextSurface`、线性
   `ContextRevision`、`swap-only-v1`、`recall-first-retirement-v1`、手动 `/compact`、

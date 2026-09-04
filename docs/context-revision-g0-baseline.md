@@ -4,7 +4,6 @@
 
 - 日期：2026-07-16
 - 状态：已完成
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I1 前置门禁
 - 性质：基准与工程门禁，不改变 runtime 消息选择或 session 语义
 
 ## 一、目标

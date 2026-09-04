@@ -5,7 +5,6 @@
 - 状态：已实施
 - 日期：2026-07-11
 - 实施日期：2026-07-11
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F1
 - 相关设计：
   - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
   - [`turn-cancellation-design.md`](turn-cancellation-design.md)

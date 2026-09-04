@@ -2,17 +2,15 @@
 
 ## 背景
 
-Tinker 已经完成 `agent-runtime-roadmap.md` 的阶段一：`ShellTaskManager` 负责 Bash
-进程组、后台任务状态、主动停止和 runner 退出清理，`TaskList`、`TaskOutput`、
-`TaskStop` 以及后台任务 TUI 面板也已经落地。
+Tinker 的 `ShellTaskManager` 负责 Bash 进程组、后台任务状态、主动停止和 runner
+退出清理，`TaskList`、`TaskOutput`、`TaskStop` 以及后台任务 TUI 面板也已经落地。
 
 当前缺少的是 turn 级运行控制。TUI 提交请求后会禁用 `PromptInput`，`runAgent()`、
 `ModelClient` 和 `ToolRuntime` 都没有取消信号；模型请求或前台 Bash 卡住时，用户只能
 等待当前调用结束或退出整个 Tinker。
 
-本文是 `agent-runtime-roadmap.md` 阶段二的详细设计。第一版只实现 TUI 中按 `Esc`
-取消当前 turn，不退出 TUI，不撤销已经发生的副作用，也不提前实现 session 持久化、
-context 统计或 compaction。
+本文第一版只实现 TUI 中按 `Esc` 取消当前 turn，不退出 TUI，不撤销已经发生的副作用，
+也不提前实现 session 持久化、context 统计或 compaction。
 
 ## 目标
 

@@ -10,8 +10,8 @@ stderr 持久化到 `.tinker/bash/<taskId>.log`。前台命令超过等待时间
 任务；TUI 只能显示 Bash 首次返回的状态，后台进程稍后退出时不会自动更新；Tinker
 正常退出时也没有等待并清理仍在运行的子进程。
 
-本文是 `agent-runtime-roadmap.md` 阶段一的详细设计，只实现当前 session 内的后台
-进程管理，不提前引入 Esc 取消、session 恢复或 compaction。
+本文只实现当前 session 内的后台进程管理，不提前引入 Esc 取消、session 恢复或
+compaction。
 
 ## 目标
 

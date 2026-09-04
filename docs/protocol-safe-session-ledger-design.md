@@ -5,7 +5,6 @@
 - 日期：2026-07-11
 - 状态：已实施（2026-07-12，与 F4 同批完成）
 - 前置阶段：F1、F2 已完成
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
 - 后续阶段：F4 [`SessionStore v1` 与 `/resume`](session-store-resume-design.md)
 
 ## 实施结果（2026-07-12）

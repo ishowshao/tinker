@@ -5,7 +5,6 @@
 - 日期：2026-07-12
 - 状态：已实施（2026-07-12，与 F3 同批完成）
 - 前置阶段：F1、F2、F3 已完成
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
 - 后续阶段：F5 稳定来源与 `Recall`
 
 ## 实施结果（2026-07-12）

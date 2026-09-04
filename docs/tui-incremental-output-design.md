@@ -5,7 +5,6 @@
 - 日期：2026-08-01
 - 状态：已实施
 - 范围：交互式 TUI 的 assistant 正文增量展示
-- 上位路线图：[`product-hardening-roadmap.md`](product-hardening-roadmap.md)
 
 ## 一、结论
 

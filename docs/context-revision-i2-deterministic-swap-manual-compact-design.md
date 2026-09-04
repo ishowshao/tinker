@@ -6,7 +6,6 @@
 - 状态：已实施并通过 I2 门禁
 - 前置阶段：
   [`context-revision-i1-shadow-planning-design.md`](context-revision-i1-shadow-planning-design.md)
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I2
 - 本文落地基线：SessionStore schema v5、不可变线性 revision、单调 override 继承、手动
   `/compact`
 - 后继变更：schema v5 基线已由

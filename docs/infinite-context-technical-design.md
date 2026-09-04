@@ -2,11 +2,10 @@
 
 ## 文档状态
 
-- 状态：目标架构，按 roadmap 分阶段实施
+- 状态：目标架构，分阶段实施
 - 首版日期：2026-07-11
 - 方向修订：2026-07-16，引入 Recall-first 冷前缀退休，checkpoint 改为证据驱动的可选后备
 - 相关既有设计：
-  - [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md)
   - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
   - [`session-turn-iteration-identity-design.md`](session-turn-iteration-identity-design.md)
 
@@ -101,8 +100,6 @@ Recall 检索的是 canonical history，不受 active revision 前缀边界限�
 ## 三、首版设计时的实现基线（2026-07-11）
 
 本节保留首版方案形成时的代码核对，用来解释后续边界为什么存在，不代表当前交付状态。
-最新完成情况以 [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 为准。
-
 ### 3.1 首版时已经存在的地基
 
 #### RuntimeSession 已经拥有稳定身份和串行事件

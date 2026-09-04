@@ -5,7 +5,6 @@
 - 日期：2026-07-16
 - 状态：已实施并通过验收
 - 前置阶段：[`context-revision-g0-baseline.md`](context-revision-g0-baseline.md)
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I1
 - 当前持久化基线：SessionStore schema v4
 - 后继阶段：I2 温层确定性换出与手动 `/compact`；更后续为 Recall-first 冷前缀退休
 

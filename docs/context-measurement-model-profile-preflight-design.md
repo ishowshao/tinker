@@ -5,7 +5,6 @@
 - 状态：已实施
 - 日期：2026-07-11
 - 实施日期：2026-07-11
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F2
 - 前置阶段：[`long-session-memory-ownership-design.md`](long-session-memory-ownership-design.md)
   已实施
 - 上位设计：

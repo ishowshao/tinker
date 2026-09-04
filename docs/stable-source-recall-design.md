@@ -4,7 +4,6 @@
 
 - 日期：2026-07-12
 - 状态：已实施（2026-07-12）
-- 对应路线图：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F5
 - 前置阶段：F3 协议安全会话账本、F4 SessionStore v1 与 `/resume` 已完成
 - 后继阶段：I1 Context Revision 与影子规划
 - 主要依据：
@@ -22,9 +21,7 @@ revision 切换、确定性换出、`/compact` 或自动 compaction。
 - 自动化测试覆盖 source、allowlist、UTF-8 page、literal search、snapshot、index rebuild、
   transaction rollback、ordinary/fatal 分流、Read v1/Edit v2 和 resume round-trip。
 - fake-model one-shot、真实 TUI PTY、`/resume` 和真实 DeepSeek search→get smoke 已通过。
-- 10,000-message 本机基线与复跑命令已回填
-  [`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 F5 实际结果；基准脚本为
-  `bun run bench:recall -- 10000 100`。
+- 10,000-message 本机基线可通过 `bun run bench:recall -- 10000 100` 复跑。
 
 ## 一、结论先行
 

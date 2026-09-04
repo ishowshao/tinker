@@ -5,7 +5,6 @@
 - 日期：2026-07-18
 - 状态：已完成（2026-07-18）；DeepSeek floor qualification 已通过，自动 swap-only 与
   prefix retirement 已放行
-- 所属阶段：[`agent-runtime-roadmap.md`](agent-runtime-roadmap.md) 的 I4
 - 前置阶段：I1 Context Revision 影子规划、I2 温层确定性换出、I3 Recall-first
   冷前缀退休
 - 当前基线：SessionStore schema v8、immutable `ContextSurface`、线性
