@@ -6,6 +6,7 @@ import { BackgroundTasks } from "../tui/components/background-tasks";
 import { DiffView } from "../tui/components/diff-view";
 import { Timeline } from "../tui/components/timeline";
 import { Footer } from "../tui/components/footer";
+import { AskUser } from "../tui/components/ask-user";
 import { BashConfirmation } from "../tui/components/bash-confirmation";
 import { App } from "../tui/app";
 import { PromptInput } from "../tui/components/prompt-input";
@@ -49,6 +50,7 @@ const testBashGuard = Object.freeze({
   mode: "guard" as const,
   source: "default" as const,
 });
+const testAskUser = Object.freeze({});
 
 function completedResult() {
   return {
@@ -92,6 +94,9 @@ function createSessionController(
     subscribeBashGuard: () => () => undefined,
     setYoloMode: () => undefined,
     resolveBashConfirmation: async () => undefined,
+    askUser: () => testAskUser,
+    subscribeAskUser: () => () => undefined,
+    resolveAskUser: async () => undefined,
     admitTurn: async (userMessage, signal) => ({
       turnId: testRuntime.turn.turnId,
       userMessage,
@@ -298,6 +303,45 @@ describe("tui components", () => {
     await Bun.sleep(10);
     expect(decisions).toEqual(["deny"]);
     panel.cleanup();
+  });
+
+  test("supports keyboard selection and dismissal for AskUser", async () => {
+    const selections: number[] = [];
+    let dismissed = 0;
+    const panel = render(
+      <AskUser
+        question="Which scope?"
+        options={[{ description: "Project" }, { description: "Global" }]}
+        onSelect={(index) => selections.push(index)}
+        onDismiss={() => {
+          dismissed += 1;
+        }}
+      />,
+    );
+    expect(panel.lastFrame()).toContain("Tinker asks");
+    expect(panel.lastFrame()).toContain("❯ 1. Project");
+    panel.stdin.write("\u001b[B");
+    await Bun.sleep(10);
+    expect(panel.lastFrame()).toContain("❯ 2. Global");
+    panel.stdin.write("\r");
+    await Bun.sleep(10);
+    expect(selections).toEqual([1]);
+    panel.cleanup();
+
+    const dismissPanel = render(
+      <AskUser
+        question="Dismiss?"
+        options={[{ description: "One" }, { description: "Two" }]}
+        onSelect={() => undefined}
+        onDismiss={() => {
+          dismissed += 1;
+        }}
+      />,
+    );
+    dismissPanel.stdin.write("\u001b");
+    await Bun.sleep(30);
+    expect(dismissed).toBe(1);
+    dismissPanel.cleanup();
   });
 
   test("marks the footer while yolo mode is enabled", () => {

@@ -1,3 +1,4 @@
+import { createAskUserToolExecutor } from "./ask-user";
 import { createBashToolExecutor } from "./bash";
 import { ShellTaskManager } from "./bash-task";
 import { createCwdState } from "./cwd-state";
@@ -86,6 +87,11 @@ export class ToolRuntime {
       ): Promise<"allow" | "deny">;
     },
     private readonly contextMaintenance?: ContextMaintenanceHandle,
+    private readonly askUser?: (
+      call: ToolCall,
+      request: Parameters<NonNullable<ToolExecutionContext["askUser"]>>[0],
+      signal: AbortSignal,
+    ) => ReturnType<NonNullable<ToolExecutionContext["askUser"]>>,
   ) {}
 
   async execute(call: ToolCall, context: ToolExecutionContext): Promise<ToolRawResult> {
@@ -117,6 +123,9 @@ export class ToolRuntime {
         ...(this.contextMaintenance === undefined
           ? {}
           : { contextMaintenance: this.contextMaintenance }),
+        ...(this.askUser === undefined
+          ? {}
+          : { askUser: (request) => this.askUser!(call, request, context.signal) }),
         ...(this.bashGuard === undefined
           ? {}
           : {
@@ -179,6 +188,11 @@ export function createDefaultTooling(options: {
   enableTurnUndo?: boolean;
   imageAssetStore?: ImageAssetStore;
   supportsViewImage?: boolean;
+  askUser?: (
+    call: ToolCall,
+    request: Parameters<NonNullable<ToolExecutionContext["askUser"]>>[0],
+    signal: AbortSignal,
+  ) => ReturnType<NonNullable<ToolExecutionContext["askUser"]>>;
   bashGuard?: {
     readonly surface: "tui" | "one-shot";
     confirm(
@@ -204,6 +218,9 @@ export function createDefaultTooling(options: {
     ...(options.homeRoot === undefined ? {} : { homeRoot: options.homeRoot }),
   });
 
+  if (options.askUser !== undefined) {
+    registry.register(createAskUserToolExecutor());
+  }
   registry.register(
     createGlobToolExecutor({
       workspaceRoot: options.workspaceRoot,
@@ -333,6 +350,7 @@ export function createDefaultTooling(options: {
       registry,
       options.bashGuard,
       options.runtimeSession.contextMaintenance,
+      options.askUser,
     ),
     snapshots,
     taskManager,

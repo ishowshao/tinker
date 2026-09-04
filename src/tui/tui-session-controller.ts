@@ -5,6 +5,8 @@ import type {
 import type {
   ExecuteTurnInput,
   AcceptedTurn,
+  AskUserSnapshot,
+  AskUserResolution,
   BashGuardSnapshot,
   RuntimeSession,
   RuntimeSkillsSnapshot,
@@ -52,6 +54,9 @@ export type TuiSessionBinding = {
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): void;
   resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
+  askUser(): AskUserSnapshot;
+  subscribeAskUser(listener: () => void): () => void;
+  resolveAskUser(response: AskUserResolution): Promise<void>;
 };
 
 export type TuiSessionController = {
@@ -262,6 +267,9 @@ export function managedTuiBinding(input: {
     setYoloMode: (enabled) => input.runtimeSession.setYoloMode(enabled),
     resolveBashConfirmation: (decision) =>
       input.runtimeSession.resolveBashConfirmation(decision),
+    askUser: () => input.runtimeSession.askUser(),
+    subscribeAskUser: (listener) => input.runtimeSession.subscribeAskUser(listener),
+    resolveAskUser: (response) => input.runtimeSession.resolveAskUser(response),
   };
 }
 

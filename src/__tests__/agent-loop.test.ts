@@ -125,6 +125,45 @@ class TwoToolModel extends TestModelClient {
   }
 }
 
+class AskUserMixedBatchModel extends TestModelClient {
+  private calls = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.calls += 1;
+    if (this.calls > 1) {
+      return testModelOutput(prepared, {
+        role: "assistant",
+        content: "recovered from invalid batch",
+      });
+    }
+    const runtime = requireRuntime(options);
+    const iteration = requireIteration(options);
+    return testModelOutput(prepared, {
+      role: "assistant",
+      toolCalls: [
+        {
+          ...runtime.createToolCall(iteration, 1),
+          providerToolCallId: "provider-ask",
+          name: "AskUser",
+          args: {
+            question: "Proceed?",
+            options: [{ description: "Yes" }, { description: "No" }],
+          },
+        },
+        {
+          ...runtime.createToolCall(iteration, 2),
+          providerToolCallId: "provider-second",
+          name: "Second",
+          args: {},
+        },
+      ],
+    });
+  }
+}
+
 class RecallBatchModel extends TestModelClient {
   private calls = 0;
 
@@ -1037,6 +1076,69 @@ describe("runAgent", () => {
         .filter((event) => event.type === "model.request.started")
         .map((event) => event.data.attemptNumber),
     ).toEqual([1, 2]);
+  });
+
+  test("rejects an AskUser mixed batch before executing any tool", async () => {
+    const identity = createTestRuntime();
+    const calls = { ask: 0, second: 0 };
+    const registry = new ToolRegistry();
+    registry.register(
+      testTool("AskUser", () => {
+        calls.ask += 1;
+      }),
+    );
+    registry.register(
+      testTool("Second", () => {
+        calls.second += 1;
+      }),
+    );
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("ask-user-batch"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "ask then mutate" },
+    });
+
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 2,
+      model: new AskUserMixedBatchModel(),
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      finalText: "recovered from invalid batch",
+    });
+    expect(calls).toEqual({ ask: 0, second: 0 });
+    expect(
+      ledger
+        .snapshot({ allowOpenTail: false })
+        .toolResults.map((entry) =>
+          entry.completion.kind === "synthetic"
+            ? [entry.completion.reason, entry.completion.detail]
+            : ["returned"],
+        ),
+    ).toEqual([
+      [
+        "failed_active",
+        "AskUser must be the only tool call in an assistant response. Call it alone on the next iteration.",
+      ],
+      [
+        "failed_active",
+        "AskUser must be the only tool call in an assistant response. Call it alone on the next iteration.",
+      ],
+    ]);
   });
 
   test("does not start the next tool when the completion write barrier fails", async () => {

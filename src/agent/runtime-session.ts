@@ -80,6 +80,8 @@ import {
   type ContextStatusRawResult,
   type ContextSwapCandidatesRawResult,
   type ContextSwapRawResult,
+  type AskUserRequest,
+  type AskUserResponse,
   type ToolExecutor,
 } from "../tools/types";
 import type { TurnUndoResult } from "../tools/turn-undo-manager";
@@ -202,8 +204,19 @@ export type RuntimeSession = {
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): void;
   resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
+  askUser(): AskUserSnapshot;
+  subscribeAskUser(listener: () => void): () => void;
+  resolveAskUser(response: AskUserResolution): Promise<void>;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
+
+export type AskUserSnapshot = {
+  readonly pending?: AskUserRequest;
+};
+
+export type AskUserResolution =
+  | { readonly outcome: "selected"; readonly selectedIndex: number }
+  | { readonly outcome: "dismissed" };
 
 export type BashGuardSource = "default" | "environment" | "cli" | "session";
 
@@ -327,6 +340,7 @@ type CommonRuntimeSessionInput = {
   memoryDelete?: ToolExecutor;
   completedTurnHook?: CompletedTurnHook;
   enableTurnUndo?: boolean;
+  enableAskUser?: boolean;
   bashGuard?: {
     readonly mode: "guard" | "yolo";
     readonly source: Exclude<BashGuardSource, "session">;
@@ -493,6 +507,16 @@ class DefaultRuntimeSession implements RuntimeSession {
   private bashGuardSource: BashGuardSource;
   private bashGuardSnapshot: BashGuardSnapshot;
   private readonly bashGuardListeners = new Set<() => void>();
+  private askUserSnapshot: AskUserSnapshot = Object.freeze({});
+  private readonly askUserListeners = new Set<() => void>();
+  private pendingAskUser?: {
+    readonly request: AskUserRequest;
+    readonly startedAt: number;
+    readonly call: ToolCallIdentity;
+    readonly resolve: (response: AskUserResponse) => void;
+    readonly reject: (error: unknown) => void;
+    readonly removeAbortListener: () => void;
+  };
   private assistantTextDeltaSinkDisabled = false;
   private pendingBashConfirmation?: {
     readonly command: string;
@@ -698,6 +722,15 @@ class DefaultRuntimeSession implements RuntimeSession {
         ...(input.enableTurnUndo === true ? { enableTurnUndo: true } : {}),
         webFetchRefiner: input.webFetchRefiner,
         toolingConfig: input.toolingConfig,
+        ...(input.enableAskUser === true
+          ? {
+              askUser: (
+                call: ToolCallIdentity,
+                request: AskUserRequest,
+                signal: AbortSignal,
+              ) => session.requestUserAnswer(call, request, signal),
+            }
+          : {}),
         bashGuard: {
           surface: input.bashGuard?.surface ?? "one-shot",
           confirm: (call, request, signal) =>
@@ -1212,6 +1245,119 @@ class DefaultRuntimeSession implements RuntimeSession {
 
   private notifyBashGuardListeners(): void {
     for (const listener of this.bashGuardListeners) {
+      listener();
+    }
+  }
+
+  askUser(): AskUserSnapshot {
+    return this.askUserSnapshot;
+  }
+
+  subscribeAskUser(listener: () => void): () => void {
+    this.askUserListeners.add(listener);
+    return () => this.askUserListeners.delete(listener);
+  }
+
+  async resolveAskUser(response: AskUserResolution): Promise<void> {
+    const pending = this.pendingAskUser;
+    if (pending === undefined) {
+      throw new Error("No AskUser question is pending.");
+    }
+    let result: AskUserResponse;
+    if (response.outcome === "selected") {
+      if (!Number.isSafeInteger(response.selectedIndex)) {
+        throw new Error("AskUser selectedIndex must be an integer.");
+      }
+      const option = pending.request.options[response.selectedIndex];
+      if (option === undefined) {
+        throw new Error("AskUser selectedIndex is out of range.");
+      }
+      result = { outcome: "selected", answer: option.description };
+    } else {
+      result = { outcome: "dismissed" };
+    }
+    this.pendingAskUser = undefined;
+    this.askUserSnapshot = Object.freeze({});
+    pending.removeAbortListener();
+    await this.append({
+      type: "tool.user_question.resolved",
+      ...pending.call,
+      data: {
+        ...result,
+        durationMs: Date.now() - pending.startedAt,
+      },
+    });
+    pending.resolve(result);
+    this.notifyAskUserListeners();
+  }
+
+  private async requestUserAnswer(
+    call: ToolCallIdentity,
+    request: AskUserRequest,
+    signal: AbortSignal,
+  ): Promise<AskUserResponse> {
+    if (this.pendingAskUser !== undefined) {
+      throw new Error("Another AskUser question is already pending.");
+    }
+    if (this.pendingBashConfirmation !== undefined) {
+      throw new Error("Cannot ask the user while a Bash confirmation is pending.");
+    }
+    if (signal.aborted) {
+      throw cancellationError(signal);
+    }
+    const startedAt = Date.now();
+    await this.append({
+      type: "tool.user_question.requested",
+      ...call,
+      data: request,
+    });
+    return new Promise<AskUserResponse>((resolve, reject) => {
+      const onAbort = () => {
+        const pending = this.pendingAskUser;
+        if (pending?.call.toolCallId !== call.toolCallId) {
+          return;
+        }
+        this.pendingAskUser = undefined;
+        this.askUserSnapshot = Object.freeze({});
+        void this.append({
+          type: "tool.user_question.resolved",
+          ...call,
+          data: {
+            outcome: "cancelled",
+            durationMs: Date.now() - startedAt,
+          },
+        }).finally(() => {
+          reject(cancellationError(signal));
+          this.notifyAskUserListeners();
+        });
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      const immutableRequest = Object.freeze({
+        question: request.question,
+        options: Object.freeze(
+          request.options.map((option) =>
+            Object.freeze({ description: option.description }),
+          ),
+        ),
+      });
+      this.pendingAskUser = {
+        request: immutableRequest,
+        startedAt,
+        call,
+        resolve,
+        reject,
+        removeAbortListener: () => signal.removeEventListener("abort", onAbort),
+      };
+      this.askUserSnapshot = Object.freeze({ pending: immutableRequest });
+      this.notifyAskUserListeners();
+      if (signal.aborted) {
+        onAbort();
+      }
+    });
+  }
+
+  private notifyAskUserListeners(): void {
+    for (const listener of this.askUserListeners) {
       listener();
     }
   }

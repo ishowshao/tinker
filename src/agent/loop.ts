@@ -384,6 +384,28 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       });
     }
 
+    if (toolCalls.some((call) => call.name === "AskUser") && toolCalls.length !== 1) {
+      const detail =
+        "AskUser must be the only tool call in an assistant response. Call it alone on the next iteration.";
+      const completions = toolCalls.map((call, index) => {
+        requireCallInIteration(call, iteration, index + 1);
+        return {
+          call,
+          kind: "synthetic" as const,
+          reason: "failed_active" as const,
+          detail,
+        };
+      });
+      input.ledger.commitToolCompletions(completions);
+      await input.runtimeSession.append({
+        type: "agent.iteration.finished",
+        ...iteration,
+        data: { outcome: "continue", toolCallCount: toolCalls.length },
+      });
+      input.runtimeSession.finishIterationForContinuation(iteration);
+      continue;
+    }
+
     for (let callIndex = 0; callIndex < toolCalls.length; callIndex += 1) {
       const call = requireToolCall(toolCalls, callIndex);
       requireCallInIteration(call, iteration, callIndex + 1);

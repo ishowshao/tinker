@@ -540,6 +540,20 @@ export type WaitRawResult =
       error: string;
     };
 
+export type AskUserRequest = {
+  readonly question: string;
+  readonly options: readonly { readonly description: string }[];
+};
+
+export type AskUserResponse =
+  | { readonly outcome: "selected"; readonly answer: string }
+  | { readonly outcome: "dismissed" };
+
+export type AskUserRawResult =
+  | { ok: true; outcome: "selected"; answer: string }
+  | { ok: true; outcome: "dismissed" }
+  | { ok: false; error: string };
+
 export type ToolRawResultByKind = {
   read: ReadFileRawResult;
   view_image: ViewImageRawResult;
@@ -564,6 +578,7 @@ export type ToolRawResultByKind = {
   memory_update: MemoryUpdateRawResult;
   memory_delete: MemoryDeleteRawResult;
   wait: WaitRawResult;
+  ask_user: AskUserRawResult;
   skill: SkillRawResult;
   mcp: McpToolRawResult;
   generic: GenericToolRawResult;
@@ -608,6 +623,7 @@ export function defineToolExecutor<TKind extends ToolRawResultKind>(
 
 export type ToolExecutionContext = {
   signal: AbortSignal;
+  askUser?: (request: AskUserRequest) => Promise<AskUserResponse>;
   contextMaintenance?: ContextMaintenanceHandle;
   confirmBashCommand?: (request: {
     command: string;

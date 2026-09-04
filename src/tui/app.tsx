@@ -25,6 +25,7 @@ import { Footer } from "./components/footer";
 import { AssistantMarkdownProvider } from "./components/assistant-markdown";
 import { ContextStatus } from "./components/context-status";
 import { BackgroundTasks } from "./components/background-tasks";
+import { AskUser } from "./components/ask-user";
 import { BashConfirmation } from "./components/bash-confirmation";
 import { Header } from "./components/header";
 import { ModelPicker } from "./components/model-picker";
@@ -141,6 +142,11 @@ export function App(props: AppProps) {
     (listener) => binding.subscribeBashGuard(listener),
     () => binding.bashGuard(),
     () => binding.bashGuard(),
+  );
+  const askUser = useSyncExternalStore(
+    (listener) => binding.subscribeAskUser(listener),
+    () => binding.askUser(),
+    () => binding.askUser(),
   );
   const promptScheduler = useSyncExternalStore(
     (listener) => binding.subscribePromptScheduler?.(listener) ?? (() => undefined),
@@ -276,7 +282,7 @@ export function App(props: AppProps) {
       setIsCancelling(true);
       setNotice("Cancelling current turn...");
     },
-    { isActive: executionRunning },
+    { isActive: executionRunning && askUser.pending === undefined },
   );
 
   const closeResumePicker = () => {
@@ -906,9 +912,11 @@ export function App(props: AppProps) {
                 status={
                   isCancelling
                     ? "cancelling"
-                    : executionRunning
-                      ? "running"
-                      : state.status
+                    : askUser.pending !== undefined
+                      ? "waiting_for_answer"
+                      : executionRunning
+                        ? "running"
+                        : state.status
                 }
                 workedForMs={state.workedForMs}
                 yolo={bashGuard.mode === "yolo"}
@@ -916,7 +924,26 @@ export function App(props: AppProps) {
               />
             </Box>
             <Box marginTop={1} flexDirection="column" flexShrink={0}>
-              {bashGuard.pending !== undefined ? (
+              {askUser.pending !== undefined ? (
+                <AskUser
+                  question={askUser.pending.question}
+                  options={askUser.pending.options}
+                  onSelect={(selectedIndex) => {
+                    void binding
+                      .resolveAskUser({ outcome: "selected", selectedIndex })
+                      .catch((error: unknown) =>
+                        setNotice(`Answer failed: ${errorMessage(error)}`),
+                      );
+                  }}
+                  onDismiss={() => {
+                    void binding
+                      .resolveAskUser({ outcome: "dismissed" })
+                      .catch((error: unknown) =>
+                        setNotice(`Dismiss failed: ${errorMessage(error)}`),
+                      );
+                  }}
+                />
+              ) : bashGuard.pending !== undefined ? (
                 <BashConfirmation
                   command={bashGuard.pending.command}
                   reason={bashGuard.pending.reason}
@@ -949,6 +976,7 @@ export function App(props: AppProps) {
                     isSessionOperation ||
                     isCopying ||
                     isCancelling ||
+                    askUser.pending !== undefined ||
                     bashGuard.pending !== undefined
                   }
                   history={props.history}

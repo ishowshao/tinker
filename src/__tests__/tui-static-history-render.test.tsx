@@ -187,6 +187,7 @@ test("running interactive frames do not clear or replay committed history", asyn
 
 function controller(store: TuiProjectionStore): TuiSessionController {
   const runtime = createTestRuntime();
+  const askUser = Object.freeze({});
   const binding: TuiSessionBinding = {
     sessionId,
     modelName: "test-model",
@@ -198,6 +199,9 @@ function controller(store: TuiProjectionStore): TuiSessionController {
     subscribeBashGuard: () => () => undefined,
     setYoloMode: () => undefined,
     resolveBashConfirmation: async () => undefined,
+    askUser: () => askUser,
+    subscribeAskUser: () => () => undefined,
+    resolveAskUser: async () => undefined,
     executeTurn: async () => ({
       status: "completed",
       finalText: "done",

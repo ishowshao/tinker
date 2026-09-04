@@ -54,6 +54,7 @@ export function decodeStoredToolRawResult(value: unknown): ToolRawResult {
       "memory_update",
       "memory_delete",
       "wait",
+      "ask_user",
       "skill",
       "mcp",
       "generic",

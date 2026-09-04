@@ -1,7 +1,14 @@
 import { Spinner, StatusMessage } from "@inkjs/ui";
 
 export type FooterProps = {
-  status: "idle" | "running" | "cancelling" | "cancelled" | "done" | "failed";
+  status:
+    | "idle"
+    | "running"
+    | "waiting_for_answer"
+    | "cancelling"
+    | "cancelled"
+    | "done"
+    | "failed";
   workedForMs?: number;
   yolo?: boolean;
   pendingFollowUps?: number;
@@ -24,6 +31,12 @@ export function Footer(props: FooterProps) {
 
   if (props.status === "failed") {
     return <StatusMessage variant="error">failed{suffix}</StatusMessage>;
+  }
+
+  if (props.status === "waiting_for_answer") {
+    return (
+      <StatusMessage variant="info">Waiting for your selection{suffix}</StatusMessage>
+    );
   }
 
   if (props.status === "running") {

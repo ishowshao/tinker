@@ -282,6 +282,33 @@ export function reduceTuiProjection(
                 : "failed",
         }),
       );
+    case "tool.user_question.requested":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(
+          turn,
+          toolCallRef(requireEventString(event.toolCallId, "AskUser toolCallId")),
+          (item) => ({ ...item, text: `AskUser -> ${event.data.question}` }),
+        ),
+      );
+    case "tool.user_question.resolved":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        appendTurnItem(turn, {
+          id: `answer-${event.toolCallId}-${event.eventSequence}`,
+          label: "answer",
+          text:
+            event.data.outcome === "selected"
+              ? event.data.answer
+              : event.data.outcome === "dismissed"
+                ? "dismissed"
+                : "cancelled",
+          status:
+            event.data.outcome === "selected"
+              ? "ok"
+              : event.data.outcome === "dismissed"
+                ? "info"
+                : "cancelled",
+        }),
+      );
     case "bash.task.backgrounded":
     case "bash.task.stopping":
     case "bash.task.finished":
@@ -822,6 +849,10 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
   if (input.name === "Wait") {
     return `Wait ${toolSeconds(input.args) ?? ""}`.trim();
   }
+  if (input.name === "AskUser") {
+    const question = stringProperty(asRecord(input.args), "question");
+    return `AskUser${question === undefined ? "" : ` -> ${question}`}`;
+  }
   if (input.name === "Skill") {
     return `Skill ${stringProperty(asRecord(input.args), "name") ?? ""}`.trim();
   }
@@ -966,6 +997,8 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
     }
     case "wait":
       return raw.ok ? `${base} -> done` : base;
+    case "ask_user":
+      return base;
     case "mcp":
     case "generic":
       return base;
@@ -1021,6 +1054,7 @@ function toolRawResultBashDetail(raw: ToolRawResult): Pick<TimelineItem, "bash">
     case "memory_update":
     case "memory_delete":
     case "wait":
+    case "ask_user":
     case "skill":
     case "mcp":
     case "generic":
@@ -1066,6 +1100,7 @@ function toolRawResultDiff(
     case "memory_update":
     case "memory_delete":
     case "wait":
+    case "ask_user":
     case "skill":
     case "mcp":
     case "generic":

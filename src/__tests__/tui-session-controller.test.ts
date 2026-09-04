@@ -376,6 +376,9 @@ function fakeRuntime(
     subscribeBashGuard: () => () => undefined,
     setYoloMode: () => undefined,
     resolveBashConfirmation: async () => undefined,
+    askUser: () => ({}),
+    subscribeAskUser: () => () => undefined,
+    resolveAskUser: async () => undefined,
     dispose: async (reason) => {
       disposals.push(reason);
     },

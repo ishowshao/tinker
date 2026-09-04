@@ -351,6 +351,14 @@ export type AgentEventDataMap = {
     decision: "allow" | "deny" | "cancelled";
     durationMs: number;
   };
+  "tool.user_question.requested": {
+    question: string;
+    options: readonly { description: string }[];
+  };
+  "tool.user_question.resolved":
+    | { outcome: "selected"; answer: string; durationMs: number }
+    | { outcome: "dismissed"; durationMs: number }
+    | { outcome: "cancelled"; durationMs: number };
   "agent.iteration.finished": {
     outcome: "continue" | "completed";
     toolCallCount: number;
@@ -448,6 +456,7 @@ export type AgentEventInput =
       "tool.started" | "tool.raw_result" | "tool.finished" | "tool.observation"
     >
   | ToolEventInput<"tool.confirmation.requested" | "tool.confirmation.resolved">
+  | ToolEventInput<"tool.user_question.requested" | "tool.user_question.resolved">
   | ToolEventInput<
       "bash.task.backgrounded" | "bash.task.stopping" | "bash.task.finished"
     >;

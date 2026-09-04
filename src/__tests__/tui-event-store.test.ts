@@ -133,6 +133,28 @@ function testEvent(input: TestEventInput): AgentEvent {
     };
   }
   if (
+    input.type === "tool.user_question.requested" ||
+    input.type === "tool.user_question.resolved"
+  ) {
+    const call = testToolCall(input.call);
+    return {
+      ...base,
+      ...call,
+      type: input.type,
+      data:
+        input.type === "tool.user_question.requested"
+          ? {
+              question: stringValue(input.question) ?? "Question?",
+              options: input.options ?? [],
+            }
+          : {
+              outcome: input.outcome ?? "dismissed",
+              ...(typeof input.answer === "string" ? { answer: input.answer } : {}),
+              durationMs: numberValue(input.durationMs) ?? 0,
+            },
+    } as unknown as AgentEvent;
+  }
+  if (
     input.type === "tool.started" ||
     input.type === "tool.raw_result" ||
     input.type === "tool.finished" ||
@@ -519,6 +541,55 @@ describe("tui event store", () => {
       raw: { kind: "wait", ok: true, seconds: 5, waitedMs: 5001 },
     });
     expect(visibleTimelineItems(state).at(-1)?.text).toBe("Wait 5s -> done");
+  });
+
+  test("keeps the AskUser question in the tool row and the selection in the answer row", () => {
+    let state = createInitialTuiState({
+      sessionId: "run-1",
+      modelName: "model",
+      workspaceRoot: "/tmp/workspace",
+    });
+    const call = {
+      providerToolCallId: "ask_1",
+      name: "AskUser",
+      args: {
+        question: "Which scope?",
+        options: [{ description: "Current project" }, { description: "All projects" }],
+      },
+    };
+
+    state = applyAgentEvent(state, { type: "tool.started", call });
+    state = applyAgentEvent(state, {
+      type: "tool.user_question.requested",
+      call,
+      question: "Which scope?",
+      options: call.args.options,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.user_question.resolved",
+      call,
+      outcome: "selected",
+      answer: "All projects",
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      call,
+      raw: { kind: "ask_user", ok: true, outcome: "selected", answer: "All projects" },
+    });
+    state = applyAgentEvent(state, { type: "tool.finished", call, ok: true });
+
+    expect(
+      visibleTimelineItems(state)
+        .slice(-2)
+        .map(({ label, text, status }) => ({
+          label,
+          text,
+          status,
+        })),
+    ).toEqual([
+      { label: undefined, text: "AskUser -> Which scope?", status: "ok" },
+      { label: "answer", text: "All projects", status: "ok" },
+    ]);
   });
 
   test("summarizes task management tool results", () => {

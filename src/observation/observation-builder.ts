@@ -5,6 +5,7 @@ import {
   toolResultDisplayText,
 } from "../agent/tool-result-content";
 import type {
+  AskUserRawResult,
   BashRawResult,
   ContextMaintenanceRawResult,
   DeleteFileRawResult,
@@ -79,6 +80,8 @@ export class ObservationBuilder {
         return textObservation(renderUpdatePlanObservation(input.raw));
       case "wait":
         return textObservation(renderWaitObservation(input.raw));
+      case "ask_user":
+        return textObservation(renderAskUserObservation(input.raw));
       case "task_list":
         return textObservation(renderTaskListObservation(input.raw));
       case "task_output":
@@ -128,6 +131,15 @@ function renderWaitObservation(raw: WaitRawResult): string {
   return raw.ok
     ? `Waited ${raw.seconds} second${raw.seconds === 1 ? "" : "s"}.`
     : `Wait failed: ${raw.error}`;
+}
+
+function renderAskUserObservation(raw: AskUserRawResult): string {
+  if (!raw.ok) {
+    return `AskUser failed: ${raw.error}`;
+  }
+  return raw.outcome === "selected"
+    ? `User selected: ${raw.answer}`
+    : "The user did not select an option. Decide how to proceed.";
 }
 
 function renderContextMaintenanceObservation(raw: ContextMaintenanceRawResult): string {

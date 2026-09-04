@@ -140,6 +140,16 @@ export class StdoutEventPrinter implements EventSink {
           `tool.confirmation.resolved toolCallId=${event.toolCallId} decision=${event.data.decision} durationMs=${event.data.durationMs}\n`,
         );
         break;
+      case "tool.user_question.requested":
+        this.stdout.write(
+          `tool.user_question.requested toolCallId=${event.toolCallId} question=${JSON.stringify(event.data.question)} options=${event.data.options.length}\n`,
+        );
+        break;
+      case "tool.user_question.resolved":
+        this.stdout.write(
+          `tool.user_question.resolved toolCallId=${event.toolCallId} outcome=${event.data.outcome} durationMs=${event.data.durationMs}\n`,
+        );
+        break;
       case "mcp.server.connected":
         this.stdout.write(
           `mcp.server.connected name=${event.data.serverName} tools=${event.data.toolCount}\n`,
@@ -239,6 +249,7 @@ function formatToolRawResult(call: ToolCall, raw: ToolRawResult): string[] {
     case "memory_update":
     case "memory_delete":
     case "wait":
+    case "ask_user":
     case "mcp":
     case "generic":
       return [];
