@@ -5,6 +5,21 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-09-04
+
+### Changed
+
+- Refresh built-in tool descriptions so filesystem scope, local command
+  execution, waiting, and context swaps are stated more precisely to the model.
+- Remove obsolete implementation roadmaps and reconcile the remaining design
+  documents with the behavior already delivered by the runtime.
+
+### Fixed
+
+- Re-evaluate context pressure after a completed turn so automatic maintenance
+  still runs when closing the turn itself moves the active context above its
+  configured pressure threshold.
+
 ## [2.7.0] - 2026-09-04
 
 ### Added
@@ -346,7 +361,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/ishowshao/tinker/releases/tag/v2.8.0
 [2.7.0]: https://github.com/ishowshao/tinker/releases/tag/v2.7.0
 [2.6.0]: https://github.com/ishowshao/tinker/releases/tag/v2.6.0
 [2.5.0]: https://github.com/ishowshao/tinker/releases/tag/v2.5.0
