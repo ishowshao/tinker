@@ -2499,6 +2499,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
       await this.settleClosedTurnSkills();
       if (result.status === "completed") {
+        await this.evaluateClosedTurnContextPressure();
         await this.performAutomaticContextMaintenance();
       }
       return result;
@@ -2519,6 +2520,21 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (this.state === "executing") {
         this.state = "ready";
       }
+    }
+  }
+
+  private async evaluateClosedTurnContextPressure(): Promise<void> {
+    const automation = this.requireContextAutomation();
+    if (!automation.automaticSwapOnly) return;
+
+    const snapshot = this.requireContextManager().measureCurrent();
+    await this.append({
+      type: "context.usage.updated",
+      sessionId: this.sessionId,
+      data: { phase: "turn_close", snapshot },
+    });
+    if (snapshot.pressure !== "normal") {
+      this.pendingAutomaticContextMaintenance = true;
     }
   }
 

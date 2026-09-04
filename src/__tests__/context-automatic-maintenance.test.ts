@@ -80,6 +80,38 @@ class FailingModel extends TestModelClient {
   }
 }
 
+class FinalResponsePressureModel extends TestModelClient {
+  requestCount = 0;
+
+  async request(
+    prepared: PreparedModelRequest,
+    options: ModelRequestOptions,
+  ): Promise<ModelRequestOutput> {
+    this.requestCount += 1;
+    if (this.requestCount === 1) {
+      if (options.identity === undefined) {
+        throw new Error("Turn-close pressure fixture has no model identity.");
+      }
+      const { iteration, runtimeSession } = options.identity;
+      return testModelOutput(prepared, {
+        role: "assistant",
+        toolCalls: [
+          {
+            ...runtimeSession.createToolCall(iteration, 1),
+            providerToolCallId: "turn-close-pressure-read",
+            name: "Read",
+            args: { file_path: "large.txt" },
+          },
+        ],
+      });
+    }
+    return testModelOutput(prepared, {
+      role: "assistant",
+      content: "final-response-pressure ".repeat(6_000),
+    });
+  }
+}
+
 class MultiObservationModel extends TestModelClient {
   requestCount = 0;
   readonly requestedMessages: AgentMessage[][] = [];
@@ -155,6 +187,78 @@ class ActiveRetirementModel extends TestModelClient {
 }
 
 describe("I4 automatic context maintenance", () => {
+  test("maintains context when the final response crosses the pressure threshold", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-turn-close-swap-"));
+    await writeFile(path.join(workspace, "large.txt"), "x".repeat(40 * 1_024));
+    const sink = collectingEventSink();
+    const model = new FinalResponsePressureModel();
+    const contextProfile = {
+      contextWindowTokens: 128 * 1_024,
+      maxSupportedOutputTokens: 64 * 1_024,
+    } as const;
+    const session = await createRuntimeSession(
+      {
+        selection: { mode: "new", sessionId: runtimeIdFactory.createSessionId() },
+        workspaceRoot: workspace,
+        modelName: "test-model",
+        profileName: "test-profile",
+        maxIterations: 2,
+        includeReasoningContent: false,
+        contextProfile,
+        contextBudget: deriveModelContextBudget(contextProfile),
+        systemPrompt: "system",
+        modelClient: model,
+        presentationSinks: [sink],
+        persistence: false,
+      },
+      {
+        loadMcpConfig: async () => undefined,
+        selectShadowPlanning: () => undefined,
+        automaticCompactionTrigger: () => ({
+          kind: "benchmark_forced",
+          targetTokens: 1,
+        }),
+      },
+    );
+
+    try {
+      const result = await session.executeTurn({
+        userMessage: { role: "user", content: "create turn-close pressure" },
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe("completed");
+      expect(model.requestCount).toBe(2);
+
+      const turnCloseUsage = sink.events.find(
+        (
+          event,
+        ): event is Extract<
+          (typeof sink.events)[number],
+          { type: "context.usage.updated" }
+        > =>
+          event.type === "context.usage.updated" && event.data.phase === "turn_close",
+      );
+      expect(turnCloseUsage?.data.snapshot.pressure).toBe("triggered");
+      const automaticSwap = sink.events.find(
+        (event) =>
+          event.type === "context.revision.finished" &&
+          event.data.strategy === "swap" &&
+          event.data.reason === "runtime_pressure",
+      );
+      expect(automaticSwap?.data).toMatchObject({
+        strategy: "swap",
+        addedOverrideCount: 1,
+      });
+      const turnFinished = sink.events.find((event) => event.type === "turn.finished");
+      expect(turnFinished?.eventSequence).toBeLessThan(
+        automaticSwap?.eventSequence ?? 0,
+      );
+    } finally {
+      await session.dispose({ type: "tui_exit" }).catch(() => undefined);
+      await rm(workspace, { recursive: true });
+    }
+  });
+
   test("swaps consumed observations before the active turn completes", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-active-turn-swap-"));
     await writeFile(path.join(workspace, "large.txt"), "x".repeat(110 * 1_024));

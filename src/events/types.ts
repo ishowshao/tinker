@@ -46,7 +46,7 @@ export type SessionStartedData = {
 };
 
 export type ContextUsageUpdatedData = {
-  phase: "initial" | "preflight" | "measured" | "revision";
+  phase: "initial" | "preflight" | "measured" | "turn_close" | "revision";
   snapshot: ContextUsageSnapshot;
 };
 
