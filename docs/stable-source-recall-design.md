@@ -64,7 +64,7 @@ F4 的 schema v1 会拒绝任何额外 schema object，而 F5 必须加入 FTS v
 这些实测结果用于确定实现落点，不把 FTS5 描述为语义检索，也不承诺模型一定会主动
 调用 `Recall`。
 
-## 二、前置契约与当前缺口
+## 二、前置契约与实施前缺口
 
 ### 2.1 F3、F4 已经冻结的事实
 
@@ -89,7 +89,7 @@ sha256(stableJsonStringify({ content }));
 - session 只能在 workspace realpath、schema、runtime contract 和协议完整性全部通过后
   进入 ready。
 
-### 2.2 当前 schema 无法直接添加 FTS
+### 2.2 实施前 schema 无法直接添加 FTS
 
 F4 schema v1 有三层严格身份：application ID、`user_version` 和 schema fingerprint。
 `verifySessionSchema()` 还会拒绝未声明的 table、index 或 trigger。因此不能在 v1 数据库
@@ -102,7 +102,7 @@ F4 schema v1 有三层严格身份：application ID、`user_version` 和 schema 
 
 F5 必须让 schema 变化显式、可验证、不可降级。
 
-### 2.3 当前 runtime 已有明确接入点
+### 2.3 实施前 runtime 已有明确接入点
 
 当前初始化顺序是：
 
@@ -121,7 +121,10 @@ open SessionStore
 初始化时注入。`Recall` 必须在 tool schema hash 计算前注册；它不是可选 feature flag，
 也不在第一次调用时才加载。
 
-### 2.4 当前仍缺少的能力
+### 2.4 实施前仍缺少的能力
+
+以下缺口均已完成；当前工具 surface 使用拆分后的 `RecallSearch` 与 `RecallGet`，并在
+`SessionStore` 的稳定 source、session-scoped reader 和 FTS 索引之上工作：
 
 - 没有稳定 source formatter/parser。
 - 没有只读、按当前 session 和 workspace 固定 scope 的历史 reader。

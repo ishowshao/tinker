@@ -1,13 +1,22 @@
 # Esc 中断当前 Turn 设计方案
 
+## 文档状态
+
+- 日期：2026-07-10
+- 状态：已实施（2026-07-10）
+
+本文保留实施前的问题分析与阶段边界；“实施前实现基线”一节描述的是功能落地前的代码，
+不代表当前 runtime。
+
 ## 背景
 
 Tinker 的 `ShellTaskManager` 负责 Bash 进程组、后台任务状态、主动停止和 runner
 退出清理，`TaskList`、`TaskOutput`、`TaskStop` 以及后台任务 TUI 面板也已经落地。
 
-当前缺少的是 turn 级运行控制。TUI 提交请求后会禁用 `PromptInput`，`runAgent()`、
-`ModelClient` 和 `ToolRuntime` 都没有取消信号；模型请求或前台 Bash 卡住时，用户只能
-等待当前调用结束或退出整个 Tinker。
+实施前缺少 turn 级运行控制：TUI、agent loop、`ModelClient` 和 `ToolRuntime` 之间没有
+贯通取消信号，模型请求或前台 Bash 卡住时只能等待调用结束或退出整个 Tinker。现在这些
+边界已通过 `AbortSignal`、`TurnCancelledError`、协议安全的 tool completion 和
+`ShellTaskManager.cancelForegroundTask()` 落地。
 
 本文第一版只实现 TUI 中按 `Esc` 取消当前 turn，不退出 TUI，不撤销已经发生的副作用，
 也不提前实现 session 持久化、context 统计或 compaction。
@@ -35,7 +44,7 @@ Tinker 的 `ShellTaskManager` 负责 Bash 进程组、后台任务状态、主�
 - 不持久化取消状态；session 恢复属于阶段三。
 - 不新增取消超时环境变量；前台 Bash 继续复用 task manager 的停止宽限期。
 
-## 当前实现基线
+## 实施前实现基线
 
 阶段二需要基于已经落地的代码接口实施，而不是重新实现阶段一：
 
@@ -645,7 +654,7 @@ bun run check
 10. 检查 `.tinker/runs/<runId>.jsonl` 和 observation log，确认取消只记录为
     `run.cancelled`。
 
-## 建议实施顺序
+## 实际实施顺序
 
 1. 增加取消 primitive、execution context、三态 result 和 `run.cancelled` 类型。
 2. 接通 `runAgent` 与 ModelClient signal，先完成模型请求取消测试。

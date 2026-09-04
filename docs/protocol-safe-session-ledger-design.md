@@ -57,11 +57,13 @@ delta 一次性放入 canonical history。user、assistant 和 tool completion �
 完成 F3 后，正常请求发送给 provider 的消息内容和顺序不应改变；改变的是这些消息在
 进入请求前已经具备稳定身份、不可变记录、完整 frame 和可验证的协议关系。
 
-## 二、当前实现基线与具体缺口
+## 二、F3 实施前的实现基线与具体缺口
+
+本节中的“当前”均指 2026-07-11 方案形成时的实现状态。
 
 ### 2.1 F1、F2 已经提供的接缝
 
-当前代码已经具备以下基础：
+F3 实施前的代码已经具备以下基础：
 
 - `RuntimeSession` 是 conversation、turn、iteration、tool call 和资源生命周期的唯一
   session owner。
@@ -75,9 +77,9 @@ delta 一次性放入 canonical history。user、assistant 和 tool completion �
 
 F3 应复用这些边界，不重新设计 RuntimeSession、ContextMeter 或工具生命周期。
 
-### 2.2 `SessionConversation` 仍只是可变消息数组
+### 2.2 实施前的 `SessionConversation` 只是可变消息数组
 
-`src/agent/session-conversation.ts` 当前内部保存：
+F3 实施前，`src/agent/session-conversation.ts` 内部保存：
 
 ```ts
 private readonly committed: AgentMessage[];
@@ -92,12 +94,12 @@ private pending?: InMemoryPendingTurn;
 - raw result、observation 与 tool message 是否来自同一次提交；
 - snapshot 中的对象后来是否被外部引用修改过。
 
-`appendAssistant()` 和 `appendTool()` 目前只是 `Array.push()`，任何角色顺序和关联都能进入
-下一次模型请求。
+当时 `appendAssistant()` 和 `appendTool()` 只是 `Array.push()`，任何角色顺序和关联都能进入
+下一次模型请求。该文件现已删除，由协议安全的 `SessionLedger` 取代。
 
-### 2.3 tool 协议完整性依赖 agent loop 的局部约定
+### 2.3 实施前 tool 协议完整性依赖 agent loop 的局部约定
 
-`src/agent/loop.ts` 当前按以下顺序工作：
+F3 实施前，`src/agent/loop.ts` 按以下顺序工作：
 
 ```text
 append assistant message
@@ -110,11 +112,11 @@ append assistant message
 取消和异常路径会补齐 placeholder，但“补齐了几条、是否错序、是否重复”没有独立领域对象
 校验。只要未来另一条代码路径忘记调用 helper，悬空 tool call 就会进入下一次请求。
 
-此外，raw result event、observation event 和 conversation tool message 是三次独立动作。
-工具副作用已经发生后，如果中间一步失败，当前内存模型只能 discard 整个 turn，无法诚实
-保存已经发生的事实。
+此外，raw result event、observation event 和 conversation tool message 当时是三次独立动作。
+工具副作用已经发生后，如果中间一步失败，旧内存模型只能 discard 整个 turn，无法诚实保存
+已经发生的事实。当前 ledger 已使用原子 completion 提交与 side-effect barrier 关闭该缺口。
 
-### 2.4 adapter 是映射器，不是出站历史 validator
+### 2.4 实施前 adapter 是映射器，不是出站历史 validator
 
 `src/model/openai-chat-mapping.ts` 会把：
 
@@ -128,12 +130,11 @@ append assistant message
 - 缺失、重复、错序或属于其他 call 的 tool message；
 - tool name、内部 `toolCallId` 与 assistant call 不一致。
 
-F3 必须在调用 adapter 前完成这些检查，不能依赖远端 provider 返回 400 才发现本地历史
-已经损坏。
+F3 已在调用 adapter 前加入这些检查，不依赖远端 provider 返回 400 才发现本地历史损坏。
 
-### 2.5 F1 的整 turn commit 不足以支持 F4
+### 2.5 实施前 F1 的整 turn commit 不足以支持 F4
 
-当前 `RuntimeSession` 先写 terminal event，再 `pendingConversation.commit()`；required sink
+F3 实施前，`RuntimeSession` 先写 terminal event，再 `pendingConversation.commit()`；required sink
 失败则 discard 整个 delta。
 
 这对 F1 的内存所有权目标成立，但不能作为持久化契约：

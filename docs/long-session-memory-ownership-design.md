@@ -13,14 +13,14 @@
 ## 一、结论先行
 
 F1 不是 SessionStore，也不会让整个 Tinker 进程的内存立即变成常数。它解决的是进入
-持久化和长上下文之前，当前运行时里两类已经明确存在的放大问题：
+持久化和长上下文之前，F1 实施前运行时里两类已经明确存在的放大问题：
 
 1. **Conversation 所有权和复制放大**：`RuntimeSession` 保存完整历史，`runAgent()`
    每个 turn 再复制一份 message 引用数组，`RunAgentResult` 又把完整历史返回给调用方。
 2. **Presentation 状态和 Ink 渲染放大**：`TuiEventStream` 永久保存完整原始事件，
    `TuiState.timeline` 永久追加展示项，Ink 每次更新都遍历越来越长的 timeline。
 
-F1 完成后的状态应是：
+F1 完成后形成以下状态：
 
 ```text
 Conversation
@@ -45,15 +45,17 @@ Ink
 - TUI 常驻状态和 Ink live tree 不再随 session 的全部事件历史持续增长；
 - conversation 不再通过函数参数和返回值传播完整历史，只保留一个长期 owner。
 
-F1 **不能**承诺 canonical conversation 已经有界。第一版 conversation 仍在内存中，仍会
-随 session message 数量增长。后续 SessionStore 接入后，才把完整 canonical history
-移到 SQLite，让内存主要受 active context budget 和当前 turn tail 限制。
+F1 本身**不能**承诺 canonical conversation 已经有界。第一版 conversation 仍在内存中，
+仍会随 session message 数量增长。后续 F4 已将完整 canonical history 移到 SQLite；当前
+内存主要受 active context budget 和 active turn tail 限制。
 
-## 二、当前实现与问题
+## 二、F1 实施前的实现与问题
+
+本节中的“当前”均指 2026-07-11 F1 实施前的代码状态。
 
 ### 2.1 Conversation 每个 Turn 复制完整引用数组
 
-`src/agent/runtime-session.ts` 当前长期保存：
+F1 实施前，`src/agent/runtime-session.ts` 长期保存：
 
 ```ts
 private sessionMessages?: AgentMessage[];
@@ -77,15 +79,15 @@ const messages =
 this.sessionMessages = result.messages;
 ```
 
-当前实现的正确性没有问题，但有三个长期缺点：
+该实现的正确性没有问题，但有三个长期缺点：
 
 - 每个 turn 至少产生一次与完整历史长度成正比的数组分配；
 - `runAgent()`、`RuntimeSession` 和调用方都能接触完整 session history，所有权不唯一；
-- 未来接入 SessionStore 时，很难只替换一个边界，容易继续让完整历史在内存 API 中流动。
+- 后续接入 SessionStore 时，很难只替换一个边界，容易继续让完整历史在内存 API 中流动。
 
 ### 2.2 TuiEventStream 把辅助 Sink 变成了第二份事件档案
 
-`src/events/tui-event-stream.ts` 当前永久保存：
+F1 实施前，`src/events/tui-event-stream.ts` 永久保存：
 
 ```ts
 readonly events: AgentEvent[] = [];

@@ -63,7 +63,9 @@ F4 的生产实现不保留 SQLite 与 `InMemorySessionLedger` 双写，也不�
 失败时退回内存继续运行。SQLite、schema、lock、workspace、runtime contract 或协议完整性
 任一项不成立，session 都在模型请求和下一次工具副作用前 fast-fail。
 
-## 二、前置契约与当前缺口
+## 二、前置契约与 F4 实施前缺口
+
+本节中的“当前”均指 F4 实施前的 runtime 和 session 文件状态。
 
 ### 2.1 F3 已经冻结的领域语义
 
@@ -86,9 +88,9 @@ F4 只能替换这些操作的存储介质和 transaction 实现，不能重新�
 后的类型或不变量与设计文档不同，应先回填并重新评审 F3，再更新本方案；不能在 F4 schema
 中暗自形成第二套语义。
 
-### 2.2 当前 session 文件仍是诊断面
+### 2.2 实施前 session 文件只是诊断面
 
-当前 runner 已经把文件放在：
+F4 实施前，runner 已经把文件放在：
 
 ```text
 .tinker/sessions/<session-id>/
@@ -109,9 +111,9 @@ F4 只能替换这些操作的存储介质和 transaction 实现，不能重新�
 因此 F4 不解析旧 JSONL 来创建消息，不从 observation log 猜 tool result，也不为现有只有
 日志、没有 `session.sqlite` 的目录提供兼容恢复。
 
-### 2.3 身份与计数器仍只存在于进程内
+### 2.3 实施前身份与计数器仍只存在于进程内
 
-当前 `RuntimeSession` 在内存中维护：
+F4 实施前，`RuntimeSession` 在内存中维护：
 
 - `nextTurnNumber`；
 - 每个 turn 的 `nextIterationNumber`；
@@ -119,29 +121,29 @@ F4 只能替换这些操作的存储介质和 transaction 实现，不能重新�
 - session 级 `eventSequence`；
 - 已知 turn、iteration 和 tool call 的身份映射。
 
-进程退出后这些值全部丢失。仅依赖 UUIDv7 的低碰撞概率不能替代顺序恢复；F4 必须持久化
-下一可分配 number，并在创建相应领域对象的同一个 transaction 中推进它。
+当时进程退出后这些值全部丢失。F4 已将下一可分配 number 持久化，并在创建相应领域对象的
+同一个 transaction 中推进它；UUIDv7 的低碰撞概率不承担顺序恢复职责。
 
-### 2.4 当前 TUI 绑定不能切换 session
+### 2.4 实施前 TUI 绑定不能切换 session
 
-当前 `runTui()` 在启动时一次性创建一个 `RuntimeSession`、一个
+F4 实施前，`runTui()` 在启动时一次性创建一个 `RuntimeSession`、一个
 `TuiProjectionStore` 以及静态传给 `App` 的 `sessionId` 和
 `run()` 回调。slash command 只有 `/status` 与 `/quit`。
 
-因此 F4 还需要一个很薄的 TUI session controller，负责列出、打开、切换和删除 session。
-该 controller 只管理 runner/UI binding，不能成为新的 canonical state owner。
+F4 已增加 `TuiSessionController`，负责列出、打开、切换和删除 session。该 controller 只管理
+runner/UI binding，不是新的 canonical state owner。
 
 ### 2.5 F4 对旧总方案的收束
 
 早期无限上下文总方案把 Message ID、protocol frame、SessionStore 和 `/resume`
-放在同一大阶段。当前路线图已经把它们拆开：
+放在同一大阶段。实际实施将它们拆开：
 
 - MessageId、FrameId、hash、origin、completion state machine 属于 F3；
 - SQLite mapping、lock、crash recovery 和 `/resume` 属于 F4；
 - Recall/FTS 属于 F5；
 - active revision 编译和切换属于 I1 之后。
 
-本方案以当前路线图和 F3 契约为准，不把旧总方案中后续阶段的表或抽象提前搬入 F4。
+本方案以该阶段拆分和 F3 契约为准，不把旧总方案中后续阶段的表或抽象提前搬入 F4。
 
 ## 三、目标与非目标
 

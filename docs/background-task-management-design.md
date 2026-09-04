@@ -1,14 +1,25 @@
 # 后台进程管理设计方案
 
+## 文档状态
+
+- 日期：2026-07-10
+- 状态：已实施（2026-07-10）
+- 当前扩展：交互式 PTY 与 `TaskInput` 已由
+  [`interactive-terminal-design.md`](interactive-terminal-design.md) 落地
+
+本文保留实施前的问题分析与第一版范围；其中“缺少”和“需要修正”均指 2026-07-10
+实施前的代码基线，不代表当前交付状态。
+
 ## 背景
 
 Tinker 的 `Bash` 工具已经使用 `ShellTaskManager` 统一启动命令，并把 stdout、
 stderr 持久化到 `.tinker/bash/<taskId>.log`。前台命令超过等待时间后也会保留为
 后台任务，因此现有实现已经具备后台执行的基础。
 
-当前缺少的是稳定的后续管理闭环：模型无法直接列出任务、查询任务最新状态或终止
-任务；TUI 只能显示 Bash 首次返回的状态，后台进程稍后退出时不会自动更新；Tinker
-正常退出时也没有等待并清理仍在运行的子进程。
+实施前缺少稳定的后续管理闭环：模型无法直接列出任务、查询任务最新状态或终止任务；
+TUI 只能显示 Bash 首次返回的状态，后台进程稍后退出时不会自动更新；Tinker 正常退出时
+也没有等待并清理仍在运行的子进程。这些缺口现已由 `ShellTaskManager`、`TaskList`、
+`TaskOutput`、`TaskStop`、任务生命周期事件和 session dispose 清理闭环补齐。
 
 本文只实现当前 session 内的后台进程管理，不提前引入 Esc 取消、session 恢复或
 compaction。
@@ -34,7 +45,7 @@ compaction。
 - 不在本阶段给普通工具或模型请求接入 `AbortSignal`。
 - 不实现 Windows 进程树终止兼容层；当前 Bash runtime 继续以 POSIX 为前提。
 
-## 当前实现基线
+## 实施前实现基线
 
 现有实现可以继续复用的部分：
 
@@ -45,7 +56,7 @@ compaction。
 - `ObservationBuilder`、JSONL event log 和 TUI event stream。
 - `BashResultView` 对命令和尾部输出的展示。
 
-当前需要修正的边界：
+当时需要修正的边界：
 
 1. `ShellTaskManager.tasks` 是公开 `Map`，外层可以直接访问 `ChildProcess`，绕过
    manager 的生命周期约束。
@@ -854,7 +865,7 @@ bun run check
 8. 再启动一个长任务，不主动停止，执行 `/quit`。
 9. 确认 Tinker 完成任务清理后退出，没有遗留进程。
 
-## 建议实施顺序
+## 实际实施顺序
 
 1. 重构 `ShellTaskManager` 数据边界和状态机，不先接 UI。
 2. 加入进程组 stop、SIGTERM/SIGKILL 升级和 shutdown。

@@ -4,9 +4,11 @@
 
 - 日期：2026-07-17
 - 状态：已实施；schema、事务和自动化回归门禁已通过
-- 当前基线：SessionStore schema v6、`SessionCompatibilityContract`、immutable
+- 本文落地基线：SessionStore schema v6、`SessionCompatibilityContract`、immutable
   `ContextSurface`、`initial_full` / `swap_only` / `surface_refresh` ContextRevision、手动
   `/compact`
+- 当前代码基线：SessionStore schema v10；本文建立的 compatibility/surface/revision 语义
+  继续保留，后续 schema 增量与自动 context maintenance 由各自设计文档定义
 - 外部验证：真实 provider 的 MCP add/remove smoke 和 interactive TUI smoke 仍需在各受支持
   profile 的有效凭据环境单独执行；runtime 不提供静默 fallback
 - 相关设计：
@@ -57,9 +59,11 @@
 12. 一次性切换到 SessionStore schema v6，不实现 v5/v6 dual-read、fallback 或 runtime
     migration。
 
-## 二、问题定义
+## 二、实施前问题定义
 
-### 2.1 当前 runtime contract 的职责过宽
+本节中的“当前”均指 2026-07-17 schema v6 方案实施前的代码状态。
+
+### 2.1 实施前 runtime contract 的职责过宽
 
 当前 `RuntimeContractV1` 包含：
 
@@ -85,7 +89,7 @@ type RuntimeContractV1 = {
 - 某项变化只是新的产品调度策略；
 - 某项变化只影响将来新增的记录，不影响历史记录。
 
-### 2.2 当前 system prompt 通过旧快照绕开 mismatch
+### 2.2 实施前 system prompt 通过旧快照绕开 mismatch
 
 新 session 会把当前 `RUNTIME_INSTRUCTIONS(workspaceRoot)` 和当前 AGENTS.md/CLAUDE.md
 合成为唯一 system message。`/resume` 不读取当前文件，而是调用
@@ -100,7 +104,7 @@ type RuntimeContractV1 = {
 仅从 contract 删除 `systemPromptSha256` 不能解决问题。当前 compiler 仍从 canonical ordinal 1
 读取旧 system message，SQLite 也禁止修改该 message 和 `session_meta.system_prompt_sha256`。
 
-### 2.3 当前 tool schema 会把 MCP 变化变成 resume failure
+### 2.3 实施前 tool schema 会把 MCP 变化变成 resume failure
 
 每次 resume 都重新加载当前 MCP config、连接 server、调用 `listTools()`，再把当前 MCP
 definitions 与 built-in tools 一起计算 `toolSchemaSha256`。因此：
@@ -112,7 +116,7 @@ definitions 与 built-in tools 一起计算 `toolSchemaSha256`。因此：
 
 MCP 是动态 capability，不能同时被当成 session 永久身份。
 
-### 2.4 当前 context budget 冻结了产品策略
+### 2.4 实施前 context budget 冻结了产品策略
 
 `contextBudget` 同时保存 provider/request 参数与产品调度参数：
 
@@ -129,9 +133,10 @@ triggerTokens
 全部旧 session 无法 resume。正确行为应是允许恢复，再用当前 policy 把一个占用 `0.6` 的
 session 重新分类为 `triggered`。
 
-当前自动 context 管理仍只执行 shadow planning，不会在 resume 过程中自动提交 compact
-revision。本方案不改变这一阶段边界：policy 变化只重新计算 pressure；真正自动 compact
-继续由后续路线图定义。
+本方案实施时，自动 context 管理仍只执行 shadow planning，不会在 resume 过程中自动提交
+compact revision；policy 变化只重新计算 pressure。该阶段边界后来已由 I4 自动化门禁取代：
+当前 runtime 在 qualification 允许时会因 runtime pressure 自动提交 swap，并在需要时继续
+执行 prefix retirement；resume activation 也可以在不访问 provider 的情况下执行维护。
 
 ## 三、术语与所有权
 
@@ -163,7 +168,7 @@ ContextSurface 是 immutable snapshot，不是每次请求临时读取的全局�
 模型当前看到的上下文视图版本。canonical history 不变，revision 决定 system message、
 swapped observation 和 tool surface 如何组成当前请求。
 
-当前实现只有：
+本方案实施前只有：
 
 - `initial_full`；
 - `swap_only`。
@@ -633,12 +638,12 @@ content。`raw_json` 只用于审计和稳定来源，不用于用当前 Observa
 3. measured anchor 若 prefix 完全相同则可以恢复；
 4. ContextMeter 使用当前 ratio 把 pressure 重新分类为 `triggered`；
 5. resume 正常进入 ready，不在打开过程中静默 compact；
-6. 当前 I1 路径在下一次 model preflight 只执行 shadow planning；手动 `/compact` 仍是唯一
+6. 本方案实施时，下一次 model preflight 只执行 shadow planning，手动 `/compact` 是唯一
    active revision commit 入口。
 
-若当前 usage 超过新的 hard `inputBudgetTokens`，session 仍可被打开并展示 blocked 状态；下一
-turn 必须在 provider request 前被明确拒绝，用户可以在 idle 状态执行 `/compact`。自动治理
-属于后续 roadmap，不在本方案中提前实现。
+若 usage 超过新的 hard `inputBudgetTokens`，session 仍可被打开并展示 blocked 状态。本方案
+当时要求下一 turn 在 provider request 前明确拒绝，并由用户在 idle 状态执行 `/compact`；
+当前实现已在通过资格门禁的 Recall contract 下增加自动 swap 与 prefix retirement。
 
 ### 12.2 request policy 变化
 
