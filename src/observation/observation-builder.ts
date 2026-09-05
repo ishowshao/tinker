@@ -598,6 +598,7 @@ function renderTaskOutputObservation(raw: TaskOutputRawResult): string {
   }
 
   const terminalScreen = raw.task.tty;
+  const range = terminalScreen ? undefined : raw.range;
   return [
     "Task output retrieved.",
     `taskId=${raw.taskId}`,
@@ -618,8 +619,20 @@ function renderTaskOutputObservation(raw: TaskOutputRawResult): string {
     terminalScreen
       ? `screen=${raw.screenColumns ?? 80}x${raw.screenRows ?? 24}`
       : undefined,
-    terminalScreen ? "current screen:" : "preview:",
-    terminalScreen ? (raw.screen ?? "") : (raw.preview ?? ""),
+    range === undefined ? undefined : `offset=${range.offset}`,
+    range === undefined ? undefined : `limit=${range.limit}`,
+    range === undefined
+      ? undefined
+      : `displayedLines=${range.displayedStartLine === undefined ? "none" : `${range.displayedStartLine}-${range.displayedEndLine}`}`,
+    range !== undefined && raw.truncated
+      ? "Requested output shortened by byte limits. Full output is available at outputFilePath."
+      : undefined,
+    terminalScreen ? "current screen:" : range === undefined ? "preview:" : "output:",
+    terminalScreen
+      ? (raw.screen ?? "")
+      : range !== undefined && range.displayedStartLine === undefined
+        ? `No output at or after line ${range.offset} in this snapshot.`
+        : (raw.preview ?? ""),
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");

@@ -147,6 +147,34 @@ describe("TaskInput log statistics", () => {
 });
 
 describe("TaskOutput output representations", () => {
+  test("explains byte-limited ranges without implying head/tail omission", () => {
+    const raw = taskOutput();
+    raw.outputLines = 1_000;
+    raw.range = {
+      offset: 100,
+      limit: 500,
+      displayedStartLine: 100,
+      displayedEndLine: 280,
+    };
+    raw.truncated = true;
+    raw.omittedLines = 319;
+    raw.preview = "100: first\n...";
+    const observation = observe(raw);
+    expect(observation.displayText).toContain(
+      "outputLines=1000\ntruncated=true\nomittedLines=319",
+    );
+    expect(observation.displayText).toContain(
+      "offset=100\nlimit=500\ndisplayedLines=100-280",
+    );
+    expect(observation.displayText).toContain(
+      "Requested output shortened by byte limits.",
+    );
+    expect(observation.displayText).toEndWith(`output:\n${raw.preview}`);
+    expect(observation.content).toEqual([
+      { type: "text", text: observation.displayText },
+    ]);
+  });
+
   test("preserves the ordinary log preview and its metadata", () => {
     const raw = taskOutput();
     raw.outputBytes = 60_000;

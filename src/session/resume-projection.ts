@@ -160,28 +160,25 @@ function projectTurn(
     .query("SELECT * FROM messages WHERE turn_id = ? ORDER BY ordinal")
     .all(turnId) as Array<Record<string, unknown>>;
   const promptRows = messages.filter((message) => message.role === "user");
-  if (promptRows.length !== 1) {
-    throw new Error(
-      `Turn ${turnId} must contain exactly one user message; found ${promptRows.length}.`,
-    );
-  }
   const prompt = promptRows[0];
-  if (prompt === undefined) {
-    throw new Error(`Turn ${turnId} user message disappeared.`);
+  if (prompt === undefined || messages[0] !== prompt) {
+    throw new Error(`Turn ${turnId} must start with a user message.`);
   }
-  const userPrompt = truncateUserPromptProjection(
-    readUserPromptProjection(database, prompt),
-    MAX_TIMELINE_PROMPT_CODE_POINTS,
-  );
-  const allItems: TimelineItem[] = [
-    {
-      id: `resume-${requireString(prompt.message_id, "message_id")}`,
-      label: "prompt",
-      text: userPrompt.text,
-      userPrompt,
-      status: "text",
-    },
-  ];
+  const allItems: TimelineItem[] = [projectPrompt(database, prompt, "prompt")];
+  let nextPromptIndex = 1;
+  const appendFollowUpsBefore = (ordinal: number): void => {
+    while (nextPromptIndex < promptRows.length) {
+      const followUp = promptRows[nextPromptIndex];
+      if (
+        followUp === undefined ||
+        safeNumber(followUp.ordinal, "user ordinal") >= ordinal
+      ) {
+        break;
+      }
+      allItems.push(projectPrompt(database, followUp, "follow-up"));
+      nextPromptIndex += 1;
+    }
+  };
   const assistantsByIteration = new Map<string, Record<string, unknown>>();
   for (const message of messages) {
     const role = requireString(message.role, "message role");
@@ -224,6 +221,15 @@ function projectTurn(
     .query("SELECT * FROM iterations WHERE turn_id = ? ORDER BY iteration_number")
     .all(turnId) as Array<Record<string, unknown>>;
   for (const iteration of iterations) {
+    const iterationId = requireString(iteration.iteration_id, "iteration_id");
+    const assistant = assistantsByIteration.get(iterationId);
+    // Steering is committed between complete tool exchanges. An unanswered
+    // terminal iteration has no ordinal, so all remaining follow-ups precede it.
+    appendFollowUpsBefore(
+      assistant === undefined
+        ? Number.POSITIVE_INFINITY
+        : safeNumber(assistant.ordinal, "assistant ordinal"),
+    );
     allItems.push(
       ...projectIteration(
         iteration,
@@ -234,6 +240,8 @@ function projectTurn(
       ),
     );
   }
+  // The iteration limit can end a turn immediately after steering was applied.
+  appendFollowUpsBefore(Number.POSITIVE_INFINITY);
   if (assistantsByIteration.size > 0) {
     throw new Error(
       `Turn ${turnId} has assistant messages without matching iterations.`,
@@ -262,6 +270,24 @@ function projectTurn(
     workedForMs: Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt)),
     items: limited.items,
     omittedItemCount: limited.omitted,
+  };
+}
+
+function projectPrompt(
+  database: Database,
+  message: Record<string, unknown>,
+  label: "prompt" | "follow-up",
+): TimelineItem {
+  const userPrompt = truncateUserPromptProjection(
+    readUserPromptProjection(database, message),
+    MAX_TIMELINE_PROMPT_CODE_POINTS,
+  );
+  return {
+    id: `resume-${requireString(message.message_id, "message_id")}`,
+    label,
+    text: userPrompt.text,
+    userPrompt,
+    status: "text",
   };
 }
 

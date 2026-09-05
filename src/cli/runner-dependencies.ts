@@ -38,7 +38,7 @@ Use run_in_background=true for dev servers, watch commands, long-running builds,
 Do not add & to Bash commands; background execution is handled by the Bash tool.
 Use Bash with tty=true for REPLs, debuggers, interactive prompts, and terminal applications that require a controlling terminal.
 Use TaskList to list background shell tasks in the current session.
-Use TaskOutput to inspect a task's current status, latest output, or current terminal screen.
+Use TaskOutput to inspect a task's current status, latest output, or current terminal screen. For non-PTY logs, offset (1-based) and limit select consecutive lines instead of the default head/tail preview; PTY tasks ignore them. Range truncated=true means byte limits shortened requested content, not that lines outside the range exist. When polling running logs, reread the last observed line because it may still be growing.
 Use TaskInput with the returned task ID to send characters to a PTY task. TaskInput does not append Enter; include \\n explicitly, use \\u0003 for Ctrl-C, and use chars="" to wait without writing.
 Use TaskStop to stop a background task that is no longer needed.
 Do not use ad-hoc kill commands to manage tasks created by Bash.

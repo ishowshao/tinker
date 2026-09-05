@@ -9,7 +9,14 @@ import {
   type OutputPreviewSource,
 } from "./bounded-output-preview";
 
+import {
+  readTaskOutputRange,
+  type TaskOutputRange,
+  type TaskOutputRangeRequest,
+} from "./task-output-range";
+
 export type TaskOutputSnapshot = {
+  range?: TaskOutputRange;
   outputBytes: number;
   outputLines: number;
   preview: string;
@@ -46,6 +53,34 @@ export class TaskOutput {
   async end(): Promise<TaskOutputSnapshot> {
     this.endPromise ??= this.finish();
     return this.endPromise;
+  }
+
+  async readRange(
+    range: TaskOutputRangeRequest,
+    signal?: AbortSignal,
+  ): Promise<TaskOutputSnapshot> {
+    const ended = this.endPromise !== undefined;
+    if (ended) {
+      await this.endPromise;
+    }
+    const snapshot = this.snapshot();
+    if (!ended) {
+      // A write callback is a barrier for all bytes captured above; later writes
+      // may proceed, but the reader remains bounded to snapshot.outputBytes.
+      await new Promise<void>((resolve, reject) => {
+        this.stream.write(Buffer.alloc(0), (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    }
+    return readTaskOutputRange({
+      filePath: this.filePath,
+      snapshot,
+      range,
+      ended,
+      signal,
+    });
   }
 
   private async finish(): Promise<TaskOutputSnapshot> {

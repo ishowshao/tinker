@@ -73,6 +73,65 @@ class ArrayEventSink implements EventSink {
 }
 
 describe("background task management", () => {
+  test.each([
+    false,
+    true,
+  ])("TaskOutput range reaches the observation and is ignored for PTY=%s", async (tty) => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-range-"));
+    const tooling = createDefaultTooling({ workspaceRoot: workspace });
+    try {
+      const bash = asBash(
+        await tooling.runtime.execute({
+          name: "Bash",
+          args: {
+            command: "printf 'one\\ntwo\\nthree\\n'; exit 2",
+            tty,
+          },
+        }),
+      );
+      const call = tooling.testRuntime.toolCall({
+        name: "TaskOutput",
+        args: { task_id: bash.taskId, offset: 2, limit: 1 },
+      });
+      const raw = asTaskOutput(await tooling.runtime.execute(call));
+      const text = new ObservationBuilder().build({ call, raw }).displayText;
+      expect(raw.ok).toBe(true);
+      expect(text).toContain("status=failed\nexitCode=2");
+      if (tty) {
+        expect(raw.range).toBeUndefined();
+        expect(text).toContain("current screen:\none\ntwo\nthree");
+        expect(text).not.toContain("offset=");
+        expect(text).not.toContain("truncated=");
+      } else {
+        expect(raw.range).toEqual({
+          offset: 2,
+          limit: 1,
+          displayedStartLine: 2,
+          displayedEndLine: 2,
+        });
+        expect(text).toContain("outputLines=3\ntruncated=false");
+        expect(text).toContain(
+          "offset=2\nlimit=1\ndisplayedLines=2-2\noutput:\n2: two",
+        );
+        const emptyCall = tooling.testRuntime.toolCall({
+          name: "TaskOutput",
+          args: { task_id: bash.taskId, offset: 4 },
+        });
+        const emptyRaw = asTaskOutput(await tooling.runtime.execute(emptyCall));
+        const empty = new ObservationBuilder().build({
+          call: emptyCall,
+          raw: emptyRaw,
+        }).displayText;
+        expect(empty).toContain("truncated=false");
+        expect(empty).toContain("displayedLines=none");
+        expect(empty).toContain("No output at or after line 4 in this snapshot.");
+      }
+    } finally {
+      await tooling.dispose();
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("registers task tools and validates their arguments", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-tasks-"));
     const tooling = createDefaultTooling({ workspaceRoot: workspace });

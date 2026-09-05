@@ -14,6 +14,7 @@ import {
   spawnShellProcess,
 } from "./shell-process";
 import { TaskOutput, type TaskOutputSnapshot } from "./task-output";
+import type { TaskOutputRangeRequest } from "./task-output-range";
 import {
   createTerminalScreen,
   TERMINAL_SCREEN_COLUMNS,
@@ -259,7 +260,11 @@ export class ShellTaskManager {
     return this.inspection(task);
   }
 
-  async inspectTaskOutput(taskId: string): Promise<ShellTaskInspection | undefined> {
+  async inspectTaskOutput(
+    taskId: string,
+    range?: TaskOutputRangeRequest,
+    signal?: AbortSignal,
+  ): Promise<ShellTaskInspection | undefined> {
     const task = this.tasks.get(taskId);
     if (task === undefined) {
       return undefined;
@@ -271,7 +276,20 @@ export class ShellTaskManager {
     } else {
       await task.terminalScreen?.flush();
     }
-    return this.inspection(task);
+    const inspection = this.inspection(task);
+    if (range !== undefined && task.mode !== "pty") {
+      const output = await task.output.readRange(range, signal);
+      return {
+        ...inspection,
+        task: {
+          ...inspection.task,
+          outputBytes: output.outputBytes,
+          outputLines: output.outputLines,
+        },
+        output,
+      };
+    }
+    return inspection;
   }
 
   taskCompletion(taskId: string): Promise<ShellTaskSnapshot> {

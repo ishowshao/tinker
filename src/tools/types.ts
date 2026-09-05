@@ -9,6 +9,7 @@ import type {
 } from "../session/session-history-reader";
 import type { ShellTaskSnapshot, ShellTaskStatus } from "./bash-task";
 import type { SkillScope } from "../skills/skill-loader";
+import type { TaskOutputRange } from "./task-output-range";
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -173,6 +174,7 @@ export type UpdatePlanRawResult =
     };
 
 export type TaskOutputRawResult = {
+  range?: TaskOutputRange;
   ok: boolean;
   taskId: string;
   task?: ShellTaskSnapshot;

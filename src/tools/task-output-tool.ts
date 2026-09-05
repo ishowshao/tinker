@@ -1,6 +1,6 @@
-import type { ShellTaskManager } from "./bash-task";
+import type { ShellTaskInspection, ShellTaskManager } from "./bash-task";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
-import { parseTaskIdArgs } from "./task-tool-args";
+import { parseTaskOutputArgs } from "./task-tool-args";
 import { defineToolExecutor } from "./types";
 import type { TaskOutputRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 
@@ -10,7 +10,8 @@ export function createTaskOutputToolExecutor(options: {
   return defineToolExecutor("task_output", {
     definition: {
       name: "TaskOutput",
-      description: "Get the current status and latest output of a shell task.",
+      description:
+        "Get a shell task's status and output. Defaults to a head/tail log preview or current PTY screen. For non-PTY tasks, offset/limit selects consecutive numbered log lines instead; PTY tasks ignore these parameters. truncated means content within the requested range was shortened by byte limits, not that other log lines exist. When polling a running log, reread its last line because it may still be growing.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -18,6 +19,20 @@ export function createTaskOutputToolExecutor(options: {
           task_id: {
             type: "string",
             description: "The task ID returned by Bash or TaskList.",
+          },
+          offset: {
+            type: "integer",
+            minimum: 1,
+            maximum: Number.MAX_SAFE_INTEGER,
+            description:
+              "1-based starting log line. Supplying offset or limit selects consecutive lines; default offset is 1. Ignored for PTY tasks.",
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: Number.MAX_SAFE_INTEGER,
+            description:
+              "Maximum number of consecutive log lines to read (default 200 in range mode), subject to byte limits. Ignored for PTY tasks.",
           },
         },
         required: ["task_id"],
@@ -29,12 +44,26 @@ export function createTaskOutputToolExecutor(options: {
       context: ToolExecutionContext,
     ): Promise<TaskOutputRawResult> {
       throwIfTurnCancelled(context.signal);
-      const parsed = parseTaskIdArgs(args, "TaskOutput");
+      const parsed = parseTaskOutputArgs(args);
       if (!parsed.ok) {
         return { ok: false, taskId: "", error: parsed.error };
       }
 
-      const inspection = await options.taskManager.inspectTaskOutput(parsed.taskId);
+      let inspection: ShellTaskInspection | undefined;
+      try {
+        inspection = await options.taskManager.inspectTaskOutput(
+          parsed.taskId,
+          parsed.range,
+          context.signal,
+        );
+      } catch (error) {
+        throwIfTurnCancelled(context.signal);
+        return {
+          ok: false,
+          taskId: parsed.taskId,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
       throwIfTurnCancelled(context.signal);
       if (inspection === undefined) {
         return {
@@ -55,6 +84,7 @@ export function createTaskOutputToolExecutor(options: {
         preview: inspection.output.preview,
         truncated: inspection.output.truncated,
         omittedLines: inspection.output.omittedLines,
+        range: inspection.output.range,
         outputFilePath: inspection.task.outputFilePath,
         screenRows: inspection.screenRows,
         screenColumns: inspection.screenColumns,
