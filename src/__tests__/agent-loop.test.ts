@@ -25,6 +25,7 @@ import {
   type SessionHistoryReader,
 } from "../session/session-history-reader";
 import { createRecallSearchToolExecutor } from "../tools/recall";
+import { createSessionHistoryAccess } from "../session/session-history-access";
 import { createDefaultTooling } from "../tools/registry";
 import { ToolRegistry, ToolRuntime } from "../tools/registry";
 import type { ToolExecutor } from "../tools/types";
@@ -1204,7 +1205,14 @@ describe("runAgent", () => {
       );
     });
     const registry = new ToolRegistry();
-    registry.register(createRecallSearchToolExecutor({ historyReader: reader }));
+    registry.register(
+      createRecallSearchToolExecutor({
+        historyAccess: createSessionHistoryAccess({
+          historyReader: reader,
+          workspaceRoot: "/test",
+        }),
+      }),
+    );
     registry.register(
       testTool("Second", () => {
         secondCalls += 1;
@@ -1252,7 +1260,14 @@ describe("runAgent", () => {
       throw new RecallHistoryError("RECALL_SOURCE_NOT_FOUND", "ordinary history miss");
     });
     const registry = new ToolRegistry();
-    registry.register(createRecallSearchToolExecutor({ historyReader: reader }));
+    registry.register(
+      createRecallSearchToolExecutor({
+        historyAccess: createSessionHistoryAccess({
+          historyReader: reader,
+          workspaceRoot: "/test",
+        }),
+      }),
+    );
     registry.register(
       testTool("Second", () => {
         secondCalls += 1;

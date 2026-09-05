@@ -922,13 +922,18 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       return raw.route === undefined
         ? base
         : `${base} -> ok (${raw.route}${raw.refined === true ? ", refined" : ""})`;
-    case "recall":
+    case "recall": {
       if (!raw.ok) {
         return base;
       }
+      const provenance =
+        raw.sessionId === undefined
+          ? ""
+          : ` [session=${raw.sessionId}, workspace=${raw.workspaceRoot ?? "unknown"}]`;
       return raw.mode === "search"
-        ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}`
-        : `${base} -> ${raw.page.returnedBytes} historical bytes`;
+        ? `${base} -> ${raw.page.hits.length} historical match${raw.page.hits.length === 1 ? "" : "es"}${provenance}`
+        : `${base} -> ${raw.page.returnedBytes} historical bytes${provenance}`;
+    }
     case "context_maintenance":
       if (!raw.ok) {
         return raw.operation === "swap"

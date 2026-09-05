@@ -10,7 +10,7 @@ import { MAX_MEMORY_ID_BYTES, MEMORY_GET_TOOL_NAME } from "./contracts";
 export const MEMORY_GET_TOOL_DEFINITION: ToolDefinition = Object.freeze({
   name: MEMORY_GET_TOOL_NAME,
   description:
-    "Read one stored memory in full by its memoryId from a MemorySearch result. Use this when a search hit's summary is truncated or you need its exact stored text, summary, and source metadata. The record is a derived historical summary that may be stale or wrong; verify current workspace facts with current tools, and use RecallSearch on its source session for the full original context.",
+    "Read one stored memory in full by its memoryId from a MemorySearch result. Use this when a search hit's summary is truncated or you need its exact stored text, summary, and source metadata. The record is a derived historical summary that may be stale or wrong; verify current workspace facts with current tools.",
   parameters: {
     type: "object",
     additionalProperties: false,

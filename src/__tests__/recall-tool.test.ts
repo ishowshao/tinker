@@ -3,6 +3,7 @@ import { ObservationBuilder } from "../observation/observation-builder";
 import { formatMessageSource } from "../context/context-source";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
+import { createSessionHistoryAccess } from "../session/session-history-access";
 import {
   RecallHistoryError,
   type SessionHistoryReader,
@@ -34,6 +35,7 @@ describe("Recall tools", () => {
     });
     expect(Object.keys(requireRecord(searchDefinition?.parameters.properties))).toEqual(
       [
+        "sessionId",
         "query",
         "roles",
         "tool_names",
@@ -53,6 +55,7 @@ describe("Recall tools", () => {
       required: ["source"],
     });
     expect(Object.keys(requireRecord(getDefinition?.parameters.properties))).toEqual([
+      "sessionId",
       "source",
       "byte_offset",
       "byte_limit",
@@ -349,8 +352,13 @@ function registerRecallTools(
   registry: ToolRegistry,
   historyReader: SessionHistoryReader,
 ): void {
-  registry.register(createRecallSearchToolExecutor({ historyReader }));
-  registry.register(createRecallGetToolExecutor({ historyReader }));
+  const historyAccess = createSessionHistoryAccess({
+    historyReader,
+    workspaceRoot: "/test",
+    homeRoot: "/does-not-exist",
+  });
+  registry.register(createRecallSearchToolExecutor({ historyAccess }));
+  registry.register(createRecallGetToolExecutor({ historyAccess }));
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

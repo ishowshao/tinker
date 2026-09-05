@@ -273,6 +273,7 @@ export type GenericToolRawResult = {
 };
 
 export type RecallToolErrorCode =
+  | import("../session/session-history-access").RecallSessionErrorCode
   | "RECALL_ARGS_INVALID"
   | "RECALL_SOURCE_INVALID"
   | "RECALL_SOURCE_NOT_FOUND"
@@ -284,6 +285,9 @@ export type RecallSearchRawResult =
       ok: true;
       mode: "search";
       historical: true;
+      /** Optional only for persisted results produced before session selection. */
+      sessionId?: SessionId;
+      workspaceRoot?: string;
       query: string;
       filters: RecallSearchFilters;
       page: RecallSearchPage;
@@ -300,6 +304,9 @@ export type RecallGetRawResult =
       ok: true;
       mode: "get";
       historical: true;
+      /** Optional only for persisted results produced before session selection. */
+      sessionId?: SessionId;
+      workspaceRoot?: string;
       page: RecallGetPage;
     }
   | {

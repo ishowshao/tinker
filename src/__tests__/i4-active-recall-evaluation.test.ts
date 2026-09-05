@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { I4_ACTIVE_RECALL_QUALIFICATION } from "../context/context-automation-policy";
-import { sha256 } from "../model/model-request-preflight";
+import {
+  I4_ACTIVE_RECALL_QUALIFICATION,
+  RECALL_SESSION_SELECTION_CONTINUITY,
+} from "../context/context-automation-policy";
+import { sha256, stableJsonStringify } from "../model/model-request-preflight";
+import { RECALL_TOOL_DEFINITIONS } from "../tools/recall";
 import {
   ACTIVE_RECALL_CASES,
   ACTIVE_RECALL_MANIFEST_HASH,
@@ -144,17 +148,46 @@ describe("I4 active Recall qualification policy", () => {
 
   test("keeps the compiled floor gate bound to the checked-in holdout reports", () => {
     const positive = readFixture(
-      "docs/context-revision-i4-holdout-deepseek-v4-flash.json",
+      "docs/recall-session-selection-holdout-deepseek-v4-flash.json",
     );
     const negative = readFixture(
-      "docs/context-revision-i4-holdout-negative-deepseek-v4-flash.json",
+      "docs/recall-session-selection-negative-deepseek-v4-flash.json",
     );
     const qualification = JSON.parse(
-      readFixture("docs/context-revision-i4-qualification-deepseek-v4-flash.json"),
+      readFixture("docs/recall-session-selection-qualification-deepseek-v4-flash.json"),
     ) as Record<string, unknown>;
     expect(sha256(positive)).toBe(I4_ACTIVE_RECALL_QUALIFICATION.positiveReportSha256);
     expect(sha256(negative)).toBe(I4_ACTIVE_RECALL_QUALIFICATION.negativeReportSha256);
-    expect(qualification.passed).toBe(true);
+    const positiveReport = JSON.parse(positive) as I4ActiveRecallReport;
+    const negativeReport = JSON.parse(negative) as I4ActiveRecallReport;
+    // Historical reports retain their measured surface. The live evaluator must
+    // reject them after a description change, not relabel them as fresh evidence.
+    expect(() =>
+      evaluateActiveRecallQualification(positiveReport, negativeReport),
+    ).toThrow("does not match the current Recall surface");
+    for (const report of [positiveReport, negativeReport]) {
+      expect(report.recallToolDefinitionSha256).toBe(
+        I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+      );
+    }
+    const continuity = RECALL_SESSION_SELECTION_CONTINUITY;
+    expect(continuity.evaluatedRecallToolDefinitionSha256).toBe(
+      I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+    );
+    expect(sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS))).toBe(
+      continuity.recallToolDefinitionSha256,
+    );
+    expect(continuity.recallToolDefinitionSha256).not.toBe(
+      continuity.evaluatedRecallToolDefinitionSha256,
+    );
+    expect(sha256(positive)).toBe(continuity.positiveReportSha256);
+    expect(sha256(negative)).toBe(continuity.negativeReportSha256);
+    expect(qualification.passed).toBe(false);
+    expect(qualification.passed).toBe(I4_ACTIVE_RECALL_QUALIFICATION.passed);
+    expect(qualification.metrics).toEqual(I4_ACTIVE_RECALL_QUALIFICATION.metrics);
+    expect(qualification.recallToolDefinitionSha256).toBe(
+      I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+    );
     expect(qualification.policySha256).toBe(
       I4_ACTIVE_RECALL_QUALIFICATION.policySha256,
     );
@@ -229,8 +262,8 @@ function qualificationReport(positive: boolean): I4ActiveRecallReport {
     manifestHash: ACTIVE_RECALL_MANIFEST_HASH,
     graderVersion: "active-recall-deterministic-grader-v1",
     recallContractSha256: I4_ACTIVE_RECALL_QUALIFICATION.recallContractSha256,
-    recallToolDefinitionSha256:
-      I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+    // Synthetic trials exercise the policy against the current tool surface.
+    recallToolDefinitionSha256: sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS)),
     profile: "deepseek-v4-flash",
     model: "deepseek-v4-flash",
     stream: true,

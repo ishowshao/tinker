@@ -2,7 +2,9 @@
 
 ## 状态与目标
 
-- 状态：待审阅，未实施。
+- 状态：已实施（2026-09-05）；真实模型重新评测未通过主动 Recall qualification，
+  按用户后续明确决定，本次 Recall 改进保留自动 swap 与自动 prefix retirement 开启，
+  不变更其触发条件和执行逻辑；真实评测结果单独保留，不标为通过。
 - 代码基线：Tinker `2.8.0`，commit `57bcfe2`。
 - 目标：为 `RecallSearch`、`RecallGet` 增加可选的 `sessionId`，不传时保持当前行为，
   指定时读取目标 session 的历史。
@@ -229,6 +231,54 @@ Recall 的工具定义关联已有主动 Recall qualification。增加字段会�
 
 实施涉及源码和测试时，按项目约定迭代运行 `bun run check:fast`，完成前运行
 `bun run check`；真实模型 qualification 与离线回归结果分开报告。
+
+## 实施与验证记录（2026-09-05）
+
+- 新增 `src/session/session-history-access.ts`：按配置 home 定位唯一 session，验证私有路径、
+  DB/WAL/SHM、schema、session/workspace 身份及 ready 状态；只读短事务复用现有 reader，
+  busy timeout 为 250ms，finally 严格关闭连接。当前 session 复用注入的 reader。
+- 默认工具组装为 TUI/one-shot 同时启用；Memory 不参与依赖。Recall 成功结果及
+  observation/TUI 标记来源，旧结果缺省字段仍可恢复；Memory 指导明确传 `sourceSessionId`。
+- 回归覆盖同/跨工作区、默认快路径、分页/哈希、错误隔离、源 workspace 删除、
+  活跃 WAL/部分 turn、同事务快照、静态库不变、权限/符号链接、歧义、不完整扫描、
+  迁移拒绝、损坏/索引缺失、busy/取消、图片省略以及老/新结果 resume/fork。
+- 本机 macOS + Bun 1.3.14 的只读/WAL/SHM、独立进程 busy 读取已验证。Linux 尚未实测：
+  本机 Docker CLI 存在但 daemon 不可连接，不能把 macOS 结果当作 Linux 验证。
+
+- 离线质量门禁：`bun run check:fast` 通过（1124 tests）；`bun run check` 通过
+  （1167 tests，含真实进程 E2E、docs:check 和 benchmark smoke），无失败。
+
+### 真实模型 qualification（与离线回归分开）
+
+按原冻结 manifest/policy 运行 `deepseek-v4-flash` 的完整 holdout：90 个正例试验
+（10 cases × 3 views × 3 trials）及 9 个负例。未调整门槛、未筛选试验、未重跑择优。
+
+- full-history 成功率 96.67%；swap-only 100%；Recall-only 100%。
+- Recall-only 主动 Recall 100%，Search → Get 13.33%，低于冻结门槛 30%。
+- Recall-only 无效调用/试验为 0；负例不必要 Recall 为 0。
+- token/latency 相对 full-history 比率分别为 0.2813 / 0.8764。
+- 评测最终 `passed=false`，报告及其自动化建议保持原样。初次实施据此关闭了自动
+  prefix retirement；用户随后明确要求此次只改进 Recall，保留自动 retirement 开启。
+- 最初通过 `recall-session-selection-continuity-v1` 记录保留开启的决定。随后用户精简
+  Recall description，并从 MemorySearch/Get description 删除重复的 Recall 调用指导
+  （模型观察不变），再次明确要求本次文案修改保留自动维护开启。当前使用
+  `recall-session-selection-description-continuity-v2`，分别绑定原评测工具 hash
+  `0af1dcea5ccbb0619c36d2bf0df1e183a0213b1a5b8b2a6181c38a0fc79705eb` 与精简后工具 hash
+  `072ffe5ee810bcd06ae681eb3749400ab6e9219c3d762e3e0e0ad5cc9573d53e`，同时保持
+  Recall contract 和正负报告 hash 绑定。原始报告及 `passed=false` 不变；精简后的文案
+  尚未重新进行真实模型评测，现有 evaluator 必须拒绝把旧报告当作当前 surface 的证据。
+- 仍检查 profile 与 surface 匹配；自动 swap/retirement 的触发、规划和执行安全条件不变，
+  未来 surface/report 变更不继承这次例外。事件沿用 qualificationId 字段记录当前
+  decision ID，不假称评测通过。
+- 此决定不改变冻结评测门槛：30 个 Recall-only 试验都成功 Search、任务全部通过，
+  其中 26 次没有调用 Get；Search 摘要可能已经足够，调用比例不能单独证明能力下降。
+  后续可独立改进评测题目，本次不修改评测策略。手动 `/compact retire` 不受影响。
+
+完整原始报告与机器判定：
+
+- [正例报告](recall-session-selection-holdout-deepseek-v4-flash.json)
+- [负例报告](recall-session-selection-negative-deepseek-v4-flash.json)
+- [qualification](recall-session-selection-qualification-deepseek-v4-flash.json)
 
 ## 参考
 

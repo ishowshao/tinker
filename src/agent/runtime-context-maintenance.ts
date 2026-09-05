@@ -739,7 +739,9 @@ export class RuntimeContextMaintenance {
 function requireAutomationQualificationId(decision: ContextAutomationDecision): string {
   if (
     !decision.automaticSwapOnly ||
-    (decision.reason !== "qualified" && decision.reason !== "swap_only_qualified") ||
+    (decision.reason !== "qualified" &&
+      decision.reason !== "swap_only_qualified" &&
+      decision.reason !== "explicit_continuity") ||
     decision.qualificationId === undefined
   ) {
     throw new Error("Automatic context maintenance has no qualification identity.");

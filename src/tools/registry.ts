@@ -40,6 +40,7 @@ import type {
 } from "./types";
 import type { ToolCall } from "../agent/types";
 import type { SessionHistoryReader } from "../session/session-history-reader";
+import { createSessionHistoryAccess } from "../session/session-history-access";
 import { ToolExecutionFatalError } from "./types";
 import type { SkillCatalogSnapshot } from "../skills/skill-loader";
 import type { SkillActivationCoordinator } from "../skills/skill-context";
@@ -252,12 +253,9 @@ export function createDefaultTooling(options: {
       createViewImageToolExecutor({ imageAssetStore: options.imageAssetStore }),
     );
   }
-  registry.register(
-    createRecallSearchToolExecutor({ historyReader: options.historyReader }),
-  );
-  registry.register(
-    createRecallGetToolExecutor({ historyReader: options.historyReader }),
-  );
+  const historyAccess = createSessionHistoryAccess(options);
+  registry.register(createRecallSearchToolExecutor({ historyAccess }));
+  registry.register(createRecallGetToolExecutor({ historyAccess }));
   registry.register(createContextStatusToolExecutor());
   registry.register(createContextSwapCandidatesToolExecutor());
   registry.register(createContextSwapToolExecutor());

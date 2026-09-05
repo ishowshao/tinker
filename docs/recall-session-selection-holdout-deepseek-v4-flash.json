@@ -1,0 +1,5109 @@
+{
+  "schemaVersion": "active-recall-report-v1",
+  "createdAt": "2026-09-05T03:28:53.024Z",
+  "suite": "holdout",
+  "manifestVersion": "active-recall-manifest-v1",
+  "manifestHash": "093679e221e02b71ba5acf54693faa7a299d05dd25f6faabbeb84645d4db4d2d",
+  "graderVersion": "active-recall-deterministic-grader-v1",
+  "recallContractSha256": "3b6d1a452efea1db5920eb13542571b038667ef4f635551bea375bda6562a39f",
+  "recallToolDefinitionSha256": "0af1dcea5ccbb0619c36d2bf0df1e183a0213b1a5b8b2a6181c38a0fc79705eb",
+  "profile": "deepseek-v4-flash",
+  "model": "deepseek-v4-flash",
+  "stream": true,
+  "fixture": {
+    "version": "active-recall-long-session-fixture-v1",
+    "turnCount": 10,
+    "payloadBytes": 12288
+  },
+  "run": {
+    "views": [
+      "full_history",
+      "swap_only",
+      "recall_only_retirement"
+    ],
+    "trialsPerView": 3,
+    "includeNegative": false,
+    "caseIds": [
+      "hold-explicit-lighthouse-rollback-a",
+      "hold-explicit-lighthouse-rollback-b",
+      "hold-implicit-quartz-checksum-a",
+      "hold-implicit-quartz-checksum-b",
+      "hold-rewrite-token-cache-a",
+      "hold-rewrite-token-cache-b",
+      "hold-failure-gamma-command-a",
+      "hold-failure-gamma-command-b",
+      "hold-version-worker-a",
+      "hold-version-worker-b"
+    ]
+  },
+  "aggregate": {
+    "trialCount": 90,
+    "positiveTrialCount": 90,
+    "negativeTrialCount": 0,
+    "taskSuccessRate": 0.9889,
+    "fullHistoryTaskSuccessRate": 0.9667,
+    "swapOnlyTaskSuccessRate": 1,
+    "recallOnlyTaskSuccessRate": 1,
+    "recallOnlyActiveRecallRate": 1,
+    "recallOnlySearchGetSuccessRate": 0.1333,
+    "recallOnlyCorrectSourceRate": 0.1333,
+    "invalidRecallCallCount": 1,
+    "providerRequestCount": 169,
+    "providerLatencyMs": 250381.2049,
+    "providerUsage": {
+      "promptTokens": 2484061,
+      "completionTokens": 26812,
+      "totalTokens": 2510873,
+      "promptCacheHitTokens": 1025664,
+      "promptCacheMissTokens": 1458397,
+      "reasoningTokens": 19010
+    }
+  },
+  "trials": [
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "harbor-22"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 7295.4905,
+        "usage": {
+          "promptTokens": 68577,
+          "completionTokens": 796,
+          "totalTokens": 69373,
+          "promptCacheHitTokens": 34432,
+          "promptCacheMissTokens": 34145,
+          "reasoningTokens": 722
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "rollback group",
+          "harbor-22"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3141.3992,
+        "usage": {
+          "promptTokens": 68605,
+          "completionTokens": 270,
+          "totalTokens": 68875,
+          "promptCacheHitTokens": 33920,
+          "promptCacheMissTokens": 34685,
+          "reasoningTokens": 180
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "harbor-22"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2510.417,
+        "usage": {
+          "promptTokens": 67986,
+          "completionTokens": 195,
+          "totalTokens": 68181,
+          "promptCacheHitTokens": 33792,
+          "promptCacheMissTokens": 34194,
+          "reasoningTokens": 137
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2046.8295,
+        "usage": {
+          "promptTokens": 7784,
+          "completionTokens": 248,
+          "totalTokens": 8032,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7784,
+          "reasoningTokens": 237
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 941.9194,
+        "usage": {
+          "promptTokens": 7771,
+          "completionTokens": 99,
+          "totalTokens": 7870,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7771,
+          "reasoningTokens": 89
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "harbor-22",
+          "Lighthouse rollout: rollback group"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2250.8726,
+        "usage": {
+          "promptTokens": 16482,
+          "completionTokens": 256,
+          "totalTokens": 16738,
+          "promptCacheHitTokens": 7936,
+          "promptCacheMissTokens": 8546,
+          "reasoningTokens": 161
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "Lighthouse rollout rollback",
+          "rollback group"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1813.287,
+        "usage": {
+          "promptTokens": 11389,
+          "completionTokens": 168,
+          "totalTokens": 11557,
+          "promptCacheHitTokens": 5248,
+          "promptCacheMissTokens": 6141,
+          "reasoningTokens": 78
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 4,
+        "getCount": 0,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "rollback group Lighthouse",
+          "Lighthouse rollout rollback",
+          "Lighthouse",
+          "rollback"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3137.4653,
+        "usage": {
+          "promptTokens": 18202,
+          "completionTokens": 372,
+          "totalTokens": 18574,
+          "promptCacheHitTokens": 11392,
+          "promptCacheMissTokens": 6810,
+          "reasoningTokens": 204
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-a",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 3,
+        "getCount": 1,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 1,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": true,
+        "invalidCallCount": 0,
+        "queries": [
+          "rollback group Lighthouse rollout",
+          "Lighthouse",
+          "rollback"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": [
+          1
+        ]
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 3541.0545,
+        "usage": {
+          "promptTokens": 24831,
+          "completionTokens": 364,
+          "totalTokens": 25195,
+          "promptCacheHitTokens": 17664,
+          "promptCacheMissTokens": 7167,
+          "reasoningTokens": 122
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1607.8353,
+        "usage": {
+          "promptTokens": 33740,
+          "completionTokens": 87,
+          "totalTokens": 33827,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33740,
+          "reasoningTokens": 77
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1686.1593,
+        "usage": {
+          "promptTokens": 33739,
+          "completionTokens": 108,
+          "totalTokens": 33847,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33739,
+          "reasoningTokens": 98
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2570.192,
+        "usage": {
+          "promptTokens": 33738,
+          "completionTokens": 187,
+          "totalTokens": 33925,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33738,
+          "reasoningTokens": 177
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 845.1942,
+        "usage": {
+          "promptTokens": 7769,
+          "completionTokens": 68,
+          "totalTokens": 7837,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7769,
+          "reasoningTokens": 58
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1262.3605,
+        "usage": {
+          "promptTokens": 7770,
+          "completionTokens": 104,
+          "totalTokens": 7874,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7770,
+          "reasoningTokens": 93
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1789.3268,
+        "usage": {
+          "promptTokens": 7780,
+          "completionTokens": 220,
+          "totalTokens": 8000,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7780,
+          "reasoningTokens": 210
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 3,
+        "getCount": 0,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "Lighthouse rollback group",
+          "Lighthouse",
+          "rollback"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2264.5827,
+        "usage": {
+          "promptTokens": 17610,
+          "completionTokens": 271,
+          "totalTokens": 17881,
+          "promptCacheHitTokens": 10880,
+          "promptCacheMissTokens": 6730,
+          "reasoningTokens": 137
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 2,
+        "getCount": 1,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 1,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": true,
+        "invalidCallCount": 0,
+        "queries": [
+          "rollback group Lighthouse rollout",
+          "rollback group"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": [
+          1
+        ]
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2972.1226,
+        "usage": {
+          "promptTokens": 18180,
+          "completionTokens": 339,
+          "totalTokens": 18519,
+          "promptCacheHitTokens": 11648,
+          "promptCacheMissTokens": 6532,
+          "reasoningTokens": 179
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-explicit-lighthouse-rollback-b",
+      "scenario": "explicit_reference",
+      "counterfactualGroup": "hold-explicit-lighthouse-rollback",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "rollback",
+          "Lighthouse"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1968.3762,
+        "usage": {
+          "promptTokens": 11722,
+          "completionTokens": 252,
+          "totalTokens": 11974,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6346,
+          "reasoningTokens": 134
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2817.8968,
+        "usage": {
+          "promptTokens": 33742,
+          "completionTokens": 244,
+          "totalTokens": 33986,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33742,
+          "reasoningTokens": 235
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1812.3245,
+        "usage": {
+          "promptTokens": 33742,
+          "completionTokens": 90,
+          "totalTokens": 33832,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33742,
+          "reasoningTokens": 81
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1454.4996,
+        "usage": {
+          "promptTokens": 33741,
+          "completionTokens": 95,
+          "totalTokens": 33836,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33741,
+          "reasoningTokens": 86
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2045.197,
+        "usage": {
+          "promptTokens": 7781,
+          "completionTokens": 96,
+          "totalTokens": 7877,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7781,
+          "reasoningTokens": 87
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 898.334,
+        "usage": {
+          "promptTokens": 7786,
+          "completionTokens": 75,
+          "totalTokens": 7861,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7786,
+          "reasoningTokens": 66
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1262.926,
+        "usage": {
+          "promptTokens": 7780,
+          "completionTokens": 153,
+          "totalTokens": 7933,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7780,
+          "reasoningTokens": 144
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index",
+          "checksum"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1924.5977,
+        "usage": {
+          "promptTokens": 11684,
+          "completionTokens": 221,
+          "totalTokens": 11905,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6308,
+          "reasoningTokens": 134
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index",
+          "checksum"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2218.4358,
+        "usage": {
+          "promptTokens": 11711,
+          "completionTokens": 222,
+          "totalTokens": 11933,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6335,
+          "reasoningTokens": 136
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-a",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index",
+          "checksum requirement"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2367.287,
+        "usage": {
+          "promptTokens": 11526,
+          "completionTokens": 171,
+          "totalTokens": 11697,
+          "promptCacheHitTokens": 5248,
+          "promptCacheMissTokens": 6278,
+          "reasoningTokens": 84
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1822.5096,
+        "usage": {
+          "promptTokens": 33742,
+          "completionTokens": 119,
+          "totalTokens": 33861,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33742,
+          "reasoningTokens": 111
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1692.2937,
+        "usage": {
+          "promptTokens": 33740,
+          "completionTokens": 100,
+          "totalTokens": 33840,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33740,
+          "reasoningTokens": 92
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2633.8146,
+        "usage": {
+          "promptTokens": 33741,
+          "completionTokens": 178,
+          "totalTokens": 33919,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33741,
+          "reasoningTokens": 170
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1685.7242,
+        "usage": {
+          "promptTokens": 7775,
+          "completionTokens": 184,
+          "totalTokens": 7959,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7775,
+          "reasoningTokens": 176
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 878.0724,
+        "usage": {
+          "promptTokens": 7777,
+          "completionTokens": 57,
+          "totalTokens": 7834,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7777,
+          "reasoningTokens": 49
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1109.6962,
+        "usage": {
+          "promptTokens": 7787,
+          "completionTokens": 116,
+          "totalTokens": 7903,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7787,
+          "reasoningTokens": 107
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index",
+          "checksum"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2341.1321,
+        "usage": {
+          "promptTokens": 11756,
+          "completionTokens": 307,
+          "totalTokens": 12063,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6380,
+          "reasoningTokens": 190
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index",
+          "checksum"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2152.7018,
+        "usage": {
+          "promptTokens": 11696,
+          "completionTokens": 222,
+          "totalTokens": 11918,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6320,
+          "reasoningTokens": 137
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-implicit-quartz-checksum-b",
+      "scenario": "implicit_dependency",
+      "counterfactualGroup": "hold-implicit-quartz-checksum",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "quartz-index"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3881.3949,
+        "usage": {
+          "promptTokens": 20216,
+          "completionTokens": 447,
+          "totalTokens": 20663,
+          "promptCacheHitTokens": 11520,
+          "promptCacheMissTokens": 8696,
+          "reasoningTokens": 313
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2052.8495,
+        "usage": {
+          "promptTokens": 33752,
+          "completionTokens": 143,
+          "totalTokens": 33895,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33752,
+          "reasoningTokens": 128
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 1,
+        "queries": [
+          "token-cache eviction",
+          "token-cache eviction"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 5059.42,
+        "usage": {
+          "promptTokens": 102584,
+          "completionTokens": 533,
+          "totalTokens": 103117,
+          "promptCacheHitTokens": 68224,
+          "promptCacheMissTokens": 34360,
+          "reasoningTokens": 367
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1890.8564,
+        "usage": {
+          "promptTokens": 33752,
+          "completionTokens": 96,
+          "totalTokens": 33848,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33752,
+          "reasoningTokens": 81
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1060.8169,
+        "usage": {
+          "promptTokens": 7790,
+          "completionTokens": 119,
+          "totalTokens": 7909,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7790,
+          "reasoningTokens": 104
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 928.5043,
+        "usage": {
+          "promptTokens": 7798,
+          "completionTokens": 101,
+          "totalTokens": 7899,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7798,
+          "reasoningTokens": 85
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "mark-stale->drain-readers->delete"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1841.943,
+        "usage": {
+          "promptTokens": 16071,
+          "completionTokens": 190,
+          "totalTokens": 16261,
+          "promptCacheHitTokens": 7808,
+          "promptCacheMissTokens": 8263,
+          "reasoningTokens": 122
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 4,
+        "getCount": 0,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "token-cache eviction cleanup sequence",
+          "concurrency-safe cleanup sequence arrow",
+          "eviction",
+          "token-cache"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3001.1359,
+        "usage": {
+          "promptTokens": 18286,
+          "completionTokens": 384,
+          "totalTokens": 18670,
+          "promptCacheHitTokens": 11392,
+          "promptCacheMissTokens": 6894,
+          "reasoningTokens": 175
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 4,
+        "getCount": 0,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "token-cache eviction cleanup concurrency",
+          "eviction sequence",
+          "eviction",
+          "token-cache"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3399.5732,
+        "usage": {
+          "promptTokens": 18251,
+          "completionTokens": 412,
+          "totalTokens": 18663,
+          "promptCacheHitTokens": 11392,
+          "promptCacheMissTokens": 6859,
+          "reasoningTokens": 205
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-a",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 5,
+        "searchCount": 5,
+        "getCount": 0,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "token-cache eviction cleanup",
+          "fixture-payload.txt",
+          "evict",
+          "lock",
+          "->"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 5,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 5652.686,
+        "usage": {
+          "promptTokens": 21610,
+          "completionTokens": 751,
+          "totalTokens": 22361,
+          "promptCacheHitTokens": 13184,
+          "promptCacheMissTokens": 8426,
+          "reasoningTokens": 548
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1890.5789,
+        "usage": {
+          "promptTokens": 33754,
+          "completionTokens": 16,
+          "totalTokens": 33770,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33754,
+          "reasoningTokens": 0
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1983.8798,
+        "usage": {
+          "promptTokens": 33753,
+          "completionTokens": 110,
+          "totalTokens": 33863,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33753,
+          "reasoningTokens": 93
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2021.7882,
+        "usage": {
+          "promptTokens": 33753,
+          "completionTokens": 148,
+          "totalTokens": 33901,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33753,
+          "reasoningTokens": 132
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1043.9164,
+        "usage": {
+          "promptTokens": 7807,
+          "completionTokens": 102,
+          "totalTokens": 7909,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7807,
+          "reasoningTokens": 86
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1004.7644,
+        "usage": {
+          "promptTokens": 7806,
+          "completionTokens": 65,
+          "totalTokens": 7871,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7806,
+          "reasoningTokens": 49
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 773.0774,
+        "usage": {
+          "promptTokens": 7800,
+          "completionTokens": 51,
+          "totalTokens": 7851,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7800,
+          "reasoningTokens": 34
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 5,
+        "searchCount": 5,
+        "getCount": 0,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "concurrency-safe cleanup sequence token-cache eviction",
+          "token-cache eviction cleanup",
+          "token cache",
+          "eviction",
+          "cleanup sequence"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 5,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2786.9024,
+        "usage": {
+          "promptTokens": 18485,
+          "completionTokens": 344,
+          "totalTokens": 18829,
+          "promptCacheHitTokens": 11392,
+          "promptCacheMissTokens": 7093,
+          "reasoningTokens": 132
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "token-cache eviction",
+          "concurrency-safe cleanup sequence"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2048.6994,
+        "usage": {
+          "promptTokens": 11554,
+          "completionTokens": 244,
+          "totalTokens": 11798,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6178,
+          "reasoningTokens": 146
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-rewrite-token-cache-b",
+      "scenario": "lexical_rewrite",
+      "counterfactualGroup": "hold-rewrite-token-cache",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "token-cache eviction",
+          "concurrency-safe cleanup sequence"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1799.6885,
+        "usage": {
+          "promptTokens": 11590,
+          "completionTokens": 225,
+          "totalTokens": 11815,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6214,
+          "reasoningTokens": 83
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2880.8558,
+        "usage": {
+          "promptTokens": 33761,
+          "completionTokens": 318,
+          "totalTokens": 34079,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33761,
+          "reasoningTokens": 301
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": false,
+        "code": "wrong_value"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 7707.6504,
+        "usage": {
+          "promptTokens": 103033,
+          "completionTokens": 911,
+          "totalTokens": 103944,
+          "promptCacheHitTokens": 68608,
+          "promptCacheMissTokens": 34425,
+          "reasoningTokens": 525
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "approved rerun command gamma",
+          "gamma.test.ts"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4141.99,
+        "usage": {
+          "promptTokens": 102734,
+          "completionTokens": 395,
+          "totalTokens": 103129,
+          "promptCacheHitTokens": 68224,
+          "promptCacheMissTokens": 34510,
+          "reasoningTokens": 284
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "approved rerun command after the interactive-mode failure"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2220.5707,
+        "usage": {
+          "promptTokens": 16220,
+          "completionTokens": 265,
+          "totalTokens": 16485,
+          "promptCacheHitTokens": 7936,
+          "promptCacheMissTokens": 8284,
+          "reasoningTokens": 196
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 11773.0357,
+        "usage": {
+          "promptTokens": 16981,
+          "completionTokens": 1554,
+          "totalTokens": 18535,
+          "promptCacheHitTokens": 9088,
+          "promptCacheMissTokens": 7893,
+          "reasoningTokens": 1454
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2300.9703,
+        "usage": {
+          "promptTokens": 7804,
+          "completionTokens": 345,
+          "totalTokens": 8149,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7804,
+          "reasoningTokens": 328
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "gamma",
+          "integration suite"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1831.266,
+        "usage": {
+          "promptTokens": 11773,
+          "completionTokens": 230,
+          "totalTokens": 12003,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6397,
+          "reasoningTokens": 106
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 6,
+        "searchCount": 5,
+        "getCount": 1,
+        "successfulSearchCount": 5,
+        "successfulGetCount": 1,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": true,
+        "invalidCallCount": 0,
+        "queries": [
+          "integration suite gamma",
+          "approved command",
+          "gamma",
+          "build host",
+          "integration"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": [
+          1
+        ]
+      },
+      "tools": {
+        "callCount": 6,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 4,
+        "latencyMs": 3807.7302,
+        "usage": {
+          "promptTokens": 27117,
+          "completionTokens": 509,
+          "totalTokens": 27626,
+          "promptCacheHitTokens": 19200,
+          "promptCacheMissTokens": 7917,
+          "reasoningTokens": 187
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-a",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "integration suite gamma",
+          "build host"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2057.657,
+        "usage": {
+          "promptTokens": 11753,
+          "completionTokens": 206,
+          "totalTokens": 11959,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6377,
+          "reasoningTokens": 112
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2354.3807,
+        "usage": {
+          "promptTokens": 33763,
+          "completionTokens": 332,
+          "totalTokens": 34095,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33763,
+          "reasoningTokens": 312
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 2414.6717,
+        "usage": {
+          "promptTokens": 33761,
+          "completionTokens": 185,
+          "totalTokens": 33946,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33761,
+          "reasoningTokens": 166
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 6681.3935,
+        "usage": {
+          "promptTokens": 33762,
+          "completionTokens": 828,
+          "totalTokens": 34590,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 33762,
+          "reasoningTokens": 808
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1180.9182,
+        "usage": {
+          "promptTokens": 7819,
+          "completionTokens": 124,
+          "totalTokens": 7943,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7819,
+          "reasoningTokens": 105
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "gamma-retry.test.ts",
+          "approved rerun command"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 9973.3395,
+        "usage": {
+          "promptTokens": 17721,
+          "completionTokens": 1403,
+          "totalTokens": 19124,
+          "promptCacheHitTokens": 9088,
+          "promptCacheMissTokens": 8633,
+          "reasoningTokens": 1271
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 0,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 1,
+        "latencyMs": 1119.9402,
+        "usage": {
+          "promptTokens": 7810,
+          "completionTokens": 79,
+          "totalTokens": 7889,
+          "promptCacheHitTokens": 0,
+          "promptCacheMissTokens": 7810,
+          "reasoningTokens": 60
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 2,
+        "getCount": 1,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 1,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": true,
+        "invalidCallCount": 0,
+        "queries": [
+          "integration suite gamma",
+          "gamma build host"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": [
+          1
+        ]
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2930.8353,
+        "usage": {
+          "promptTokens": 18261,
+          "completionTokens": 413,
+          "totalTokens": 18674,
+          "promptCacheHitTokens": 11776,
+          "promptCacheMissTokens": 6485,
+          "reasoningTokens": 174
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 4,
+        "getCount": 0,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "integration suite gamma approved command",
+          "rerun integration suite gamma build host",
+          "gamma",
+          "approved command"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4412.8422,
+        "usage": {
+          "promptTokens": 18302,
+          "completionTokens": 444,
+          "totalTokens": 18746,
+          "promptCacheHitTokens": 11392,
+          "promptCacheMissTokens": 6910,
+          "reasoningTokens": 266
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-failure-gamma-command-b",
+      "scenario": "prior_failure",
+      "counterfactualGroup": "hold-failure-gamma-command",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 4,
+        "searchCount": 4,
+        "getCount": 0,
+        "successfulSearchCount": 4,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "integration suite gamma build host",
+          "approved command",
+          "gamma",
+          "build host"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 0
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 5069.9089,
+        "usage": {
+          "promptTokens": 18894,
+          "completionTokens": 675,
+          "totalTokens": 19569,
+          "promptCacheHitTokens": 11776,
+          "promptCacheMissTokens": 7118,
+          "reasoningTokens": 438
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 2,
+        "searchCount": 2,
+        "getCount": 0,
+        "successfulSearchCount": 2,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "services/worker.ini",
+          "workers-v3-saffron"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 5717.1385,
+        "usage": {
+          "promptTokens": 104713,
+          "completionTokens": 698,
+          "totalTokens": 105411,
+          "promptCacheHitTokens": 69632,
+          "promptCacheMissTokens": 35081,
+          "reasoningTokens": 480
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2824.2226,
+        "usage": {
+          "promptTokens": 101909,
+          "completionTokens": 296,
+          "totalTokens": 102205,
+          "promptCacheHitTokens": 67968,
+          "promptCacheMissTokens": 33941,
+          "reasoningTokens": 176
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2605.5567,
+        "usage": {
+          "promptTokens": 67728,
+          "completionTokens": 183,
+          "totalTokens": 67911,
+          "promptCacheHitTokens": 33792,
+          "promptCacheMissTokens": 33936,
+          "reasoningTokens": 111
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2502.4064,
+        "usage": {
+          "promptTokens": 15831,
+          "completionTokens": 294,
+          "totalTokens": 16125,
+          "promptCacheHitTokens": 7808,
+          "promptCacheMissTokens": 8023,
+          "reasoningTokens": 222
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "workers-v3-saffron"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2236.6044,
+        "usage": {
+          "promptTokens": 16224,
+          "completionTokens": 288,
+          "totalTokens": 16512,
+          "promptCacheHitTokens": 7936,
+          "promptCacheMissTokens": 8288,
+          "reasoningTokens": 181
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4325.751,
+        "usage": {
+          "promptTokens": 24030,
+          "completionTokens": 328,
+          "totalTokens": 24358,
+          "promptCacheHitTokens": 15872,
+          "promptCacheMissTokens": 8158,
+          "reasoningTokens": 208
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2030.3686,
+        "usage": {
+          "promptTokens": 11492,
+          "completionTokens": 185,
+          "totalTokens": 11677,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6116,
+          "reasoningTokens": 84
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 3,
+        "searchCount": 3,
+        "getCount": 0,
+        "successfulSearchCount": 3,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "services/worker.ini label",
+          "worker.ini",
+          "label=workers-"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 4,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3128.0269,
+        "usage": {
+          "promptTokens": 18133,
+          "completionTokens": 373,
+          "totalTokens": 18506,
+          "promptCacheHitTokens": 11264,
+          "promptCacheMissTokens": 6869,
+          "reasoningTokens": 173
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-a",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2158.0703,
+        "usage": {
+          "promptTokens": 11501,
+          "completionTokens": 244,
+          "totalTokens": 11745,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6125,
+          "reasoningTokens": 140
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 3
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 2726.0462,
+        "usage": {
+          "promptTokens": 101952,
+          "completionTokens": 289,
+          "totalTokens": 102241,
+          "promptCacheHitTokens": 67968,
+          "promptCacheMissTokens": 33984,
+          "reasoningTokens": 134
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "workers-v5-umber"
+        ],
+        "searchHitTurnNumbers": [
+          1
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 6818.3918,
+        "usage": {
+          "promptTokens": 103479,
+          "completionTokens": 742,
+          "totalTokens": 104221,
+          "promptCacheHitTokens": 69120,
+          "promptCacheMissTokens": 34359,
+          "reasoningTokens": 592
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "full_history",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 3002.9495,
+        "usage": {
+          "promptTokens": 67728,
+          "completionTokens": 181,
+          "totalTokens": 67909,
+          "promptCacheHitTokens": 33792,
+          "promptCacheMissTokens": 33936,
+          "reasoningTokens": 113
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {},
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 3
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 4397.4288,
+        "usage": {
+          "promptTokens": 24425,
+          "completionTokens": 558,
+          "totalTokens": 24983,
+          "promptCacheHitTokens": 16256,
+          "promptCacheMissTokens": 8169,
+          "reasoningTokens": 387
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 0,
+        "searchCount": 0,
+        "getCount": 0,
+        "successfulSearchCount": 0,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": false,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [],
+        "searchHitTurnNumbers": [],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 1,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 1684.2245,
+        "usage": {
+          "promptTokens": 15838,
+          "completionTokens": 202,
+          "totalTokens": 16040,
+          "promptCacheHitTokens": 7936,
+          "promptCacheMissTokens": 7902,
+          "reasoningTokens": 134
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "swap_only",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "services/worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 3,
+        "nonRecallCallCount": 2
+      },
+      "provider": {
+        "requestCount": 3,
+        "latencyMs": 3204.6915,
+        "usage": {
+          "promptTokens": 25656,
+          "completionTokens": 409,
+          "totalTokens": 26065,
+          "promptCacheHitTokens": 16896,
+          "promptCacheMissTokens": 8760,
+          "reasoningTokens": 259
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": true
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 1,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2976.9044,
+        "usage": {
+          "promptTokens": 11492,
+          "completionTokens": 284,
+          "totalTokens": 11776,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6116,
+          "reasoningTokens": 181
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 2,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "services/worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2163.6717,
+        "usage": {
+          "promptTokens": 11540,
+          "completionTokens": 244,
+          "totalTokens": 11784,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6164,
+          "reasoningTokens": 123
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    },
+    {
+      "caseId": "hold-version-worker-b",
+      "scenario": "historical_current",
+      "counterfactualGroup": "hold-version-worker",
+      "positive": true,
+      "view": "recall_only_retirement",
+      "trial": 3,
+      "task": {
+        "passed": true,
+        "code": "passed"
+      },
+      "recall": {
+        "callCount": 1,
+        "searchCount": 1,
+        "getCount": 0,
+        "successfulSearchCount": 1,
+        "successfulGetCount": 0,
+        "searchFoundTurnOne": true,
+        "gotTurnOne": false,
+        "invalidCallCount": 0,
+        "queries": [
+          "services/worker.ini"
+        ],
+        "searchHitTurnNumbers": [
+          1,
+          11
+        ],
+        "getTurnNumbers": []
+      },
+      "tools": {
+        "callCount": 2,
+        "nonRecallCallCount": 1
+      },
+      "provider": {
+        "requestCount": 2,
+        "latencyMs": 2133.9917,
+        "usage": {
+          "promptTokens": 11527,
+          "completionTokens": 263,
+          "totalTokens": 11790,
+          "promptCacheHitTokens": 5376,
+          "promptCacheMissTokens": 6151,
+          "reasoningTokens": 158
+        },
+        "resolvedModels": [
+          "deepseek-v4-flash"
+        ]
+      },
+      "revision": {
+        "swap": {
+          "status": "compacted",
+          "outcome": "insufficient_candidates"
+        },
+        "retirement": {
+          "status": "retired",
+          "outcome": "retirement_floor",
+          "retiredTurnCount": 9
+        }
+      },
+      "payload": {
+        "expectedHistoricalValueVisible": false
+      }
+    }
+  ]
+}

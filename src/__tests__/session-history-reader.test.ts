@@ -11,6 +11,7 @@ import {
 import { formatMessageSource } from "../context/context-source";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { SessionError } from "../session/session-errors";
+import { createSessionHistoryAccess } from "../session/session-history-access";
 import {
   isRecallableMessage,
   RecallHistoryError,
@@ -69,6 +70,24 @@ describe("SessionHistoryReader", () => {
       }
       const toolText = toolResultDisplayText(toolMessage.content);
       expect(pages.join("")).toBe(toolText);
+      const cloneId = runtimeIdFactory.createSessionId();
+      await first.store.cloneTo({ targetSessionId: cloneId });
+      const external = createSessionHistoryAccess({
+        historyReader: reader,
+        workspaceRoot: first.store.workspaceRoot,
+      });
+      await external.withHistoryReader(
+        cloneId,
+        new AbortController().signal,
+        (selected) => {
+          expect(
+            selected.get({ source, byteOffset: 0, byteLimit: 20_000 }).content,
+          ).toBe(toolText);
+          expect(
+            selected.search({ query: "recursive-secret", limit: 10, offset: 0 }).hits,
+          ).toEqual([]);
+        },
+      );
 
       const systemMessage = first.store.loadProtocolView().messages[0];
       expectRecallError(

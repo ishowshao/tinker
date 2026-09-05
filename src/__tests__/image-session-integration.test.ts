@@ -10,6 +10,7 @@ import { runtimeIdFactory } from "../ids/runtime-id";
 import { ImageAssetStore } from "../image/image-asset-store";
 import type { ImageAssetRef, UserImageAttachment } from "../image/image-types";
 import { SessionError } from "../session/session-errors";
+import { createSessionHistoryAccess } from "../session/session-history-access";
 import { ResumeProjectionReader } from "../session/resume-projection";
 import { SessionStore } from "../session/session-store";
 import { SqliteSessionLedger } from "../session/sqlite-session-ledger";
@@ -97,6 +98,23 @@ describe("image session persistence", () => {
       expect(recall.content).not.toContain(workspace);
 
       await store.cloneTo({ targetSessionId: cloneId });
+      const external = createSessionHistoryAccess({
+        historyReader: store.historyReader(),
+        workspaceRoot: store.workspaceRoot,
+      });
+      await external.withHistoryReader(
+        cloneId,
+        new AbortController().signal,
+        (reader) => {
+          expect(
+            reader.get({
+              source: formatMessageSource(canonicalUser.messageId),
+              byteOffset: 0,
+              byteLimit: 4_096,
+            }),
+          ).toEqual(recall);
+        },
+      );
       clone = await SessionStore.openExisting({
         workspaceRoot: workspace,
         sessionId: cloneId,

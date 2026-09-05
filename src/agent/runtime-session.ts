@@ -437,7 +437,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
 
       session.tooling = dependencies.createTooling({
-        workspaceRoot: input.workspaceRoot,
+        workspaceRoot: store.workspaceRoot,
         ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
         runtimeSession: session.context,
         historyReader: store.historyReader(),

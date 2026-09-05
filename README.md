@@ -19,7 +19,7 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
   - `TaskList` / `TaskOutput` / `TaskInput` / `TaskStop` — Inspect, interact with, and stop long-running shell tasks
   - `WebSearch` — Search the web via Exa API
   - `WebFetch` — Fetch and refine web page content (local, browser, or Exa backend)
-  - `Recall` — Search or retrieve model-visible history from the current session
+  - `RecallSearch` / `RecallGet` — Search or retrieve model-visible history from the current session or an explicitly selected session
 - **Agent Skills**: Discover compatible `SKILL.md` packages at project and user
   scope, disclose their catalog progressively, and keep activated instructions
   durable across context compaction and session resume.
@@ -33,6 +33,52 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
 - **Choice of models**: Uses an OpenAI-compatible Chat Completions transport with
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
+
+### Reading another session's history
+
+Both Recall tools accept an optional `sessionId` (a canonical session UUID).
+Omitting it keeps the current-session behavior. In the TUI or one-shot CLI, the
+agent can use a session ID you supply or a Memory result's `sourceSessionId`:
+
+```ts
+RecallSearch({ sessionId: sourceSessionId, query: "distinctive-anchor" })
+RecallGet({ sessionId: sourceSessionId, source: "ctx://message/<message-UUID>" })
+```
+
+Reuse the same `sessionId` for Get and subsequent pages. Search's
+`snapshot_through_ordinal`, ordinals and turn numbers belong to that session only.
+Results identify their source session and workspace. Missing, ambiguous, unsafe,
+unsupported or corrupt sessions return errors; Recall never silently switches
+back to the current session. Memory is not required.
+
+**Data scope:** explicit session selection can read other workspaces under the
+configured Tinker home (`TINKER_HOME` overrides the OS home). Retrieved text is
+sent to the **current model provider** and saved as a tool result in the **current
+session**, including when projects or providers differ. There is no additional
+cross-workspace confirmation dialog.
+
+External history uses short read-only SQLite snapshots, without resuming the
+source session, taking its execution lock, repairing indexes or migrating its
+schema. Only the current readable schema is supported. Active writers' committed
+history is readable; an open/interrupted turn may be incomplete. Historical
+instructions, Skills and authorizations are not activated, and content hashes
+prove storage consistency, not truth. Use Read/Grep to verify current facts.
+Original workspaces need not still exist. SQLite WAL reads can coordinate through
+SHM; read-only access does not promise that an active writer's directory remains
+byte-for-byte unchanged. See the [design](docs/recall-session-selection-design.md).
+
+The session-selection Recall surface was re-evaluated with the frozen active
+Recall qualification policy. It missed the Search → Get threshold, although all
+Recall-only tasks passed. An explicit product decision preserves the previously
+enabled automatic swap and prefix retirement. A subsequent explicit decision
+extends continuity to the reviewed description-only cleanup, binding its exact
+tool hash separately from the original evaluated hash and report pair. The cleaned
+wording has not been re-evaluated with the live model. Triggers and execution
+safeguards are unchanged. This is not a qualification pass or a blanket exemption
+for future changes. The
+[qualification report](docs/recall-session-selection-qualification-deepseek-v4-flash.json)
+retains the measured failure; its automation flags describe the frozen evaluator's
+recommendation, not this subsequent runtime continuity decision.
 
 ## Quick Start
 

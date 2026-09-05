@@ -2,6 +2,13 @@
 
 ## 文档状态
 
+> 2026-09-05 更新：本文原有通过记录针对旧 Recall surface。加入 `sessionId` 后已按原
+> 冻结门槛重新评测，Search → Get 未达标，但 Recall-only 任务全部通过。用户随后明确
+> 要求本次 Recall 改进保留自动 retirement 开启；运行时以绑定本次 surface/report 的
+> continuity 决定保留原行为，不篡改评测结果或修改触发/执行逻辑。随后文案精简经用户明确
+> 确认更新为 v2 continuity，独立绑定新文案 hash；旧报告不作为新文案的真实模型评测。
+> 详见[本次实施与报告](recall-session-selection-design.md#真实模型-qualification与离线回归分开)。
+
 - 日期：2026-07-18
 - 状态：已完成（2026-07-18）；DeepSeek floor qualification 已通过，自动 swap-only 与
   prefix retirement 已放行

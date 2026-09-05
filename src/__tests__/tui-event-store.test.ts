@@ -339,6 +339,49 @@ describe("tui event store", () => {
     });
   });
 
+  test("shows Recall provenance while tolerating persisted results without it", () => {
+    for (const provenance of [
+      {},
+      { sessionId: "source-session", workspaceRoot: "/source/workspace" },
+    ]) {
+      let state = createInitialTuiState({
+        sessionId: "run-1",
+        modelName: "model",
+        workspaceRoot: "/tmp/workspace",
+      });
+      const call = {
+        providerToolCallId: "recall-provenance",
+        name: "RecallSearch",
+        args: { query: "anchor" },
+      };
+      state = applyAgentEvent(state, {
+        type: "tool.started",
+        iterationNumber: 1,
+        call,
+      });
+      state = applyAgentEvent(state, {
+        type: "tool.raw_result",
+        iterationNumber: 1,
+        call,
+        raw: {
+          kind: "recall",
+          ok: true,
+          mode: "search",
+          historical: true,
+          query: "anchor",
+          filters: {},
+          page: { hits: [] },
+          ...provenance,
+        },
+      });
+      const text = visibleTimelineItems(state).at(-1)?.text;
+      expect(text).toContain("0 historical matches");
+      if ("sessionId" in provenance)
+        expect(text).toContain("[session=source-session, workspace=/source/workspace]");
+      else expect(text).not.toContain("[session=");
+    }
+  });
+
   test("summarizes MemorySearch calls with query and keywords", () => {
     let state = createInitialTuiState({
       sessionId: "run-1",

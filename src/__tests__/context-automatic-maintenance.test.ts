@@ -9,6 +9,7 @@ import { toolResultDisplayText } from "../agent/tool-result-content";
 import {
   I4_ACTIVE_RECALL_QUALIFICATION,
   I4_SWAP_ONLY_QUALIFICATION_ID,
+  RECALL_SESSION_SELECTION_CONTINUITY,
   selectContextAutomation,
 } from "../context/context-automation-policy";
 import { createContextSurface } from "../context/context-surface";
@@ -351,7 +352,9 @@ describe("I4 automatic context maintenance", () => {
         presentationSinks: [sink],
         persistence: false,
       },
-      { loadMcpConfig: async () => undefined },
+      {
+        loadMcpConfig: async () => undefined,
+      },
     );
 
     try {
@@ -464,11 +467,11 @@ describe("I4 automatic context maintenance", () => {
       expect(automaticFinished).toHaveLength(2);
       expect(automaticFinished[0]?.data).toMatchObject({
         strategy: "swap",
-        qualificationId: "deepseek-v4-flash-floor-v1",
+        qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
       });
       expect(automaticFinished[1]?.data).toMatchObject({
         strategy: "retire_prefix",
-        qualificationId: "deepseek-v4-flash-floor-v1",
+        qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
         retiredTurnCount: 9,
       });
       expect(model.requestCount).toBe(20);
@@ -706,7 +709,7 @@ describe("I4 automatic context maintenance", () => {
     }
   });
 
-  test("enables both modes only for the qualified Recall contract and tool", () => {
+  test("binds continuity to the reviewed surface without qualifying the old report", () => {
     const prepared = prepareTestModelRequest({
       messages: [{ role: "system", content: "system" }],
       tools: [...RECALL_TOOL_DEFINITIONS],
@@ -725,8 +728,38 @@ describe("I4 automatic context maintenance", () => {
     ).toEqual({
       automaticSwapOnly: true,
       automaticPrefixRetirement: true,
+      reason: "explicit_continuity",
+      qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
+    });
+    // Old measured evidence does not qualify the description-cleaned surface,
+    // and copying it must not inherit the explicit continuity decision.
+    for (const passed of [false, true]) {
+      expect(
+        selectContextAutomation(
+          { profileName: "deepseek-v4-flash", surface },
+          { ...I4_ACTIVE_RECALL_QUALIFICATION, passed },
+        ),
+      ).toEqual({
+        automaticSwapOnly: false,
+        automaticPrefixRetirement: false,
+        reason: "recall_tool_mismatch",
+      });
+    }
+    // Synthetic current-surface evidence exercises ordinary gate branches only.
+    const syntheticEvidence = {
+      ...I4_ACTIVE_RECALL_QUALIFICATION,
+      recallToolDefinitionSha256:
+        RECALL_SESSION_SELECTION_CONTINUITY.recallToolDefinitionSha256,
+    };
+    expect(
+      selectContextAutomation(
+        { profileName: "deepseek-v4-flash", surface },
+        { ...syntheticEvidence, passed: true },
+      ),
+    ).toMatchObject({
+      automaticSwapOnly: true,
+      automaticPrefixRetirement: true,
       reason: "qualified",
-      qualificationId: "deepseek-v4-flash-floor-v1",
     });
     expect(selectContextAutomation({ surface })).toEqual({
       automaticSwapOnly: false,
@@ -736,7 +769,7 @@ describe("I4 automatic context maintenance", () => {
     expect(
       selectContextAutomation(
         { profileName: "deepseek-v4-flash", surface },
-        { ...I4_ACTIVE_RECALL_QUALIFICATION, passed: false },
+        { ...syntheticEvidence, passed: false },
       ),
     ).toEqual({
       automaticSwapOnly: true,
