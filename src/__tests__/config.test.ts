@@ -522,6 +522,27 @@ describe("system prompt", () => {
     expect(prompt).toContain("head_limit and offset");
   });
 
+  test("describes shell task tools as capabilities", () => {
+    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
+
+    expect(prompt).toContain(
+      "TaskList lists background shell tasks in the current session.",
+    );
+    expect(prompt).toContain(
+      "TaskOutput reports a task's current status, latest output, or current terminal screen.",
+    );
+    expect(prompt).toContain(
+      "TaskInput sends characters to a PTY task identified by the returned task ID.",
+    );
+    expect(prompt).toContain('chars="" waits without writing.');
+    expect(prompt).toContain(
+      "TaskStop stops a background task that is no longer needed.",
+    );
+    for (const tool of ["TaskList", "TaskOutput", "TaskInput", "TaskStop"]) {
+      expect(prompt).not.toContain(`Use ${tool}`);
+    }
+  });
+
   test("keeps tool responsibility boundaries", () => {
     const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
 
@@ -539,11 +560,11 @@ describe("system prompt", () => {
       "Successful Write and Edit operations establish the current version",
     );
     expect(prompt).toContain("Use Bash with tty=true");
-    expect(prompt).toContain("include \\n explicitly");
+    expect(prompt).toContain("an explicit \\n sends Enter");
     expect(prompt).toContain("Use UpdatePlan for non-trivial work");
     expect(prompt).toContain("Each UpdatePlan call replaces the complete plan");
     expect(prompt).toContain("keep at most one step in_progress");
-    expect(prompt).toContain("use \\u0003 for Ctrl-C");
+    expect(prompt).toContain("\\u0003 sends Ctrl-C");
     expect(prompt).not.toContain("\u0003");
     expect(prompt).toContain(
       "Do not send passwords, tokens, or other secrets through TaskInput",

@@ -38,10 +38,10 @@ Use run_in_background=true for persistent processes such as dev servers and watc
 For finite commands whose result is needed next, such as builds, tests, and checks, prefer foreground execution when no independent work remains. Set a sufficient foreground timeout; the call returns as soon as the command finishes.
 Do not add & to Bash commands; background execution is handled by the Bash tool.
 Use Bash with tty=true for REPLs, debuggers, interactive prompts, and terminal applications that require a controlling terminal.
-Use TaskList to list background shell tasks in the current session.
-Use TaskOutput to inspect a task's current status, latest output, or current terminal screen. For non-PTY logs, offset (1-based) and limit select consecutive lines instead of the default head/tail preview; PTY tasks ignore them. Range truncated=true means byte limits shortened requested content, not that lines outside the range exist. When polling running logs, reread the last observed line because it may still be growing.
-Use TaskInput with the returned task ID to send characters to a PTY task. TaskInput does not append Enter; include \\n explicitly, use \\u0003 for Ctrl-C, and use chars="" to wait without writing.
-Use TaskStop to stop a background task that is no longer needed.
+TaskList lists background shell tasks in the current session.
+TaskOutput reports a task's current status, latest output, or current terminal screen. For non-PTY logs, offset (1-based) and limit select consecutive lines instead of the default head/tail preview; PTY tasks ignore them. Range truncated=true means byte limits shortened requested content, not that lines outside the range exist. The last observed line of a running log may still be growing; rereading it when polling captures further changes to that line.
+TaskInput sends characters to a PTY task identified by the returned task ID. TaskInput does not append Enter; an explicit \\n sends Enter, \\u0003 sends Ctrl-C, and chars="" waits without writing.
+TaskStop stops a background task that is no longer needed.
 Do not use ad-hoc kill commands to manage tasks created by Bash.
 Bash and TaskOutput return outputFilePath. Use Read on outputFilePath when you need complete or paginated output.
 Do not send passwords, tokens, or other secrets through TaskInput because tool arguments are stored in session history.
