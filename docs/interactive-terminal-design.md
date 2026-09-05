@@ -9,13 +9,10 @@
 - 验证：`bun run check` 通过；真实 TUI journey 覆盖交互、canonical history 和 `/quit`
   清理。
 
-本文是 `docs/bash-tool-design.md` 和
-`docs/background-task-management-design.md` 的增量设计。它不建立第二套进程管理系统，
-而是在现有 `ShellTaskManager`、`Bash`、`TaskList`、`TaskOutput`、`TaskStop` 之上增加
-PTY 启动与输入能力。
-
-本文明确修订 `docs/bash-tool-design.md` 中“暂不实现伪终端和交互式 prompt”的旧边界。
-其余 Bash 与后台任务合同保持不变。
+本文记录在现有 `ShellTaskManager`、`Bash`、`TaskList`、`TaskOutput`、`TaskStop`
+之上增加 PTY 启动与输入能力的设计。当前 Bash 入口见
+[`src/tools/bash.ts`](../src/tools/bash.ts)，任务输出入口见
+[`src/tools/task-output-tool.ts`](../src/tools/task-output-tool.ts)。
 
 ## 2. 结论
 
@@ -743,7 +740,6 @@ PTY process 是 runtime-only：
 | `src/tui/event-store.ts` | 投影 TaskInput tool item 与 tty task 标记 |
 | `src/tui/components/background-tasks.tsx` | 在现有两行布局内显示可选 tty 标记 |
 | `src/cli/runner-dependencies.ts` | 增加模型使用 tty/TaskInput 的系统提示 |
-| `docs/bash-tool-design.md` | 实现时更新旧 non-goal 和公开 schema |
 | `README.md` / generated docs | 如公开工具说明涉及该能力，按现有 docs workflow 更新 |
 
 不要为了目录整齐提前拆出大量抽象文件。`shell-process.ts` 只有在 pipe/PTY adapter 让

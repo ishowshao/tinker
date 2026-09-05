@@ -13,10 +13,10 @@
 - 当前基线：SessionStore schema v10、immutable `ContextSurface`、线性
   `ContextRevision`、`swap-only-v1`、`recall-first-retirement-v1`、稳定来源与
   Recall、自动 `runtime_pressure` 维护、手动 `/compact`
-- 相关设计：
-  [`context-revision-i2-deterministic-swap-manual-compact-design.md`](context-revision-i2-deterministic-swap-manual-compact-design.md)、
-  [`context-revision-i3-recall-first-prefix-retirement-design.md`](context-revision-i3-recall-first-prefix-retirement-design.md)、
-  [`stable-source-recall-design.md`](stable-source-recall-design.md)
+- 相关实现：
+  [`src/context/context-manager.ts`](../src/context/context-manager.ts)、
+  [`src/context/prefix-retirement-planner.ts`](../src/context/prefix-retirement-planner.ts)、
+  [`src/tools/recall.ts`](../src/tools/recall.ts)
 
 ## 一、结论
 

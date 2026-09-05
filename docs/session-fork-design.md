@@ -6,10 +6,10 @@
 - 状态：已实施并验证
 - 当前基线：SessionStore schema v8、`/resume`、`ResumeProjectionReader`、
   `DefaultTuiSessionController`
-- 相关设计：
-  [`session-store-resume-design.md`](session-store-resume-design.md)、
-  [`runtime-contract-context-surface-refresh-design.md`](runtime-contract-context-surface-refresh-design.md)、
-  [`stable-source-recall-design.md`](stable-source-recall-design.md)
+- 相关实现：
+  [`src/session/session-store.ts`](../src/session/session-store.ts)、
+  [`src/context/context-surface.ts`](../src/context/context-surface.ts)、
+  [`src/tools/recall.ts`](../src/tools/recall.ts)
 
 ## 一、结论
 

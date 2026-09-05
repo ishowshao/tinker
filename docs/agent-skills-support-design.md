@@ -15,9 +15,10 @@
   [Agent Skills Specification](https://agentskills.io/specification)、
   [How to add skills support to your agent](https://agentskills.io/client-implementation/adding-skills-support)
 - 相关设计：
-  [`project-instructions-loading-design.md`](project-instructions-loading-design.md)、
-  [`runtime-contract-context-surface-refresh-design.md`](runtime-contract-context-surface-refresh-design.md)、
-  [`context-revision-i3-recall-first-prefix-retirement-design.md`](context-revision-i3-recall-first-prefix-retirement-design.md)
+  [`project-instructions-loading-design.md`](project-instructions-loading-design.md)
+- Context Surface 与前缀退休实现：
+  [`src/context/context-surface.ts`](../src/context/context-surface.ts)、
+  [`src/context/prefix-retirement-planner.ts`](../src/context/prefix-retirement-planner.ts)
 
 ## 一、结论
 

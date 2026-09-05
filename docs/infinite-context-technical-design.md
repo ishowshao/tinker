@@ -10,9 +10,9 @@
 - 状态：目标架构，分阶段实施
 - 首版日期：2026-07-11
 - 方向修订：2026-07-16，引入 Recall-first 冷前缀退休，checkpoint 改为证据驱动的可选后备
-- 相关既有设计：
-  - [`runtime-session-lifecycle-design.md`](runtime-session-lifecycle-design.md)
-  - [`session-turn-iteration-identity-design.md`](session-turn-iteration-identity-design.md)
+- 运行时与身份模型实现：
+  - [`src/agent/runtime-session.ts`](../src/agent/runtime-session.ts)
+  - [`src/ids/runtime-id.ts`](../src/ids/runtime-id.ts)
 
 ## 一、结论先行
 

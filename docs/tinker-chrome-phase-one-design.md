@@ -1079,8 +1079,8 @@ Chrome API 使用 fake：
 ## 参考
 
 - Tinker MCP 设计：[`mcp-integration-design.md`](./mcp-integration-design.md)
-- Tinker RuntimeSession 生命周期：
-  [`runtime-session-lifecycle-design.md`](./runtime-session-lifecycle-design.md)
+- Tinker RuntimeSession 实现：
+  [`src/agent/runtime-session.ts`](../src/agent/runtime-session.ts)
 - Tinker WebFetch 设计：[`web-fetch-tool-design.md`](./web-fetch-tool-design.md)
 - 当前 MCP manager：[`src/mcp/mcp-manager.ts`](../src/mcp/mcp-manager.ts)
 - 当前 MCP tool adapter：

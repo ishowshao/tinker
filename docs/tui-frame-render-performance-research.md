@@ -309,7 +309,7 @@ itemLimitPerTurn: 40
 - **鼠标滚轮**：Ink 7 没有鼠标支持（build 目录中没有任何 mouse 相关代码），需要自己开关
   终端 mouse tracking 模式并解析转义序列，还要处理 suspend 给子进程时的开关成对性。
 - **原生 scrollback 与终端选中复制**：备用屏幕下都会失去，`/copy`
-  （`docs/tui-copy-command-design.md`）会变成主要的取文本路径。
+  会变成主要的取文本路径（[剪贴板实现](../src/tui/clipboard.ts)）。
 - **浮层需要纳入行数预算**：FileViewer、MemoryBrowser、ResumeSessionPicker、ModelPicker
   都必须在钉住的视口内布局；前两者已经这样做了。
 

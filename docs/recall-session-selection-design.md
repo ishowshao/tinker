@@ -283,6 +283,6 @@ Recall 的工具定义关联已有主动 Recall qualification。增加字段会�
 
 ## 参考
 
-- [稳定来源与 Recall](stable-source-recall-design.md)
+- [Recall 工具实现](../src/tools/recall.ts)
 - [全局记忆现状](global-memory/global-memory-design.md)
-- [主动 Recall 评测与自动化门禁](context-revision-i4-active-recall-evaluation-automation-gates-design.md)
+- [自动上下文维护与模型评测解耦](context-automation-evaluation-decoupling.md)
