@@ -17,7 +17,8 @@ export async function qualifyI4ActiveRecall(input: {
   const negative = await readReport(input.negativeReportPath);
   const result = evaluateActiveRecallQualification(positive.report, negative.report);
   const qualification = Object.freeze({
-    schemaVersion: "active-recall-qualification-v1",
+    // v2 reports evaluation only; product automation is configured independently.
+    schemaVersion: "active-recall-qualification-v2",
     qualificationId: "deepseek-v4-flash-floor-v1",
     qualifiedAt: new Date().toISOString(),
     profile: positive.report.profile,
@@ -35,8 +36,6 @@ export async function qualifyI4ActiveRecall(input: {
     negativeReportSha256: negative.sha256,
     gates: result.gates,
     metrics: result.metrics,
-    automaticSwapOnly: true,
-    automaticPrefixRetirement: result.passed,
     passed: result.passed,
   });
   await writeJsonAtomic(input.outputPath, qualification);

@@ -1,19 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRuntimeSession } from "../agent/runtime-session";
 import { isContextPressureNotice } from "../agent/context-pressure-notice";
 import type { AgentMessage, AssistantMessage } from "../agent/types";
 import { toolResultDisplayText } from "../agent/tool-result-content";
-import {
-  I4_ACTIVE_RECALL_QUALIFICATION,
-  I4_SWAP_ONLY_QUALIFICATION_ID,
-  RECALL_SESSION_SELECTION_CONTINUITY,
-  selectContextAutomation,
-} from "../context/context-automation-policy";
-import { createContextSurface } from "../context/context-surface";
-import { CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION } from "../context/recall-retirement-contract";
+import { DEFAULT_CONTEXT_AUTOMATION_POLICY } from "../context/context-automation-policy";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import type {
   ModelRequestOptions,
@@ -21,19 +14,21 @@ import type {
   PreparedModelRequest,
 } from "../model/model-client";
 import { deriveModelContextBudget } from "../model/model-context-profile";
-import { RECALL_TOOL_DEFINITIONS } from "../tools/recall";
+import { createDefaultTooling } from "../tools/registry";
 import {
   collectingEventSink,
-  prepareTestModelRequest,
   TEST_CONTEXT_BUDGET,
   TEST_CONTEXT_PROFILE,
   TestModelClient,
   testModelOutput,
   testModelRequestInput,
 } from "./test-runtime";
-import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
+import {
+  isolateTinkerHome,
+  workspaceSessionDirectory,
+} from "./helpers/workspace-storage-test-support";
 
-isolateTinkerHome();
+const tinkerHome = isolateTinkerHome();
 
 class ToolObservationModel extends TestModelClient {
   requestCount = 0;
@@ -467,11 +462,11 @@ describe("I4 automatic context maintenance", () => {
       expect(automaticFinished).toHaveLength(2);
       expect(automaticFinished[0]?.data).toMatchObject({
         strategy: "swap",
-        qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
+        automationPolicyId: DEFAULT_CONTEXT_AUTOMATION_POLICY.policyId,
       });
       expect(automaticFinished[1]?.data).toMatchObject({
         strategy: "retire_prefix",
-        qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
+        automationPolicyId: DEFAULT_CONTEXT_AUTOMATION_POLICY.policyId,
         retiredTurnCount: 9,
       });
       expect(model.requestCount).toBe(20);
@@ -506,12 +501,11 @@ describe("I4 automatic context maintenance", () => {
         loadMcpConfig: async () => undefined,
         selectShadowPlanning: () =>
           pressureArmed ? { trigger: "runtime_pressure" } : undefined,
-        selectContextAutomation: () => ({
-          automaticSwapOnly: true,
+        contextAutomationPolicy: {
+          automaticSwap: true,
           automaticPrefixRetirement: false,
-          reason: "swap_only_qualified",
-          qualificationId: "test-floor-v1",
-        }),
+          policyId: "test-swap-only",
+        },
         automaticCompactionTrigger: () => ({
           kind: "benchmark_forced",
           targetTokens: -1,
@@ -537,7 +531,7 @@ describe("I4 automatic context maintenance", () => {
         strategy: "swap",
         stage: "plan",
         errorCode: "invalid_target",
-        qualificationId: "test-floor-v1",
+        automationPolicyId: "test-swap-only",
       });
 
       pressureArmed = false;
@@ -636,6 +630,11 @@ describe("I4 automatic context maintenance", () => {
       {
         loadMcpConfig: async () => undefined,
         selectShadowPlanning: () => undefined,
+        contextAutomationPolicy: {
+          policyId: "test-build-pressured-history",
+          automaticSwap: false,
+          automaticPrefixRetirement: false,
+        },
       },
     );
 
@@ -651,6 +650,28 @@ describe("I4 automatic context maintenance", () => {
         ).toBe("completed");
       }
       await first.dispose({ type: "tui_exit" });
+      const sessionDirectory = await workspaceSessionDirectory(
+        workspace,
+        tinkerHome(),
+        sessionId,
+      );
+      const legacyEventPath = path.join(sessionDirectory, "events.jsonl");
+      // Diagnostic logs are not the recovery source of truth. Retain a legacy
+      // event verbatim and verify resume neither consumes its gate nor rewrites it.
+      const legacyEvent = {
+        ...sink.events.at(-1),
+        type: "context.revision.started",
+        data: {
+          strategy: "swap",
+          reason: "runtime_pressure",
+          policyVersion: "swap-only-v1",
+          rendererFormat: "swap-observation-v1",
+          qualificationId: "legacy-qualification-v1",
+        },
+      };
+      const legacyText = `${JSON.stringify(legacyEvent)}\n`;
+      await writeFile(legacyEventPath, legacyText, { mode: 0o600 });
+      sink.events.length = 0;
 
       const resumedModel = new ToolObservationModel();
       const resumed = await createRuntimeSession(
@@ -700,6 +721,13 @@ describe("I4 automatic context maintenance", () => {
         ).toBe(true);
         expect(resumedModel.requestCount).toBe(0);
         expect(resumed.canSwitchSession()).toBe(true);
+        expect(await readFile(legacyEventPath, "utf8")).toBe(legacyText);
+        for (const event of resumeMaintenance) {
+          expect(event.data).toMatchObject({
+            automationPolicyId: "context-automation-v1",
+          });
+          expect(event.data).not.toHaveProperty("qualificationId");
+        }
       } finally {
         await resumed.dispose({ type: "tui_exit" });
       }
@@ -709,101 +737,75 @@ describe("I4 automatic context maintenance", () => {
     }
   });
 
-  test("binds continuity to the reviewed surface without qualifying the old report", () => {
-    const prepared = prepareTestModelRequest({
-      messages: [{ role: "system", content: "system" }],
-      tools: [...RECALL_TOOL_DEFINITIONS],
-    });
-    const surface = createContextSurface({
-      surfaceId: runtimeIdFactory.createContextSurfaceId(),
-      sessionId: runtimeIdFactory.createSessionId(),
-      systemPrompt: "system",
-      recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-      toolDefinitions: [...RECALL_TOOL_DEFINITIONS],
-      prepared,
-      createdAt: "2026-07-18T00:00:00.000Z",
-    });
-    expect(
-      selectContextAutomation({ profileName: "deepseek-v4-flash", surface }),
-    ).toEqual({
-      automaticSwapOnly: true,
-      automaticPrefixRetirement: true,
-      reason: "explicit_continuity",
-      qualificationId: RECALL_SESSION_SELECTION_CONTINUITY.decisionId,
-    });
-    // Old measured evidence does not qualify the description-cleaned surface,
-    // and copying it must not inherit the explicit continuity decision.
-    for (const passed of [false, true]) {
+  test.each([
+    undefined,
+    "unmeasured-model",
+  ])("runs with updated Recall descriptions and profile %s without evaluation evidence", async (profileName) => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-product-policy-"));
+    await writeFile(path.join(workspace, "large.txt"), "x".repeat(32 * 1_024));
+    const contextProfile = {
+      contextWindowTokens: 128 * 1_024,
+      maxSupportedOutputTokens: 64 * 1_024,
+    } as const;
+    const sink = collectingEventSink();
+    const model = new FinalResponsePressureModel();
+    const session = await createRuntimeSession(
+      {
+        selection: { mode: "new", sessionId: runtimeIdFactory.createSessionId() },
+        workspaceRoot: workspace,
+        modelName: "unmeasured-model",
+        ...(profileName === undefined ? {} : { profileName }),
+        maxIterations: 2,
+        includeReasoningContent: false,
+        contextProfile,
+        contextBudget: deriveModelContextBudget(contextProfile),
+        systemPrompt: "system",
+        modelClient: model,
+        presentationSinks: [sink],
+        persistence: false,
+      },
+      {
+        loadMcpConfig: async () => undefined,
+        createTooling: (options) => {
+          const tooling = createDefaultTooling(options);
+          const definitions = tooling.registry.definitions.bind(tooling.registry);
+          tooling.registry.definitions = () =>
+            definitions().map((definition) =>
+              definition.name.startsWith("Recall")
+                ? {
+                    ...definition,
+                    description: `${definition.description} Revised guidance.`,
+                  }
+                : definition,
+            );
+          return tooling;
+        },
+      },
+    );
+    try {
       expect(
-        selectContextAutomation(
-          { profileName: "deepseek-v4-flash", surface },
-          { ...I4_ACTIVE_RECALL_QUALIFICATION, passed },
-        ),
-      ).toEqual({
-        automaticSwapOnly: false,
-        automaticPrefixRetirement: false,
-        reason: "recall_tool_mismatch",
-      });
+        (
+          await session.executeTurn({
+            userMessage: { role: "user", content: "create pressure" },
+            signal: new AbortController().signal,
+          })
+        ).status,
+      ).toBe("completed");
+      const maintenance = sink.events.filter(
+        (event) =>
+          event.type === "context.revision.finished" &&
+          event.data.reason === "runtime_pressure",
+      );
+      expect(maintenance.length).toBeGreaterThan(0);
+      for (const event of maintenance) {
+        expect(event.data).toMatchObject({
+          automationPolicyId: "context-automation-v1",
+        });
+        expect(event.data).not.toHaveProperty("qualificationId");
+      }
+    } finally {
+      await session.dispose({ type: "tui_exit" });
+      await rm(workspace, { recursive: true });
     }
-    // Synthetic current-surface evidence exercises ordinary gate branches only.
-    const syntheticEvidence = {
-      ...I4_ACTIVE_RECALL_QUALIFICATION,
-      recallToolDefinitionSha256:
-        RECALL_SESSION_SELECTION_CONTINUITY.recallToolDefinitionSha256,
-    };
-    expect(
-      selectContextAutomation(
-        { profileName: "deepseek-v4-flash", surface },
-        { ...syntheticEvidence, passed: true },
-      ),
-    ).toMatchObject({
-      automaticSwapOnly: true,
-      automaticPrefixRetirement: true,
-      reason: "qualified",
-    });
-    expect(selectContextAutomation({ surface })).toEqual({
-      automaticSwapOnly: false,
-      automaticPrefixRetirement: false,
-      reason: "unprofiled_model",
-    });
-    expect(
-      selectContextAutomation(
-        { profileName: "deepseek-v4-flash", surface },
-        { ...syntheticEvidence, passed: false },
-      ),
-    ).toEqual({
-      automaticSwapOnly: true,
-      automaticPrefixRetirement: false,
-      reason: "swap_only_qualified",
-      qualificationId: I4_SWAP_ONLY_QUALIFICATION_ID,
-    });
-
-    const changedRecall = {
-      ...RECALL_TOOL_DEFINITIONS[0],
-      description: `${RECALL_TOOL_DEFINITIONS[0].description} changed`,
-    };
-    const changedPrepared = prepareTestModelRequest({
-      messages: [{ role: "system", content: "system" }],
-      tools: [changedRecall, RECALL_TOOL_DEFINITIONS[1]],
-    });
-    const changedSurface = createContextSurface({
-      surfaceId: runtimeIdFactory.createContextSurfaceId(),
-      sessionId: runtimeIdFactory.createSessionId(),
-      systemPrompt: "system",
-      recallContractVersion: CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-      toolDefinitions: [changedRecall, RECALL_TOOL_DEFINITIONS[1]],
-      prepared: changedPrepared,
-      createdAt: "2026-07-18T00:00:00.000Z",
-    });
-    expect(
-      selectContextAutomation({
-        profileName: "deepseek-v4-flash",
-        surface: changedSurface,
-      }),
-    ).toEqual({
-      automaticSwapOnly: false,
-      automaticPrefixRetirement: false,
-      reason: "recall_tool_mismatch",
-    });
   });
 });

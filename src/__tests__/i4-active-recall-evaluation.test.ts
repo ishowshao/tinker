@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import {
-  I4_ACTIVE_RECALL_QUALIFICATION,
-  RECALL_SESSION_SELECTION_CONTINUITY,
-} from "../context/context-automation-policy";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import os from "node:os";
+import { renderRecallRetirementContract } from "../context/recall-retirement-contract";
+import { qualifyI4ActiveRecall } from "../../scripts/qualify-i4-active-recall";
 import { sha256, stableJsonStringify } from "../model/model-request-preflight";
 import { RECALL_TOOL_DEFINITIONS } from "../tools/recall";
 import {
@@ -17,7 +17,22 @@ import type {
   I4ActiveRecallReport,
   I4ActiveRecallTrial,
 } from "../../scripts/bench-i4-active-recall";
-import { evaluateActiveRecallQualification } from "../../scripts/i4-active-recall-policy";
+import {
+  evaluateActiveRecallQualification,
+  ACTIVE_RECALL_QUALIFICATION_POLICY_SHA256,
+} from "../../scripts/i4-active-recall-policy";
+
+// Archived evidence is test data only, never a runtime automation dependency.
+const historicalQualification = JSON.parse(
+  readFixture("docs/recall-session-selection-qualification-deepseek-v4-flash.json"),
+) as {
+  manifestSha256: string;
+  positiveReportSha256: string;
+  negativeReportSha256: string;
+  recallToolDefinitionSha256: string;
+  policySha256: string;
+  passed: boolean;
+};
 
 describe("I4 active Recall evaluation manifest", () => {
   test("covers five positive scenarios with counterfactual pairs in each suite", () => {
@@ -56,9 +71,7 @@ describe("I4 active Recall evaluation manifest", () => {
     expect(new Set(ACTIVE_RECALL_CASES.map((entry) => entry.id)).size).toBe(
       ACTIVE_RECALL_CASES.length,
     );
-    expect(ACTIVE_RECALL_MANIFEST_HASH).toBe(
-      I4_ACTIVE_RECALL_QUALIFICATION.manifestSha256,
-    );
+    expect(ACTIVE_RECALL_MANIFEST_HASH).toBe(historicalQualification.manifestSha256);
   });
 });
 
@@ -146,54 +159,74 @@ describe("I4 active Recall qualification policy", () => {
     );
   });
 
-  test("keeps the compiled floor gate bound to the checked-in holdout reports", () => {
+  test("preserves archived report integrity without making it runtime policy", () => {
     const positive = readFixture(
       "docs/recall-session-selection-holdout-deepseek-v4-flash.json",
     );
     const negative = readFixture(
       "docs/recall-session-selection-negative-deepseek-v4-flash.json",
     );
-    const qualification = JSON.parse(
-      readFixture("docs/recall-session-selection-qualification-deepseek-v4-flash.json"),
-    ) as Record<string, unknown>;
-    expect(sha256(positive)).toBe(I4_ACTIVE_RECALL_QUALIFICATION.positiveReportSha256);
-    expect(sha256(negative)).toBe(I4_ACTIVE_RECALL_QUALIFICATION.negativeReportSha256);
+    expect(sha256(positive)).toBe(historicalQualification.positiveReportSha256);
+    expect(sha256(negative)).toBe(historicalQualification.negativeReportSha256);
+    expect(
+      sha256(
+        readFixture(
+          "docs/recall-session-selection-qualification-deepseek-v4-flash.json",
+        ),
+      ),
+    ).toBe("a02e19fa86ef8046758408eac77410f2f7b74bccb1b222ba4eae70e8b032df59");
     const positiveReport = JSON.parse(positive) as I4ActiveRecallReport;
     const negativeReport = JSON.parse(negative) as I4ActiveRecallReport;
-    // Historical reports retain their measured surface. The live evaluator must
-    // reject them after a description change, not relabel them as fresh evidence.
     expect(() =>
       evaluateActiveRecallQualification(positiveReport, negativeReport),
     ).toThrow("does not match the current Recall surface");
     for (const report of [positiveReport, negativeReport]) {
       expect(report.recallToolDefinitionSha256).toBe(
-        I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+        historicalQualification.recallToolDefinitionSha256,
       );
     }
-    const continuity = RECALL_SESSION_SELECTION_CONTINUITY;
-    expect(continuity.evaluatedRecallToolDefinitionSha256).toBe(
-      I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
+    expect(historicalQualification.passed).toBe(false);
+    expect(historicalQualification.policySha256).toBe(
+      ACTIVE_RECALL_QUALIFICATION_POLICY_SHA256,
     );
-    expect(sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS))).toBe(
-      continuity.recallToolDefinitionSha256,
-    );
-    expect(continuity.recallToolDefinitionSha256).not.toBe(
-      continuity.evaluatedRecallToolDefinitionSha256,
-    );
-    expect(sha256(positive)).toBe(continuity.positiveReportSha256);
-    expect(sha256(negative)).toBe(continuity.negativeReportSha256);
-    expect(qualification.passed).toBe(false);
-    expect(qualification.passed).toBe(I4_ACTIVE_RECALL_QUALIFICATION.passed);
-    expect(qualification.metrics).toEqual(I4_ACTIVE_RECALL_QUALIFICATION.metrics);
-    expect(qualification.recallToolDefinitionSha256).toBe(
-      I4_ACTIVE_RECALL_QUALIFICATION.recallToolDefinitionSha256,
-    );
-    expect(qualification.policySha256).toBe(
-      I4_ACTIVE_RECALL_QUALIFICATION.policySha256,
-    );
-    expect(qualification.manifestSha256).toBe(
-      I4_ACTIVE_RECALL_QUALIFICATION.manifestSha256,
-    );
+  });
+
+  test.each([
+    true,
+    false,
+  ])("writes evaluation-only v2 reports when passed=%s", async (passed) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tinker-evaluation-only-"));
+    try {
+      const positive = qualificationReport(true);
+      const negative = qualificationReport(false);
+      const report = passed
+        ? positive
+        : {
+            ...positive,
+            trials: positive.trials.map((trial) => ({
+              ...trial,
+              task: { passed: false, code: "wrong_value" as const },
+            })),
+          };
+      const positiveReportPath = path.join(root, "positive.json");
+      const negativeReportPath = path.join(root, "negative.json");
+      const outputPath = path.join(root, "evaluation.json");
+      await writeFile(positiveReportPath, JSON.stringify(report));
+      await writeFile(negativeReportPath, JSON.stringify(negative));
+      const result = await qualifyI4ActiveRecall({
+        positiveReportPath,
+        negativeReportPath,
+        outputPath,
+      });
+      expect(result.schemaVersion).toBe("active-recall-qualification-v2");
+      expect(result.passed).toBe(passed);
+      expect(result).not.toHaveProperty("automaticSwapOnly");
+      expect(result).not.toHaveProperty("automaticSwap");
+      expect(result).not.toHaveProperty("automaticPrefixRetirement");
+      expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual(result);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -261,7 +294,7 @@ function qualificationReport(positive: boolean): I4ActiveRecallReport {
     manifestVersion: "active-recall-manifest-v1",
     manifestHash: ACTIVE_RECALL_MANIFEST_HASH,
     graderVersion: "active-recall-deterministic-grader-v1",
-    recallContractSha256: I4_ACTIVE_RECALL_QUALIFICATION.recallContractSha256,
+    recallContractSha256: sha256(renderRecallRetirementContract()),
     // Synthetic trials exercise the policy against the current tool surface.
     recallToolDefinitionSha256: sha256(stableJsonStringify(RECALL_TOOL_DEFINITIONS)),
     profile: "deepseek-v4-flash",

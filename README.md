@@ -29,7 +29,7 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
 - **Turn cancellation**: Users can cancel an ongoing turn safely, with protocol-safe synthetic tool messages.
 - **Context metering**: Budget-aware context management with protocol validation before sending requests to the model.
 - **Deterministic context compaction**: Idle sessions can swap eligible historical tool output into Recall-addressable placeholders without calling the model.
-- **Infinite Context architecture**: Immutable canonical history, deterministic context revisions, Recall-addressable cold state, and qualified prefix retirement support sessions designed to continue indefinitely without pretending the model has infinite tokens. See the [technical design](docs/infinite-context-technical-design.md).
+- **Infinite Context architecture**: Immutable canonical history, deterministic context revisions, Recall-addressable cold state, and protocol-safe prefix retirement support sessions designed to continue indefinitely without pretending the model has infinite tokens. See the [technical design](docs/infinite-context-technical-design.md).
 - **Choice of models**: Uses an OpenAI-compatible Chat Completions transport with
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
@@ -67,18 +67,25 @@ Original workspaces need not still exist. SQLite WAL reads can coordinate throug
 SHM; read-only access does not promise that an active writer's directory remains
 byte-for-byte unchanged. See the [design](docs/recall-session-selection-design.md).
 
-The session-selection Recall surface was re-evaluated with the frozen active
-Recall qualification policy. It missed the Search → Get threshold, although all
-Recall-only tasks passed. An explicit product decision preserves the previously
-enabled automatic swap and prefix retirement. A subsequent explicit decision
-extends continuity to the reviewed description-only cleanup, binding its exact
-tool hash separately from the original evaluated hash and report pair. The cleaned
-wording has not been re-evaluated with the live model. Triggers and execution
-safeguards are unchanged. This is not a qualification pass or a blanket exemption
-for future changes. The
-[qualification report](docs/recall-session-selection-qualification-deepseek-v4-flash.json)
-retains the measured failure; its automation flags describe the frozen evaluator's
-recommendation, not this subsequent runtime continuity decision.
+### Automatic context maintenance and evaluation
+
+Automatic swap and prefix retirement are product defaults, independent of model
+names, evaluation scores, report availability, and tool-description hashes. Under
+context pressure, the runtime tries swap first and attempts retirement only when
+swap has no eligible candidates or insufficient candidates. Existing scheduling,
+protocol boundaries, cancellation, transaction, and request/surface consistency
+checks remain in force. Required Recall tools and the current retirement contract
+must be available; enabling a product policy does not bypass execution safety.
+There are no new user-facing switches or model allowlists.
+
+Evaluation measures model behavior; it does not enable or disable these features.
+New evaluation reports (`active-recall-qualification-v2`) contain metrics, gates,
+and provenance but no automation flags. Historical reports remain unchanged. The
+[session-selection report](docs/recall-session-selection-qualification-deepseek-v4-flash.json)
+retains its measured failure: Search → Get missed the threshold even though all
+Recall-only tasks passed. Its old automation fields are legacy data, not runtime
+policy. The subsequent description cleanup has not been re-evaluated with a live
+model. See the [decoupling design](docs/context-automation-evaluation-decoupling.md).
 
 ## Quick Start
 

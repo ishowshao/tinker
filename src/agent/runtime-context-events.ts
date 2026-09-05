@@ -31,7 +31,7 @@ export function boundedContextErrorCode(code: string): string {
 export function contextRevisionFinishedData(
   result: ContextCompactionResult,
   reason: "manual" | "runtime_pressure" | "model_directed" = "manual",
-  qualificationId?: string,
+  automationPolicyId?: string,
 ): ContextRevisionFinishedData {
   if (result.status === "unchanged") {
     return {
@@ -48,7 +48,7 @@ export function contextRevisionFinishedData(
       guardedTokensBefore: result.guardedTokensBefore,
       targetTokens: result.targetTokens,
       durationMs: result.durationMs,
-      ...(qualificationId === undefined ? {} : { qualificationId }),
+      ...(automationPolicyId === undefined ? {} : { automationPolicyId }),
     };
   }
   return {
@@ -69,14 +69,14 @@ export function contextRevisionFinishedData(
     targetTokens: result.targetTokens,
     planHash: result.planHash,
     durationMs: result.durationMs,
-    ...(qualificationId === undefined ? {} : { qualificationId }),
+    ...(automationPolicyId === undefined ? {} : { automationPolicyId }),
   };
 }
 
 export function contextRetirementFinishedData(
   result: ContextRetirementResult,
   reason: "manual" | "runtime_pressure" = "manual",
-  qualificationId?: string,
+  automationPolicyId?: string,
 ): ContextRevisionFinishedData {
   if (result.status === "unchanged") {
     return {
@@ -95,7 +95,7 @@ export function contextRetirementFinishedData(
       targetTokens: result.targetTokens,
       planningDurationMs: result.planningDurationMs,
       durationMs: result.durationMs,
-      ...(qualificationId === undefined ? {} : { qualificationId }),
+      ...(automationPolicyId === undefined ? {} : { automationPolicyId }),
     };
   }
   return {
@@ -122,6 +122,6 @@ export function contextRetirementFinishedData(
     transactionDurationMs: result.transactionDurationMs,
     activationDurationMs: result.activationDurationMs,
     durationMs: result.durationMs,
-    ...(qualificationId === undefined ? {} : { qualificationId }),
+    ...(automationPolicyId === undefined ? {} : { automationPolicyId }),
   };
 }

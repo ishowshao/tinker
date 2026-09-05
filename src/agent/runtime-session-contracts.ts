@@ -1,5 +1,5 @@
 import type { PublicToolingConfig } from "../cli/public-config-contract";
-import type { selectContextAutomation } from "../context/context-automation-policy";
+import type { ContextAutomationPolicy } from "../context/context-automation-policy";
 import type {
   ContextCompactionResult,
   ContextCompactionTrigger,
@@ -287,7 +287,7 @@ export type RuntimeSessionFactoryDependencies = {
   ) => EventSink;
   selectShadowPlanning: NonNullable<RunAgentInput["shadowPlanning"]>["select"];
   onShadowPlanningResult?: NonNullable<RunAgentInput["shadowPlanning"]>["onResult"];
-  selectContextAutomation: typeof selectContextAutomation;
+  contextAutomationPolicy: ContextAutomationPolicy;
   automaticCompactionTrigger: () => ContextCompactionTrigger;
   automaticRetirementTrigger: () => ContextRetirementTrigger;
   manualCompactionTrigger: () => ContextCompactionTrigger;

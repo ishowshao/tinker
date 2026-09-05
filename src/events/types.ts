@@ -56,6 +56,8 @@ export type ContextRevisionStartedData =
       reason: "manual" | "runtime_pressure" | "model_directed";
       policyVersion: "swap-only-v1";
       rendererFormat: "swap-observation-v1";
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {
@@ -69,6 +71,8 @@ export type ContextRevisionStartedData =
       reason: "manual" | "runtime_pressure";
       policyVersion: "recall-first-retirement-v1";
       baseRevisionNumber: number;
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {
@@ -102,6 +106,8 @@ export type ContextRevisionFinishedData =
       targetTokens: number;
       planHash?: string;
       durationMs: number;
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {
@@ -143,6 +149,8 @@ export type ContextRevisionFinishedData =
       transactionDurationMs?: number;
       activationDurationMs?: number;
       durationMs: number;
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {
@@ -166,6 +174,8 @@ export type ContextRevisionFailedData =
       stage: "snapshot" | "plan" | "validate" | "commit" | "activate";
       errorCode: string;
       error: string;
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {
@@ -183,6 +193,8 @@ export type ContextRevisionFailedData =
       errorCode: string;
       error: string;
       committed: boolean;
+      automationPolicyId?: string;
+      /** Legacy event metadata only; never controls runtime automation. */
       qualificationId?: string;
     }
   | {

@@ -1,8 +1,9 @@
 import path from "node:path";
+import { assertContextMaintenanceCapabilities } from "./runtime-context-capabilities";
 import { CompiledContextError } from "../context/compiled-context-validator";
 import {
-  selectContextAutomation,
-  type ContextAutomationDecision,
+  DEFAULT_CONTEXT_AUTOMATION_POLICY,
+  type ContextAutomationPolicy,
 } from "../context/context-automation-policy";
 import {
   ContextManager,
@@ -178,7 +179,7 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
   createEventSink,
   selectShadowPlanning: ({ preflight }) =>
     preflight.pressure === "normal" ? undefined : { trigger: "runtime_pressure" },
-  selectContextAutomation,
+  contextAutomationPolicy: DEFAULT_CONTEXT_AUTOMATION_POLICY,
   automaticCompactionTrigger: () => ({ kind: "runtime_pressure" }),
   automaticRetirementTrigger: () => ({ kind: "runtime_pressure" }),
   manualCompactionTrigger: () => ({ kind: "manual" }),
@@ -215,7 +216,7 @@ class DefaultRuntimeSession implements RuntimeSession {
   private readonly committedPrefixAuditor = new CommittedPrefixAuditor();
   private readonly shadowPlanner: SwapPlanner;
   private contextManager?: ContextManager;
-  private contextAutomationDecision?: ContextAutomationDecision;
+  private contextAutomationPolicy?: ContextAutomationPolicy;
   private assistantTextDeltaSinkDisabled = false;
 
   private readonly skillCatalog: SkillCatalogSnapshot;
@@ -612,6 +613,10 @@ class DefaultRuntimeSession implements RuntimeSession {
 
       await session.runtimeSkills.appendSkillsCatalogLoaded();
 
+      assertContextMaintenanceCapabilities(
+        session.requireTooling().registry,
+        store.loadContextSnapshot().surface.recallContractVersion,
+      );
       session.ledger = dependencies.createLedger(store, dependencies.idFactory);
       session.contextManager = new ContextManager({
         store,
@@ -653,14 +658,13 @@ class DefaultRuntimeSession implements RuntimeSession {
         data: { phase: "initial", snapshot: initialSnapshot },
       });
 
-      session.contextAutomationDecision = dependencies.selectContextAutomation({
-        ...(input.profileName === undefined ? {} : { profileName: input.profileName }),
-        surface: store.loadContextSnapshot().surface,
+      session.contextAutomationPolicy = Object.freeze({
+        ...dependencies.contextAutomationPolicy,
       });
       if (
         input.selection.mode === "resume" &&
         initialSnapshot.pressure !== "normal" &&
-        session.contextAutomationDecision.automaticSwapOnly
+        session.contextAutomationPolicy.automaticSwap
       ) {
         session.contextMaintenance.scheduleAutomaticMaintenance();
         session.state = "executing";
@@ -803,11 +807,11 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
   }
 
-  private requireContextAutomation(): ContextAutomationDecision {
-    if (this.contextAutomationDecision === undefined) {
+  private requireContextAutomation(): ContextAutomationPolicy {
+    if (this.contextAutomationPolicy === undefined) {
       throw new Error("RuntimeSession context automation is not initialized.");
     }
-    return this.contextAutomationDecision;
+    return this.contextAutomationPolicy;
   }
 
   private requireActiveContextTool(
@@ -1162,7 +1166,7 @@ class DefaultRuntimeSession implements RuntimeSession {
               const selection = this.dependencies.selectShadowPlanning(planningInput);
               if (
                 selection?.trigger === "runtime_pressure" &&
-                this.requireContextAutomation().automaticSwapOnly
+                this.requireContextAutomation().automaticSwap
               ) {
                 this.contextMaintenance.scheduleAutomaticMaintenance();
               }

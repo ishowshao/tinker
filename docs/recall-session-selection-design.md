@@ -2,6 +2,10 @@
 
 ## 状态与目标
 
+> 最新更新：自动维护已与评测彻底解耦，原 continuity v1/v2 仅为下文历史实施记录。
+> 当前产品默认开启 swap / retirement，不绑定评测结果或工具描述哈希。详见
+> [解耦方案](context-automation-evaluation-decoupling.md)。
+
 - 状态：已实施（2026-09-05）；真实模型重新评测未通过主动 Recall qualification，
   按用户后续明确决定，本次 Recall 改进保留自动 swap 与自动 prefix retirement 开启，
   不变更其触发条件和执行逻辑；真实评测结果单独保留，不标为通过。

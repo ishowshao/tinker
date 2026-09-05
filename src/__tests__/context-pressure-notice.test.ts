@@ -108,6 +108,13 @@ describe("context pressure notice", () => {
           event.data.reason === "runtime_pressure",
       );
       expect(automaticSwaps).toHaveLength(1);
+      expect(
+        sink.events.some(
+          (event) =>
+            event.type === "context.revision.started" &&
+            event.data.strategy === "retire_prefix",
+        ),
+      ).toBe(false);
       expect(noticeSequence).toBeLessThan(
         automaticSwaps[0]?.eventSequence ?? Number.NaN,
       );
@@ -132,6 +139,11 @@ describe("context pressure notice", () => {
     );
     const sink = collectingEventSink();
     const model = new NoticeNoAutomationModel();
+    const contextAutomationPolicy = {
+      policyId: "test-automation-disabled",
+      automaticSwap: false,
+      automaticPrefixRetirement: false,
+    };
     const session = await createRuntimeSession(
       {
         selection: { mode: "new", sessionId },
@@ -146,7 +158,7 @@ describe("context pressure notice", () => {
         presentationSinks: [sink],
         persistence: false,
       },
-      { loadMcpConfig: async () => undefined },
+      { loadMcpConfig: async () => undefined, contextAutomationPolicy },
     );
     try {
       const first = await session.executeTurn({

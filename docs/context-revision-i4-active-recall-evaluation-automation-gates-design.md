@@ -2,6 +2,11 @@
 
 ## 文档状态
 
+> 最新决定（2026-09-05）：本文的评测控制自动维护开关设计及后续 continuity 机制已被
+> [产品策略与评测解耦方案](context-automation-evaluation-decoupling.md)取代。自动 swap /
+> retirement 默认开启，不再读取评测报告、模型名称或资格哈希。下文为历史设计与测量记录，
+> 其中自动化放行/关闭规则不再代表当前运行时行为；评测数据保持原样。
+
 > 2026-09-05 更新：本文原有通过记录针对旧 Recall surface。加入 `sessionId` 后已按原
 > 冻结门槛重新评测，Search → Get 未达标，但 Recall-only 任务全部通过。用户随后明确
 > 要求本次 Recall 改进保留自动 retirement 开启；运行时以绑定本次 surface/report 的
