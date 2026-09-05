@@ -15,16 +15,23 @@ content, recall session history, and call tools exposed by MCP servers.
   session for either the TUI or one-shot runner.
 - `src/agent/runtime-session.ts` owns the session lifecycle and coordinates the
   agent loop, cancellation, context maintenance, persistence, tools, and event
-  delivery. `src/agent/loop.ts` repeatedly builds a model request, validates its
+  delivery. Context maintenance, interactions, prompt scheduling, and Skills
+  live in dedicated `runtime-*` modules; extend the responsible module.
+  `src/agent/loop.ts` repeatedly builds a model request, validates its
   context budget and protocol, calls the model, executes requested tools, records
   their results, and continues until the model returns a final response.
 - `src/context` compiles canonical history into provider-ready context. Context
   revisions, compaction, and prefix retirement may change what is sent to the
   model without mutating the canonical conversation. Retired history remains
-  available through Recall.
+  available through Recall. `ContextStatus`, `ContextSwapCandidates`, and
+  `ContextSwap` expose model-directed context management. Swaps are queued and
+  execute only after the current iteration's tool frames close.
 - `src/session` persists canonical session state in SQLite and provides resume,
   history retrieval, and session catalog operations. SQLite is the recovery
   source of truth; event and observation logs are diagnostic projections.
+- `src/memory` owns global memory extraction, retrieval, and management across
+  sessions and workspaces, currently wired through the TUI. Global Memory is
+  separate from Recall, which retrieves canonical session history.
 - `src/model` isolates provider-specific request mapping, streaming, token
   estimation, and preflight checks behind the model client boundary.
 - `src/tools` defines built-in tool schemas and executors. MCP tools are adapted
@@ -35,6 +42,8 @@ content, recall session history, and call tools exposed by MCP servers.
   resumed sessions rebuild the same presentation from stored canonical state.
 - `src/skills` discovers and activates Agent Skills. `src/image` owns image
   import, storage, validation, and request materialization.
+- `packages/tinker-chrome` contains the browser extension, MCP server, bridge,
+  and native host for Chrome integration.
 
 Keep orchestration in the runtime/session layers, provider logic in `src/model`,
 and user-interface behavior in `src/tui` or the CLI. Prefer fast failure at these
@@ -55,10 +64,15 @@ adding exclusions.
 
 When a change includes source code, tests, executable scripts, dependencies, or
 build/runtime configuration, run `bun run check` before considering it complete.
-It must pass type checking, formatting, linting, tests, and the benchmark smoke
-check. It is the only gate, and `check:fast` never substitutes for it.
+It must pass type checking, formatting, linting, `docs:check`, tests, and the
+benchmark smoke check. It is the completion gate; `check:fast` never substitutes
+for it.
 
 `test:fast` excludes the end-to-end tier with one `--path-ignore-patterns` flag
 per pattern. Do not merge them into a comma-joined value — Bun reads that as a
 single literal pattern, silently filters nothing, and the fast tier degrades
 back into a full run.
+
+README sections marked `GENERATED` derive from public CLI/config contracts and
+slash-command declarations. Update those sources, then run `bun run docs:generate`;
+do not hand-edit generated sections. `bun run docs:check` verifies them read-only.
