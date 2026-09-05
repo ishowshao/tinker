@@ -29,7 +29,7 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
 - **Turn cancellation**: Users can cancel an ongoing turn safely, with protocol-safe synthetic tool messages.
 - **Context metering**: Budget-aware context management with protocol validation before sending requests to the model.
 - **Deterministic context compaction**: Idle sessions can swap eligible historical tool output into Recall-addressable placeholders without calling the model.
-- **Infinite Context architecture**: Immutable canonical history, deterministic context revisions, Recall-addressable cold state, and protocol-safe prefix retirement support sessions designed to continue indefinitely without pretending the model has infinite tokens. See the [technical design](docs/infinite-context-technical-design.md).
+- **Infinite Context architecture**: Immutable canonical history, deterministic context revisions, Recall-addressable cold state, and protocol-safe prefix retirement support sessions designed to continue indefinitely without pretending the model has infinite tokens.
 - **Choice of models**: Uses an OpenAI-compatible Chat Completions transport with
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
@@ -65,7 +65,8 @@ instructions, Skills and authorizations are not activated, and content hashes
 prove storage consistency, not truth. Use Read/Grep to verify current facts.
 Original workspaces need not still exist. SQLite WAL reads can coordinate through
 SHM; read-only access does not promise that an active writer's directory remains
-byte-for-byte unchanged. See the [design](docs/recall-session-selection-design.md).
+byte-for-byte unchanged. See the
+[history access implementation](src/session/session-history-access.ts).
 
 ### Automatic context maintenance and evaluation
 
@@ -81,11 +82,11 @@ There are no new user-facing switches or model allowlists.
 Evaluation measures model behavior; it does not enable or disable these features.
 New evaluation reports (`active-recall-qualification-v2`) contain metrics, gates,
 and provenance but no automation flags. Historical reports remain unchanged. The
-[session-selection evaluation](docs/recall-session-selection-design.md#真实模型-qualification与离线回归分开)
+session-selection evaluation
 retains its measured failure: Search → Get missed the threshold even though all
 Recall-only tasks passed. Its old automation fields are legacy data, not runtime
 policy. The subsequent description cleanup has not been re-evaluated with a live
-model. See the [decoupling design](docs/context-automation-evaluation-decoupling.md).
+model.
 
 ## Quick Start
 
@@ -451,9 +452,9 @@ pixels in total. Provider requests preserve smaller images and proportionally
 downscale larger images to a maximum 2048-pixel long edge. Context planning uses
 fixed local token buckets derived from the materialized dimensions and performs no
 independent token-estimator request. See the
-[`image token bucket design`](docs/image-token-bucket-estimation-design.md) and
-[`multimodal image input design`](docs/multimodal-image-input-design.md) for the
-complete fixed policy and persistence contract.
+[image input policy](src/image/image-input-policy.ts) and
+[image asset store](src/image/image-asset-store.ts) for the policy and storage
+implementations.
 
 `ViewImage(file_path)` is registered only when the selected profile declares both
 `inputModalities: ["text", "image"]` and
@@ -463,8 +464,8 @@ text-only for tool results. Relative paths stay inside the workspace, absolute
 paths may explicitly select an external local file, and symbolic links are
 rejected. Canonical history stores content-addressed image references rather than
 Base64, while stdout, TUI, Recall, and logs show deterministic text summaries.
-See the [`ViewImage tool design`](docs/view-image-tool-design.md) for the complete
-capability, persistence, provider, and compaction contract.
+See the [`ViewImage implementation`](src/tools/view-image.ts) for the tool's
+validation and execution logic.
 
 ### Built-in Slash Commands
 
@@ -529,9 +530,9 @@ turn. Built-in slash commands appear first in suggestions, followed by project
 commands in configuration order. Custom commands accept no arguments and cannot
 override built-ins. The optional configuration is loaded once at TUI startup,
 must be valid when present, and has a 1 MiB size limit. It is not loaded by the
-one-shot `tinker run` command. See
-[`docs/project-custom-slash-commands-design.md`](docs/project-custom-slash-commands-design.md)
-for the full contract.
+one-shot `tinker run` command. See the
+[project command loader](src/tui/project-slash-commands.ts) for configuration
+validation and loading behavior.
 
 ### Global Runtime Data
 
