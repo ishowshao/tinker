@@ -602,13 +602,19 @@ function renderTaskOutputObservation(raw: TaskOutputRawResult): string {
     "Task output retrieved.",
     `taskId=${raw.taskId}`,
     `status=${raw.task.status}`,
+    raw.task.exitCode === undefined ? undefined : `exitCode=${raw.task.exitCode}`,
+    raw.task.signal === undefined ? undefined : `signal=${raw.task.signal}`,
+    raw.task.error === undefined ? undefined : `error=${raw.task.error}`,
     `command=${raw.task.command}`,
     `tty=${terminalScreen}`,
     `outputFilePath=${raw.outputFilePath}`,
-    `outputBytes=${raw.outputBytes ?? 0}`,
-    `outputLines=${raw.outputLines ?? 0}`,
-    `truncated=${raw.truncated ?? false}`,
-    raw.omittedLines === undefined ? undefined : `omittedLines=${raw.omittedLines}`,
+    // PTY renders a screen, not the log preview; its counters describe the log.
+    `${terminalScreen ? "logBytes" : "outputBytes"}=${raw.outputBytes ?? 0}`,
+    `${terminalScreen ? "logLines" : "outputLines"}=${raw.outputLines ?? 0}`,
+    terminalScreen ? undefined : `truncated=${raw.truncated ?? false}`,
+    terminalScreen || raw.omittedLines === undefined
+      ? undefined
+      : `omittedLines=${raw.omittedLines}`,
     terminalScreen
       ? `screen=${raw.screenColumns ?? 80}x${raw.screenRows ?? 24}`
       : undefined,
@@ -632,8 +638,8 @@ function renderTaskInputObservation(raw: TaskInputRawResult): string {
     `waitedMs=${raw.waitedMs}`,
     `screen=${raw.screenColumns}x${raw.screenRows}`,
     `outputFilePath=${raw.outputFilePath}`,
-    `outputBytes=${raw.outputBytes}`,
-    `outputLines=${raw.outputLines}`,
+    `logBytes=${raw.outputBytes}`,
+    `logLines=${raw.outputLines}`,
     "current screen:",
     raw.screen,
   ].join("\n");
