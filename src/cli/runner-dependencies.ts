@@ -34,7 +34,8 @@ Use WebSearch, when it is available, to look up current information on the web s
 Use WebFetch to read the content of a specific URL, such as documentation pages found via WebSearch.
 Prefer Read for reading files instead of using cat on large files.
 Prefer Write or Edit for changing files instead of shell redirection.
-Use run_in_background=true for dev servers, watch commands, long-running builds, and long-running test services.
+Use run_in_background=true for persistent processes such as dev servers and watch commands, or when you have independent work to do while a command runs.
+For finite commands whose result is needed next, such as builds, tests, and checks, prefer foreground execution when no independent work remains. Set a sufficient foreground timeout; the call returns as soon as the command finishes.
 Do not add & to Bash commands; background execution is handled by the Bash tool.
 Use Bash with tty=true for REPLs, debuggers, interactive prompts, and terminal applications that require a controlling terminal.
 Use TaskList to list background shell tasks in the current session.
