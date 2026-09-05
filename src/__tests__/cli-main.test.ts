@@ -27,6 +27,43 @@ class MemoryWriter {
 }
 
 describe("CLI main boundary", () => {
+  test("remote commands are explicit and bypass local model/TUI bootstrap", async () => {
+    for (const mode of ["serve", "connect"] as const) {
+      const state = testInput([mode, "--config", "pairing.json"]);
+      const order: string[] = [];
+      const dependencies = successfulDependencies(order);
+      dependencies.loadTuiRunner = async () => {
+        throw new Error("Unexpected local TUI load");
+      };
+      dependencies.loadServeRunner = async () => ({
+        runServe: async (input) => {
+          order.push(`serve:${input.configPath}`);
+          return 0;
+        },
+      });
+      dependencies.loadConnectRunner = async () => ({
+        runConnect: async (input) => {
+          order.push(`connect:${input.configPath}`);
+          return 0;
+        },
+      });
+      expect(await main(state.input, dependencies)).toBe(0);
+      expect(order).toEqual([`${mode}:${state.input.cwd}/pairing.json`]);
+      const missing = testInput([mode]);
+      expect(await main(missing.input, dependencies)).toBe(2);
+      expect(missing.stderr.output).toContain("--config");
+    }
+    const state = testInput([]);
+    const dependencies = successfulDependencies();
+    dependencies.loadServeRunner = async () => {
+      throw new Error("Unexpected service load");
+    };
+    dependencies.loadConnectRunner = async () => {
+      throw new Error("Unexpected remote TUI load");
+    };
+    expect(await main(state.input, dependencies)).toBe(0);
+  });
+
   test("handles help, version, and usage before loading config or runners", async () => {
     for (const expected of [
       { args: ["--help"], code: 0, stdout: "Usage: tinker" },
@@ -370,6 +407,8 @@ function successfulDependencies(order: string[] = []): MutableDependencies {
     loadTuiRunner: async () => ({ runTui: async () => undefined }),
     loadOneShotRunner: async () => ({ runOneShot: async () => 0 }),
     loadUpdateRunner: async () => ({ runUpdate: async () => 0 }),
+    loadServeRunner: async () => ({ runServe: async () => 0 }),
+    loadConnectRunner: async () => ({ runConnect: async () => 0 }),
   };
 }
 

@@ -47,6 +47,24 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     description: "Start the interactive terminal interface.",
     profileOption: PROFILE_OPTION,
   }),
+  serve: Object.freeze({
+    command: "serve",
+    description: "Run the local daemon for paired remote clients.",
+    configOption: Object.freeze({
+      flags: "--config <path>",
+      description: "Read the service JSON configuration.",
+      valueName: "path",
+    } satisfies PublicCliOption),
+  }),
+  connect: Object.freeze({
+    command: "connect",
+    description: "Attach a terminal client to a service; exiting detaches only.",
+    configOption: Object.freeze({
+      flags: "--config <path>",
+      description: "Read the paired client JSON configuration.",
+      valueName: "path",
+    } satisfies PublicCliOption),
+  }),
   run: Object.freeze({
     command: "run [prompt]",
     description: "Run one prompt non-interactively.",

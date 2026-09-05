@@ -1,4 +1,5 @@
 import type { SessionId } from "../ids/runtime-id";
+import path from "node:path";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { parseCommandLine, type CommandLineResult } from "./command-line";
 import type {
@@ -91,6 +92,8 @@ export type MainDependencies = {
   readonly loadTuiRunner: () => Promise<TuiRunner>;
   readonly loadOneShotRunner: () => Promise<OneShotRunner>;
   readonly loadUpdateRunner: () => Promise<UpdateRunner>;
+  readonly loadServeRunner: () => Promise<typeof import("./serve-runner")>;
+  readonly loadConnectRunner: () => Promise<typeof import("./connect-runner")>;
 };
 
 const DEFAULT_DEPENDENCIES: MainDependencies = {
@@ -102,6 +105,8 @@ const DEFAULT_DEPENDENCIES: MainDependencies = {
   loadTuiRunner: () => import("./tui-runner"),
   loadOneShotRunner: () => import("./run-runner"),
   loadUpdateRunner: () => import("./update-runner"),
+  loadServeRunner: () => import("./serve-runner"),
+  loadConnectRunner: () => import("./connect-runner"),
 };
 
 export async function main(
@@ -156,6 +161,27 @@ export async function main(
         );
       } catch (error) {
         await writeCliOutput(input.stderr, renderCliFailure("Update failed", error));
+        return finish(1);
+      }
+    }
+
+    if (parsed.command.type === "serve" || parsed.command.type === "connect") {
+      const options = {
+        configPath: path.resolve(cwd, parsed.command.configPath),
+        env,
+        stdout: input.stdout,
+      };
+      try {
+        const exitCode =
+          parsed.command.type === "serve"
+            ? await (await dependencies.loadServeRunner()).runServe(options)
+            : await (await dependencies.loadConnectRunner()).runConnect(options);
+        return finish(exitCode);
+      } catch (error) {
+        await writeCliOutput(
+          input.stderr,
+          renderCliFailure("Remote operation failed", error),
+        );
         return finish(1);
       }
     }

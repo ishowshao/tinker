@@ -6,6 +6,8 @@ import { CliUsageError, type CliCommandScope } from "./output";
 export type CliCommand =
   | { readonly type: "tui"; readonly profileName?: string }
   | { readonly type: "update" }
+  | { readonly type: "serve"; readonly configPath: string }
+  | { readonly type: "connect"; readonly configPath: string }
   | {
       readonly type: "run";
       readonly profileName?: string;
@@ -130,6 +132,21 @@ export async function parseCommandLine(
       },
     );
 
+  for (const type of ["serve", "connect"] as const) {
+    const command = contract[type];
+    program
+      .command(command.command)
+      .description(command.description)
+      .requiredOption(command.configOption.flags, command.configOption.description)
+      .allowExcessArguments(false)
+      .exitOverride()
+      .action((options: { config: string }) => {
+        if (!options.config.trim())
+          throw new CliUsageError("--config requires a non-empty path.", type);
+        selectedCommand = Object.freeze({ type, configPath: options.config });
+      });
+  }
+
   program
     .command(contract.update.command)
     .description(contract.update.description)
@@ -166,10 +183,13 @@ export async function parseCommandLine(
       "run",
     );
   }
-  if (selectedCommand.type === "update" && topLevelProfile !== undefined) {
+  if (
+    ["update", "serve", "connect"].includes(selectedCommand.type) &&
+    topLevelProfile !== undefined
+  ) {
     throw new CliUsageError(
       "The top-level --profile option only applies to the TUI.",
-      "update",
+      selectedCommand.type as CliCommandScope,
     );
   }
   return Object.freeze({ type: "command", command: selectedCommand });
@@ -222,6 +242,10 @@ function preflightArgv(args: readonly string[]): CliCommandScope {
       }
       if (token === "update") {
         scope = "update";
+        continue;
+      }
+      if (token === "serve" || token === "connect") {
+        scope = token;
         continue;
       }
       if (token === "help") {

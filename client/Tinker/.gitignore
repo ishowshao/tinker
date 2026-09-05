@@ -1,0 +1,10 @@
+# Xcode user settings and UI state
+xcuserdata/
+*.xcuserstate
+
+# Local build and test artifacts
+build/
+DerivedData/
+*.xcresult
+*.xcarchive
+*.ipa

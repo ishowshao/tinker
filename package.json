@@ -23,6 +23,7 @@
     "src/memory",
     "src/model",
     "src/observation",
+    "src/remote",
     "src/session",
     "src/skills",
     "src/tools",

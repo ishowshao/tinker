@@ -4,7 +4,7 @@ const TRUNCATION_MARKER = "...[truncated]";
 const ESCAPE = String.fromCharCode(27);
 const ANSI_CSI_PATTERN = new RegExp(`${ESCAPE}\\[[0-?]*[ -/]*[@-~]`, "g");
 
-export type CliCommandScope = "root" | "run" | "update";
+export type CliCommandScope = "root" | "run" | "update" | "serve" | "connect";
 
 export interface CliOutputWriter {
   write(chunk: string): boolean | void;

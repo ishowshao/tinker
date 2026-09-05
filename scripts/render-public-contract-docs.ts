@@ -105,6 +105,10 @@ export function renderPublicCliCommands(): string {
       contract.run.promptSources[2].description,
     ],
     [`\`tinker ${updateCommand}\``, contract.update.description],
+    ...(["serve", "connect"] as const).map((name) => [
+      `\`tinker ${contract[name].command} ${contract[name].configOption.flags}\``,
+      contract[name].description,
+    ]),
     [`\`tinker ${help}\``, "Show top-level CLI help."],
     [`\`tinker ${helpCommand} ${runCommand}\``, "Show one-shot command help."],
     [`\`tinker ${helpCommand} ${updateCommand}\``, "Show update command help."],

@@ -158,6 +158,8 @@ The installed package exposes this public CLI:
 | `tinker run [--profile <profile-name>] [--yolo] --stdin` | Read the prompt from standard input until EOF. |
 | `tinker run [--profile <profile-name>] [--yolo] --file <path>` | Read the prompt from a UTF-8 text file. |
 | `tinker update` | Update the global npm installation from the official npm registry. |
+| `tinker serve --config <path>` | Run the local daemon for paired remote clients. |
+| `tinker connect --config <path>` | Attach a terminal client to a service; exiting detaches only. |
 | `tinker --help` | Show top-level CLI help. |
 | `tinker help run` | Show one-shot command help. |
 | `tinker help update` | Show update command help. |
