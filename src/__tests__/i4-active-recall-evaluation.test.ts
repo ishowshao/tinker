@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import os from "node:os";
@@ -21,18 +20,6 @@ import {
   evaluateActiveRecallQualification,
   ACTIVE_RECALL_QUALIFICATION_POLICY_SHA256,
 } from "../../scripts/i4-active-recall-policy";
-
-// Archived evidence is test data only, never a runtime automation dependency.
-const historicalQualification = JSON.parse(
-  readFixture("docs/recall-session-selection-qualification-deepseek-v4-flash.json"),
-) as {
-  manifestSha256: string;
-  positiveReportSha256: string;
-  negativeReportSha256: string;
-  recallToolDefinitionSha256: string;
-  policySha256: string;
-  passed: boolean;
-};
 
 describe("I4 active Recall evaluation manifest", () => {
   test("covers five positive scenarios with counterfactual pairs in each suite", () => {
@@ -67,11 +54,13 @@ describe("I4 active Recall evaluation manifest", () => {
     }
   });
 
-  test("has unique case ids and matches the qualified frozen manifest", () => {
+  test("has unique case ids and preserves the frozen manifest", () => {
     expect(new Set(ACTIVE_RECALL_CASES.map((entry) => entry.id)).size).toBe(
       ACTIVE_RECALL_CASES.length,
     );
-    expect(ACTIVE_RECALL_MANIFEST_HASH).toBe(historicalQualification.manifestSha256);
+    expect(ACTIVE_RECALL_MANIFEST_HASH).toBe(
+      "093679e221e02b71ba5acf54693faa7a299d05dd25f6faabbeb84645d4db4d2d",
+    );
   });
 });
 
@@ -159,35 +148,21 @@ describe("I4 active Recall qualification policy", () => {
     );
   });
 
-  test("preserves archived report integrity without making it runtime policy", () => {
-    const positive = readFixture(
-      "docs/recall-session-selection-holdout-deepseek-v4-flash.json",
+  test("preserves the frozen qualification policy", () => {
+    expect(ACTIVE_RECALL_QUALIFICATION_POLICY_SHA256).toBe(
+      "77ca611594d4e9b7b5a597a3a33e35fcaaffae284dc2ac9953ce9a63cce1c009",
     );
-    const negative = readFixture(
-      "docs/recall-session-selection-negative-deepseek-v4-flash.json",
-    );
-    expect(sha256(positive)).toBe(historicalQualification.positiveReportSha256);
-    expect(sha256(negative)).toBe(historicalQualification.negativeReportSha256);
-    expect(
-      sha256(
-        readFixture(
-          "docs/recall-session-selection-qualification-deepseek-v4-flash.json",
-        ),
-      ),
-    ).toBe("a02e19fa86ef8046758408eac77410f2f7b74bccb1b222ba4eae70e8b032df59");
-    const positiveReport = JSON.parse(positive) as I4ActiveRecallReport;
-    const negativeReport = JSON.parse(negative) as I4ActiveRecallReport;
-    expect(() =>
-      evaluateActiveRecallQualification(positiveReport, negativeReport),
-    ).toThrow("does not match the current Recall surface");
-    for (const report of [positiveReport, negativeReport]) {
-      expect(report.recallToolDefinitionSha256).toBe(
-        historicalQualification.recallToolDefinitionSha256,
-      );
-    }
-    expect(historicalQualification.passed).toBe(false);
-    expect(historicalQualification.policySha256).toBe(
-      ACTIVE_RECALL_QUALIFICATION_POLICY_SHA256,
+  });
+
+  test.each([
+    "recallContractSha256",
+    "recallToolDefinitionSha256",
+  ] as const)("rejects reports with an outdated %s", (field) => {
+    const staleSurface = { [field]: sha256("outdated Recall surface") };
+    const positive = { ...qualificationReport(true), ...staleSurface };
+    const negative = { ...qualificationReport(false), ...staleSurface };
+    expect(() => evaluateActiveRecallQualification(positive, negative)).toThrow(
+      "does not match the current Recall surface",
     );
   });
 
@@ -342,8 +317,4 @@ function aggregateForTest(trials: readonly I4ActiveRecallTrial[]) {
       promptCacheMissTokens: trials.length * 40,
     },
   };
-}
-
-function readFixture(relativePath: string): string {
-  return readFileSync(path.resolve(import.meta.dir, "../..", relativePath), "utf8");
 }

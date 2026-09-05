@@ -278,11 +278,8 @@ Recall 的工具定义关联已有主动 Recall qualification。增加字段会�
   其中 26 次没有调用 Get；Search 摘要可能已经足够，调用比例不能单独证明能力下降。
   后续可独立改进评测题目，本次不修改评测策略。手动 `/compact retire` 不受影响。
 
-完整原始报告与机器判定：
-
-- [正例报告](recall-session-selection-holdout-deepseek-v4-flash.json)
-- [负例报告](recall-session-selection-negative-deepseek-v4-flash.json)
-- [qualification](recall-session-selection-qualification-deepseek-v4-flash.json)
+完整原始报告与机器判定保存在本地 `.data/evaluations/`，不纳入 Git。
+常规测试使用合成报告验证评测规则，不依赖这些历史归档。
 
 ## 参考
 

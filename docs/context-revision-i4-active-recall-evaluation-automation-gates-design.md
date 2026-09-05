@@ -969,11 +969,7 @@ JSON answer；这两次失败都不涉及 Recall 工具协议。没有 historica
 | Recall-only retirement | 72 | 2,005,931 | 1,155,968 / 839,584 | 169.46s |
 
 全部真实 response/chunk 只解析到 `deepseek-v4-flash`。qualification 的 12 道机器门全部通过；
-详细证据见
-[`context-revision-i4-holdout-deepseek-v4-flash.json`](context-revision-i4-holdout-deepseek-v4-flash.json)、
-[`context-revision-i4-holdout-negative-deepseek-v4-flash.json`](context-revision-i4-holdout-negative-deepseek-v4-flash.json)
-和
-[`context-revision-i4-qualification-deepseek-v4-flash.json`](context-revision-i4-qualification-deepseek-v4-flash.json)。
+详细原始报告与机器判定保存在本地 `.data/evaluations/`，不纳入 Git。
 
 ### 18.3 production automation
 

@@ -81,7 +81,7 @@ There are no new user-facing switches or model allowlists.
 Evaluation measures model behavior; it does not enable or disable these features.
 New evaluation reports (`active-recall-qualification-v2`) contain metrics, gates,
 and provenance but no automation flags. Historical reports remain unchanged. The
-[session-selection report](docs/recall-session-selection-qualification-deepseek-v4-flash.json)
+[session-selection evaluation](docs/recall-session-selection-design.md#真实模型-qualification与离线回归分开)
 retains its measured failure: Search → Get missed the threshold even though all
 Recall-only tasks passed. Its old automation fields are legacy data, not runtime
 policy. The subsequent description cleanup has not been re-evaluated with a live
