@@ -5,6 +5,43 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-09-05
+
+### Added
+
+- Add optional `sessionId` selection to `RecallSearch` and `RecallGet`, allowing
+  the agent to retrieve original history from another session, including a
+  Memory result's source session or another workspace under the same Tinker
+  home. Results identify their source session and workspace. External history is
+  read without resuming, repairing, or migrating the source session. Retrieved
+  text is sent to the current model provider and stored in the current session;
+  cross-workspace access does not show an additional confirmation dialog.
+- Add `offset` and `limit` to `TaskOutput` for reading consecutive, numbered lines
+  from non-PTY task logs. Omitting both preserves the head/tail preview; PTY tasks
+  continue to return the current terminal screen.
+
+### Changed
+
+- Enable automatic context swaps and prefix retirement as product defaults,
+  independent of model names, evaluation results, report availability, and tool
+  description hashes. Existing Recall capability, protocol, transaction, and
+  request-consistency checks remain enforced. Evaluation still measures model
+  behavior but no longer enables or disables runtime maintenance; this does not
+  guarantee reliable history retrieval by every model.
+- Clarify shell guidance so finite builds, tests, and checks run in the foreground
+  when their result is needed next and no independent work remains. Reserve
+  background execution for persistent processes or useful concurrent work, and
+  describe task tools in terms of their capabilities.
+
+### Fixed
+
+- Restore sessions containing follow-up messages submitted during an active turn
+  instead of rejecting turns with multiple user messages. Resumed timelines keep
+  follow-ups in their original order for completed and failed turns.
+- Include available exit codes, termination signals, and errors in `TaskOutput`
+  observations. Distinguish PTY screen snapshots from cumulative log statistics,
+  and clarify byte-limited log ranges and polling of a still-growing final line.
+
 ## [2.8.0] - 2026-09-04
 
 ### Changed
@@ -361,7 +398,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/ishowshao/tinker/releases/tag/v2.9.0
 [2.8.0]: https://github.com/ishowshao/tinker/releases/tag/v2.8.0
 [2.7.0]: https://github.com/ishowshao/tinker/releases/tag/v2.7.0
 [2.6.0]: https://github.com/ishowshao/tinker/releases/tag/v2.6.0
