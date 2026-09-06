@@ -72,7 +72,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. For directories, ripgrep runs in that directory with . as its search path; explicitly selecting an excluded directory allows searching inside it. Files are passed as absolute paths: explicit files bypass ignore/glob/type filtering, and explicit symlink files are followed. Explicit binary files may yield matches but are not guaranteed to be searched completely.",
+              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. For directories, ripgrep runs in that directory with . as its search path; explicitly selecting an excluded directory allows searching inside it. Files are passed as absolute paths: explicit files bypass ignore/glob/type filtering, and explicit symlink files are followed. Explicit binary files may yield matches but are not guaranteed to be searched completely, and reported line numbers may be inaccurate.",
           },
           glob: {
             type: "string",
