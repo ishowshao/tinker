@@ -77,7 +77,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           glob: {
             type: "string",
             description:
-              "Passed unchanged to ripgrep's --glob option after default exclusions. Matching positive globs override ignore rules and can override default exclusions (for example, **/* includes otherwise excluded directories). Does not enable symlink traversal or disable binary detection.",
+              "Passed unchanged to ripgrep's --glob option after default exclusions. A glob that matches files inside an excluded directory does not necessarily allow traversal into that directory: **/node_modules/** can return no matches because node_modules itself is still excluded. To search an excluded directory, set path to that directory (for example, node_modules/pkg), then use glob to filter files within it. Broad globs such as **/* can also match excluded directory entries and allow traversal. Does not enable symlink traversal or disable binary detection.",
           },
           output_mode: {
             type: "string",
