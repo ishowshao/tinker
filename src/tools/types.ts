@@ -92,11 +92,18 @@ export type DeleteFileRawResult = {
 
 export type GlobRawResult = {
   ok: boolean;
-  pattern: string;
+  pattern?: string;
   searchPath: string;
   absoluteSearchPath?: string;
   matches?: string[];
+  /** Number of paths returned, including in legacy unpaginated results. */
   matchCount?: number;
+  /** Exact total before pagination; absent in legacy results. */
+  totalMatches?: number;
+  returnedCount?: number;
+  appliedOffset?: number;
+  hasMore?: boolean;
+  nextOffset?: number;
   ignored?: string[];
   error?: string;
 };

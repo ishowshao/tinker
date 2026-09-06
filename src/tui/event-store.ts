@@ -873,6 +873,9 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         ? base
         : `${base} -> ${raw.asset.mimeType}, ${raw.asset.width}x${raw.asset.height}, ${raw.asset.byteLength} bytes`;
     case "glob":
+      if (raw.ok && raw.totalMatches !== undefined) {
+        return `${base} -> ${raw.returnedCount ?? raw.matches?.length ?? 0} of ${raw.totalMatches} matches`;
+      }
       return raw.ok && raw.matchCount !== undefined
         ? `${base} -> ${raw.matchCount} match${raw.matchCount === 1 ? "" : "es"}`
         : base;

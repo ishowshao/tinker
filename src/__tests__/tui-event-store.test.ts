@@ -994,6 +994,50 @@ describe("tui event store", () => {
     expect(visibleTimelineItems(state)[3]?.status).toBe("ok");
   });
 
+  test("shows the returned and total Glob counts for a paginated result", () => {
+    const call = {
+      providerToolCallId: "glob_page",
+      name: "Glob",
+      args: { pattern: "**/*.ts" },
+    };
+    let state = createInitialTuiState({
+      sessionId: testRuntime.runtimeSession.sessionId,
+      modelName: "test",
+      workspaceRoot: "/workspace",
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.started",
+      iterationNumber: 1,
+      call,
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call,
+      raw: {
+        kind: "glob",
+        ok: true,
+        pattern: "**/*.ts",
+        searchPath: ".",
+        matchCount: 200,
+        returnedCount: 200,
+        totalMatches: 503,
+        hasMore: true,
+        nextOffset: 200,
+        matches: [],
+      },
+    });
+    state = applyAgentEvent(state, {
+      type: "tool.finished",
+      iterationNumber: 1,
+      call,
+      ok: true,
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Glob **/*.ts -> 200 of 503 matches",
+    );
+  });
+
   test("updates one model item while a reasoning-only retry is running", () => {
     let state = createInitialTuiState({
       sessionId: "run-1",

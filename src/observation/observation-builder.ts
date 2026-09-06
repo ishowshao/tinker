@@ -182,18 +182,30 @@ function assertNever(value: never): never {
 
 function renderGlobObservation(raw: GlobRawResult): string {
   if (!raw.ok) {
-    return `Glob failed for pattern=${JSON.stringify(raw.pattern)}: ${raw.error ?? "Unknown error."}`;
+    const pattern =
+      raw.pattern === undefined ? "(missing or invalid)" : JSON.stringify(raw.pattern);
+    return `Glob failed for pattern=${pattern}, searchPath=${JSON.stringify(raw.searchPath)}: ${raw.error ?? "Unknown error."}`;
   }
 
   const matches = raw.matches ?? [];
+  const totalMatches = raw.totalMatches ?? raw.matchCount ?? matches.length;
 
   return [
     `Glob succeeded for pattern=${JSON.stringify(raw.pattern)}.`,
     `searchPath=${raw.searchPath}`,
-    `matchCount=${raw.matchCount ?? matches.length}`,
+    `totalMatches=${totalMatches}`,
+    `returnedCount=${raw.returnedCount ?? matches.length}`,
+    `hasMore=${raw.hasMore ?? false}`,
+    ...(raw.hasMore && raw.nextOffset !== undefined
+      ? [`nextOffset=${raw.nextOffset}`]
+      : []),
     `ignored=${(raw.ignored ?? []).join(",")}`,
     "matches:",
-    matches.length === 0 ? "(no matches)" : matches.join("\n"),
+    matches.length > 0
+      ? matches.join("\n")
+      : totalMatches === 0
+        ? "(no matches)"
+        : `(no results on this page at offset ${raw.appliedOffset ?? 0})`,
   ].join("\n");
 }
 

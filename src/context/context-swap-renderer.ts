@@ -193,6 +193,11 @@ function metadataEntries(
         ["pattern", raw.pattern],
         ["searchPath", raw.searchPath],
         ["matchCount", raw.matchCount],
+        ["totalMatches", raw.totalMatches],
+        ["returnedCount", raw.returnedCount],
+        ["appliedOffset", raw.appliedOffset],
+        ["hasMore", raw.hasMore],
+        ["nextOffset", raw.nextOffset],
       ];
     case "grep":
       return [

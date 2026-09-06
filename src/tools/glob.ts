@@ -9,6 +9,8 @@ import type { GlobRawResult, ToolExecutionContext, ToolExecutor } from "./types"
 type GlobArgs = {
   pattern: string;
   path?: string;
+  head_limit: number;
+  offset: number;
 };
 
 export type GlobToolOptions = {
@@ -16,6 +18,8 @@ export type GlobToolOptions = {
 };
 
 const ignoredDirectories = ["node_modules", ".git"];
+const defaultHeadLimit = 200;
+const maxHeadLimit = 500;
 
 export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
   return defineToolExecutor("glob", {
@@ -35,6 +39,20 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
             description:
               "Optional workspace-relative or absolute search directory. Defaults to the workspace root.",
           },
+          head_limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: maxHeadLimit,
+            description:
+              "Maximum paths to return. Defaults to 200; must be between 1 and 500.",
+          },
+          offset: {
+            type: "integer",
+            minimum: 0,
+            maximum: Number.MAX_SAFE_INTEGER,
+            description:
+              "Skip the first N sorted matches. Defaults to 0. To continue, pass nextOffset from the previous result with the same pattern and path.",
+          },
         },
         required: ["pattern"],
       },
@@ -46,8 +64,16 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
       if (!parsed.ok) {
         return {
           ok: false,
-          pattern: "",
-          searchPath: ".",
+          pattern:
+            isRecord(args) && typeof args.pattern === "string"
+              ? args.pattern
+              : undefined,
+          searchPath:
+            isRecord(args) && args.path !== undefined
+              ? typeof args.path === "string"
+                ? args.path
+                : "(invalid path)"
+              : ".",
           ignored: ignoredDirectories,
           error: parsed.error,
         };
@@ -100,14 +126,24 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           absoluteSearchPath,
           matches,
         });
+        const page = displayMatches.slice(
+          input.offset,
+          input.offset + input.head_limit,
+        );
+        const hasMore = input.offset + page.length < displayMatches.length;
 
         return {
           ok: true,
           pattern: input.pattern,
           searchPath,
           absoluteSearchPath,
-          matches: displayMatches,
-          matchCount: displayMatches.length,
+          matches: page,
+          matchCount: page.length,
+          totalMatches: displayMatches.length,
+          returnedCount: page.length,
+          appliedOffset: input.offset,
+          hasMore,
+          ...(hasMore ? { nextOffset: input.offset + page.length } : {}),
           ignored: ignoredDirectories,
         };
       } catch (error) {
@@ -151,11 +187,35 @@ function parseGlobArgs(
     return { ok: false, error: "Glob.path must be a string." };
   }
 
+  if (
+    args.head_limit !== undefined &&
+    (typeof args.head_limit !== "number" ||
+      !Number.isSafeInteger(args.head_limit) ||
+      args.head_limit < 1 ||
+      args.head_limit > maxHeadLimit)
+  ) {
+    return {
+      ok: false,
+      error: "Glob.head_limit must be an integer between 1 and 500.",
+    };
+  }
+
+  if (
+    args.offset !== undefined &&
+    (typeof args.offset !== "number" ||
+      !Number.isSafeInteger(args.offset) ||
+      args.offset < 0)
+  ) {
+    return { ok: false, error: "Glob.offset must be a non-negative safe integer." };
+  }
+
   return {
     ok: true,
     value: {
       pattern: args.pattern,
       path: args.path,
+      head_limit: args.head_limit ?? defaultHeadLimit,
+      offset: args.offset ?? 0,
     },
   };
 }
