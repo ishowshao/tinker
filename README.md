@@ -245,7 +245,7 @@ are required. Boolean environment values accept case-insensitive `true/false`,
 | `EXA_API_KEY` | Tooling | All modes | No | Non-empty string | — | Yes | Enables WebSearch and the Exa WebFetch backend when set. |
 | `TINKER_MCP_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `60000` | No | MCP tool-call timeout in milliseconds. |
 | `TINKER_MCP_MAX_OBSERVATION_CHARS` | Tooling | All modes | No | Positive integer | `40000` | No | Maximum model-visible characters in one MCP result. |
-| `TINKER_BASH_DEFAULT_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `5000` | No | Default Bash foreground timeout in milliseconds. |
+| `TINKER_BASH_DEFAULT_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `60000` | No | Default Bash foreground timeout in milliseconds. |
 | `TINKER_BASH_MAX_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `600000` | No | Maximum Bash foreground timeout in milliseconds. |
 | `TINKER_YOLO` | Tooling | All modes | No | Boolean | `false` | No | Allow high-confidence destructive Bash commands without confirmation. |
 | `TINKER_GREP_TIMEOUT_MS` | Tooling | All modes | No | Positive integer | `20000` | No | Bundled ripgrep invocation timeout in milliseconds. |

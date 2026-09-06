@@ -72,7 +72,7 @@ describe("public config contract", () => {
     expect(DEFAULT_PUBLIC_TOOLING_CONFIG).toMatchObject({
       mcpTimeoutMs: 60_000,
       mcpMaxObservationChars: 40_000,
-      bashDefaultTimeoutMs: 5_000,
+      bashDefaultTimeoutMs: 60_000,
       bashMaxTimeoutMs: 600_000,
       grepTimeoutMs: 20_000,
       grepMaxBufferBytes: 20_000_000,

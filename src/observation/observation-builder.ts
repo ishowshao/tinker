@@ -694,7 +694,7 @@ function renderTaskInputObservation(raw: TaskInputRawResult): string {
   }
 
   return [
-    "Terminal input sent.",
+    raw.writtenBytes === 0 ? "Terminal screen polled." : "Terminal input sent.",
     `taskId=${raw.taskId}`,
     `status=${raw.status}`,
     `writtenBytes=${raw.writtenBytes}`,

@@ -174,7 +174,7 @@ export const PUBLIC_CONFIG_FIELDS = Object.freeze([
     valueKind: "positive-integer",
     requiredIn: "never",
     appliesIn: "always",
-    defaultValue: 5_000,
+    defaultValue: 60_000,
     secret: false,
     section: "tooling",
     description: "Default Bash foreground timeout in milliseconds.",

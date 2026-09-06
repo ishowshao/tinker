@@ -88,9 +88,9 @@ describe.each([false, true])("TaskOutput termination details (tty=%s)", (tty) =>
 
 describe("TaskInput log statistics", () => {
   test.each([
-    "",
-    "ok\n",
-  ])("aligns polling and input observations for chars=%j", (chars) => {
+    ["", "Terminal screen polled."],
+    ["ok\n", "Terminal input sent."],
+  ])("aligns polling and input observations for chars=%j", (chars, summary) => {
     const output = taskOutput({ tty: true, outputBytes: 60_000, outputLines: 1_000 });
     if (output.task === undefined) {
       throw new Error("Expected a task snapshot.");
@@ -121,7 +121,7 @@ describe("TaskInput log statistics", () => {
 
     expect(observation.displayText).toBe(
       [
-        "Terminal input sent.",
+        summary,
         "taskId=task-output-test",
         "status=running",
         `writtenBytes=${Buffer.byteLength(chars)}`,
