@@ -28,6 +28,7 @@ import {
   type ProviderResponseDiagnostics,
 } from "./model-client";
 import { imageAssetUrlMarker } from "./openai-image-mapping";
+import { sanitizedProviderError } from "./openai-model-utils";
 
 export type OpenAIResponsesMappingOptions = {
   materializedImages?: ReadonlyMap<ImageAssetId, string>;
@@ -160,6 +161,16 @@ export function fromOpenAIResponse(
 ): ModelRequestOutput {
   const root = requireRecord(response, "response", options);
   const status = requireString(root.status, "status", options);
+  if (status === "failed") {
+    const error = requireRecord(root.error, "error", options);
+    const code = requireString(error.code, "error.code", options);
+    const message = requireString(error.message, "error.message", options);
+    throw sanitizedProviderError(
+      Object.assign(new Error(message), { code }),
+      options.provider,
+      options.model,
+    );
+  }
   if (status !== "completed" && status !== "incomplete") {
     throw providerResponseError(
       options,

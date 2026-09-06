@@ -883,6 +883,65 @@ describe("runAgent", () => {
     expect(pending.projectedMessageCount()).toBe(2);
   });
 
+  test("manual selection resets transient retry allowance within the same iteration", async () => {
+    const events = new ArrayEventSink();
+    const identity = createTestRuntime(events);
+    const registry = new ToolRegistry();
+    const ledger = new InMemorySessionLedger({
+      sessionId: identity.runtimeSession.sessionId,
+      systemPrompt: "system",
+      idFactory: deterministicIdFactory("manual-transient"),
+      initialToolDefinitions: registry.definitions(),
+    });
+    const pending = ledger.beginTurn({
+      turn: identity.turn,
+      userMessage: { role: "user", content: "hello" },
+    });
+    const model = new RetryScriptModel([
+      ...Array.from({ length: 10 }, () => rateLimitedError()),
+      "success",
+    ]);
+    let questions = 0;
+    const result = await runAgent({
+      ledger: pending.agent,
+      maxIterations: 1,
+      model,
+      contextMeter: createTestContextMeter(),
+      tools: registry,
+      toolRuntime: new ToolRuntime(registry),
+      observationBuilder: new ObservationBuilder(),
+      runtimeSession: identity.runtimeSession,
+      turn: identity.turn,
+      signal: new AbortController().signal,
+      transientRetryDelaysMs: [0, 0, 0, 0],
+      requestProviderRetry: async (iteration, failure) => {
+        questions += 1;
+        expect(iteration.iterationNumber).toBe(1);
+        expect(failure.attemptNumber).toBe(questions * 5);
+        expect(failure.retryDisposition).toBe("exhausted");
+        expect(pending.projectedMessageCount()).toBe(2);
+        return "retry";
+      },
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      lastIteration: { iterationNumber: 1 },
+    });
+    expect(questions).toBe(2);
+    expect(model.preparedRequests).toHaveLength(11);
+    expect(
+      model.preparedRequests.every((request) => request === model.preparedRequests[0]),
+    ).toBe(true);
+    expect(
+      events.events.filter((event) => event.type === "agent.iteration.started"),
+    ).toHaveLength(1);
+    expect(
+      events.events
+        .filter((event) => event.type === "model.request.started")
+        .map((event) => event.data.attemptNumber),
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+
   test("tracks reasoning-only and transient retry budgets independently", async () => {
     const events = new ArrayEventSink();
     const identity = createTestRuntime(events);

@@ -1,8 +1,10 @@
 import { Box, Text, useInput } from "ink";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export type AskUserProps = {
   question: string;
+  title?: string;
+  dismissLabel?: string;
   options: readonly { readonly description: string }[];
   onSelect(selectedIndex: number): void;
   onDismiss(): void;
@@ -10,6 +12,12 @@ export type AskUserProps = {
 
 export function AskUser(props: AskUserProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const selection = useRef(0);
+  const moveSelection = (offset: number) => {
+    selection.current =
+      (selection.current + offset + props.options.length) % props.options.length;
+    setSelectedIndex(selection.current);
+  };
 
   useInput((input, key) => {
     if (key.escape) {
@@ -17,17 +25,15 @@ export function AskUser(props: AskUserProps) {
       return;
     }
     if (key.upArrow) {
-      setSelectedIndex((current) =>
-        current === 0 ? props.options.length - 1 : current - 1,
-      );
+      moveSelection(-1);
       return;
     }
     if (key.downArrow) {
-      setSelectedIndex((current) => (current + 1) % props.options.length);
+      moveSelection(1);
       return;
     }
     if (key.return) {
-      props.onSelect(selectedIndex);
+      props.onSelect(selection.current);
       return;
     }
     if (/^[1-6]$/.test(input)) {
@@ -41,7 +47,7 @@ export function AskUser(props: AskUserProps) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
       <Text color="cyan" bold>
-        Tinker asks
+        {props.title ?? "Tinker asks"}
       </Text>
       <Text>{props.question}</Text>
       <Box flexDirection="column" marginTop={1}>
@@ -54,7 +60,8 @@ export function AskUser(props: AskUserProps) {
         ))}
       </Box>
       <Text dimColor>
-        ↑/↓ select · 1-{props.options.length} choose · Enter confirm · Esc skip
+        ↑/↓ select · 1-{props.options.length} choose · Enter confirm · Esc{" "}
+        {props.dismissLabel ?? "skip"}
       </Text>
     </Box>
   );

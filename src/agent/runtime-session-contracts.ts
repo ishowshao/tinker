@@ -1,3 +1,7 @@
+import type {
+  ProviderRetryDecision,
+  ProviderRetrySnapshot,
+} from "./runtime-provider-retry";
 import type { PublicToolingConfig } from "../cli/public-config-contract";
 import type { ContextAutomationPolicy } from "../context/context-automation-policy";
 import type {
@@ -118,6 +122,12 @@ export type RuntimeSession = {
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): void;
   resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
+  providerRetry(): ProviderRetrySnapshot;
+  subscribeProviderRetry(listener: () => void): () => void;
+  resolveProviderRetry(
+    requestId: string,
+    decision: ProviderRetryDecision,
+  ): Promise<void>;
   askUser(): AskUserSnapshot;
   subscribeAskUser(listener: () => void): () => void;
   resolveAskUser(response: AskUserResolution): Promise<void>;
@@ -251,6 +261,7 @@ export type CommonRuntimeSessionInput = {
   completedTurnHook?: CompletedTurnHook;
   enableTurnUndo?: boolean;
   enableAskUser?: boolean;
+  enableProviderRetryPrompt?: boolean;
   bashGuard?: {
     readonly mode: "guard" | "yolo";
     readonly source: Exclude<BashGuardSource, "session">;

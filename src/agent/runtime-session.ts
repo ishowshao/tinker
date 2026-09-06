@@ -1,3 +1,7 @@
+import {
+  RuntimeProviderRetry,
+  type ProviderRetryDecision,
+} from "./runtime-provider-retry";
 import path from "node:path";
 import { assertContextMaintenanceCapabilities } from "./runtime-context-capabilities";
 import { CompiledContextError } from "../context/compiled-context-validator";
@@ -221,6 +225,7 @@ class DefaultRuntimeSession implements RuntimeSession {
 
   private readonly skillCatalog: SkillCatalogSnapshot;
   private readonly interactions: RuntimeInteractions;
+  private readonly providerRetryInteraction: RuntimeProviderRetry;
   private readonly scheduler: RuntimePromptScheduler;
   private readonly contextMaintenance: RuntimeContextMaintenance;
   private readonly runtimeSkills: RuntimeSkills;
@@ -234,6 +239,9 @@ class DefaultRuntimeSession implements RuntimeSession {
     private readonly store: SessionStore,
     private readonly assetStore: ImageAssetStore,
   ) {
+    this.providerRetryInteraction = new RuntimeProviderRetry((event) =>
+      this.append(event),
+    );
     this.sessionId = input.selection.sessionId;
     this.resumed = input.selection.mode === "resume";
     this.scheduler = new RuntimePromptScheduler(
@@ -692,6 +700,21 @@ class DefaultRuntimeSession implements RuntimeSession {
 
   resolveBashConfirmation(decision: "allow" | "deny"): Promise<void> {
     return this.interactions.resolveBashConfirmation(decision);
+  }
+
+  providerRetry() {
+    return this.providerRetryInteraction.read();
+  }
+
+  subscribeProviderRetry(listener: () => void): () => void {
+    return this.providerRetryInteraction.subscribe(listener);
+  }
+
+  resolveProviderRetry(
+    requestId: string,
+    decision: ProviderRetryDecision,
+  ): Promise<void> {
+    return this.providerRetryInteraction.resolve(requestId, decision);
   }
 
   askUser(): AskUserSnapshot {
@@ -1184,6 +1207,12 @@ class DefaultRuntimeSession implements RuntimeSession {
           signal,
           assetStore: this.assetStore,
           initialRequest,
+          ...(this.input.enableProviderRetryPrompt === true
+            ? {
+                requestProviderRetry: (iteration, failure, signal) =>
+                  this.providerRetryInteraction.request(iteration, failure, signal),
+              }
+            : {}),
         });
       } catch (error) {
         if (error instanceof RuntimeEventAppendError) {

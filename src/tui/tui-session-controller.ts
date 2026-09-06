@@ -54,6 +54,9 @@ export type TuiSessionBinding = {
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): void;
   resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
+  providerRetry?: RuntimeSession["providerRetry"];
+  subscribeProviderRetry?: RuntimeSession["subscribeProviderRetry"];
+  resolveProviderRetry?: RuntimeSession["resolveProviderRetry"];
   askUser(): AskUserSnapshot;
   subscribeAskUser(listener: () => void): () => void;
   resolveAskUser(response: AskUserResolution): Promise<void>;
@@ -267,6 +270,11 @@ export function managedTuiBinding(input: {
     setYoloMode: (enabled) => input.runtimeSession.setYoloMode(enabled),
     resolveBashConfirmation: (decision) =>
       input.runtimeSession.resolveBashConfirmation(decision),
+    providerRetry: () => input.runtimeSession.providerRetry(),
+    subscribeProviderRetry: (listener) =>
+      input.runtimeSession.subscribeProviderRetry(listener),
+    resolveProviderRetry: (requestId, decision) =>
+      input.runtimeSession.resolveProviderRetry(requestId, decision),
     askUser: () => input.runtimeSession.askUser(),
     subscribeAskUser: (listener) => input.runtimeSession.subscribeAskUser(listener),
     resolveAskUser: (response) => input.runtimeSession.resolveAskUser(response),

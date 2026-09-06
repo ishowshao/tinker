@@ -321,7 +321,10 @@ describe("RuntimeSession failure boundaries", () => {
   test("keeps history protocol-valid after tool execution throws", async () => {
     const sink = collectingEventSink();
     const model = new FailingToolCallModel();
-    const input = createInput(model, sink, "tool-failure");
+    const input = {
+      ...createInput(model, sink, "tool-failure"),
+      enableProviderRetryPrompt: true,
+    };
     let ledger: InMemorySessionLedger | undefined;
     const session = await createRuntimeSession(input, {
       idFactory: deterministicIdFactory("tool-failure"),
@@ -358,6 +361,9 @@ describe("RuntimeSession failure boundaries", () => {
     await session.dispose({ type: "oneshot_complete" });
 
     expect(failed.status).toBe("failed");
+    expect(sink.events.some((event) => event.type === "model.retry.requested")).toBe(
+      false,
+    );
     expect(recovered.status).toBe("completed");
     const failedToolMessages = failedMessages.filter(
       (message) => message.role === "tool",

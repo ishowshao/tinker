@@ -577,68 +577,73 @@ describe("TuiProjectionStore", () => {
     ).toEqual(["short response", "model iteration 1 -> assistant response", content]);
   });
 
-  test("preserves sealed retry output, drops its tail, and labels the new attempt", async () => {
-    const store = createStore();
-    const turn = turnIdentity(1);
-    const iteration = iterationIdentity(1, 1);
-    await store.append(turnStarted(1, turn, "retry"));
-    await store.append(modelStarted(2, iteration));
-    store.updateAssistantTextDelta({
-      ...iteration,
-      attemptNumber: 1,
-      content: "## Old one\nsealed\n\n## Old tail\ndiscard me",
-    });
-    await store.append({
-      type: "model.request.failed",
-      ...iteration,
-      eventSequence: 3,
-      timestamp: timestamp(3),
-      data: {
+  for (const disposition of ["scheduled", "exhausted"] as const) {
+    test(`preserves ${disposition} retry output, drops its tail, and labels the new attempt`, async () => {
+      const store = createStore();
+      const turn = turnIdentity(1);
+      const iteration = iterationIdentity(1, 1);
+      await store.append(turnStarted(1, turn, "retry"));
+      await store.append(modelStarted(2, iteration));
+      store.updateAssistantTextDelta({
+        ...iteration,
         attemptNumber: 1,
-        maxAttempts: 2,
-        code: "provider_unavailable",
-        retryDisposition: "scheduled",
-        provider: "test",
-        model: "test-model",
-        error: "retry",
-      },
-    });
-    await store.append(modelStarted(4, iteration, 2));
-    store.updateAssistantTextDelta({
-      ...iteration,
-      attemptNumber: 1,
-      content: "## stale\nignored\n\n## stale two\n",
-    });
-    const replacement = "## New one\nsealed\n\n## New tail\nkept";
-    store.updateAssistantTextDelta({
-      ...iteration,
-      attemptNumber: 2,
-      content: replacement,
-    });
-    await store.append(modelFinished(5, iteration, replacement, 2));
+        content: "## Old one\nsealed\n\n## Old tail\ndiscard me",
+      });
+      await store.append({
+        type: "model.request.failed",
+        ...iteration,
+        eventSequence: 3,
+        timestamp: timestamp(3),
+        data: {
+          attemptNumber: 1,
+          maxAttempts: 2,
+          code: "provider_unavailable",
+          retryDisposition: disposition,
+          provider: "test",
+          model: "test-model",
+          error: "retry",
+        },
+      });
+      await store.append(modelStarted(4, iteration, 2));
+      store.updateAssistantTextDelta({
+        ...iteration,
+        attemptNumber: 1,
+        content: "## stale\nignored\n\n## stale two\n",
+      });
+      const replacement = "## New one\nsealed\n\n## New tail\nkept";
+      store.updateAssistantTextDelta({
+        ...iteration,
+        attemptNumber: 2,
+        content: replacement,
+      });
+      await store.append(modelFinished(5, iteration, replacement, 2));
 
-    const committed = store.getLogSnapshot().committed;
-    const sections = committed.filter(isAssistantStreamSectionItem);
-    expect(sections.map((section) => section.markdown)).toEqual([
-      "## Old one\nsealed\n\n",
-      "## New one\nsealed\n\n",
-      "## New tail\nkept",
-    ]);
-    expect(sections.map((section) => section.showAssistantLabel)).toEqual([
-      true,
-      true,
-      false,
-    ]);
-    expect(JSON.stringify(committed)).not.toContain("discard me");
-    expect(JSON.stringify(committed)).not.toContain("stale");
-    expect(
-      committed.some(
-        (item) =>
-          !isAssistantStreamSectionItem(item) &&
-          item.text === "assistant response interrupted · retrying",
-      ),
-    ).toBe(true);
-  });
+      const committed = store.getLogSnapshot().committed;
+      const sections = committed.filter(isAssistantStreamSectionItem);
+      expect(sections.map((section) => section.markdown)).toEqual([
+        "## Old one\nsealed\n\n",
+        "## New one\nsealed\n\n",
+        "## New tail\nkept",
+      ]);
+      expect(sections.map((section) => section.showAssistantLabel)).toEqual([
+        true,
+        true,
+        false,
+      ]);
+      expect(JSON.stringify(committed)).not.toContain("discard me");
+      expect(JSON.stringify(committed)).not.toContain("stale");
+      expect(
+        committed.some(
+          (item) =>
+            !isAssistantStreamSectionItem(item) &&
+            item.text ===
+              (disposition === "scheduled"
+                ? "assistant response interrupted · retrying"
+                : "assistant response interrupted"),
+        ),
+      ).toBe(true);
+    });
+  }
 
   test("keeps sealed output but never flushes the open tail on cancellation", async () => {
     const store = createStore();

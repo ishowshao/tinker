@@ -25,7 +25,7 @@ import type {
   PreparedModelRequest,
   PreparedPromptSegment,
 } from "./model-client";
-import { validateModelModalities } from "./model-client";
+import { ProviderResponseError, validateModelModalities } from "./model-client";
 import { sha256, stableJsonStringify } from "./model-request-preflight";
 import { estimatePromptSegments } from "./token-estimator";
 
@@ -212,6 +212,25 @@ export class FakeModelClient implements ModelClient {
       );
     }
 
+    if (this.mode === "pty-provider-retry") {
+      if (lastUserMessage(input.messages) === "PTY_RETRY_NEXT") {
+        return textOutput(prepared, "PTY_RETRY_NEXT_DONE");
+      }
+      if (this.steps <= 4) {
+        options.onTextDelta?.(
+          `## Attempt ${this.steps}\nPartial response\n\n## Unfinished\nDRAFT_ONLY`,
+        );
+        throw new ProviderResponseError(
+          "reasoning_only_assistant",
+          "PTY_PROVIDER_FAILURE",
+          {
+            provider: prepared.provider,
+            model: prepared.model,
+          },
+        );
+      }
+      return textOutput(prepared, "PTY_RETRY_DONE");
+    }
     if (this.mode === "write-notes") {
       return this.writeNotes(input, prepared, options);
     }

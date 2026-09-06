@@ -1,3 +1,4 @@
+import { EMPTY_PROVIDER_RETRY } from "../agent/runtime-provider-retry";
 import { Box, Static, Text, useApp, useInput, useStdout, useWindowSize } from "ink";
 import {
   useCallback,
@@ -143,6 +144,12 @@ export function App(props: AppProps) {
     () => binding.bashGuard(),
     () => binding.bashGuard(),
   );
+  const providerRetry = useSyncExternalStore(
+    (listener) => binding.subscribeProviderRetry?.(listener) ?? (() => undefined),
+    () => binding.providerRetry?.() ?? EMPTY_PROVIDER_RETRY,
+    () => EMPTY_PROVIDER_RETRY,
+  );
+  const pendingProviderRetry = providerRetry.pending;
   const askUser = useSyncExternalStore(
     (listener) => binding.subscribeAskUser(listener),
     () => binding.askUser(),
@@ -282,7 +289,12 @@ export function App(props: AppProps) {
       setIsCancelling(true);
       setNotice("Cancelling current turn...");
     },
-    { isActive: executionRunning && askUser.pending === undefined },
+    {
+      isActive:
+        executionRunning &&
+        askUser.pending === undefined &&
+        pendingProviderRetry === undefined,
+    },
   );
 
   const closeResumePicker = () => {
@@ -912,7 +924,8 @@ export function App(props: AppProps) {
                 status={
                   isCancelling
                     ? "cancelling"
-                    : askUser.pending !== undefined
+                    : askUser.pending !== undefined ||
+                        pendingProviderRetry !== undefined
                       ? "waiting_for_answer"
                       : executionRunning
                         ? "running"
@@ -924,7 +937,35 @@ export function App(props: AppProps) {
               />
             </Box>
             <Box marginTop={1} flexDirection="column" flexShrink={0}>
-              {askUser.pending !== undefined ? (
+              {pendingProviderRetry !== undefined ? (
+                <AskUser
+                  key={pendingProviderRetry.requestId}
+                  title="Provider request failed"
+                  question={`Automatic retries exhausted. ${pendingProviderRetry.failure.error.slice(0, 500)}`}
+                  options={[
+                    { description: "Retry again" },
+                    { description: "End this turn" },
+                  ]}
+                  dismissLabel="end this turn"
+                  onSelect={(index) => {
+                    void binding
+                      .resolveProviderRetry?.(
+                        pendingProviderRetry.requestId,
+                        index === 0 ? "retry" : "stop",
+                      )
+                      .catch((error: unknown) =>
+                        setNotice(`Retry selection failed: ${errorMessage(error)}`),
+                      );
+                  }}
+                  onDismiss={() => {
+                    void binding
+                      .resolveProviderRetry?.(pendingProviderRetry.requestId, "stop")
+                      .catch((error: unknown) =>
+                        setNotice(`Retry selection failed: ${errorMessage(error)}`),
+                      );
+                  }}
+                />
+              ) : askUser.pending !== undefined ? (
                 <AskUser
                   question={askUser.pending.question}
                   options={askUser.pending.options}
@@ -977,6 +1018,7 @@ export function App(props: AppProps) {
                     isCopying ||
                     isCancelling ||
                     askUser.pending !== undefined ||
+                    pendingProviderRetry !== undefined ||
                     bashGuard.pending !== undefined
                   }
                   history={props.history}

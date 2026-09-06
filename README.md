@@ -34,6 +34,19 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
 
+### Provider retry selection
+
+When automatic retries for a provider request are exhausted, the TUI offers
+**Retry again** or **End this turn**. Retrying reuses the same request within the
+same turn and iteration, with a fresh automatic retry allowance. Ending the turn
+(or pressing Esc in the selection) records the original failure. The selection
+adds no conversation message and applies only to the current running process.
+Retryable failures include HTTP 429/500/502/503/504, structured `server_error`
+and `rate_limit_exceeded` errors inside provider streams or failed Responses,
+and transient connection failures, including socket resets during streaming.
+Tool failures and non-retryable errors keep their existing behavior. One-shot
+and remote service runs do not wait for this TUI selection.
+
 ### PTY screen size
 
 `Bash` accepts optional `cols` and `rows` for the initial PTY screen size:

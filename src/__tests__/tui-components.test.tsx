@@ -153,6 +153,27 @@ describe("tui components", () => {
     panel.cleanup();
   });
 
+  test("uses the latest selection for rapid arrow/Enter input", async () => {
+    const selections: number[] = [];
+    const panel = render(
+      <AskUser
+        title="Provider request failed"
+        question="Automatic retries exhausted"
+        dismissLabel="end this turn"
+        options={[{ description: "Retry again" }, { description: "End this turn" }]}
+        onSelect={(index) => selections.push(index)}
+        onDismiss={() => undefined}
+      />,
+    );
+    panel.stdin.write("\u001b[B");
+    panel.stdin.write("\r");
+    await Bun.sleep(10);
+    expect(selections).toEqual([1]);
+    expect(panel.lastFrame()).toContain("Provider request failed");
+    expect(panel.lastFrame()).toContain("Esc end this turn");
+    panel.cleanup();
+  });
+
   test("supports keyboard selection and dismissal for AskUser", async () => {
     const selections: number[] = [];
     let dismissed = 0;

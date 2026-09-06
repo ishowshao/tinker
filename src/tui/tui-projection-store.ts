@@ -205,12 +205,15 @@ export class TuiProjectionStore implements EventSink, AssistantTextDeltaSink {
       return false;
     }
     this.assistantStreamAttempt = undefined;
-    if (event.data.retryDisposition !== "scheduled" || attempt.sectionCount === 0) {
+    if (attempt.sectionCount === 0) {
       return false;
     }
     this.appendCommitted({
       id: `assistant-stream-retry-${attempt.iterationId}-${attempt.attemptNumber}`,
-      text: "assistant response interrupted · retrying",
+      text:
+        event.data.retryDisposition === "scheduled"
+          ? "assistant response interrupted · retrying"
+          : "assistant response interrupted",
       status: "info",
     });
     return true;

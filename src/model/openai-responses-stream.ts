@@ -2,6 +2,7 @@ import {
   ProviderResponseError,
   type ProviderResponseDiagnostics,
 } from "./model-client";
+import { sanitizedProviderError } from "./openai-model-utils";
 
 export class OpenAIResponsesStreamAccumulator {
   private eventCount = 0;
@@ -19,6 +20,19 @@ export class OpenAIResponsesStreamAccumulator {
     const record = requireRecord(event, path, this.options);
     const type = requireString(record.type, `${path}.type`, this.options);
     this.eventCount += 1;
+
+    if (type === "error") {
+      const message = requireString(record.message, `${path}.message`, this.options);
+      const code =
+        record.code === null
+          ? null
+          : requireString(record.code, `${path}.code`, this.options);
+      throw sanitizedProviderError(
+        Object.assign(new Error(message), { code }),
+        this.options.provider,
+        this.options.model,
+      );
+    }
 
     if (type === "response.output_text.delta") {
       return requireString(record.delta, `${path}.delta`, this.options);

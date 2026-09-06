@@ -119,6 +119,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         toolingConfig: options.publicConfig.tooling,
         enableTurnUndo: true,
         enableAskUser: true,
+        enableProviderRetryPrompt: true,
         bashGuard: {
           mode: sessionConfig.bashGuardMode,
           source: sessionConfig.bashGuardSource,

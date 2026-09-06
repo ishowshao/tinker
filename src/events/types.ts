@@ -337,6 +337,12 @@ export type AgentEventDataMap = {
   "agent.iteration.started": { iterationNumber: number };
   "model.request.started": ModelRequestAttemptData;
   "model.request.failed": ModelRequestFailedData;
+  "model.retry.requested": ModelRequestFailedData;
+  "model.retry.resolved": {
+    attemptNumber: number;
+    decision: "retry" | "stop" | "cancelled";
+    durationMs: number;
+  };
   "model.request.finished": ModelRequestAttemptData & {
     output: ModelRequestOutput;
   };
@@ -457,6 +463,8 @@ export type AgentEventInput =
       | "agent.iteration.started"
       | "model.request.started"
       | "model.request.failed"
+      | "model.retry.requested"
+      | "model.retry.resolved"
       | "model.request.finished"
       | "context.usage.updated"
       | "context.shadow.planned"

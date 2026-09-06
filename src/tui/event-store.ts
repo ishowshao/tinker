@@ -205,6 +205,16 @@ export function reduceTuiProjection(
           status: "running",
         })),
       );
+    case "model.retry.requested":
+      return updateActiveTurn(state, event, policy, (turn) =>
+        updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({
+          ...item,
+          text: `model iteration ${event.iterationNumber} · waiting for retry selection`,
+          status: "running",
+        })),
+      );
+    case "model.retry.resolved":
+      return state;
     case "model.request.finished":
       return updateActiveTurn(state, event, policy, (turn) =>
         updateTurnItem(turn, modelRequestRef(event.iterationId), (item) => ({

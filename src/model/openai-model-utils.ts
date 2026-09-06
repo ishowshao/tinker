@@ -358,10 +358,54 @@ function providerErrorCode(error: unknown): ProviderResponseErrorCode {
   if (status === 500 || status === 502 || status === 503 || status === 504) {
     return "provider_unavailable";
   }
-  if (status === undefined && error instanceof OpenAI.APIConnectionError) {
+  // Explicit HTTP failures take precedence over payload or transport hints.
+  if (status !== undefined) return "provider_request_error";
+  const code = errorField(error, "code");
+  if (code === "server_error") return "provider_unavailable";
+  if (code === "rate_limit_exceeded") return "provider_rate_limited";
+  if (error instanceof OpenAI.APIConnectionError || isTransportFailure(error)) {
     return "provider_unavailable";
   }
   return "provider_request_error";
+}
+
+const TRANSIENT_TRANSPORT_CODES = new Set([
+  "ECONNRESET",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+]);
+
+function isTransportFailure(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  // Fetch may wrap a socket error in TypeError.cause after headers arrive.
+  for (let depth = 0; error !== undefined && depth < 8; depth += 1) {
+    if (seen.has(error)) return false;
+    seen.add(error);
+    if (
+      errorField(error, "name") === "AbortError" ||
+      error instanceof OpenAI.APIUserAbortError ||
+      providerErrorStatus(error) !== undefined
+    ) {
+      return false;
+    }
+    const code = errorField(error, "code");
+    if (code !== undefined) {
+      return typeof code === "string" && TRANSIENT_TRANSPORT_CODES.has(code);
+    }
+    error = errorField(error, "cause");
+  }
+  return false;
+}
+
+function errorField(error: unknown, key: string): unknown {
+  return typeof error === "object" && error !== null
+    ? (error as Record<string, unknown>)[key]
+    : undefined;
 }
 
 function providerErrorStatus(error: unknown): number | undefined {

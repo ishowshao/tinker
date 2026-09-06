@@ -1,3 +1,5 @@
+import type { ModelRequestFailedData } from "../events/types";
+import type { ProviderRetryDecision } from "./runtime-provider-retry";
 import {
   materializeModelRequest,
   type MaterializedModelRequest,
@@ -74,6 +76,11 @@ export type RunAgentInput = {
     usage: ContextUsageSnapshot;
   };
   transientRetryDelaysMs?: readonly number[];
+  requestProviderRetry?: (
+    iteration: IterationIdentity,
+    failure: ModelRequestFailedData,
+    signal: AbortSignal,
+  ) => Promise<ProviderRetryDecision>;
 };
 
 export class FatalAgentTurnError extends Error {
@@ -196,12 +203,13 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       return failedResult(error, iteration);
     }
 
+    let maxAttempts = MODEL_REQUEST_MAX_ATTEMPTS;
     await input.runtimeSession.append({
       type: "model.request.started",
       ...iteration,
       data: {
         attemptNumber: 1,
-        maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+        maxAttempts,
       },
     });
 
@@ -240,7 +248,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           ...iteration,
           data: {
             attemptNumber,
-            maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+            maxAttempts,
           },
         });
       }
@@ -289,19 +297,47 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
           transientRetries,
           transientRetryDelaysMs,
         });
+        const failure = modelRequestFailureData({
+          error,
+          request,
+          attemptNumber,
+          maxAttempts,
+          retryDisposition: decision.disposition,
+          ...(decision.disposition === "scheduled" && decision.delayMs > 0
+            ? { retryDelayMs: decision.delayMs }
+            : {}),
+        });
         await input.runtimeSession.append({
           type: "model.request.failed",
           ...iteration,
-          data: modelRequestFailureData({
-            error,
-            request,
-            attemptNumber,
-            retryDisposition: decision.disposition,
-            ...(decision.disposition === "scheduled" && decision.delayMs > 0
-              ? { retryDelayMs: decision.delayMs }
-              : {}),
-          }),
+          data: failure,
         });
+        if (decision.disposition === "exhausted" && input.requestProviderRetry) {
+          let retry: ProviderRetryDecision;
+          try {
+            retry = await input.requestProviderRetry(iteration, failure, input.signal);
+          } catch (retryError) {
+            if (input.signal.aborted) {
+              return cancelledResult(
+                cancellation(input.signal, iteration, "model_request"),
+                iteration,
+              );
+            }
+            throw retryError;
+          }
+          if (input.signal.aborted) {
+            return cancelledResult(
+              cancellation(input.signal, iteration, "model_request"),
+              iteration,
+            );
+          }
+          if (retry === "retry") {
+            reasoningOnlyRetries = 0;
+            transientRetries = 0;
+            maxAttempts = attemptNumber + MODEL_REQUEST_MAX_ATTEMPTS;
+            continue;
+          }
+        }
 
         if (decision.disposition === "scheduled") {
           if (decision.kind === "reasoning_only") {
@@ -349,7 +385,7 @@ export async function runAgent(input: RunAgentInput): Promise<RunAgentResult> {
       ...iteration,
       data: {
         attemptNumber: successfulAttempt,
-        maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+        maxAttempts,
         output: modelOutput,
       },
     });
@@ -823,6 +859,7 @@ function modelRequestFailureData(input: {
   error: unknown;
   request: PreparedModelRequest;
   attemptNumber: number;
+  maxAttempts: number;
   retryDisposition: "scheduled" | "not_retryable" | "exhausted";
   retryDelayMs?: number;
 }) {
@@ -830,7 +867,7 @@ function modelRequestFailureData(input: {
     input.error instanceof ProviderResponseError ? input.error : undefined;
   return {
     attemptNumber: input.attemptNumber,
-    maxAttempts: MODEL_REQUEST_MAX_ATTEMPTS,
+    maxAttempts: input.maxAttempts,
     code: providerError?.code ?? ("provider_request_error" as const),
     retryDisposition: input.retryDisposition,
     ...(input.retryDelayMs === undefined ? {} : { retryDelayMs: input.retryDelayMs }),
