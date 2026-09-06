@@ -5,6 +5,7 @@ import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { ripGrep } from "./ripgrep";
 import { parseGrepOutput } from "./grep-output";
+import { applyContentHeadLimit, applyHeadLimit } from "./grep-pagination";
 import { formatGrepPath } from "./grep-path";
 import { defineToolExecutor } from "./types";
 import type {
@@ -51,8 +52,6 @@ const defaultExcludedDirectories = [
   "node_modules",
   ".tinker",
 ];
-
-const defaultHeadLimit = 250;
 
 export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
   return defineToolExecutor("grep", {
@@ -124,13 +123,13 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
             type: "integer",
             minimum: 0,
             description:
-              "Limit output to first N lines or entries. Defaults to 250. Pass 0 for unlimited.",
+              "Limit selected results. In content mode, counts matching lines (one per line even with multiple matches), or complete ripgrep match events with multiline=true. Each selected result includes its requested context when the search completes; context does not consume the limit. Nearby matches shown within that context are not consumed or expanded and may reappear on later pages. Overlapping context is deduplicated within a page. Other modes count file entries. Defaults to 250. Pass 0 for unlimited.",
           },
           offset: {
             type: "integer",
             minimum: 0,
             description:
-              "Skip first N lines or entries before applying head_limit. Defaults to 0.",
+              "Skip N results in the same units as head_limit, excluding context. Defaults to 0. To continue, pass nextOffset with the same search parameters. Pages may repeat context lines.",
           },
           multiline: {
             type: "boolean",
@@ -246,12 +245,35 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         });
       }
 
-      const page = applyHeadLimit(records, input.head_limit, input.offset ?? 0);
+      const requestedContext = resolveGrepContext(input);
+      const page =
+        mode === "content"
+          ? applyContentHeadLimit(
+              records,
+              input.head_limit,
+              input.offset ?? 0,
+              requestedContext,
+            )
+          : applyHeadLimit(records, input.head_limit, input.offset ?? 0);
       const filenames = [...new Set(page.items.map((record) => record.filePath))];
       const pagination = {
-        totalResults: records.length,
+        totalResults: page.totalResults,
+        returnedResults: page.returnedResults,
+        paginationUnit:
+          mode === "content"
+            ? input.multiline === true
+              ? ("match_events" as const)
+              : ("matching_lines" as const)
+            : ("files" as const),
+        hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
         appliedLimit: page.appliedLimit,
         appliedOffset: appliedOffset(input.offset),
+        searchIncomplete: rg.truncated,
+        contextMayBeIncomplete:
+          mode === "content" &&
+          rg.truncated &&
+          (requestedContext.before > 0 || requestedContext.after > 0),
         truncated: rg.truncated || page.appliedLimit !== undefined || undefined,
         error: partialWarning,
       };
@@ -279,11 +301,13 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
       const contentLines = page.items.flatMap((record) => {
         if (record.kind !== "match" && record.kind !== "context") return [];
         const separator = record.kind === "match" ? ":" : "-";
-        const position =
-          input.lineNumbers === false ? "" : `${record.lineNumber}${separator}`;
-        return [
-          `${formatGrepPath(record.filePath)}${separator}${position}${record.text}`,
-        ];
+        return record.lines.map((text, index) => {
+          const position =
+            input.lineNumbers === false
+              ? ""
+              : `${record.lineNumber + index}${separator}`;
+          return `${formatGrepPath(record.filePath)}${separator}${position}${text}`;
+        });
       });
       return {
         ...base,
@@ -316,18 +340,8 @@ export function buildRipgrepArgs(
   } else {
     args.push("--json");
 
-    if (input.context !== undefined) {
-      args.push("-C", String(input.context));
-    } else if (input.contextAlias !== undefined) {
-      args.push("-C", String(input.contextAlias));
-    } else {
-      if (input.before !== undefined) {
-        args.push("-B", String(input.before));
-      }
-      if (input.after !== undefined) {
-        args.push("-A", String(input.after));
-      }
-    }
+    const context = resolveGrepContext(input);
+    args.push("-B", String(context.before), "-A", String(context.after));
   }
 
   if (input.multiline === true) {
@@ -350,22 +364,11 @@ export function buildRipgrepArgs(
   return args;
 }
 
-export function applyHeadLimit<T>(
-  items: T[],
-  limit: number | undefined,
-  offset = 0,
-): { items: T[]; appliedLimit?: number } {
-  if (limit === 0) {
-    return { items: items.slice(offset) };
-  }
-
-  const effectiveLimit = limit ?? defaultHeadLimit;
-  const itemsPage = items.slice(offset, offset + effectiveLimit);
-  const wasTruncated = items.length - offset > effectiveLimit;
-
+function resolveGrepContext(input: GrepArgs) {
+  const both = input.context ?? input.contextAlias;
   return {
-    items: itemsPage,
-    appliedLimit: wasTruncated ? effectiveLimit : undefined,
+    before: both ?? input.before ?? 0,
+    after: both ?? input.after ?? 0,
   };
 }
 

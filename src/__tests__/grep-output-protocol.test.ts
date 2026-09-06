@@ -88,7 +88,7 @@ describe("Grep output protocols", () => {
     );
   });
 
-  test("JSON event decoding supports base64 text and expands multiline records", () => {
+  test("JSON event decoding supports base64 text and preserves multiline boundaries", () => {
     const records = parseGrepOutput(
       event({
         path: { bytes: Buffer.from(`${root}/a.txt`).toString("base64") },
@@ -100,8 +100,7 @@ describe("Grep output protocols", () => {
       false,
     );
     expect(records).toEqual([
-      { kind: "match", filePath: "a.txt", lineNumber: 8, text: "one" },
-      { kind: "match", filePath: "a.txt", lineNumber: 9, text: "two" },
+      { kind: "match", filePath: "a.txt", lineNumber: 8, lines: ["one", "two"] },
     ]);
     expect(
       parseGrepOutput(
@@ -110,7 +109,7 @@ describe("Grep output protocols", () => {
         root,
         false,
       )[0],
-    ).toMatchObject({ text: "[Omitted long matching line]" });
+    ).toMatchObject({ lines: ["[Omitted long matching line]"] });
   });
 
   test("escaped path display round-trips and never contains literal control characters", () => {

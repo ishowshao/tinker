@@ -30,7 +30,7 @@ async function search(
 }
 
 describe("Grep stable record boundaries", () => {
-  test("content uses physical lines for multiline and separated context pages", async () => {
+  test("content preserves multiline events and paginates selected matches with context", async () => {
     await withWorkspace(async (workspace) => {
       await writeFile(
         path.join(workspace, "a.txt"),
@@ -49,8 +49,8 @@ describe("Grep stable record boundaries", () => {
         pattern: "PAGE",
         output_mode: "content",
         "-A": 1,
-        offset: 2,
-        head_limit: 2,
+        offset: 1,
+        head_limit: 1,
       });
       expect(page.raw.content).toBe("a.txt:5:PAGE\na.txt-6-NEXT");
       expect(page.raw.numFiles).toBe(1);

@@ -2,10 +2,18 @@ import path from "node:path";
 import { toDisplayPath } from "./path-safety";
 import type { GrepOutputMode } from "./types";
 
+export type GrepContentRecord = {
+  kind: "match" | "context";
+  filePath: string;
+  lineNumber: number;
+  /** Keep each JSON event intact so pagination cannot split a multiline match. */
+  lines: string[];
+};
+
 export type GrepRecord =
   | { kind: "file"; filePath: string }
   | { kind: "count"; filePath: string; count: number }
-  | { kind: "match" | "context"; filePath: string; lineNumber: number; text: string };
+  | GrepContentRecord;
 
 /** Decode complete protocol records only. A truncated tail is never a record. */
 export function parseGrepOutput(
@@ -91,18 +99,17 @@ function parseJsonOutput(
     );
     const lines = decodeText(data.lines, false).split("\n");
     if (lines.at(-1) === "") lines.pop();
-    for (const [index, line] of lines.entries()) {
-      const text = line.endsWith("\r") ? line.slice(0, -1) : line;
-      records.push({
-        kind: event.type,
-        filePath,
-        lineNumber: data.line_number + index,
-        text:
-          [...text].length > 500
-            ? `[Omitted long ${event.type === "match" ? "matching" : "context"} line]`
-            : text,
-      });
-    }
+    records.push({
+      kind: event.type,
+      filePath,
+      lineNumber: data.line_number,
+      lines: lines.map((line) => {
+        const text = line.endsWith("\r") ? line.slice(0, -1) : line;
+        return [...text].length > 500
+          ? `[Omitted long ${event.type === "match" ? "matching" : "context"} line]`
+          : text;
+      }),
+    });
   }
   return records;
 }

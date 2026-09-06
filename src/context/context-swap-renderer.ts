@@ -205,6 +205,15 @@ function metadataEntries(
         ["searchPath", raw.searchPath],
         ["mode", raw.mode],
         ["numMatches", raw.numMatches],
+        ["numLines", raw.numLines],
+        ["paginationUnit", raw.paginationUnit],
+        ["totalResults", raw.totalResults],
+        ["returnedResults", raw.returnedResults],
+        ["appliedOffset", raw.appliedOffset],
+        ["hasMore", raw.hasMore],
+        ["nextOffset", raw.nextOffset],
+        ["searchIncomplete", raw.searchIncomplete],
+        ["contextMayBeIncomplete", raw.contextMayBeIncomplete],
         ["truncated", raw.truncated],
       ];
     case "bash":

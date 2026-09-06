@@ -128,12 +128,23 @@ export type GrepRawResult = {
   counts?: { filePath: string; count: number }[];
   /** Sum on this page: matching lines for count, individual matches for count-matches. */
   numMatches?: number;
-  /** Collected entries/lines before pagination; not a global total if search was incomplete. */
+  /** Collected pagination units; legacy content results counted all output lines. Not a global total if searchIncomplete. */
   totalResults?: number;
+  /** Selected pagination units, excluding context and nearby matches shown as context. */
+  returnedResults?: number;
+  paginationUnit?: "matching_lines" | "match_events" | "files";
+  /** More collected pagination units are available, independently of search completeness. */
+  hasMore?: boolean;
+  nextOffset?: number;
   appliedLimit?: number;
   appliedOffset?: number;
+  /** True for interrupted searches (e.g. timeout or output buffer limit), not pagination. */
+  searchIncomplete?: boolean;
+  /** The search stopped early, so requested context cannot be guaranteed complete. */
+  contextMayBeIncomplete?: boolean;
   /** Legacy default exclusions, not observed skips. New Grep results omit this field. */
   ignored?: string[];
+  /** Compatibility flag combining pagination and interrupted search; prefer explicit fields above. */
   truncated?: boolean;
   error?: string;
 };

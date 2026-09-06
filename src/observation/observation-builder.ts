@@ -216,7 +216,7 @@ function renderGrepObservation(raw: GrepRawResult): string {
 
   const sections: string[] = [];
   const paginated = raw.appliedLimit !== undefined || (raw.appliedOffset ?? 0) > 0;
-  const incomplete = raw.truncated === true && raw.error !== undefined;
+  const incomplete = grepSearchIncomplete(raw);
   const empty = raw.mode === "content" ? !raw.content : raw.numFiles === 0;
 
   if (empty) {
@@ -267,8 +267,15 @@ function renderGrepObservation(raw: GrepRawResult): string {
     sections.push(pagination);
   }
 
-  if (raw.truncated === true && raw.error !== undefined) {
-    sections.push(`Warning: results are incomplete. ${raw.error}`);
+  if (incomplete) {
+    sections.push(
+      `Warning: results are incomplete. ${raw.error ?? "Search did not finish."}`,
+    );
+  }
+  if (raw.contextMayBeIncomplete === true) {
+    sections.push(
+      "Warning: requested context may be incomplete because the search stopped early. Narrow the search and retry.",
+    );
   }
 
   return sections.join("\n\n");
@@ -281,9 +288,14 @@ function grepCountLabel(mode: "count" | "count-matches", count: number): string 
 }
 
 function renderGrepPagination(raw: GrepRawResult): string | undefined {
-  const incomplete = raw.truncated === true && raw.error !== undefined;
-  if (raw.appliedLimit !== undefined) {
-    const nextOffset = (raw.appliedOffset ?? 0) + raw.appliedLimit;
+  const incomplete = grepSearchIncomplete(raw);
+  const hasMore = raw.hasMore ?? raw.appliedLimit !== undefined;
+  const nextOffset =
+    raw.nextOffset ??
+    (raw.appliedLimit === undefined
+      ? undefined
+      : (raw.appliedOffset ?? 0) + raw.appliedLimit);
+  if (hasMore && nextOffset !== undefined) {
     return `More ${incomplete ? "collected " : ""}results available; nextOffset=${nextOffset}.`;
   }
 
@@ -294,6 +306,10 @@ function renderGrepPagination(raw: GrepRawResult): string | undefined {
   }
 
   return undefined;
+}
+
+function grepSearchIncomplete(raw: GrepRawResult): boolean {
+  return raw.searchIncomplete ?? (raw.truncated === true && raw.error !== undefined);
 }
 
 function renderReadObservation(raw: ReadFileRawResult): string {
