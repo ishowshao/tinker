@@ -1,6 +1,6 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
-import { glob } from "glob";
+import { glob, type Path } from "glob";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { defineToolExecutor } from "./types";
@@ -25,7 +25,8 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
   return defineToolExecutor("glob", {
     definition: {
       name: "Glob",
-      description: "Find files by glob pattern. node_modules and .git are ignored.",
+      description:
+        "Find regular files by glob pattern, including symbolic links to regular files. Directory links and broken links are excluded. node_modules and .git are ignored.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -118,13 +119,14 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           nodir: true,
           dot: true,
           follow: false,
+          withFileTypes: true,
           signal: context.signal,
           ignore: ["**/node_modules/**", "**/.git/**"],
         });
-        const displayMatches = toDisplayMatches({
+        const displayMatches = await toDisplayMatches({
           workspaceRoot: options.workspaceRoot,
-          absoluteSearchPath,
           matches,
+          signal: context.signal,
         });
         const page = displayMatches.slice(
           input.offset,
@@ -237,20 +239,35 @@ async function ensureDirectory(
   }
 }
 
-function toDisplayMatches(input: {
+async function toDisplayMatches(input: {
   workspaceRoot: string;
-  absoluteSearchPath: string;
-  matches: string[];
-}): string[] {
-  const normalized = input.matches.map((match) => {
-    const absolutePath = resolveWorkspacePath(
-      input.workspaceRoot,
-      path.resolve(input.absoluteSearchPath, match),
-    );
-    return toDisplayPath(input.workspaceRoot, absolutePath);
-  });
+  matches: Path[];
+  signal: AbortSignal;
+}): Promise<string[]> {
+  const normalized: string[] = [];
+  for (const match of input.matches) {
+    throwIfTurnCancelled(input.signal);
+    if (!(await isRegularFileMatch(match))) continue;
+    const absolutePath = resolveWorkspacePath(input.workspaceRoot, match.fullpath());
+    normalized.push(toDisplayPath(input.workspaceRoot, absolutePath));
+  }
+  throwIfTurnCancelled(input.signal);
 
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
+}
+
+async function isRegularFileMatch(match: Path): Promise<boolean> {
+  if (!match.isSymbolicLink()) return match.isFile();
+
+  try {
+    // Resolve only the type; keep the link's path in the returned matches.
+    return (await stat(match.fullpath())).isFile();
+  } catch (error) {
+    if (isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
