@@ -225,7 +225,7 @@ describe("Grep tool", () => {
     });
   });
 
-  test("count mode returns per-file counts and total matches", async () => {
+  test("count mode returns per-file matching line counts and their sum", async () => {
     await withGrepWorkspace(async (workspace) => {
       await writeFile(path.join(workspace, "a.ts"), "foo\nfoo\n", "utf8");
       await writeFile(path.join(workspace, "b.ts"), "foo\nfoo\nfoo\nbar\n", "utf8");
@@ -522,7 +522,7 @@ describe("Grep tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.displayText).toBe("Found 2 files\na.ts\nb.ts");
+      expect(observation.displayText).toBe("Found 2 matching files\na.ts\nb.ts");
 
       const emptyCall = tooling.testRuntime.toolCall({
         providerToolCallId: "call_2",
@@ -535,7 +535,7 @@ describe("Grep tool", () => {
         raw: emptyRaw,
       });
 
-      expect(emptyObservation.displayText).toBe("No files found");
+      expect(emptyObservation.displayText).toBe("No matches found");
     });
   });
 
@@ -580,7 +580,7 @@ describe("Grep tool", () => {
         raw: countRaw,
       });
       expect(countObservation.displayText).toBe(
-        "a.ts:1\nb.ts:3\n\nFound 4 total occurrences across 2 files.",
+        "a.ts: 1 matching line\nb.ts: 3 matching lines\n\nTotal: 4 matching lines across 2 matching files.",
       );
     });
   });
@@ -600,9 +600,11 @@ describe("Grep tool", () => {
       const raw = await tooling.runtime.execute(call);
       const observation = new ObservationBuilder().build({ call, raw });
 
-      expect(observation.displayText).toContain("Found 1 file\nb.ts");
       expect(observation.displayText).toContain(
-        "[Showing results with pagination = limit: 1, offset: 1]",
+        "Showing 1 matching file on this page\nb.ts",
+      );
+      expect(observation.displayText).toContain(
+        "More results available; nextOffset=2.",
       );
     });
   });

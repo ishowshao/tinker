@@ -101,7 +101,11 @@ export type GlobRawResult = {
   error?: string;
 };
 
-export type GrepOutputMode = "content" | "files_with_matches" | "count";
+export type GrepOutputMode =
+  | "content"
+  | "files_with_matches"
+  | "count"
+  | "count-matches";
 
 export type GrepRawResult = {
   ok: boolean;
@@ -113,7 +117,12 @@ export type GrepRawResult = {
   numFiles: number;
   content?: string;
   numLines?: number;
+  /** Structured count records; paths are unescaped and never parsed from display text. */
+  counts?: { filePath: string; count: number }[];
+  /** Sum on this page: matching lines for count, individual matches for count-matches. */
   numMatches?: number;
+  /** Collected entries/lines before pagination; not a global total if search was incomplete. */
+  totalResults?: number;
   appliedLimit?: number;
   appliedOffset?: number;
   ignored?: string[];

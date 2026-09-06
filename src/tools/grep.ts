@@ -4,6 +4,8 @@ import { throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { isWorkspaceLocalCwd, type CwdState } from "./cwd-state";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
 import { ripGrep } from "./ripgrep";
+import { parseGrepOutput } from "./grep-output";
+import { formatGrepPath } from "./grep-path";
 import { defineToolExecutor } from "./types";
 import type {
   GrepOutputMode,
@@ -56,7 +58,8 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
   return defineToolExecutor("grep", {
     definition: {
       name: "Grep",
-      description: "Search file contents with ripgrep.",
+      description:
+        "Search file contents with ripgrep. Results use a consistent file-path order. Pagination is not a snapshot: file changes between calls may cause skipped or repeated results. Quoted paths use JSON escaping; pass the decoded path to file tools.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -77,8 +80,9 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           },
           output_mode: {
             type: "string",
-            enum: ["content", "files_with_matches", "count"],
-            description: 'Output mode. Defaults to "files_with_matches".',
+            enum: ["content", "files_with_matches", "count", "count-matches"],
+            description:
+              'Defaults to "files_with_matches" (matching file paths). "content" returns matching lines. "count" returns matching lines per file, counting a line once even with multiple matches; cannot be combined with multiline=true. "count-matches" returns non-overlapping matches per file, including multiple matches on one line. Count summaries cover only the displayed files when paginated.',
           },
           "-B": {
             type: "integer",
@@ -130,7 +134,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           multiline: {
             type: "boolean",
             description:
-              "Enable multiline mode where dot matches newlines. Defaults to false.",
+              'Enable multiline mode where dot matches newlines. Defaults to false. For counting, use output_mode="count-matches"; "count" rejects multiline=true.',
           },
         },
         required: ["pattern"],
@@ -205,63 +209,77 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
       };
       const partialWarning = rg.truncated ? rg.error : undefined;
 
-      if (mode === "files_with_matches") {
-        const sorted = await sortFilesForOutput([...new Set(rg.lines)]);
-        const page = applyHeadLimit(sorted, input.head_limit, input.offset ?? 0);
-        const filenames = page.items.map((file) =>
-          toDisplayPath(options.workspaceRoot, file),
-        );
-
-        return {
-          ...base,
-          filenames,
-          numFiles: filenames.length,
-          appliedLimit: page.appliedLimit,
-          appliedOffset: appliedOffset(input.offset),
-          truncated: rg.truncated || page.appliedLimit !== undefined || undefined,
-          error: partialWarning,
-        };
+      let records;
+      try {
+        records = parseGrepOutput(rg.stdout, mode, options.workspaceRoot, rg.truncated);
+      } catch (error) {
+        return grepFailure({
+          pattern: input.pattern,
+          searchPath,
+          absoluteSearchPath,
+          mode,
+          error: `Invalid ripgrep output: ${errorMessage(error)}`,
+        });
+      }
+      if (rg.truncated && records.length === 0) {
+        return grepFailure({
+          pattern: input.pattern,
+          searchPath,
+          absoluteSearchPath,
+          mode,
+          truncated: true,
+          error:
+            partialWarning ??
+            "Incomplete ripgrep output contained no complete records.",
+        });
       }
 
-      if (mode === "count") {
-        const sorted = [...rg.lines].sort((left, right) => left.localeCompare(right));
-        const page = applyHeadLimit(sorted, input.head_limit, input.offset ?? 0);
-        const entries = page.items.map((line) =>
-          parseCountLine(line, options.workspaceRoot),
-        );
-        const filenames = entries.map((entry) => entry.filePath);
-
-        return {
-          ...base,
-          filenames,
-          numFiles: filenames.length,
-          content: entries
-            .map((entry) => `${entry.filePath}:${entry.count}`)
-            .join("\n"),
-          numMatches: entries.reduce((total, entry) => total + entry.count, 0),
-          appliedLimit: page.appliedLimit,
-          appliedOffset: appliedOffset(input.offset),
-          truncated: rg.truncated || page.appliedLimit !== undefined || undefined,
-          error: partialWarning,
-        };
-      }
-
-      const page = applyHeadLimit(rg.lines, input.head_limit, input.offset ?? 0);
-      const contentLines = page.items.map((line) =>
-        relativizeContentLine(line, options.workspaceRoot),
-      );
-      const filenames = extractContentFilenames(contentLines);
-
-      return {
-        ...base,
-        filenames,
-        numFiles: filenames.length,
-        content: contentLines.join("\n"),
-        numLines: contentLines.length,
+      const page = applyHeadLimit(records, input.head_limit, input.offset ?? 0);
+      const filenames = [...new Set(page.items.map((record) => record.filePath))];
+      const pagination = {
+        totalResults: records.length,
         appliedLimit: page.appliedLimit,
         appliedOffset: appliedOffset(input.offset),
         truncated: rg.truncated || page.appliedLimit !== undefined || undefined,
         error: partialWarning,
+      };
+      if (mode === "files_with_matches") {
+        return { ...base, ...pagination, filenames, numFiles: filenames.length };
+      }
+      if (mode === "count" || mode === "count-matches") {
+        const counts = page.items.flatMap((record) =>
+          record.kind === "count"
+            ? [{ filePath: record.filePath, count: record.count }]
+            : [],
+        );
+        return {
+          ...base,
+          ...pagination,
+          filenames,
+          numFiles: filenames.length,
+          counts,
+          content: counts
+            .map((entry) => `${formatGrepPath(entry.filePath)}:${entry.count}`)
+            .join("\n"),
+          numMatches: counts.reduce((sum, entry) => sum + entry.count, 0),
+        };
+      }
+      const contentLines = page.items.flatMap((record) => {
+        if (record.kind !== "match" && record.kind !== "context") return [];
+        const separator = record.kind === "match" ? ":" : "-";
+        const position =
+          input.lineNumbers === false ? "" : `${record.lineNumber}${separator}`;
+        return [
+          `${formatGrepPath(record.filePath)}${separator}${position}${record.text}`,
+        ];
+      });
+      return {
+        ...base,
+        ...pagination,
+        filenames,
+        numFiles: filenames.length,
+        content: contentLines.join("\n"),
+        numLines: contentLines.length,
       };
     },
   });
@@ -272,21 +290,19 @@ export function buildRipgrepArgs(
   mode: GrepOutputMode,
   absoluteSearchPath: string,
 ): string[] {
-  const args = ["--hidden", "--max-columns", "500"];
+  // Sorting in rg fixes cross-file order before any pagination, including partial output.
+  const args = ["--no-config", "--hidden", "--sort", "path", "--color", "never"];
 
   for (const directory of ignoredDirectories) {
     args.push("--glob", `!${directory}`);
   }
 
   if (mode === "files_with_matches") {
-    args.push("-l");
-  } else if (mode === "count") {
-    args.push("-c", "--with-filename");
+    args.push("-l", "--null");
+  } else if (mode === "count" || mode === "count-matches") {
+    args.push(mode === "count" ? "-c" : "--count-matches", "--with-filename", "--null");
   } else {
-    args.push("--with-filename");
-    if (input.lineNumbers !== false) {
-      args.push("-n");
-    }
+    args.push("--json");
 
     if (input.context !== undefined) {
       args.push("-C", String(input.context));
@@ -368,17 +384,28 @@ function parseGrepArgs(args: unknown): ParsedGrepArgs {
     args.output_mode !== undefined &&
     args.output_mode !== "content" &&
     args.output_mode !== "files_with_matches" &&
-    args.output_mode !== "count"
+    args.output_mode !== "count" &&
+    args.output_mode !== "count-matches"
   ) {
     return {
       ok: false,
       pattern,
       error:
-        'Grep.output_mode must be one of "content", "files_with_matches", or "count".',
+        'Grep.output_mode must be one of "content", "files_with_matches", "count", or "count-matches".',
     };
   }
 
   const mode = args.output_mode;
+
+  if (mode === "count" && args.multiline === true) {
+    return {
+      ok: false,
+      pattern,
+      mode,
+      error:
+        'Grep output_mode="count" counts matching lines and cannot be combined with multiline=true. Use output_mode="count-matches" to count multiline matches.',
+    };
+  }
 
   for (const name of ["-B", "-A", "-C", "context", "head_limit", "offset"]) {
     const value = args[name];
@@ -458,63 +485,6 @@ async function ensureFileOrDirectory(
   } catch {
     return { ok: false, error: "Grep.path does not exist." };
   }
-}
-
-async function sortFilesForOutput(files: string[]): Promise<string[]> {
-  if (process.env.NODE_ENV === "test") {
-    return [...files].sort((left, right) => left.localeCompare(right));
-  }
-
-  const withMtime = await Promise.all(
-    files.map(async (file) => {
-      try {
-        const info = await stat(file);
-        return { file, mtimeMs: info.mtimeMs };
-      } catch {
-        return { file, mtimeMs: 0 };
-      }
-    }),
-  );
-
-  return withMtime
-    .sort((left, right) =>
-      right.mtimeMs !== left.mtimeMs
-        ? right.mtimeMs - left.mtimeMs
-        : left.file.localeCompare(right.file),
-    )
-    .map((entry) => entry.file);
-}
-
-function parseCountLine(
-  line: string,
-  workspaceRoot: string,
-): { filePath: string; count: number } {
-  const separator = line.lastIndexOf(":");
-  const absolutePath = separator === -1 ? line : line.slice(0, separator);
-  const count = separator === -1 ? 0 : Number(line.slice(separator + 1));
-
-  return {
-    filePath: toDisplayPath(workspaceRoot, absolutePath),
-    count: Number.isFinite(count) ? count : 0,
-  };
-}
-
-function relativizeContentLine(line: string, workspaceRoot: string): string {
-  const prefix = path.resolve(workspaceRoot) + path.sep;
-  return line.startsWith(prefix) ? line.slice(prefix.length) : line;
-}
-
-function extractContentFilenames(lines: string[]): string[] {
-  const filenames = new Set<string>();
-
-  for (const line of lines) {
-    const match = /^(.+?):\d+[:-]/.exec(line);
-    if (match?.[1] !== undefined) {
-      filenames.add(match[1]);
-    }
-  }
-
-  return [...filenames];
 }
 
 function appliedOffset(offset: number | undefined): number | undefined {

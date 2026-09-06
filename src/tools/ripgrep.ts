@@ -7,7 +7,8 @@ export const RIPGREP_MISSING_ERROR =
 
 export type RipgrepResult = {
   ok: boolean;
-  lines: string[];
+  /** Raw stdout; the caller must decode its selected record protocol. */
+  stdout: string;
   exitCode?: number;
   truncated: boolean;
   error?: string;
@@ -158,21 +159,19 @@ function runRipgrep(
 }
 
 function finalizeResult(attempt: RipgrepAttempt): RipgrepResult {
-  const lines = splitCompleteLines(attempt.stdout, attempt.truncated);
-
   if (attempt.ok) {
     return {
       ok: true,
-      lines,
+      stdout: attempt.stdout,
       exitCode: attempt.exitCode,
       truncated: false,
     };
   }
 
-  if (attempt.truncated && lines.length > 0) {
+  if (attempt.truncated && attempt.stdout.length > 0) {
     return {
       ok: true,
-      lines,
+      stdout: attempt.stdout,
       exitCode: attempt.exitCode,
       truncated: true,
       error: attempt.error,
@@ -181,28 +180,11 @@ function finalizeResult(attempt: RipgrepAttempt): RipgrepResult {
 
   return {
     ok: false,
-    lines: [],
+    stdout: "",
     exitCode: attempt.exitCode,
     truncated: attempt.truncated,
     error: attempt.error ?? "ripgrep failed.",
   };
-}
-
-function splitCompleteLines(stdout: string, droppedPartialTail: boolean): string[] {
-  if (stdout === "") {
-    return [];
-  }
-
-  const lines = stdout.split("\n");
-  const last = lines.at(-1);
-
-  if (last === "") {
-    lines.pop();
-  } else if (droppedPartialTail) {
-    lines.pop();
-  }
-
-  return lines;
 }
 
 function isEagainError(

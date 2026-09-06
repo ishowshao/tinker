@@ -1197,7 +1197,26 @@ describe("tui event store", () => {
       },
     });
     expect(visibleTimelineItems(state).at(-1)?.text).toBe(
-      "Grep foo -> 9 matches across 2 files",
+      "Grep foo -> 9 matching lines across 2 files",
+    );
+
+    state = applyAgentEvent(state, {
+      type: "tool.raw_result",
+      iterationNumber: 1,
+      call: { providerToolCallId: "call_1", name: "Grep", args: { pattern: "foo" } },
+      raw: {
+        kind: "grep",
+        ok: true,
+        pattern: "foo",
+        mode: "count-matches",
+        filenames: ["a.ts"],
+        numFiles: 1,
+        numMatches: 4,
+        appliedOffset: 1,
+      },
+    });
+    expect(visibleTimelineItems(state).at(-1)?.text).toBe(
+      "Grep foo -> 4 matches across 1 file (this page)",
     );
 
     state = applyAgentEvent(state, {

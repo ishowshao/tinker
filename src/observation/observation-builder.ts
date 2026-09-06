@@ -35,6 +35,7 @@ import type {
   WriteFileRawResult,
 } from "../tools/types";
 import { MAX_MEMORY_TEXT_BYTES, truncateUtf8 } from "../memory/contracts";
+import { formatGrepPath } from "../tools/grep-path";
 
 export type ToolObservation = {
   readonly content: readonly ToolResultContent[];
@@ -202,31 +203,51 @@ function renderGrepObservation(raw: GrepRawResult): string {
   }
 
   const sections: string[] = [];
+  const paginated = raw.appliedLimit !== undefined || (raw.appliedOffset ?? 0) > 0;
+  const incomplete = raw.truncated === true && raw.error !== undefined;
+  const empty = raw.mode === "content" ? !raw.content : raw.numFiles === 0;
 
-  if (raw.mode === "files_with_matches") {
-    sections.push(
-      raw.numFiles === 0
-        ? "No files found"
-        : [
-            `Found ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`,
-            ...raw.filenames,
-          ].join("\n"),
-    );
-  } else if (raw.mode === "count") {
-    if (raw.numFiles === 0) {
+  if (empty) {
+    if (raw.totalResults === 0 && !incomplete) {
       sections.push("No matches found");
+    } else if ((raw.appliedOffset ?? 0) > 0) {
+      sections.push(`No results on this page at offset ${raw.appliedOffset}.`);
     } else {
-      sections.push(raw.content ?? "");
       sections.push(
-        `Found ${raw.numMatches ?? 0} total occurrence${(raw.numMatches ?? 0) === 1 ? "" : "s"} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}.`,
+        incomplete
+          ? "No results available in this partial output."
+          : "No matches found",
       );
     }
-  } else {
+  } else if (raw.mode === "files_with_matches") {
     sections.push(
-      raw.content === undefined || raw.content === ""
-        ? "No matches found"
-        : raw.content,
+      [
+        `${paginated || incomplete ? "Showing" : "Found"} ${raw.numFiles} matching file${raw.numFiles === 1 ? "" : "s"}${paginated ? " on this page" : ""}`,
+        ...raw.filenames.map(formatGrepPath),
+      ].join("\n"),
     );
+  } else if (raw.mode === "count" || raw.mode === "count-matches") {
+    const mode = raw.mode;
+    sections.push(
+      raw.counts !== undefined
+        ? raw.counts
+            .map(
+              (entry) =>
+                `${formatGrepPath(entry.filePath)}: ${grepCountLabel(mode, entry.count)}`,
+            )
+            .join("\n")
+        : // Legacy stored results have only display text. Never use it to compute totals.
+          (raw.content ?? "").replace(
+            /:(\d+)$/gm,
+            (_suffix, count: string) => `: ${grepCountLabel(mode, Number(count))}`,
+          ),
+    );
+    const scope = paginated ? "This page" : incomplete ? "Results shown" : "Total";
+    sections.push(
+      `${scope}: ${grepCountLabel(mode, raw.numMatches ?? 0)} across ${raw.numFiles} matching file${raw.numFiles === 1 ? "" : "s"}.`,
+    );
+  } else {
+    sections.push(raw.content ?? "");
   }
 
   const pagination = renderGrepPagination(raw);
@@ -241,20 +262,26 @@ function renderGrepObservation(raw: GrepRawResult): string {
   return sections.join("\n\n");
 }
 
+function grepCountLabel(mode: "count" | "count-matches", count: number): string {
+  return mode === "count"
+    ? `${count} matching line${count === 1 ? "" : "s"}`
+    : `${count} match${count === 1 ? "" : "es"}`;
+}
+
 function renderGrepPagination(raw: GrepRawResult): string | undefined {
-  const parts: string[] = [];
-
+  const incomplete = raw.truncated === true && raw.error !== undefined;
   if (raw.appliedLimit !== undefined) {
-    parts.push(`limit: ${raw.appliedLimit}`);
+    const nextOffset = (raw.appliedOffset ?? 0) + raw.appliedLimit;
+    return `More ${incomplete ? "collected " : ""}results available; nextOffset=${nextOffset}.`;
   }
 
-  if (raw.appliedOffset !== undefined) {
-    parts.push(`offset: ${raw.appliedOffset}`);
+  if ((raw.appliedOffset ?? 0) > 0 && raw.totalResults !== 0) {
+    return incomplete
+      ? "End of collected results; search is incomplete."
+      : "End of results.";
   }
 
-  return parts.length === 0
-    ? undefined
-    : `[Showing results with pagination = ${parts.join(", ")}]`;
+  return undefined;
 }
 
 function renderReadObservation(raw: ReadFileRawResult): string {

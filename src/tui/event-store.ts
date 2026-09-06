@@ -881,11 +881,21 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
         return `${base} -> ${raw.numLines} line${raw.numLines === 1 ? "" : "s"}`;
       }
       if (
-        raw.mode === "count" &&
+        (raw.mode === "count" || raw.mode === "count-matches") &&
         raw.numMatches !== undefined &&
         raw.numFiles !== undefined
       ) {
-        return `${base} -> ${raw.numMatches} match${raw.numMatches === 1 ? "" : "es"} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
+        const unit =
+          raw.mode === "count"
+            ? `matching line${raw.numMatches === 1 ? "" : "s"}`
+            : `match${raw.numMatches === 1 ? "" : "es"}`;
+        const scope =
+          raw.appliedLimit !== undefined || (raw.appliedOffset ?? 0) > 0
+            ? " (this page)"
+            : raw.truncated
+              ? " (partial results)"
+              : "";
+        return `${base} -> ${raw.numMatches} ${unit} across ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}${scope}`;
       }
       return `${base} -> ${raw.numFiles} file${raw.numFiles === 1 ? "" : "s"}`;
     case "read":
