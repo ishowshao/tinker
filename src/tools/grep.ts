@@ -41,7 +41,7 @@ export type GrepToolOptions = {
   };
 };
 
-const ignoredDirectories = [
+const defaultExcludedDirectories = [
   ".git",
   ".svn",
   ".hg",
@@ -66,17 +66,18 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         properties: {
           pattern: {
             type: "string",
+            minLength: 1,
             description:
               "The regular expression pattern to search for in file contents.",
           },
           path: {
             type: "string",
             description:
-              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd.",
+              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. Resolved to an absolute path and passed to ripgrep as the search path argument.",
           },
           glob: {
             type: "string",
-            description: 'Glob pattern to filter files, such as "*.js" or "**/*.tsx".',
+            description: "Passed unchanged to ripgrep's --glob option.",
           },
           output_mode: {
             type: "string",
@@ -117,7 +118,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           },
           type: {
             type: "string",
-            description: "File type to search, such as js, ts, py, rust, go, or java.",
+            description: "Passed unchanged to ripgrep's --type option.",
           },
           head_limit: {
             type: "integer",
@@ -205,7 +206,6 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         searchPath,
         absoluteSearchPath,
         mode,
-        ignored: ignoredDirectories,
       };
       const partialWarning = rg.truncated ? rg.error : undefined;
 
@@ -293,7 +293,7 @@ export function buildRipgrepArgs(
   // Sorting in rg fixes cross-file order before any pagination, including partial output.
   const args = ["--no-config", "--hidden", "--sort", "path", "--color", "never"];
 
-  for (const directory of ignoredDirectories) {
+  for (const directory of defaultExcludedDirectories) {
     args.push("--glob", `!${directory}`);
   }
 
@@ -507,7 +507,6 @@ function grepFailure(input: {
     mode: input.mode,
     filenames: [],
     numFiles: 0,
-    ignored: ignoredDirectories,
     truncated: input.truncated,
     error: input.error,
   };

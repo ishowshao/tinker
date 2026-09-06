@@ -125,6 +125,7 @@ export type GrepRawResult = {
   totalResults?: number;
   appliedLimit?: number;
   appliedOffset?: number;
+  /** Legacy default exclusions, not observed skips. New Grep results omit this field. */
   ignored?: string[];
   truncated?: boolean;
   error?: string;
