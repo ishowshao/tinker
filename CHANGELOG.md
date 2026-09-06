@@ -5,6 +5,13 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+### Changed
+
+- Run `Grep` directory searches with ripgrep's working directory set to the search
+  directory and `.` as the path argument. Directory globs such as `sub/**` now
+  match from that directory; globs that relied on absolute search paths may need
+  updating. Explicit file searches keep their existing invocation.
+
 ## [2.9.0] - 2026-09-05
 
 ### Added

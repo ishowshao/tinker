@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 
@@ -17,6 +18,7 @@ export type RipgrepResult = {
 export type RipgrepOptions = {
   signal: AbortSignal;
   command?: string;
+  cwd?: string;
   timeoutMs?: number;
   maxBufferBytes?: number;
 };
@@ -33,7 +35,13 @@ export async function ripGrep(
   const timeoutMs = options.timeoutMs ?? DEFAULT_PUBLIC_TOOLING_CONFIG.grepTimeoutMs;
   const maxBufferBytes =
     options.maxBufferBytes ?? DEFAULT_PUBLIC_TOOLING_CONFIG.grepMaxBufferBytes;
-  const command = findRipgrepCommand(options.command);
+  const configuredCommand = findRipgrepCommand(options.command);
+  // Preserve relative executable paths when only the search subprocess changes cwd.
+  const command =
+    options.cwd !== undefined &&
+    (configuredCommand.includes("/") || configuredCommand.includes(path.sep))
+      ? path.resolve(configuredCommand)
+      : configuredCommand;
 
   const first = await runRipgrep(
     command,
@@ -41,6 +49,7 @@ export async function ripGrep(
     timeoutMs,
     maxBufferBytes,
     options.signal,
+    options.cwd,
   );
   if (first.retryWithSingleThread) {
     throwIfTurnCancelled(options.signal);
@@ -51,6 +60,7 @@ export async function ripGrep(
         timeoutMs,
         maxBufferBytes,
         options.signal,
+        options.cwd,
       ),
     );
   }
@@ -73,6 +83,7 @@ function runRipgrep(
   timeoutMs: number,
   maxBufferBytes: number,
   signal: AbortSignal,
+  cwd?: string,
 ): Promise<RipgrepAttempt> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
@@ -83,7 +94,7 @@ function runRipgrep(
     execFile(
       command,
       args,
-      { timeout: timeoutMs, maxBuffer: maxBufferBytes, signal },
+      { timeout: timeoutMs, maxBuffer: maxBufferBytes, signal, cwd },
       (error, stdout, stderr) => {
         if (signal.aborted) {
           reject(cancellationError(signal, error));

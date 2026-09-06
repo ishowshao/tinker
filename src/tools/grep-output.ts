@@ -1,3 +1,4 @@
+import path from "node:path";
 import { toDisplayPath } from "./path-safety";
 import type { GrepOutputMode } from "./types";
 
@@ -12,8 +13,11 @@ export function parseGrepOutput(
   mode: GrepOutputMode,
   workspaceRoot: string,
   truncated: boolean,
+  searchCwd: string = workspaceRoot,
 ): GrepRecord[] {
-  if (mode === "content") return parseJsonOutput(stdout, workspaceRoot, truncated);
+  if (mode === "content") {
+    return parseJsonOutput(stdout, workspaceRoot, truncated, searchCwd);
+  }
   const records: GrepRecord[] = [];
   let start = 0;
   while (start < stdout.length) {
@@ -22,9 +26,12 @@ export function parseGrepOutput(
       if (truncated) break;
       throw new Error("Missing NUL path delimiter.");
     }
-    const absolutePath = stdout.slice(start, nul);
-    if (absolutePath === "") throw new Error("Empty path in ripgrep output.");
-    const filePath = toDisplayPath(workspaceRoot, absolutePath);
+    const reportedPath = stdout.slice(start, nul);
+    if (reportedPath === "") throw new Error("Empty path in ripgrep output.");
+    const filePath = toDisplayPath(
+      workspaceRoot,
+      path.resolve(searchCwd, reportedPath),
+    );
     if (mode === "files_with_matches") {
       records.push({ kind: "file", filePath });
       start = nul + 1;
@@ -49,6 +56,7 @@ function parseJsonOutput(
   stdout: string,
   workspaceRoot: string,
   truncated: boolean,
+  searchCwd: string,
 ): GrepRecord[] {
   const records: GrepRecord[] = [];
   let start = 0;
@@ -68,8 +76,8 @@ function parseJsonOutput(
       throw new Error("Unexpected ripgrep JSON event type.");
     }
     const data = event.data;
-    const absolutePath = decodeText(data.path, true);
-    if (absolutePath === "") throw new Error("Empty path in ripgrep JSON event.");
+    const reportedPath = decodeText(data.path, true);
+    if (reportedPath === "") throw new Error("Empty path in ripgrep JSON event.");
     if (
       typeof data.line_number !== "number" ||
       !Number.isSafeInteger(data.line_number) ||
@@ -77,7 +85,10 @@ function parseJsonOutput(
     ) {
       throw new Error("Invalid line number in ripgrep JSON event.");
     }
-    const filePath = toDisplayPath(workspaceRoot, absolutePath);
+    const filePath = toDisplayPath(
+      workspaceRoot,
+      path.resolve(searchCwd, reportedPath),
+    );
     const lines = decodeText(data.lines, false).split("\n");
     if (lines.at(-1) === "") lines.pop();
     for (const [index, line] of lines.entries()) {

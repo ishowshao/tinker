@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ObservationBuilder } from "../observation/observation-builder";
@@ -12,7 +12,7 @@ import { createTestRuntime } from "./test-runtime";
 isolateTinkerHome();
 
 describe("Grep ripgrep wrapper", () => {
-  test("matches native rg with the same options and absolute search argument", async () => {
+  test("matches native rg running in the search directory or given an absolute file", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-grep-wrapper-"));
     try {
       for (const file of [
@@ -43,6 +43,8 @@ describe("Grep ripgrep wrapper", () => {
       ];
       for (const input of cases) {
         const absoluteSearchPath = path.resolve(workspace, input.path ?? ".");
+        const isDirectory = (await stat(absoluteSearchPath)).isDirectory();
+        const cwd = isDirectory ? absoluteSearchPath : process.cwd();
         // Independent native invocation: do not reuse the wrapper's argument builder.
         const args = ["--no-config", "--hidden", "--sort", "path", "--color", "never"];
         for (const directory of [
@@ -60,8 +62,9 @@ describe("Grep ripgrep wrapper", () => {
         args.push("-l", "--null");
         if (input.type !== undefined) args.push("--type", input.type);
         if (input.glob !== undefined) args.push("--glob", input.glob);
-        args.push("-e", "needle", absoluteSearchPath);
+        args.push("-e", "needle", isDirectory ? "." : absoluteSearchPath);
         const native = Bun.spawn([findRipgrepCommand(), ...args], {
+          cwd,
           stdout: "pipe",
           stderr: "pipe",
         });
@@ -75,7 +78,7 @@ describe("Grep ripgrep wrapper", () => {
         const filenames = stdout
           .split("\0")
           .filter(Boolean)
-          .map((file) => path.relative(workspace, file));
+          .map((file) => path.relative(workspace, path.resolve(cwd, file)));
         const raw = await tooling.runtime.execute({
           name: "Grep",
           args: { pattern: "needle", ...input },

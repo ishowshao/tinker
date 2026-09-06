@@ -73,7 +73,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. Resolved to an absolute path and passed to ripgrep as the search path argument.",
+              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. For directories, ripgrep runs in that directory with . as its search path. Files are passed as absolute paths.",
           },
           glob: {
             type: "string",
@@ -183,10 +183,16 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
         });
       }
 
-      const rgArgs = buildRipgrepArgs(input, mode, absoluteSearchPath);
+      const searchCwd = pathCheck.isDirectory ? absoluteSearchPath : undefined;
+      const rgArgs = buildRipgrepArgs(
+        input,
+        mode,
+        pathCheck.isDirectory ? "." : absoluteSearchPath,
+      );
       const rg = await ripGrep(rgArgs, {
         signal: context.signal,
         ...options.ripgrep,
+        cwd: searchCwd,
       });
 
       if (!rg.ok) {
@@ -211,7 +217,13 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
 
       let records;
       try {
-        records = parseGrepOutput(rg.stdout, mode, options.workspaceRoot, rg.truncated);
+        records = parseGrepOutput(
+          rg.stdout,
+          mode,
+          options.workspaceRoot,
+          rg.truncated,
+          searchCwd,
+        );
       } catch (error) {
         return grepFailure({
           pattern: input.pattern,
@@ -288,7 +300,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
 export function buildRipgrepArgs(
   input: GrepArgs,
   mode: GrepOutputMode,
-  absoluteSearchPath: string,
+  searchPathArgument: string,
 ): string[] {
   // Sorting in rg fixes cross-file order before any pagination, including partial output.
   const args = ["--no-config", "--hidden", "--sort", "path", "--color", "never"];
@@ -334,7 +346,7 @@ export function buildRipgrepArgs(
     args.push("--glob", input.glob);
   }
 
-  args.push("-e", input.pattern, absoluteSearchPath);
+  args.push("-e", input.pattern, searchPathArgument);
   return args;
 }
 
@@ -476,11 +488,11 @@ function resolveSearchPath(options: GrepToolOptions, inputPath?: string): string
 
 async function ensureFileOrDirectory(
   targetPath: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; isDirectory: boolean } | { ok: false; error: string }> {
   try {
     const info = await stat(targetPath);
     return info.isFile() || info.isDirectory()
-      ? { ok: true }
+      ? { ok: true, isDirectory: info.isDirectory() }
       : { ok: false, error: "Grep.path must be a file or directory." };
   } catch {
     return { ok: false, error: "Grep.path does not exist." };
