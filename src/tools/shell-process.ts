@@ -36,6 +36,8 @@ export async function spawnShellProcess(input: {
   command: string;
   cwd: string;
   cwdFilePath: string;
+  cols?: number;
+  rows?: number;
   onOutput(bytes: Uint8Array): void;
 }): Promise<ShellProcessHandle> {
   const env = {
@@ -107,6 +109,8 @@ async function spawnPipeShellProcess(input: {
 function spawnPtyShellProcess(input: {
   cwd: string;
   env: NodeJS.ProcessEnv;
+  cols?: number;
+  rows?: number;
   onOutput(bytes: Uint8Array): void;
 }): ShellProcessHandle {
   let terminalEnded = false;
@@ -143,8 +147,8 @@ function spawnPtyShellProcess(input: {
       GIT_PAGER: "cat",
     },
     terminal: {
-      cols: TERMINAL_SCREEN_COLUMNS,
-      rows: TERMINAL_SCREEN_ROWS,
+      cols: input.cols ?? TERMINAL_SCREEN_COLUMNS,
+      rows: input.rows ?? TERMINAL_SCREEN_ROWS,
       name: "xterm-256color",
       data(_terminal, bytes) {
         input.onOutput(new Uint8Array(bytes));

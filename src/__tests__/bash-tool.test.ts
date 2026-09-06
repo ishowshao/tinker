@@ -14,6 +14,7 @@ import { createDefaultTooling as createDefaultToolingBase } from "../tools/regis
 import type { ToolExecutionContext, ToolRawResult } from "../tools/types";
 import { TurnCancelledError } from "../agent/turn-cancellation";
 import { MAX_PREVIEW_BYTES } from "../tools/bounded-output-preview";
+import { parseBashArgs } from "../tools/bash";
 import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
 
 isolateTinkerHome();
@@ -51,6 +52,125 @@ function createDefaultTooling(
 }
 
 describe("Bash tool", () => {
+  test.each([
+    [{}, 80, 24],
+    [{ cols: 160 }, 160, 24],
+    [{ rows: 48 }, 80, 48],
+    [{ cols: 160, rows: 48 }, 160, 48],
+  ] as const)("uses PTY dimensions %j for the process and final screen", async (size, cols, rows) => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-size-"));
+    const tooling = createDefaultTooling({ workspaceRoot: workspace });
+    const wideLine = "W".repeat(cols - 1);
+    try {
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          name: "Bash",
+          args: {
+            command: `stty size; printf '\\033[${rows};1H%s' '${wideLine}'`,
+            tty: true,
+            ...size,
+          },
+        }),
+      );
+      expect(raw).toMatchObject({
+        ok: true,
+        status: "completed",
+        tty: true,
+        screenColumns: cols,
+        screenRows: rows,
+      });
+      const lines = raw.screen?.split("\n");
+      expect(lines).toHaveLength(rows);
+      expect(lines?.[0]).toBe(`${rows} ${cols}`);
+      expect(lines?.at(-1)).toBe(wideLine);
+
+      for (const name of ["TaskOutput", "TaskInput"] as const) {
+        const call = tooling.testRuntime.toolCall({
+          name,
+          args: {
+            task_id: raw.taskId,
+            ...(name === "TaskInput" ? { chars: "", wait_ms: 0 } : {}),
+          },
+        });
+        const output = await tooling.runtime.execute(call);
+        expect(output).toMatchObject({
+          ok: true,
+          status: "completed",
+          screenColumns: cols,
+          screenRows: rows,
+          screen: raw.screen,
+        });
+        expect(
+          new ObservationBuilder().build({ call, raw: output }).displayText,
+        ).toContain(`screen=${cols}x${rows}`);
+      }
+    } finally {
+      await tooling.dispose();
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test.each([
+    undefined,
+    false,
+  ])("ignores dimensions without enabling PTY when tty=%s", async (tty) => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-size-"));
+    const tooling = createDefaultTooling({ workspaceRoot: workspace });
+    try {
+      const raw = asBashRawResult(
+        await tooling.runtime.execute({
+          name: "Bash",
+          args: {
+            command: "if test -t 0 || test -t 1; then exit 1; fi; printf pipe",
+            ...(tty === undefined ? {} : { tty }),
+            cols: 160,
+            rows: 48,
+          },
+        }),
+      );
+      expect(raw).toMatchObject({
+        ok: true,
+        status: "completed",
+        tty: false,
+        preview: "pipe",
+      });
+      expect(raw.screen).toBeUndefined();
+      expect(raw.screenColumns).toBeUndefined();
+      expect(raw.screenRows).toBeUndefined();
+    } finally {
+      await tooling.dispose();
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test("validates dimensions only when using a PTY", () => {
+    for (const name of ["cols", "rows"] as const) {
+      for (const value of [0, -1, 1.5, 1_001, "160", null, NaN, Infinity]) {
+        const parsed = parseBashArgs({ command: "true", tty: true, [name]: value });
+        expect(parsed.ok).toBe(false);
+        if (!parsed.ok) {
+          expect(parsed.error).toContain(`Bash.${name}`);
+        }
+      }
+    }
+    expect(parseBashArgs({ command: "true", tty: true, cols: 1 }).ok).toBe(false);
+    for (const size of [
+      { cols: 2, rows: 1 },
+      { cols: 1_000, rows: 1_000 },
+    ]) {
+      expect(parseBashArgs({ command: "true", tty: true, ...size })).toMatchObject({
+        ok: true,
+        value: size,
+      });
+    }
+    for (const tty of [undefined, false]) {
+      expect(parseBashArgs({ command: "true", tty, cols: 0, rows: -1 })).toMatchObject({
+        ok: true,
+        value: { tty, cols: undefined, rows: undefined },
+      });
+    }
+  });
+
   test("denies a dangerous command before spawning it", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-bash-"));
     const marker = path.join(workspace, "spawned");

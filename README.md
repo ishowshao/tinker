@@ -34,6 +34,20 @@ This does not pretend that any model has infinite tokens or guarantee that it wi
   explicit model and context limits. Actual provider support must be established
   by a qualification matrix; transport compatibility alone is not a guarantee.
 
+### PTY screen size
+
+`Bash` accepts optional `cols` and `rows` for the initial PTY screen size:
+
+```json
+{"command":"python3 -q","tty":true,"cols":160,"rows":48}
+```
+
+Each omitted dimension keeps its default: 80 columns and 24 rows. Columns accept
+integers from 2 to 1000; rows accept integers from 1 to 1000. When `tty` is omitted
+or `false`, dimensions are ignored and execution continues through ordinary pipes.
+`TaskOutput` and `TaskInput` report the actual screen size. Dimensions are set at
+creation; running tasks cannot be resized through these tools.
+
 ### Reading another session's history
 
 Both Recall tools accept an optional `sessionId` (a canonical session UUID).

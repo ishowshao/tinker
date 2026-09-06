@@ -15,12 +15,7 @@ import {
 } from "./shell-process";
 import { TaskOutput, type TaskOutputSnapshot } from "./task-output";
 import type { TaskOutputRangeRequest } from "./task-output-range";
-import {
-  createTerminalScreen,
-  TERMINAL_SCREEN_COLUMNS,
-  TERMINAL_SCREEN_ROWS,
-  type TerminalScreen,
-} from "./terminal-screen";
+import { createTerminalScreen, type TerminalScreen } from "./terminal-screen";
 import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 
 export type ShellTaskStatus =
@@ -146,6 +141,8 @@ export class ShellTaskManager {
     description: string;
     origin: ShellTaskOrigin;
     tty: boolean;
+    cols?: number;
+    rows?: number;
   }): Promise<ShellTaskHandle> {
     if (!this.acceptingTasks) {
       throw new Error("Cannot start a Bash task after task manager shutdown.");
@@ -164,7 +161,7 @@ export class ShellTaskManager {
       throw new Error("Cannot start a Bash task after task manager shutdown.");
     }
 
-    const terminalScreen = input.tty ? createTerminalScreen() : undefined;
+    const terminalScreen = input.tty ? createTerminalScreen(input) : undefined;
     let shellProcess: ShellProcessHandle;
     try {
       shellProcess = await spawnShellProcess({
@@ -172,6 +169,8 @@ export class ShellTaskManager {
         command: input.command,
         cwd: this.options.cwdState.cwd,
         cwdFilePath,
+        cols: terminalScreen?.columns,
+        rows: terminalScreen?.rows,
         onOutput(bytes) {
           output.write(Buffer.from(bytes));
           if (terminalScreen !== undefined) {
@@ -585,8 +584,8 @@ export class ShellTaskManager {
       ...(screen === undefined
         ? {}
         : {
-            screenRows: TERMINAL_SCREEN_ROWS,
-            screenColumns: TERMINAL_SCREEN_COLUMNS,
+            screenRows: task.terminalScreen?.rows,
+            screenColumns: task.terminalScreen?.columns,
             screen,
           }),
     };

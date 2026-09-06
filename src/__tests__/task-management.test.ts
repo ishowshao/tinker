@@ -227,7 +227,10 @@ describe("background task management", () => {
     }
   });
 
-  test("drives a Python REPL through a bounded terminal screen", async () => {
+  test.each([
+    {},
+    { cols: 160, rows: 48 },
+  ])("drives a Python REPL through a bounded terminal screen with %j", async (size) => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-pty-task-"));
     const confirmations: string[] = [];
     const tooling = createDefaultTooling({
@@ -252,6 +255,7 @@ describe("background task management", () => {
             description: "Start Python REPL",
             tty: true,
             timeout: 25,
+            ...size,
           },
         }),
       );
@@ -263,8 +267,8 @@ describe("background task management", () => {
 
       const ready = await waitForTerminalScreen(tooling, repl.taskId, ">>>");
       expect(ready.task?.tty).toBe(true);
-      expect(ready.screenRows).toBe(24);
-      expect(ready.screenColumns).toBe(80);
+      expect(ready.screenRows).toBe(size.rows ?? 24);
+      expect(ready.screenColumns).toBe(size.cols ?? 80);
       expect(ready.screen).not.toContain("\x1b");
 
       const evaluated = await sendTaskInput(
@@ -280,6 +284,8 @@ describe("background task management", () => {
       expect(evaluated.writtenBytes).toBe(Buffer.byteLength("print(6 * 7)\n"));
       expect(evaluated.waitedMs).toBeGreaterThanOrEqual(200);
       expect(evaluated.status).toBe("running");
+      expect(evaluated.screenRows).toBe(size.rows ?? 24);
+      expect(evaluated.screenColumns).toBe(size.cols ?? 80);
       expect(evaluated.screen).toContain("42");
       expect(evaluated.screen).toContain(">>>");
       expect(evaluated.screen).not.toContain("\x1b");
@@ -302,6 +308,8 @@ describe("background task management", () => {
         throw new Error(finalPoll.error);
       }
       expect(finalPoll.status).toBe("completed");
+      expect(finalPoll.screenRows).toBe(size.rows ?? 24);
+      expect(finalPoll.screenColumns).toBe(size.cols ?? 80);
       expect(finalPoll.screen).toBe(exited.screen);
 
       const rejected = await sendTaskInput(tooling, repl.taskId, "print(1)\n", 0);

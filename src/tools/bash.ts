@@ -13,6 +13,7 @@ import type { TaskOutputSnapshot } from "./task-output";
 import type { BashRawResult, ToolExecutionContext, ToolExecutor } from "./types";
 import { DEFAULT_PUBLIC_TOOLING_CONFIG } from "../cli/public-config-contract";
 import { classifyBashRisk } from "./bash-guard";
+import { MAX_TERMINAL_DIMENSION, MIN_TERMINAL_COLUMNS } from "./terminal-screen";
 
 type BashArgs = {
   command: string;
@@ -20,6 +21,8 @@ type BashArgs = {
   description?: string;
   run_in_background?: boolean;
   tty?: boolean;
+  cols?: number;
+  rows?: number;
 };
 
 export type BashToolOptions = {
@@ -71,6 +74,20 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
             type: "boolean",
             description:
               "Run the command in a pseudo-terminal so it can receive interactive input.",
+          },
+          cols: {
+            type: "integer",
+            minimum: MIN_TERMINAL_COLUMNS,
+            maximum: MAX_TERMINAL_DIMENSION,
+            description:
+              "Initial PTY width in columns. Defaults to 80. Ignored unless tty=true.",
+          },
+          rows: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAX_TERMINAL_DIMENSION,
+            description:
+              "Initial PTY height in rows. Defaults to 24. Ignored unless tty=true.",
           },
         },
         required: ["command"],
@@ -137,6 +154,8 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
         description: input.description ?? input.command,
         origin: call,
         tty: input.tty === true,
+        cols: input.cols,
+        rows: input.rows,
       });
 
       if (input.run_in_background === true) {
@@ -232,6 +251,25 @@ export function parseBashArgs(
     return { ok: false, error: "Bash.tty must be a boolean." };
   }
 
+  if (args.tty === true) {
+    for (const name of ["cols", "rows"] as const) {
+      const value = args[name];
+      const minimum = name === "cols" ? MIN_TERMINAL_COLUMNS : 1;
+      if (
+        value !== undefined &&
+        (typeof value !== "number" ||
+          !Number.isInteger(value) ||
+          value < minimum ||
+          value > MAX_TERMINAL_DIMENSION)
+      ) {
+        return {
+          ok: false,
+          error: `Bash.${name} must be an integer between ${minimum} and ${MAX_TERMINAL_DIMENSION}.`,
+        };
+      }
+    }
+  }
+
   return {
     ok: true,
     value: {
@@ -243,6 +281,8 @@ export function parseBashArgs(
           : args.description,
       run_in_background: args.run_in_background,
       tty: args.tty,
+      cols: args.tty === true ? (args.cols as number | undefined) : undefined,
+      rows: args.tty === true ? (args.rows as number | undefined) : undefined,
     },
   };
 }

@@ -3,16 +3,25 @@ import { Terminal } from "@xterm/headless";
 
 export const TERMINAL_SCREEN_ROWS = 24;
 export const TERMINAL_SCREEN_COLUMNS = 80;
+export const MIN_TERMINAL_COLUMNS = 2;
+export const MAX_TERMINAL_DIMENSION = 1_000;
 
 export type TerminalScreen = {
+  readonly rows: number;
+  readonly columns: number;
   write(bytes: Uint8Array): Promise<void>;
   flush(): Promise<void>;
   text(): string;
   dispose(): void;
 };
 
-export function createTerminalScreen(): TerminalScreen {
-  return new HeadlessTerminalScreen(TERMINAL_SCREEN_ROWS, TERMINAL_SCREEN_COLUMNS);
+export function createTerminalScreen(
+  options: { cols?: number; rows?: number } = {},
+): TerminalScreen {
+  return new HeadlessTerminalScreen(
+    options.rows ?? TERMINAL_SCREEN_ROWS,
+    options.cols ?? TERMINAL_SCREEN_COLUMNS,
+  );
 }
 
 export class HeadlessTerminalScreen implements TerminalScreen {
