@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import { glob, type Path } from "glob";
 import { cancellationError, throwIfTurnCancelled } from "../agent/turn-cancellation";
 import { resolveWorkspacePath, toDisplayPath } from "./path-safety";
@@ -38,7 +38,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative or absolute search directory. Defaults to the workspace root.",
+              "Optional workspace-relative or absolute search directory. Defaults to the workspace root. A directory symbolic link is allowed as the search root.",
           },
           head_limit: {
             type: "integer",
@@ -114,8 +114,11 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
       }
 
       try {
+        // Resolve the root only; keep the traversal policy for links below it.
+        const realSearchPath = await realpath(absoluteSearchPath);
+        throwIfTurnCancelled(context.signal);
         const matches = await glob(input.pattern, {
-          cwd: absoluteSearchPath,
+          cwd: realSearchPath,
           nodir: true,
           dot: true,
           follow: false,
@@ -125,6 +128,8 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
         });
         const displayMatches = await toDisplayMatches({
           workspaceRoot: options.workspaceRoot,
+          absoluteSearchPath,
+          realSearchPath,
           matches,
           signal: context.signal,
         });
@@ -241,6 +246,8 @@ async function ensureDirectory(
 
 async function toDisplayMatches(input: {
   workspaceRoot: string;
+  absoluteSearchPath: string;
+  realSearchPath: string;
   matches: Path[];
   signal: AbortSignal;
 }): Promise<string[]> {
@@ -248,7 +255,11 @@ async function toDisplayMatches(input: {
   for (const match of input.matches) {
     throwIfTurnCancelled(input.signal);
     if (!(await isRegularFileMatch(match))) continue;
-    const absolutePath = resolveWorkspacePath(input.workspaceRoot, match.fullpath());
+    // Preserve the caller's root spelling, including directory links and aliases.
+    const absolutePath = path.resolve(
+      input.absoluteSearchPath,
+      path.relative(input.realSearchPath, match.fullpath()),
+    );
     normalized.push(toDisplayPath(input.workspaceRoot, absolutePath));
   }
   throwIfTurnCancelled(input.signal);

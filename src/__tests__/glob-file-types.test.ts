@@ -75,6 +75,57 @@ describe("Glob file types", () => {
     });
   });
 
+  test("recursively searches linked roots while preserving paths and traversal exclusions", async () => {
+    await withWorkspace(async (workspace) => {
+      await mkdir(path.join(workspace, "docs/nested"));
+      await writeFile(path.join(workspace, "docs/nested/guide.md"), "fixture");
+      await symlink("README.md", path.join(workspace, "docs/file-link.md"));
+      await symlink("nested", path.join(workspace, "docs/nested-link"));
+      await symlink(".", path.join(workspace, "docs/loop"));
+      await symlink("missing", path.join(workspace, "docs/broken.md"));
+      await symlink("a-directory-link", path.join(workspace, "directory-chain"));
+      for (const directory of ["node_modules", ".git"]) {
+        await mkdir(path.join(workspace, "docs", directory));
+        await writeFile(path.join(workspace, "docs", directory, "ignored.md"), "");
+      }
+
+      const link = path.join(workspace, "a-directory-link");
+      for (const [workspaceRoot, searchDirectory, prefix] of [
+        [workspace, "docs", "docs"],
+        [workspace, "a-directory-link", "a-directory-link"],
+        [workspace, link, "a-directory-link"],
+        [workspace, "directory-chain", "directory-chain"],
+        [link, undefined, ""],
+        [path.join(workspace, "emptydir"), link, link],
+      ] as const) {
+        const tooling = createDefaultTooling({ workspaceRoot });
+        const matches = ["file-link.md", "nested/guide.md", "README.md"].map((file) =>
+          path.join(prefix, file),
+        );
+        for (const pattern of ["**/*.md", "**/*"]) {
+          for (const offset of [0, 2]) {
+            const raw = await tooling.runtime.execute({
+              providerToolCallId: "recursive_link_root",
+              name: "Glob",
+              args: { pattern, path: searchDirectory, head_limit: 2, offset },
+            });
+            expect(raw).toMatchObject({
+              ok: true,
+              searchPath: prefix || ".",
+              absoluteSearchPath: path.resolve(workspaceRoot, searchDirectory ?? "."),
+              matches: matches.slice(offset, offset + 2),
+              totalMatches: 3,
+              returnedCount: offset === 0 ? 2 : 1,
+              hasMore: offset === 0,
+            });
+            if (offset === 0) expect(raw).toHaveProperty("nextOffset", 2);
+            else expect(raw).not.toHaveProperty("nextOffset");
+          }
+        }
+      }
+    });
+  });
+
   test("filters before counting and paginating model-visible results", async () => {
     await withWorkspace(async (workspace) => {
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
