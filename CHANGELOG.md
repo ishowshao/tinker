@@ -5,12 +5,44 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-09-06
+
+### Added
+
+- Add remote access for paired clients. `tinker serve --config <path>` runs the
+  local daemon that paired remote clients connect to, and
+  `tinker connect --config <path>` attaches a terminal client to a running
+  service; exiting the client detaches without stopping the service. See
+  `docs/remote-access.md`. A native iOS client under `client/Tinker` is included
+  for acceptance.
+- Add `offset` and `head_limit` pagination to `Glob` results. Long result sets
+  now report whether more matches remain instead of being silently capped.
+- Add `cols` and `rows` options to `Bash` for custom initial PTY dimensions when
+  `tty=true`, so terminal applications that require a specific size can run in
+  an appropriately sized pseudo-terminal.
+
 ### Changed
 
 - Run `Grep` directory searches with ripgrep's working directory set to the search
   directory and `.` as the path argument. Directory globs such as `sub/**` now
   match from that directory; globs that relied on absolute search paths may need
   updating. Explicit file searches keep their existing invocation.
+- Increase the default `Bash` foreground wait before a command continues in the
+  background, and clarify how `TaskOutput` and `TaskInput` poll PTY sessions.
+- Omit internal file hashes from tool observations; the model sees the same
+  content without opaque bookkeeping tokens.
+
+### Fixed
+
+- Stop `TaskStop` from hanging when a shell's child processes survive after the
+  shell itself exits; stopping a task now reliably reports its final state.
+- Preserve `Grep` match context across paginated results, keep long-line matches
+  instead of dropping them, and report counts and paginated records
+  consistently, including a `count-matches` mode with explicit counting units.
+- Resolve symbolic-link search roots in `Glob` while preserving result paths,
+  and exclude directory and broken symbolic links from results.
+- Accept pagination arguments in `Read` when reading empty files instead of
+  rejecting the call.
 
 ## [2.9.0] - 2026-09-05
 
@@ -405,7 +437,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.9.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.10.0...HEAD
+[2.10.0]: https://github.com/ishowshao/tinker/releases/tag/v2.10.0
 [2.9.0]: https://github.com/ishowshao/tinker/releases/tag/v2.9.0
 [2.8.0]: https://github.com/ishowshao/tinker/releases/tag/v2.8.0
 [2.7.0]: https://github.com/ishowshao/tinker/releases/tag/v2.7.0
