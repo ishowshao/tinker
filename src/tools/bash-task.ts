@@ -417,8 +417,15 @@ export class ShellTaskManager {
     if (!(await completesWithin(task.completion, this.stopGraceMs))) {
       this.synchronizeTerminalState(task);
       if (!isTerminalStatus(task.status)) {
-        signalProcessGroup(task, "SIGKILL");
-        escalated = true;
+        escalated = signalProcessGroup(task, "SIGKILL");
+        if (
+          !(await completesWithin(task.completion, this.stopGraceMs)) &&
+          !task.process.outputClosed
+        ) {
+          task.error =
+            "Task output remained open after forced termination; closed local output streams. Descendant processes may still be running.";
+          task.process.close();
+        }
       }
     }
 
@@ -474,8 +481,8 @@ export class ShellTaskManager {
   private async monitorTask(task: ManagedShellTask): Promise<ShellTaskSnapshot> {
     const result = await task.process.wait();
 
-    this.applyTermination(task, result);
     await task.process.waitForOutputClose();
+    this.applyTermination(task, result);
     await task.output.end();
     if (task.terminalScreen !== undefined) {
       await task.terminalScreen.flush();
@@ -505,9 +512,9 @@ export class ShellTaskManager {
     }
 
     task.endedAt ??= new Date().toISOString();
-    if (result.error !== undefined) {
+    if (result.error !== undefined || task.error !== undefined) {
       task.status = "failed";
-      task.error = result.error;
+      task.error ??= result.error;
       return;
     }
 
@@ -522,7 +529,9 @@ export class ShellTaskManager {
   }
 
   private synchronizeTerminalState(task: ManagedShellTask): void {
-    if (isTerminalStatus(task.status)) {
+    // An exited wrapper can leave children holding its output descriptors open.
+    // Keep the task stoppable until both process exit and output closure occur.
+    if (isTerminalStatus(task.status) || !task.process.outputClosed) {
       return;
     }
 
@@ -607,13 +616,15 @@ export class ShellTaskManager {
 function signalProcessGroup(
   task: ManagedShellTask,
   signal: "SIGTERM" | "SIGKILL",
-): void {
+): boolean {
   try {
     process.kill(-task.processGroupId, signal);
+    return true;
   } catch (error) {
     if (!isNoSuchProcess(error)) {
       throw error;
     }
+    return false;
   }
 }
 

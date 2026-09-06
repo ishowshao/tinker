@@ -37,12 +37,13 @@ export function createTaskStopToolExecutor(options: {
       try {
         const result = await options.taskManager.stopTask(parsed.taskId, "tool");
         return {
-          ok: true,
+          ok: result.task.error === undefined,
           taskId: parsed.taskId,
           task: result.task,
           status: result.task.status,
           requestedSignal: result.requestedSignal,
           escalated: result.escalated,
+          ...(result.task.error === undefined ? {} : { error: result.task.error }),
         };
       } catch (error) {
         const inspection = options.taskManager.inspectTask(parsed.taskId);

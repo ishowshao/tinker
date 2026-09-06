@@ -14,6 +14,7 @@ export type ShellProcessHandle = {
   readonly mode: ShellProcessMode;
   readonly exitCode: number | null;
   readonly signalCode: NodeJS.Signals | null;
+  readonly outputClosed: boolean;
   wait(): Promise<ProcessExitResult>;
   waitForOutputClose(): Promise<void>;
   write?(chars: string): Promise<number>;
@@ -65,7 +66,16 @@ async function spawnPipeShellProcess(input: {
   pipeOutput(child.stderr, (bytes) => input.onOutput(bytes));
 
   const exit = waitForNodeProcessExit(child);
-  const close = waitForNodeProcessClose(child);
+  let outputClosed = false;
+  let resolveOutputClose: () => void;
+  const close = new Promise<void>((resolve) => {
+    resolveOutputClose = resolve;
+  });
+  const settleOutputClose = () => {
+    outputClosed = true;
+    resolveOutputClose();
+  };
+  void waitForNodeProcessClose(child).then(settleOutputClose);
   if (child.pid === undefined) {
     const result = await exit;
     throw new Error(result.error ?? "Bash process failed to start.");
@@ -80,9 +90,17 @@ async function spawnPipeShellProcess(input: {
     get signalCode() {
       return child.signalCode;
     },
+    get outputClosed() {
+      return outputClosed;
+    },
     wait: () => exit,
     waitForOutputClose: () => close,
-    close() {},
+    close() {
+      child.stdin.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      settleOutputClose();
+    },
   };
 }
 
@@ -205,6 +223,9 @@ function spawnPtyShellProcess(input: {
     get signalCode() {
       return subprocess.signalCode;
     },
+    get outputClosed() {
+      return terminalEnded;
+    },
     wait: () => exit,
     waitForOutputClose: () => terminalExit,
     write,
@@ -212,6 +233,7 @@ function spawnPtyShellProcess(input: {
       if (!terminal.closed) {
         terminal.close();
       }
+      settleTerminalExit();
     },
   };
 }
