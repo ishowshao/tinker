@@ -10,7 +10,7 @@ import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
 isolateTinkerHome();
 
 describe("Glob tool", () => {
-  test("finds workspace files, includes dotfiles, and ignores node_modules and .git", async () => {
+  test("skips node_modules and .git during traversal but searches them when set as path", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-glob-"));
 
     try {
@@ -41,6 +41,22 @@ describe("Glob tool", () => {
       expect(matches).toContain("src/app.ts");
       expect(matches).not.toContain("node_modules/pkg/ignored.ts");
       expect(matches).not.toContain(".git/config");
+
+      for (const [directory, file] of [
+        ["node_modules", "node_modules/pkg/ignored.ts"],
+        [".git", ".git/config"],
+      ]) {
+        const direct = await tooling.runtime.execute({
+          providerToolCallId: `direct_${directory}`,
+          name: "Glob",
+          args: { pattern: "**/*", path: directory },
+        });
+        expect(direct).toMatchObject({
+          ok: true,
+          matches: [file],
+          totalMatches: 1,
+        });
+      }
     } finally {
       await rm(workspace, { recursive: true });
     }
