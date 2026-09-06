@@ -121,15 +121,6 @@ export function createReadToolExecutor(options: ReadToolOptions): ToolExecutor {
         const offset = input.offset ?? 1;
 
         if (lines.length === 0) {
-          if (input.offset !== undefined || input.limit !== undefined) {
-            return {
-              ok: false,
-              filePath: input.file_path,
-              absolutePath,
-              error: "File is empty. Omit offset and limit to read the empty file.",
-            };
-          }
-
           options.snapshots.set(absolutePath, {
             sha256,
             mtimeMs: currentInfo.mtimeMs,

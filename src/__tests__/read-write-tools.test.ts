@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ObservationBuilder } from "../observation/observation-builder";
 import { createDefaultTooling } from "./helpers/tools-support";
 import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
 
@@ -207,24 +208,76 @@ describe("Read and Write tools", () => {
     }
   });
 
-  test("reads an empty file without pagination and records a valid Read", async () => {
+  test.each([
+    {},
+    { limit: 5 },
+    { offset: 1 },
+    { offset: 1, limit: 100 },
+    { offset: 2 },
+    { offset: 99, limit: 5 },
+  ])("reads an empty file with pagination %j and records a valid Read", async (pagination) => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-read-"));
 
     try {
       const filePath = path.join(workspace, "empty.txt");
       await writeFile(filePath, "", "utf8");
       const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      const call = tooling.testRuntime.toolCall({
+        providerToolCallId: "call_1",
+        name: "Read",
+        args: { file_path: "empty.txt", ...pagination },
+      });
+      const raw = await tooling.runtime.execute(call);
 
+      expect(raw).toMatchObject({
+        ok: true,
+        content: "",
+        contentBytes: 0,
+        sizeBytes: 0,
+        totalLines: 0,
+      });
+      expect("startLine" in raw ? raw.startLine : undefined).toBeUndefined();
+      expect("endLine" in raw ? raw.endLine : undefined).toBeUndefined();
+      expect(tooling.snapshots.get(filePath)).toMatchObject({
+        source: "read",
+        sha256: "sha256" in raw ? raw.sha256 : undefined,
+      });
+      const observation = new ObservationBuilder().build({ call, raw });
+      expect(observation.displayText).toContain("displayed=empty file\ncontent:\n");
+      expect(observation.displayText).not.toContain("displayed=lines");
+
+      const write = await tooling.runtime.execute({
+        providerToolCallId: "call_2",
+        name: "Write",
+        args: { file_path: "empty.txt", content: "after\n" },
+      });
+      expect(write.ok).toBe(true);
+      expect(await readFile(filePath, "utf8")).toBe("after\n");
+    } finally {
+      await rm(workspace, { recursive: true });
+    }
+  });
+
+  test.each([
+    { offset: 0 },
+    { offset: 1.5 },
+    { limit: 0 },
+    { limit: 1.5 },
+  ])("still rejects invalid pagination %j for an empty file", async (pagination) => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-read-"));
+
+    try {
+      await writeFile(path.join(workspace, "empty.txt"), "", "utf8");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
       const raw = await tooling.runtime.execute({
         providerToolCallId: "call_1",
         name: "Read",
-        args: { file_path: "empty.txt" },
+        args: { file_path: "empty.txt", ...pagination },
       });
 
-      expect(raw.ok).toBe(true);
-      expect("content" in raw ? raw.content : undefined).toBe("");
-      expect("totalLines" in raw ? raw.totalLines : undefined).toBe(0);
-      expect(tooling.snapshots.get(filePath)?.source).toBe("read");
+      expect(raw.ok).toBe(false);
+      expect("error" in raw ? raw.error : "").toContain("positive integer");
+      expect(tooling.snapshots.size).toBe(0);
     } finally {
       await rm(workspace, { recursive: true });
     }
