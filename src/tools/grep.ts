@@ -202,7 +202,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           absoluteSearchPath,
           mode,
           truncated: rg.truncated ? true : undefined,
-          error: rg.error ?? "ripgrep failed.",
+          error: omitUnsupportedRegexHint(rg.error ?? "ripgrep failed."),
         });
       }
 
@@ -368,9 +368,17 @@ export function buildRipgrepArgs(
 function resolveGrepContext(input: GrepArgs) {
   const both = input.context ?? input.contextAlias;
   return {
-    before: both ?? input.before ?? 0,
-    after: both ?? input.after ?? 0,
+    before: input.before ?? both ?? 0,
+    after: input.after ?? both ?? 0,
   };
+}
+
+function omitUnsupportedRegexHint(error: string): string {
+  // Grep does not expose rg's PCRE2 flag; preserve the diagnostic itself.
+  return error.replace(
+    /\n+Consider enabling PCRE2 with the --pcre2 flag, which can handle backreferences\s+and look-around\.\s*$/,
+    "",
+  );
 }
 
 type ParsedGrepArgs =

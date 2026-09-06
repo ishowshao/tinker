@@ -12,6 +12,39 @@ import { createTestRuntime } from "./test-runtime";
 isolateTinkerHome();
 
 describe("Grep ripgrep wrapper", () => {
+  test("regex errors retain native diagnostics without the unsupported PCRE2 suggestion", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-grep-errors-"));
+    try {
+      await writeFile(path.join(workspace, "a.txt"), "needle red\n");
+      const tooling = createDefaultTooling({ workspaceRoot: workspace });
+      for (const pattern of ["needle(?= red)", "(needle)\\1", "["]) {
+        const native = Bun.spawnSync(
+          [findRipgrepCommand(), "--no-config", "-e", pattern, "a.txt"],
+          { cwd: workspace },
+        );
+        expect(native.exitCode).toBe(2);
+        const stderr = native.stderr.toString().trim();
+        const expected = stderr.split("\n\nConsider enabling PCRE2")[0];
+        if (pattern === "[") {
+          expect(expected).toBe(stderr);
+        } else {
+          expect(stderr).toContain("Consider enabling PCRE2");
+        }
+        const call = tooling.testRuntime.toolCall({ name: "Grep", args: { pattern } });
+        const raw = await tooling.runtime.execute(call);
+        expect(raw).toMatchObject({ ok: false, error: expected });
+        const restored = decodeStoredToolRawResult(JSON.parse(JSON.stringify(raw)));
+        const observation = new ObservationBuilder().build({ call, raw: restored });
+        expect(observation.displayText).toBe(
+          `Grep failed for pattern=${JSON.stringify(pattern)}: ${expected}`,
+        );
+        expect(observation.displayText).not.toContain("--pcre2");
+      }
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   test("matches native rg running in the search directory or given an absolute file", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-grep-wrapper-"));
     try {

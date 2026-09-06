@@ -5,6 +5,7 @@ import path from "node:path";
 import { ObservationBuilder } from "../observation/observation-builder";
 import { decodeStoredToolRawResult } from "../session/session-tool-result-codec";
 import { createGrepToolExecutor, type GrepToolOptions } from "../tools/grep";
+import { findRipgrepCommand } from "../tools/ripgrep";
 import { createTestRuntime } from "./test-runtime";
 
 async function withWorkspace(run: (root: string) => Promise<void>) {
@@ -44,6 +45,58 @@ async function search(
 }
 
 describe("Grep context pagination", () => {
+  test("directional context matches native rg regardless of flag order, including zero", async () => {
+    await withWorkspace(async (root) => {
+      await writeFile(
+        path.join(root, "a.txt"),
+        "outside\nbefore1\nbefore2\nHIT\nafter1\nafter2\noutside\n",
+      );
+      for (const directional of [
+        { "-A": 3 },
+        { "-B": 3 },
+        { "-A": 0 },
+        { "-B": 0 },
+        { "-A": 0, "-B": 3 },
+      ]) {
+        const flags = Object.entries(directional).flatMap(([flag, value]) => [
+          flag,
+          String(value),
+        ]);
+        for (const nativeFlags of [
+          ["-C", "1", ...flags],
+          [...flags, "-C", "1"],
+        ]) {
+          const native = Bun.spawnSync(
+            [
+              findRipgrepCommand(),
+              "--no-config",
+              "--color=never",
+              "--no-heading",
+              "--with-filename",
+              "-n",
+              ...nativeFlags,
+              "-e",
+              "HIT",
+              "a.txt",
+            ],
+            { cwd: root },
+          );
+          expect(native.exitCode).toBe(0);
+          expect(native.stderr.toString()).toBe("");
+          for (const alias of ["context", "-C"]) {
+            const { text } = await search(root, {
+              pattern: "HIT",
+              head_limit: 1,
+              [alias]: 1,
+              ...directional,
+            });
+            expect(text).toBe(native.stdout.toString().trimEnd());
+          }
+        }
+      }
+    });
+  });
+
   test("real multiline matches retain snippets on both long Unicode lines", async () => {
     await withWorkspace(async (root) => {
       await writeFile(
@@ -173,13 +226,23 @@ describe("Grep context pagination", () => {
     },
     {
       contextArgs: { context: 1, "-C": 2, "-B": 3, "-A": 3 },
-      expected: "a.txt-3-before2\na.txt:4:HIT\na.txt-5-after1",
+      expected:
+        "a.txt-1-outside\na.txt-2-before1\na.txt-3-before2\na.txt:4:HIT\na.txt-5-after1\na.txt-6-after2\na.txt-7-outside",
     },
     {
       contextArgs: { "-C": 1, "-B": 3, "-A": 3 },
+      expected:
+        "a.txt-1-outside\na.txt-2-before1\na.txt-3-before2\na.txt:4:HIT\na.txt-5-after1\na.txt-6-after2\na.txt-7-outside",
+    },
+    {
+      contextArgs: { context: 0, "-B": 3, "-A": 3 },
+      expected:
+        "a.txt-1-outside\na.txt-2-before1\na.txt-3-before2\na.txt:4:HIT\na.txt-5-after1\na.txt-6-after2\na.txt-7-outside",
+    },
+    {
+      contextArgs: { context: 1, "-C": 2 },
       expected: "a.txt-3-before2\na.txt:4:HIT\na.txt-5-after1",
     },
-    { contextArgs: { context: 0, "-B": 3, "-A": 3 }, expected: "a.txt:4:HIT" },
   ])("keeps the hit with its resolved context: $contextArgs", async ({
     contextArgs,
     expected,
