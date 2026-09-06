@@ -58,7 +58,7 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
     definition: {
       name: "Grep",
       description:
-        "Search file contents with ripgrep. Results use a consistent file-path order. Pagination is not a snapshot: file changes between calls may cause skipped or repeated results. Quoted paths use JSON escaping; pass the decoded path to file tools.",
+        "Search file contents with ripgrep. Directory searches include hidden files, respect ignore rules (including .gitignore and .ignore), and exclude .git, .svn, .hg, .bzr, .jj, .sl, node_modules, and .tinker by default. Directory traversal does not follow symlinks; binary detection can stop searching a file. No matches means no matches within the effective search scope. Results use a consistent file-path order. Pagination is not a snapshot: file changes between calls may cause skipped or repeated results. Quoted paths use JSON escaping; pass the decoded path to file tools.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -72,17 +72,18 @@ export function createGrepToolExecutor(options: GrepToolOptions): ToolExecutor {
           path: {
             type: "string",
             description:
-              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. For directories, ripgrep runs in that directory with . as its search path. Files are passed as absolute paths.",
+              "Optional workspace-relative or absolute file or directory to search in. Defaults to the current workspace-local cwd. For directories, ripgrep runs in that directory with . as its search path; explicitly selecting an excluded directory allows searching inside it. Files are passed as absolute paths: explicit files bypass ignore/glob/type filtering, and explicit symlink files are followed. Explicit binary files may yield matches but are not guaranteed to be searched completely.",
           },
           glob: {
             type: "string",
-            description: "Passed unchanged to ripgrep's --glob option.",
+            description:
+              "Passed unchanged to ripgrep's --glob option after default exclusions. Matching positive globs override ignore rules and can override default exclusions (for example, **/* includes otherwise excluded directories). Does not enable symlink traversal or disable binary detection.",
           },
           output_mode: {
             type: "string",
             enum: ["content", "files_with_matches", "count", "count-matches"],
             description:
-              'Defaults to "files_with_matches" (matching file paths). "content" returns matching lines. "count" returns matching lines per file, counting a line once even with multiple matches; cannot be combined with multiline=true. "count-matches" returns non-overlapping matches per file, including multiple matches on one line. Count summaries cover only the displayed files when paginated.',
+              'Defaults to "files_with_matches" (matching file paths). "content" returns matching lines. Lines longer than 500 Unicode code points are excerpted: match windows include up to 100 code points on each side, with at most 500 source code points retained per line; later matches or long matches may be omitted. Long context lines retain their first 500 code points. Omission markers report skipped code points; use Read for full lines. "count" returns matching lines per file, counting a line once even with multiple matches; cannot be combined with multiline=true. "count-matches" returns non-overlapping matches per file, including multiple matches on one line. Count summaries cover only the displayed files when paginated.',
           },
           "-B": {
             type: "integer",

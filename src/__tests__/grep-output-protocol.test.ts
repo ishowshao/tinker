@@ -109,7 +109,7 @@ describe("Grep output protocols", () => {
         root,
         false,
       )[0],
-    ).toMatchObject({ lines: ["[Omitted long matching line]"] });
+    ).toMatchObject({ lines: ["x".repeat(500) + "[... 1 code points omitted ...]"] });
   });
 
   test("escaped path display round-trips and never contains literal control characters", () => {

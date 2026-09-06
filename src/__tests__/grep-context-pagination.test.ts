@@ -44,6 +44,77 @@ async function search(
 }
 
 describe("Grep context pagination", () => {
+  test("real multiline matches retain snippets on both long Unicode lines", async () => {
+    await withWorkspace(async (root) => {
+      await writeFile(
+        path.join(root, "multi.txt"),
+        "界".repeat(600) + "START\r\nEND" + "😀".repeat(600) + "\n",
+      );
+      const { raw, text } = await search(root, {
+        pattern: "START\\r?\\nEND",
+        multiline: true,
+        head_limit: 1,
+      });
+      expect(text).toBe(
+        "multi.txt:1:[... 500 code points omitted ...]" +
+          "界".repeat(100) +
+          "START\n" +
+          "multi.txt:2:END" +
+          "😀".repeat(100) +
+          "[... 500 code points omitted ...]",
+      );
+      expect(raw).toMatchObject({
+        totalResults: 1,
+        returnedResults: 1,
+        numLines: 2,
+        paginationUnit: "match_events",
+        hasMore: false,
+      });
+    });
+  });
+
+  test("long-line snippets survive real rg, persistence, observation and pagination", async () => {
+    await withWorkspace(async (root) => {
+      await writeFile(
+        path.join(root, "long.txt"),
+        "context" +
+          "x".repeat(600) +
+          "\n" +
+          "界😀".repeat(350) +
+          "NEEDLE_END\n" +
+          "x".repeat(700) +
+          "NEEDLE_END\n",
+      );
+      const first = await search(root, {
+        pattern: "NEEDLE_END",
+        "-B": 1,
+        head_limit: 1,
+      });
+      expect(first.text).toContain("long.txt-1-context");
+      expect(first.text).toContain(
+        "long.txt:2:[... 600 code points omitted ...]" +
+          "界😀".repeat(50) +
+          "NEEDLE_END",
+      );
+      expect(first.raw).toMatchObject({
+        totalResults: 2,
+        returnedResults: 1,
+        nextOffset: 1,
+        numLines: 2,
+      });
+      const second = await search(root, {
+        pattern: "NEEDLE_END",
+        "-B": 1,
+        head_limit: 1,
+        offset: 1,
+      });
+      expect(second.text).toContain(
+        "long.txt:3:[... 600 code points omitted ...]" + "x".repeat(100) + "NEEDLE_END",
+      );
+      expect(second.raw).toMatchObject({ returnedResults: 1, hasMore: false });
+    });
+  });
+
   test("a single hit retains all after-context and has no next page", async () => {
     await withWorkspace(async (root) => {
       await writeFile(

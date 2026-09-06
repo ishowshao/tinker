@@ -1,6 +1,7 @@
 import path from "node:path";
 import { toDisplayPath } from "./path-safety";
 import type { GrepOutputMode } from "./types";
+import { excerptGrepLines } from "./grep-snippets";
 
 export type GrepContentRecord = {
   kind: "match" | "context";
@@ -97,33 +98,29 @@ function parseJsonOutput(
       workspaceRoot,
       path.resolve(searchCwd, reportedPath),
     );
-    const lines = decodeText(data.lines, false).split("\n");
-    if (lines.at(-1) === "") lines.pop();
     records.push({
       kind: event.type,
       filePath,
       lineNumber: data.line_number,
-      lines: lines.map((line) => {
-        const text = line.endsWith("\r") ? line.slice(0, -1) : line;
-        return [...text].length > 500
-          ? `[Omitted long ${event.type === "match" ? "matching" : "context"} line]`
-          : text;
-      }),
+      lines: excerptGrepLines(decodeBytes(data.lines), data.submatches),
     });
   }
   return records;
 }
 
 function decodeText(value: unknown, isPath: boolean): string {
+  if (isRecord(value) && typeof value.text === "string") return value.text;
+  return new TextDecoder("utf-8", { fatal: isPath }).decode(decodeBytes(value));
+}
+
+function decodeBytes(value: unknown): Buffer {
   if (!isRecord(value)) throw new Error("Invalid text field in ripgrep JSON event.");
-  if (typeof value.text === "string") return value.text;
+  if (typeof value.text === "string") return Buffer.from(value.text, "utf8");
   if (
     typeof value.bytes === "string" &&
     /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.bytes)
   ) {
-    return new TextDecoder("utf-8", { fatal: isPath }).decode(
-      Buffer.from(value.bytes, "base64"),
-    );
+    return Buffer.from(value.bytes, "base64");
   }
   throw new Error("Invalid text encoding in ripgrep JSON event.");
 }
