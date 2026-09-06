@@ -269,7 +269,6 @@ function renderReadObservation(raw: ReadFileRawResult): string {
 
   return [
     `Read succeeded for ${raw.filePath}.`,
-    `sha256=${raw.sha256}`,
     `sizeBytes=${raw.sizeBytes ?? 0}`,
     `contentBytes=${raw.contentBytes ?? 0}`,
     `totalLines=${raw.totalLines ?? 0}`,
@@ -489,8 +488,6 @@ function renderWriteObservation(raw: WriteFileRawResult): string {
   return [
     `Write succeeded for ${raw.filePath}.`,
     `bytesWritten=${raw.bytesWritten ?? 0}`,
-    `oldSha256=${raw.oldSha256 ?? "null"}`,
-    `newSha256=${raw.newSha256}`,
   ].join("\n");
 }
 
@@ -508,8 +505,6 @@ function renderEditObservation(raw: EditFileRawResult): string {
     `replacementCount=${raw.replacementCount ?? 0}`,
     `replaceAll=${raw.replaceAll ?? false}`,
     `created=${raw.created ?? false}`,
-    `oldSha256=${raw.oldSha256 ?? "null"}`,
-    `newSha256=${raw.newSha256}`,
   ].join("\n");
 }
 
