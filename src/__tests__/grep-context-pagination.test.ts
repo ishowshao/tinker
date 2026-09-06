@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { ObservationBuilder } from "../observation/observation-builder";
@@ -445,9 +447,12 @@ describe("Grep context pagination", () => {
       );
       await writeFile(
         executable,
-        '#!/bin/sh\ncat "$(dirname "$0")/partial.jsonl"\nexec sleep 5\n',
+        '#!/bin/sh\nif [ "${1:-}" = "--warmup" ]; then exit 0; fi\ncat "$(dirname "$0")/partial.jsonl"\nexec sleep 5\n',
       );
       await chmod(executable, 0o755);
+      // macOS validates a newly created executable on its first run, which can
+      // take ~1s and would otherwise consume the ripgrep timeout below.
+      await promisify(execFile)(executable, ["--warmup"]);
       const { raw, text } = await search(
         root,
         { pattern: "HIT", "-A": 3, head_limit: 1 },
