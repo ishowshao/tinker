@@ -26,7 +26,7 @@ export function createGlobToolExecutor(options: GlobToolOptions): ToolExecutor {
     definition: {
       name: "Glob",
       description:
-        "Find regular files by glob pattern, including symbolic links to regular files. Directory links and broken links are excluded. node_modules and .git are skipped during traversal; to search inside either, set path directly to that directory.",
+        "Find regular files by glob pattern, including symbolic links to regular files. Case sensitivity follows platform defaults. Directory links and broken links are excluded. node_modules and .git are skipped during traversal; to search inside either, set path directly to that directory.",
       parameters: {
         type: "object",
         additionalProperties: false,
