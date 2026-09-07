@@ -763,7 +763,9 @@ describe("Recall session selection", () => {
     expect(cancelled).toBeInstanceOf(Error);
     const writer = new Database(databasePath);
     try {
-      writer.exec("BEGIN EXCLUSIVE; ROLLBACK");
+      writer.exec("BEGIN EXCLUSIVE");
+      expect(writer.inTransaction).toBe(true);
+      writer.exec("ROLLBACK");
     } finally {
       writer.close();
     }

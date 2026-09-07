@@ -13,6 +13,7 @@ import {
 import path from "node:path";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { IMAGE_INPUT_POLICY } from "./image-input-policy";
+import { abortableFileOpen } from "./abortable-file-open";
 import { probeImageBytes } from "./image-probe";
 import {
   normalizeOriginalImageName,
@@ -116,9 +117,14 @@ export class ImageAssetStore {
       assertContained(this.workspaceRoot, canonicalSource, "Image source realpath");
     }
 
-    const handle = await open(canonicalSource, constants.O_RDONLY | noFollowFlag());
+    const handle = await abortableFileOpen(
+      () => open(canonicalSource, constants.O_RDONLY | noFollowFlag()),
+      options.signal,
+      this.onWarning,
+    );
     let bytes: Buffer;
     try {
+      throwIfAborted(options.signal);
       const handleStat = await handle.stat();
       if (
         !handleStat.isFile() ||
