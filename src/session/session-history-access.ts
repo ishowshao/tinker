@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { ScopedQueryDatabase } from "./scoped-query-database";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { throwIfTurnCancelled } from "../agent/turn-cancellation";
@@ -67,7 +68,7 @@ export function createSessionHistoryAccess(input: {
         throwIfTurnCancelled(signal);
         await validateHistoryFiles(location.databasePath, sessionId);
         throwIfTurnCancelled(signal);
-        const database = new Database(location.databasePath, {
+        const database = new ScopedQueryDatabase(location.databasePath, {
           readonly: true,
           strict: true,
           safeIntegers: true,
@@ -100,7 +101,7 @@ export function createSessionHistoryAccess(input: {
           throwIfTurnCancelled(signal);
           return result;
         } finally {
-          database.close(true);
+          database.close();
         }
       } catch (error) {
         throwIfTurnCancelled(signal);

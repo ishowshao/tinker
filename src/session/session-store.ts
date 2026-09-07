@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { ScopedQueryDatabase } from "./scoped-query-database";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readdir, rename, rmdir } from "node:fs/promises";
 import path from "node:path";
@@ -1327,7 +1328,7 @@ export class SessionStore implements SessionLedgerCommitter {
       await chmod(stagingDatabasePath, 0o600);
       input.faultInjector?.("after_snapshot");
 
-      stagingDatabase = openWritableDatabase(stagingDatabasePath);
+      stagingDatabase = openWritableDatabase(stagingDatabasePath, ScopedQueryDatabase);
       verifySessionSchema(stagingDatabase, this.sessionId);
       dropSessionCloneTriggers(stagingDatabase);
       input.faultInjector?.("after_trigger_drop");
@@ -1542,8 +1543,11 @@ export async function resolveSessionDatabasePath(
   );
 }
 
-function openWritableDatabase(databasePath: string): Database {
-  const database = new Database(databasePath, {
+function openWritableDatabase(
+  databasePath: string,
+  DatabaseType: typeof Database = Database,
+): Database {
+  const database = new DatabaseType(databasePath, {
     create: false,
     readwrite: true,
     strict: true,

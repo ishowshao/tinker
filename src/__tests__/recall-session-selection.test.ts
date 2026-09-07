@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { formatMessageSource } from "../context/context-source";
 import { textToolResultContent } from "../agent/tool-result-content";
+import { TurnCancelledError } from "../agent/turn-cancellation";
 import type { ToolCall } from "../agent/types";
 import type { RecallRawResult } from "../tools/types";
 import { runtimeIdFactory } from "../ids/runtime-id";
@@ -724,7 +725,12 @@ describe("Recall session selection", () => {
       db.query("PRAGMA journal_mode = DELETE").get();
       db.exec("BEGIN EXCLUSIVE");
       console.log("locked", db.inTransaction, JSON.stringify(db.query("PRAGMA journal_mode").get()));
-      await Bun.sleep(1500);
+      const watchdog = setTimeout(() => {
+        console.error("Recall did not finish while the exclusive lock was held");
+        process.exit(1);
+      }, 4000);
+      await Bun.stdin.text();
+      clearTimeout(watchdog);
       db.exec("ROLLBACK");
       db.close(true);
     `,
@@ -751,16 +757,20 @@ describe("Recall session selection", () => {
       expect(await blocker.exited).toBe(0);
     }
     const controller = new AbortController();
+    const cancellation = new TurnCancelledError("user");
+    let readCompleted = false;
     const cancelled = await f.historyAccess
       .withHistoryReader(cloneId, controller.signal, (reader) => {
         reader.search({ query: "anchor", limit: 10, offset: 0 });
-        controller.abort();
+        readCompleted = true;
+        controller.abort(cancellation);
       })
       .then(
         () => null,
         (error: unknown) => error,
       );
-    expect(cancelled).toBeInstanceOf(Error);
+    expect(cancelled).toBe(cancellation);
+    expect(readCompleted).toBe(true);
     const writer = new Database(databasePath);
     try {
       writer.exec("BEGIN EXCLUSIVE");
