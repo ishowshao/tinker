@@ -73,8 +73,8 @@
     "lint": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --max-warnings=0",
     "lint:fast": "bun run lint --cache --cache-strategy content --cache-location .cache/eslint-fast/",
     "lint:fix": "eslint \"bin/**/*.js\" \"src/**/*.{ts,tsx}\" \"scripts/**/*.ts\" \"packages/**/*.ts\" --fix",
-    "test": "FORCE_COLOR=0 bun test",
-    "test:fast": "FORCE_COLOR=0 bun test --path-ignore-patterns='**/*pty*.test.ts' --path-ignore-patterns='**/native-host-integration.test.ts'",
+    "test": "bun scripts/run-test-shards.ts",
+    "test:fast": "bun scripts/run-test-shards.ts --path-ignore-patterns='**/*pty*.test.ts' --path-ignore-patterns='**/native-host-integration.test.ts'",
     "test:e2e": "FORCE_COLOR=0 bun test src/__tests__/cli-pty src/__tests__/pty-tui-harness packages/tinker-chrome/__tests__/native-host-integration",
     "typecheck": "tsc --noEmit"
   },
