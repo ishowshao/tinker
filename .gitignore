@@ -4,6 +4,7 @@
 node_modules/
 .tinker/
 .data/
+.cache/eslint-fast/
 .playwright-mcp/
 packages/tinker-chrome/dist/
 .DS_Store
