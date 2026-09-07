@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
-const SHARD_COUNT = 4;
+const SHARD_COUNT = 12;
 
 export async function runTestShards(args: string[]): Promise<number> {
   if (

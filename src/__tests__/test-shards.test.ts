@@ -45,8 +45,8 @@ test("excluded", () => { throw new Error("test filter was not forwarded"); });
     expect(
       (await readFile(seen, "utf8")).trim().split("\n").map(Number).sort(),
     ).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
-    for (let shard = 1; shard <= 4; shard++) {
-      expect(stderr).toContain(`Test shard ${shard}/4:`);
+    for (let shard = 1; shard <= 12; shard++) {
+      expect(stderr).toContain(`Test shard ${shard}/12:`);
     }
   } finally {
     await rm(root, { recursive: true, force: true });

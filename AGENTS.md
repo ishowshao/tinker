@@ -56,11 +56,15 @@ linting, and every test except the real-process end-to-end tier — the PTY TUI
 journeys and the Chrome native host, which hold most of the suite's wall-clock
 time. `bun run test:e2e` runs that tier alone.
 
-`bun run test` and `bun run test:fast` run four independent Bun processes with
-`--shard`, preserving sequential execution within each shard. The runner waits
-for every shard and fails if any shard fails. Use `bun test` directly for a
-single-process run or watch mode; do not replace sharding with `--parallel`,
-whose implicit `--isolate` currently breaks Ink/Yoga initialization.
+`check:fast` uses cached ESLint results and `test:fast` runs twelve independent
+Bun processes with `--shard`, preserving sequential execution within each shard.
+The runner waits for every shard and fails if any shard fails. Do not replace
+sharding with `--parallel`, whose implicit `--isolate` currently breaks Ink/Yoga
+initialization. Use `bun test` directly for watch mode.
+
+The final gate, `bun run check`, and CI use uncached ESLint and the original
+single-process, sequential `bun run test`. A passing fast check never replaces
+this final gate; investigate fast-check failures even if the serial run passes.
 
 Every file under `src/`, including tests and fixtures, must stay at or below 2000
 lines, counting comments and blank lines. Both gates start with
