@@ -26,16 +26,16 @@ export function TimelineRow(props: { item: TimelineItem }) {
   if (item.label !== undefined) {
     if (item.label === "assistant") {
       return (
-        <Fragment>
-          <Text color="gray">- {item.label}</Text>
+        <Box flexDirection="column" marginTop={1}>
+          <TimelineLabel label={item.label} />
           <AssistantMarkdown text={item.text} />
-        </Fragment>
+        </Box>
       );
     }
 
     return (
-      <Fragment>
-        <Text color="gray">- {item.label}</Text>
+      <Box flexDirection="column" marginY={1}>
+        <TimelineLabel label={item.label} />
         {item.userPrompt === undefined ? (
           <Text color={colorForStatus(item.status)}>{formatTimelineItem(item)}</Text>
         ) : (
@@ -44,7 +44,7 @@ export function TimelineRow(props: { item: TimelineItem }) {
         {renderItemBash(item)}
         {renderItemDiff(item)}
         {renderItemPlan(item)}
-      </Fragment>
+      </Box>
     );
   }
 
@@ -60,10 +60,18 @@ export function TimelineRow(props: { item: TimelineItem }) {
 
 export function AssistantStreamSectionRow(props: { item: AssistantStreamSectionItem }) {
   return (
-    <Fragment>
-      {props.item.showAssistantLabel ? <Text color="gray">- assistant</Text> : null}
+    <Box flexDirection="column" marginTop={props.item.showAssistantLabel ? 1 : 0}>
+      {props.item.showAssistantLabel ? <TimelineLabel label="assistant" /> : null}
       <AssistantMarkdown text={props.item.markdown} />
-    </Fragment>
+    </Box>
+  );
+}
+
+function TimelineLabel(props: { label: string }) {
+  return (
+    <Text color="cyan" bold>
+      - {props.label}
+    </Text>
   );
 }
 
