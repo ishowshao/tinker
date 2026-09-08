@@ -5,6 +5,33 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-09-08
+
+### Added
+
+- Offer directories in the TUI `@` file-mention popup. Ancestor directories of
+  workspace files now appear alongside files, ranked after matching files, and
+  selecting a directory inserts its path directly instead of attempting an
+  image import.
+- Offer a retry selection in the TUI after provider retries are exhausted, so a
+  failed model request can be retried without re-entering the prompt.
+
+### Changed
+
+- Cache ESLint results for `check:fast` and split the fast test tier into
+  twelve independent shards, shortening local iteration while keeping the
+  serial full test run as the final gate.
+
+### Fixed
+
+- Align `Grep` context-line precedence and remove an unsupported regex hint
+  from its documentation.
+- Warm up the fake ripgrep binary in tests to absorb the macOS first-execution
+  validation delay.
+- Cancel pending image file opens without leaking file handles.
+- Emphasize TUI timeline labels and add spacing between messages.
+- Finalize scoped SQLite queries before closing the session database.
+
 ## [2.10.0] - 2026-09-06
 
 ### Added
@@ -437,7 +464,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.11.0...HEAD
+[2.11.0]: https://github.com/ishowshao/tinker/releases/tag/v2.11.0
 [2.10.0]: https://github.com/ishowshao/tinker/releases/tag/v2.10.0
 [2.9.0]: https://github.com/ishowshao/tinker/releases/tag/v2.9.0
 [2.8.0]: https://github.com/ishowshao/tinker/releases/tag/v2.8.0
