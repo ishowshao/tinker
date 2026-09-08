@@ -113,4 +113,44 @@ describe("file mention", () => {
     const files = Array.from({ length: 12 }, (_, index) => `file-${index}.ts`);
     expect(rankWorkspaceFiles(files, "")).toHaveLength(8);
   });
+
+  test("marks trailing-slash paths as directories", () => {
+    const matches = rankWorkspaceFiles(["src/", "src/index.ts"], "");
+
+    expect(matches.find((match) => match.path === "src/")?.kind).toBe("directory");
+    expect(matches.find((match) => match.path === "src/index.ts")?.kind).toBe("file");
+  });
+
+  test("orders files before directories at the same score and depth", () => {
+    const matches = rankWorkspaceFiles(
+      ["src/", "src/index.ts", "docs/", "README.md"],
+      "",
+    );
+
+    expect(matches.map((match) => match.path)).toEqual([
+      "README.md",
+      "src/index.ts",
+      "docs/",
+      "src/",
+    ]);
+  });
+
+  test("ranks a matching file above a same-scored directory", () => {
+    const matches = rankWorkspaceFiles(
+      ["agent/", "agent.ts", "src/agent/loop.ts"],
+      "agent",
+    );
+
+    expect(matches[0]?.path).toBe("agent.ts");
+    expect(matches[1]?.path).toBe("agent/");
+  });
+
+  test("fuzzy matches directory basenames", () => {
+    const matches = rankWorkspaceFiles(
+      ["src/tui/", "src/agent/", "package.json"],
+      "agent",
+    );
+
+    expect(matches[0]).toMatchObject({ path: "src/agent/", kind: "directory" });
+  });
 });

@@ -12,6 +12,7 @@ export type FileMentionMatch = {
   path: string;
   indices: readonly number[];
   score: number;
+  kind: "file" | "directory";
 };
 
 export function findFileMention(editor: LineEditorState): FileMention | undefined {
@@ -76,8 +77,13 @@ export function rankWorkspaceFiles(
 ): FileMentionMatch[] {
   if (query === "") {
     return files
-      .map((filePath) => ({ path: filePath, indices: [], score: 0 }))
-      .sort((left, right) => compareShallowPaths(left.path, right.path))
+      .map((filePath) => ({
+        path: filePath,
+        indices: [],
+        score: 0,
+        kind: fileMentionKind(filePath),
+      }))
+      .sort((left, right) => compareShallowPaths(left, right))
       .slice(0, limit);
   }
 
@@ -104,6 +110,7 @@ function fuzzyMatchPath(filePath: string, query: string): FileMentionMatch | und
       path: filePath,
       indices: basenameMatch.indices,
       score: basenameMatch.score + 200,
+      kind: fileMentionKind(filePath),
     };
   }
 
@@ -115,6 +122,7 @@ function fuzzyMatchPath(filePath: string, query: string): FileMentionMatch | und
     path: filePath,
     indices: fullPathMatch.indices,
     score: fullPathMatch.score,
+    kind: fileMentionKind(filePath),
   };
 }
 
@@ -167,6 +175,11 @@ function compareFileMatches(left: FileMentionMatch, right: FileMentionMatch): nu
     return right.score - left.score;
   }
 
+  const kindDifference = left.kind === right.kind ? 0 : left.kind === "file" ? -1 : 1;
+  if (kindDifference !== 0) {
+    return kindDifference;
+  }
+
   const depthDifference = pathDepth(left.path) - pathDepth(right.path);
   if (depthDifference !== 0) {
     return depthDifference;
@@ -178,9 +191,16 @@ function compareFileMatches(left: FileMentionMatch, right: FileMentionMatch): nu
     : lengthDifference;
 }
 
-function compareShallowPaths(left: string, right: string): number {
-  const depthDifference = pathDepth(left) - pathDepth(right);
-  return depthDifference === 0 ? comparePathText(left, right) : depthDifference;
+function compareShallowPaths(left: FileMentionMatch, right: FileMentionMatch): number {
+  const kindDifference = left.kind === right.kind ? 0 : left.kind === "file" ? -1 : 1;
+  if (kindDifference !== 0) {
+    return kindDifference;
+  }
+
+  const depthDifference = pathDepth(left.path) - pathDepth(right.path);
+  return depthDifference === 0
+    ? comparePathText(left.path, right.path)
+    : depthDifference;
 }
 
 function comparePathText(left: string, right: string): number {
@@ -194,6 +214,10 @@ function comparePathText(left: string, right: string): number {
     return 1;
   }
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function fileMentionKind(filePath: string): FileMentionMatch["kind"] {
+  return filePath.endsWith("/") || filePath.endsWith("\\") ? "directory" : "file";
 }
 
 function pathDepth(filePath: string): number {

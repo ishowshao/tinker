@@ -93,6 +93,27 @@ export function createWorkspaceFileLister(
 
 export const listWorkspaceFiles = createWorkspaceFileLister();
 
+export function deriveWorkspaceDirectories(files: readonly string[]): string[] {
+  const directories = new Set<string>();
+
+  for (const filePath of files) {
+    for (let index = 0; index < filePath.length; index += 1) {
+      const char = filePath[index];
+      if ((char === "/" || char === "\\") && index > 0) {
+        directories.add(filePath.slice(0, index + 1));
+      }
+    }
+  }
+
+  return [...directories];
+}
+
+export function listWorkspaceFilesAndDirectories(
+  files: readonly string[],
+): readonly string[] {
+  return [...files, ...deriveWorkspaceDirectories(files)];
+}
+
 function splitPaths(stdout: string): string[] {
   return stdout
     .split("\n")

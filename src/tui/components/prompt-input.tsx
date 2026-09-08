@@ -41,7 +41,11 @@ import {
   type PromptDraft,
 } from "../prompt-draft";
 import { matchSlashCommands, type SlashCommand } from "../slash-commands";
-import { listWorkspaceFiles, type WorkspaceFileLister } from "../workspace-file-search";
+import {
+  listWorkspaceFiles,
+  listWorkspaceFilesAndDirectories,
+  type WorkspaceFileLister,
+} from "../workspace-file-search";
 
 export type PromptSubmission = {
   readonly draft: PromptDraft;
@@ -183,7 +187,10 @@ export function PromptInput(props: PromptInputProps) {
     () =>
       fileQuery === undefined || fileCatalog.status !== "ready"
         ? []
-        : rankWorkspaceFiles(fileCatalog.files, fileQuery),
+        : rankWorkspaceFiles(
+            listWorkspaceFilesAndDirectories(fileCatalog.files),
+            fileQuery,
+          ),
     [fileCatalog, fileQuery],
   );
   const suggestions =
@@ -223,13 +230,14 @@ export function PromptInput(props: PromptInputProps) {
     });
   };
 
-  const selectFile = (filePath: string) => {
+  const selectFile = (match: FileMentionMatch) => {
+    const filePath = match.path;
     const mention = findFileMention(state.draft.editor);
     if (mention === undefined || locked) {
       return;
     }
     const importImage = props.importImage;
-    if (importImage === undefined) {
+    if (importImage === undefined || match.kind === "directory") {
       insertFilePath(filePath);
       return;
     }
@@ -616,7 +624,7 @@ export function PromptInput(props: PromptInputProps) {
       const selectedCommand = suggestions[selectedIndex];
       if (key.return) {
         if (filePopupActive && selectedFile !== undefined) {
-          selectFile(selectedFile.path);
+          selectFile(selectedFile);
         } else if (selectedCommand !== undefined) {
           submitDraft(createPromptDraft(`/${selectedCommand.name}`));
         } else {
@@ -629,7 +637,7 @@ export function PromptInput(props: PromptInputProps) {
           if (selectedFile === undefined) {
             setState((current) => ({ ...current, suggestionsDismissed: true }));
           } else {
-            selectFile(selectedFile.path);
+            selectFile(selectedFile);
           }
         } else if (selectedCommand !== undefined) {
           setState(createPromptInputState(`/${selectedCommand.name} `));

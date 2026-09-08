@@ -2,7 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { describe, expect, test } from "bun:test";
-import { listWorkspaceFiles } from "../tui/workspace-file-search";
+import {
+  deriveWorkspaceDirectories,
+  listWorkspaceFiles,
+  listWorkspaceFilesAndDirectories,
+} from "../tui/workspace-file-search";
 
 describe("workspace file search", () => {
   test("lists workspace files while honoring ignores and explicit exclusions", async () => {
@@ -50,5 +54,18 @@ describe("workspace file search", () => {
     } finally {
       await rm(workspace, { recursive: true });
     }
+  });
+
+  test("derives ancestor directories with trailing slashes", () => {
+    expect(
+      deriveWorkspaceDirectories(["src/agent/loop.ts", "src/index.ts", "README.md"]),
+    ).toEqual(["src/", "src/agent/"]);
+  });
+
+  test("combines files and derived directories", () => {
+    expect(listWorkspaceFilesAndDirectories(["src/index.ts"])).toEqual([
+      "src/index.ts",
+      "src/",
+    ]);
   });
 });

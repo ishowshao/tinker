@@ -485,10 +485,41 @@ describe("prompt input", () => {
     const frame = stripAnsi(lastFrame());
     expect(listCalls).toBe(1);
     expect(frame).not.toContain(MODEL_NAME);
+    expect(frame).toContain("src/");
     expect(frame.indexOf("README.md")).toBeLessThan(frame.indexOf("src/index.ts"));
     expect(frame.indexOf("src/index.ts")).toBeLessThan(
       frame.indexOf("src/deep/file.ts"),
     );
+    cleanup();
+  });
+
+  test("inserts a selected directory path without attaching an image", async () => {
+    const submitted: string[] = [];
+    let importCalls = 0;
+    const { stdin, lastFrame, cleanup } = render(
+      <PromptInput
+        modelName={MODEL_NAME}
+        workspaceRoot={WORKSPACE_ROOT}
+        fileLister={async () => ["docs/plan.md"]}
+        importImage={async () => {
+          importCalls += 1;
+          throw new Error("directories must not be imported");
+        }}
+        onSubmit={(value) => {
+          submitted.push(value.userMessage.content);
+          return true;
+        }}
+      />,
+    );
+
+    await press(stdin, "see @", "d", "o", "c", "s");
+    expect(stripAnsi(lastFrame())).toContain("❯ docs/");
+
+    await press(stdin, "\r");
+    expect(importCalls).toBe(0);
+
+    await press(stdin, "\r");
+    expect(submitted).toEqual(["see docs/"]);
     cleanup();
   });
 
@@ -537,7 +568,7 @@ describe("prompt input", () => {
 
     await press(stdin, "@", ARROW_UP, "\r", "\r");
 
-    expect(submitted).toEqual(["src/deep.ts"]);
+    expect(submitted).toEqual(["src/"]);
     cleanup();
   });
 
