@@ -5,6 +5,23 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-09-11
+
+### Changed
+
+- Replace the vector memory system with plain-text Markdown records. Session
+  transcripts are appended to `memory/records/<sessionId>.md` in the global
+  Tinker home, and `MemoryCreate` saves explicit Markdown notes. `MemorySearch`
+  searches all memory files with literal, case-insensitive keywords and
+  paginated, grouped passages; the `MemoryGet`, `MemoryUpdate`, and
+  `MemoryDelete` tools and the `memory` model-profile configuration are
+  removed. Old memory configuration is ignored, and the existing memory
+  database and diagnostic files are moved to `memory-legacy/` on first use,
+  preserved but no longer searched. Memory now works in both the TUI and the
+  one-shot CLI without any model profile or embedding service.
+- Simplify `MemoryCreate` to a Markdown note with the `text` heading and an
+  optional `summary` body, recording creation time and source workspace.
+
 ## [2.11.0] - 2026-09-08
 
 ### Added
@@ -464,7 +481,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.11.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.12.0...HEAD
+[2.12.0]: https://github.com/ishowshao/tinker/releases/tag/v2.12.0
 [2.11.0]: https://github.com/ishowshao/tinker/releases/tag/v2.11.0
 [2.10.0]: https://github.com/ishowshao/tinker/releases/tag/v2.10.0
 [2.9.0]: https://github.com/ishowshao/tinker/releases/tag/v2.9.0
