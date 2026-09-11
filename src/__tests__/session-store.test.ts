@@ -1,3 +1,4 @@
+import { sessionMemoryPath } from "../memory/memory-files";
 import { describe, expect, test } from "bun:test";
 import { textToolResultContent } from "../agent/tool-result-content";
 import { Database } from "bun:sqlite";
@@ -100,7 +101,7 @@ describe("SessionStore and SqliteSessionLedger", () => {
         sourceSessionId,
       );
       expect(
-        await readFile(path.join(targetDirectory, "observations.md"), "utf8"),
+        await readFile(sessionMemoryPath(targetSessionId, homeRoot), "utf8"),
       ).toContain(`# Tinker Session ${targetSessionId}`);
     } finally {
       await target?.abandon().catch(() => undefined);

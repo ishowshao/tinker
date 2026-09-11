@@ -12,7 +12,6 @@ import type { SessionId } from "../ids/runtime-id";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
   DEFAULT_PUBLIC_TOOLING_CONFIG,
-  MEMORY_CONFIG_FIELDS,
   MODEL_PROFILE_FIELDS,
   PUBLIC_CONFIG_FIELDS,
   parsePublicEnvironment,
@@ -84,9 +83,6 @@ describe("public config contract", () => {
     expect(
       MODEL_PROFILE_FIELDS.find((field) => field.name === "api")?.defaultValue,
     ).toBe("chat-completions");
-    expect(
-      MEMORY_CONFIG_FIELDS.filter((field) => field.secret).map((field) => field.name),
-    ).toEqual(["embedding"]);
   });
 });
 
@@ -376,7 +372,7 @@ describe("profile resolution", () => {
     expect(resolved).not.toHaveProperty("sessionId");
   });
 
-  test("pre-resolves one fixed memory extraction profile and embedding profile", () => {
+  test("ignores legacy memory model configuration", () => {
     const profiles = parseModelProfiles(
       JSON.stringify({
         ...JSON.parse(TEST_PROFILES_JSON),
@@ -399,22 +395,7 @@ describe("profile resolution", () => {
     if (resolved.mode !== "profile") {
       throw new Error("Expected profile mode.");
     }
-    expect(resolved.memory).toMatchObject({
-      profile: {
-        name: "glm",
-        model: "glm-4.6",
-      },
-      embedding: {
-        name: "global-memory-v1",
-        dimensions: 2_048,
-      },
-    });
-    expect(resolved.memory?.contextBudget).toEqual(
-      deriveRunnerConfig(resolved, {
-        sessionId: TEST_SESSION_ID,
-        profileName: "glm",
-      }).contextBudget,
-    );
+    expect(resolved).not.toHaveProperty("memory");
   });
 
   test("fast-fails invalid mode/profile combinations", () => {

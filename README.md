@@ -65,7 +65,7 @@ creation; running tasks cannot be resized through these tools.
 
 Both Recall tools accept an optional `sessionId` (a canonical session UUID).
 Omitting it keeps the current-session behavior. In the TUI or one-shot CLI, the
-agent can use a session ID you supply or a Memory result's `sourceSessionId`:
+agent can use a session ID you supply or find in a memory record's filename/header:
 
 ```ts
 RecallSearch({ sessionId: sourceSessionId, query: "distinctive-anchor" })
@@ -380,70 +380,6 @@ Image-capable profile example:
 }
 ```
 
-The top-level `memory` object is optional. When present, every field below is required. It enables completed-turn extraction and `MemorySearch` only in the TUI; one-shot runs do not load memory.
-
-| Field | Required | Type / constraint | Secret | Description |
-| --- | --- | --- | --- | --- |
-| `profile` | Yes | Non-empty string | No | Existing model profile used for completed-turn atomic-memory extraction. |
-| `embedding` | Yes | Object | Yes | Single embedding profile for the global memory database. |
-
-`memory.embedding` fields:
-
-| Field | Required | Type / constraint | Secret | Description |
-| --- | --- | --- | --- | --- |
-| `name` | Yes | Non-empty string | No | Stable identity for the embedding space. |
-| `kind` | Yes | Literal `"openai-compatible"` | No | Embedding transport kind. |
-| `model` | Yes | Non-empty string | No | Embedding provider model name. |
-| `apiBase` | Yes | Non-empty string | No | OpenAI-compatible API base URL. |
-| `apiKey` | Yes | Non-empty string | Yes | Embedding provider credential. |
-| `dimensions` | Yes | Positive integer | No | Fixed vector dimensions for the global memory database. |
-
-Enabling memory sends completed-turn text (not image bytes) to `memory.profile`, and sends extracted candidates plus search queries to the embedding endpoint. Derived memories are stored in `~/.tinker/memory/memory.sqlite`; newly inserted memory text is appended to the private development log `~/.tinker/memory/extracted-memories.log`.
-
-Atomic-memory profile example:
-
-```json
-{
-  "default": "text",
-  "profiles": {
-    "text": {
-      "model": "example-text-model",
-      "api": "chat-completions",
-      "apiBase": "https://api.example.com/v1",
-      "apiKey": "your-model-api-key",
-      "contextWindowTokens": 128000,
-      "maxSupportedOutputTokens": 8192,
-      "reasoning": {
-        "supportedEfforts": [
-          "low",
-          "medium",
-          "high"
-        ],
-        "defaultEffort": "medium"
-      },
-      "includeReasoningContent": false,
-      "stream": true,
-      "inputModalities": [
-        "text"
-      ],
-      "toolResultModalities": [
-        "text"
-      ]
-    }
-  },
-  "memory": {
-    "profile": "text",
-    "embedding": {
-      "name": "example-embedding-space",
-      "kind": "openai-compatible",
-      "model": "example-embedding-model",
-      "apiBase": "https://embeddings.example.com/v1",
-      "apiKey": "your-embedding-api-key",
-      "dimensions": 1024
-    }
-  }
-}
-```
 <!-- END GENERATED: MODEL PROFILE FIELDS -->
 
 Set `api` to `"responses"` to use the standard Responses API. Keep `apiBase`
@@ -563,6 +499,27 @@ one-shot `tinker run` command. See the
 [project command loader](src/tui/project-slash-commands.ts) for configuration
 validation and loading behavior.
 
+### Text memory
+
+Memory works without a model profile or embedding service in both the TUI and
+one-shot CLI. Session transcripts are appended to
+`<home>/.tinker/memory/records/<sessionId>.md`. `MemoryCreate` saves explicit notes
+to `memory/notes/<id>.md`, using `text` as the heading and optional `summary` as
+the body, with creation time and source workspace.
+
+`MemorySearch` has the same parameters and behavior as `Grep`, except `path` is
+not exposed: it always searches `<home>/.tinker/memory/`. Use `Read` on the returned
+paths, optionally with line offsets. There are no MemoryGet, MemoryUpdate, or
+MemoryDelete tools. Resume appends to the same record; cloning copies historical
+content; deleting a session leaves its memory record in place. `/memory` browses
+previews of records and notes.
+
+Old `models.json` memory configuration is ignored. Existing database and memory
+diagnostic files are moved to `<home>/.tinker/memory-legacy/<id>/` on first use;
+they are preserved but not searched or converted. Older session-local
+`observations.md` files move to records when those sessions are resumed.
+See [the memory design](docs/global-memory/global-memory-design.md).
+
 ### Global Runtime Data
 
 Tinker keeps private runtime state in a global home directory instead of inside
@@ -570,8 +527,8 @@ your projects. Each workspace maps to
 `~/.tinker/projects/<workspace-slug-hash>/` — the slug comes from the workspace
 directory name and the hash from its canonical absolute path, so one project
 always resolves to one storage directory even when reached through symlinks.
-That directory holds per-session SQLite databases, event logs, and observation
-logs (`sessions/<id>/`), background Bash task logs (`bash/`), imported image
+That directory holds per-session SQLite databases and event logs
+(`sessions/<id>/`), background Bash task logs (`bash/`), imported image
 assets (`assets/images/`), and prompt history (`prompt-history.jsonl`).
 Workspaces stay clean: no `.tinker/` directory is created inside them.
 

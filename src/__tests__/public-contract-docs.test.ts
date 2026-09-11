@@ -20,8 +20,6 @@ import {
 } from "../../scripts/render-public-contract-docs";
 import { parseModelProfiles } from "../cli/model-profiles";
 import {
-  MEMORY_CONFIG_FIELDS,
-  MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_REASONING_FIELDS,
   PUBLIC_CONFIG_FIELDS,
@@ -43,14 +41,9 @@ describe("public contract documentation rendering", () => {
     }
   });
 
-  test("renders all profile fields and production-valid text, image, and memory examples", () => {
+  test("renders all profile fields and production-valid text and image examples", () => {
     const rendered = renderModelProfileFields();
-    for (const field of [
-      ...MODEL_PROFILE_FIELDS,
-      ...MODEL_REASONING_FIELDS,
-      ...MEMORY_CONFIG_FIELDS,
-      ...MEMORY_EMBEDDING_FIELDS,
-    ]) {
+    for (const field of [...MODEL_PROFILE_FIELDS, ...MODEL_REASONING_FIELDS]) {
       expect(rendered).toContain(`\`${field.name}\``);
       expect(rendered).toContain(field.description);
     }
@@ -58,7 +51,7 @@ describe("public contract documentation rendering", () => {
     const examples = [...rendered.matchAll(/```json\n([\s\S]*?)\n```/g)].map(
       (match) => match[1],
     );
-    expect(examples).toHaveLength(3);
+    expect(examples).toHaveLength(2);
     for (const [index, example] of examples.entries()) {
       expect(example).toBeDefined();
       parseModelProfiles(example ?? "", `README example ${index + 1}`);
@@ -67,7 +60,6 @@ describe("public contract documentation rendering", () => {
     expect(examples[0]).toContain('"toolResultModalities": [');
     expect(examples[0]).toContain('"supportedEfforts": [');
     expect(examples[1]).toContain('"image"');
-    expect(examples[2]).toContain('"memory": {');
   });
 
   test("renders built-in slash command order, usage, and descriptions", () => {

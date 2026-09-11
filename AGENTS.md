@@ -28,10 +28,11 @@ content, recall session history, and call tools exposed by MCP servers.
   execute only after the current iteration's tool frames close.
 - `src/session` persists canonical session state in SQLite and provides resume,
   history retrieval, and session catalog operations. SQLite is the recovery
-  source of truth; event and observation logs are diagnostic projections.
-- `src/memory` owns global memory extraction, retrieval, and management across
-  sessions and workspaces, currently wired through the TUI. Global Memory is
-  separate from Recall, which retrieves canonical session history.
+  source of truth; event logs and searchable session Markdown are projections.
+- `src/memory` owns plain-text session records and explicit Markdown notes across
+  sessions and workspaces. MemorySearch reuses Grep with a fixed memory directory;
+  MemoryCreate writes notes. Read opens either source. Global Memory is separate
+  from Recall, which retrieves canonical session history.
 - `src/model` isolates provider-specific request mapping, streaming, token
   estimation, and preflight checks behind the model client boundary.
 - `src/tools` defines built-in tool schemas and executors. MCP tools are adapted

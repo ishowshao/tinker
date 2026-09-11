@@ -1,3 +1,4 @@
+import { sessionMemoryPath } from "../memory/memory-files";
 import { describe, expect, test } from "bun:test";
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -275,7 +276,7 @@ describe("runOneShot", () => {
         model.inputs[0]?.tools
           .filter((tool) => tool.name.startsWith("Memory"))
           .map((tool) => tool.name),
-      ).toEqual([]);
+      ).toEqual(["MemorySearch", "MemoryCreate"]);
       expect(messages.filter((message) => message.role === "system")).toHaveLength(1);
       expect(messages[0]).toMatchObject({ role: "system" });
       expect(messages[0]?.content).toContain(instructions.trim());
@@ -440,10 +441,7 @@ describe("runOneShot", () => {
         (await stat(path.join(sessionDirectory, "events.jsonl"))).mode & 0o777,
       ).toBe(0o600);
 
-      const observations = await readFile(
-        path.join(testSessionDirectory, "observations.md"),
-        "utf8",
-      );
+      const observations = await readFile(sessionMemoryPath("test-session"), "utf8");
       expect(observations).toContain("# Tinker Session test-session");
       expect(observations).toContain("- Prompt");
       expect(observations).toContain("Create notes.txt with one line: hello.");

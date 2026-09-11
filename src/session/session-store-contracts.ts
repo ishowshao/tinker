@@ -28,29 +28,6 @@ export type SessionMediaCompatibility = {
   readonly toolResultModalities: readonly ("text" | "image")[];
 };
 
-export type CompletedTurnMessageSnapshot =
-  | {
-      readonly ordinal: number;
-      readonly role: "user";
-      readonly content: string;
-    }
-  | {
-      readonly ordinal: number;
-      readonly role: "assistant";
-      readonly content: string | null;
-      readonly reasoningContent?: string | null;
-    }
-  | {
-      readonly ordinal: number;
-      readonly role: "tool";
-      readonly name: string;
-      readonly content: string;
-    };
-
-export type CompletedTurnSnapshot = {
-  readonly messages: readonly CompletedTurnMessageSnapshot[];
-};
-
 export type SessionCompatibilityContract = {
   modelName: string;
   profileName?: string;

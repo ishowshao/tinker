@@ -469,6 +469,7 @@ export type MemoryCreateRawResult =
   | {
       ok: true;
       status: "created" | "already_exists";
+      filePath?: string;
       memoryId: string;
       createdAt: string;
     }

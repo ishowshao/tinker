@@ -14,7 +14,8 @@ import {
 
 export const MEMORY_CREATE_TOOL_DEFINITION: ToolDefinition = Object.freeze({
   name: MEMORY_CREATE_TOOL_NAME,
-  description: "Create one global memory shared across sessions and workspaces.",
+  description:
+    "Save an explicit memory as a Markdown note shared across sessions and workspaces. Returns a file path that Read can open.",
   parameters: {
     type: "object",
     additionalProperties: false,
@@ -23,7 +24,7 @@ export const MEMORY_CREATE_TOOL_DEFINITION: ToolDefinition = Object.freeze({
         type: "string",
         minLength: 1,
         maxLength: MAX_MEMORY_TEXT_BYTES,
-        description: "A one-line searchable index for this memory.",
+        description: "A one-line Markdown heading for this memory.",
       },
       summary: {
         type: "string",
@@ -43,15 +44,12 @@ export function createMemoryCreateToolExecutor(options: {
     call: ToolCall,
     signal: AbortSignal,
   ) => Promise<MemoryCreateRawResult>;
-  readonly recordInvalidCall: (call: ToolCall) => Promise<void>;
 }): ToolExecutor {
   return defineToolExecutor("memory_create", {
     definition: MEMORY_CREATE_TOOL_DEFINITION,
     async execute(args, call, context): Promise<MemoryCreateRawResult> {
       const parsed = parseMemoryCreateArgs(args);
       if (!parsed.ok) {
-        throwIfTurnCancelled(context.signal);
-        await options.recordInvalidCall(call);
         throwIfTurnCancelled(context.signal);
         return { ok: false, error: parsed.error };
       }

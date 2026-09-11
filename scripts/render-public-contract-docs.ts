@@ -5,14 +5,11 @@ import { diffLines } from "diff";
 import { parseModelProfiles } from "../src/cli/model-profiles";
 import { PUBLIC_CLI_CONTRACT } from "../src/cli/public-cli-contract";
 import {
-  MEMORY_CONFIG_FIELDS,
-  MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_REASONING_FIELDS,
   PUBLIC_CONFIG_FIELDS,
   type ModelProfileField,
   type ModelReasoningField,
-  type MemoryEmbeddingField,
   type PublicConfigField,
 } from "../src/cli/public-config-contract";
 import { SLASH_COMMANDS } from "../src/tui/slash-commands";
@@ -157,27 +154,11 @@ export function renderModelProfileFields(): string {
     reasoningConstraint(field),
     field.description,
   ]);
-  const memoryRows = MEMORY_CONFIG_FIELDS.map((field) => [
-    `\`${field.name}\``,
-    field.required ? "Yes" : "No",
-    field.valueKind === "embedding-profile" ? "Object" : "Non-empty string",
-    field.secret ? "Yes" : "No",
-    field.description,
-  ]);
-  const embeddingRows = MEMORY_EMBEDDING_FIELDS.map((field) => [
-    `\`${field.name}\``,
-    field.required ? "Yes" : "No",
-    memoryEmbeddingConstraint(field),
-    field.secret ? "Yes" : "No",
-    field.description,
-  ]);
   const textDocument = createProfileExample(false);
   const imageDocument = createProfileExample(true);
-  const memoryDocument = createMemoryExample();
 
   parseModelProfiles(JSON.stringify(textDocument), "README text profile example");
   parseModelProfiles(JSON.stringify(imageDocument), "README image profile example");
-  parseModelProfiles(JSON.stringify(memoryDocument), "README memory profile example");
 
   return [
     "Profile fields:",
@@ -205,27 +186,6 @@ export function renderModelProfileFields(): string {
     JSON.stringify(imageDocument, null, 2),
     "```",
     "",
-    "The top-level `memory` object is optional. When present, every field below is required. It enables completed-turn extraction and `MemorySearch` only in the TUI; one-shot runs do not load memory.",
-    "",
-    renderTable(
-      ["Field", "Required", "Type / constraint", "Secret", "Description"],
-      memoryRows,
-    ),
-    "",
-    "`memory.embedding` fields:",
-    "",
-    renderTable(
-      ["Field", "Required", "Type / constraint", "Secret", "Description"],
-      embeddingRows,
-    ),
-    "",
-    "Enabling memory sends completed-turn text (not image bytes) to `memory.profile`, and sends extracted candidates plus search queries to the embedding endpoint. Derived memories are stored in `~/.tinker/memory/memory.sqlite`; newly inserted memory text is appended to the private development log `~/.tinker/memory/extracted-memories.log`.",
-    "",
-    "Atomic-memory profile example:",
-    "",
-    "```json",
-    JSON.stringify(memoryDocument, null, 2),
-    "```",
   ].join("\n");
 }
 
@@ -397,23 +357,6 @@ function createProfileExample(image: boolean): Record<string, unknown> {
   };
 }
 
-function createMemoryExample(): Record<string, unknown> {
-  return {
-    ...createProfileExample(false),
-    memory: {
-      profile: "text",
-      embedding: {
-        name: "example-embedding-space",
-        kind: "openai-compatible",
-        model: "example-embedding-model",
-        apiBase: "https://embeddings.example.com/v1",
-        apiKey: "your-embedding-api-key",
-        dimensions: 1_024,
-      },
-    },
-  };
-}
-
 function publicConfigArea(field: PublicConfigField): string {
   switch (field.section) {
     case "model":
@@ -484,15 +427,6 @@ function reasoningConstraint(field: ModelReasoningField): string {
 
 function modelProfileDefault(field: ModelProfileField): string {
   return field.defaultValue === undefined ? "—" : codeValue(field.defaultValue);
-}
-
-function memoryEmbeddingConstraint(field: MemoryEmbeddingField): string {
-  if (field.literalValue !== undefined) {
-    return `Literal ${codeValue(field.literalValue)}`;
-  }
-  return field.valueKind === "positive-integer"
-    ? "Positive integer"
-    : "Non-empty string";
 }
 
 function codeValue(value: string | number | boolean | readonly string[]): string {

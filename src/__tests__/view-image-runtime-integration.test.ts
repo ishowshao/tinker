@@ -1,3 +1,4 @@
+import { sessionMemoryPath } from "../memory/memory-files";
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -12,7 +13,6 @@ import type { AgentEvent } from "../events/types";
 import { runtimeIdFactory } from "../ids/runtime-id";
 import { OpenAIResponsesModelClient } from "../model/openai-responses-model-client";
 import { resolveSessionDatabasePath } from "../session/session-store";
-import { resolveWorkspaceStorageRoot } from "../session/workspace-storage";
 import { TEST_CONTEXT_BUDGET, TEST_CONTEXT_PROFILE } from "./test-runtime";
 import { isolateTinkerHome } from "./helpers/workspace-storage-test-support";
 
@@ -163,12 +163,7 @@ describe("ViewImage runtime integration", () => {
       ).toEqual({ count: 1 });
       database.close();
 
-      const observationsPath = path.join(
-        await resolveWorkspaceStorageRoot(workspace),
-        "sessions",
-        sessionId,
-        "observations.md",
-      );
+      const observationsPath = sessionMemoryPath(sessionId);
       const observationLog = await readFile(observationsPath, "utf8").catch(() => "");
       expect(observationLog).not.toContain("data:image");
       expect(observationLog).not.toContain("base64");

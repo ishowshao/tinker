@@ -244,7 +244,7 @@ describe("Recall session selection", () => {
     });
   });
 
-  test("default tooling exposes external Recall without a Memory dependency", async () => {
+  test("default tooling exposes external Recall alongside text memory", async () => {
     const f = await fixture();
     const tooling = createDefaultTooling({
       workspaceRoot: f.workspaceRoot,
@@ -253,7 +253,7 @@ describe("Recall session selection", () => {
       runtimeSession: createTestRuntime().runtimeSession,
     });
     try {
-      expect(tooling.registry.get("MemorySearch")).toBeUndefined();
+      expect(tooling.registry.get("MemorySearch")).toBeDefined();
       const result = await tooling.runtime.execute(
         createTestRuntime().toolCall({
           name: "RecallSearch",

@@ -835,7 +835,7 @@ function toolCallSummary(input: { name: string; args: unknown }): string {
     return `WebSearch ${toolQuery(input.args) ?? ""}`.trim();
   }
   if (input.name === "MemorySearch") {
-    return `MemorySearch ${memorySearchDetail(input.args)}`.trim();
+    return `MemorySearch ${toolPattern(input.args) ?? memorySearchDetail(input.args)}`.trim();
   }
   if (input.name === "MemoryCreate") {
     return "MemoryCreate";

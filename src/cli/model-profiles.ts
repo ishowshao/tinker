@@ -5,13 +5,10 @@ import {
 } from "../model/model-context-profile";
 import { parseModelApi, type ModelApi } from "../model/model-api";
 import {
-  MEMORY_CONFIG_FIELDS,
-  MEMORY_EMBEDDING_FIELDS,
   MODEL_PROFILE_FIELDS,
   MODEL_PROFILES_DOCUMENT_FIELDS,
   MODEL_REASONING_FIELDS,
 } from "./public-config-contract";
-import type { MemoryEmbeddingConfig } from "../memory/contracts";
 import type { ReasoningEffortConfig } from "../model/reasoning-effort";
 import type { ModelInputModality, ToolResultModality } from "../model/model-client";
 
@@ -34,12 +31,6 @@ export type { ModelInputModality, ToolResultModality } from "../model/model-clie
 export type ModelProfiles = {
   readonly defaultProfile: string;
   readonly profiles: ReadonlyMap<string, ModelProfile>;
-  readonly memory?: MemoryConfig;
-};
-
-export type MemoryConfig = {
-  readonly profile: string;
-  readonly embedding: MemoryEmbeddingConfig;
 };
 
 export async function loadModelProfiles(configPath: string): Promise<ModelProfiles> {
@@ -146,14 +137,9 @@ export function parseModelProfiles(raw: string, sourcePath: string): ModelProfil
     profiles.set(profileName, parseProfile(profileName, profileValue, sourcePath));
   }
 
-  const memory =
-    json.memory === undefined
-      ? undefined
-      : parseMemoryConfig(json.memory, profiles, sourcePath);
   return Object.freeze({
     defaultProfile,
     profiles,
-    ...(memory === undefined ? {} : { memory }),
   });
 }
 
@@ -370,56 +356,6 @@ function parseReasoning(value: unknown, where: string): ReasoningEffortConfig {
   });
 }
 
-function parseMemoryConfig(
-  value: unknown,
-  profiles: ReadonlyMap<string, ModelProfile>,
-  sourcePath: string,
-): MemoryConfig {
-  const where = `Model profiles ${sourcePath}: "memory"`;
-  if (!isRecord(value)) {
-    throw new Error(`${where} must be an object.`);
-  }
-  assertKnownKeys(
-    value,
-    MEMORY_CONFIG_FIELDS.map((field) => field.name),
-    where,
-  );
-  const profile = requireString(value.profile, `${where}.profile`);
-  if (!profiles.has(profile)) {
-    throw unknownProfileNamesError(profile, [...profiles.keys()]);
-  }
-  const embedding = parseMemoryEmbedding(value.embedding, `${where}.embedding`);
-  return Object.freeze({ profile, embedding });
-}
-
-function parseMemoryEmbedding(value: unknown, where: string): MemoryEmbeddingConfig {
-  if (!isRecord(value)) {
-    throw new Error(`${where} must be an object.`);
-  }
-  assertKnownKeys(
-    value,
-    MEMORY_EMBEDDING_FIELDS.map((field) => field.name),
-    where,
-  );
-  const name = requireString(value.name, `${where}.name`);
-  if (value.kind !== "openai-compatible") {
-    throw new Error(`${where}.kind must be "openai-compatible".`);
-  }
-  const model = requireString(value.model, `${where}.model`);
-  const apiBase = requireString(value.apiBase, `${where}.apiBase`);
-  requireHttpUrl(apiBase, `${where}.apiBase`);
-  const apiKey = requireString(value.apiKey, `${where}.apiKey`);
-  const dimensions = requirePositiveInteger(value.dimensions, `${where}.dimensions`);
-  return Object.freeze({
-    name,
-    kind: "openai-compatible",
-    model,
-    apiBase,
-    apiKey,
-    dimensions,
-  });
-}
-
 function parseInputModalities(
   value: unknown,
   name: string,
@@ -536,22 +472,6 @@ function requirePositiveInteger(value: unknown, name: string): number {
     throw new Error(`${name} must be a positive integer.`);
   }
   return value;
-}
-
-function requireHttpUrl(value: string, name: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    throw new Error(`${name} must be a valid HTTP(S) URL.`);
-  }
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    parsed.username !== "" ||
-    parsed.password !== ""
-  ) {
-    throw new Error(`${name} must be a valid HTTP(S) URL.`);
-  }
 }
 
 function parseBoolean(value: unknown, name: string): boolean {

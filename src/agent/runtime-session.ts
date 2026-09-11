@@ -1,3 +1,4 @@
+import { prepareSessionMemory, sessionMemoryPath } from "../memory/memory-files";
 import {
   RuntimeProviderRetry,
   type ProviderRetryDecision,
@@ -25,7 +26,7 @@ import type { EventSink } from "../events/event-sink";
 import { JsonlEventLog } from "../events/jsonl-event-log";
 import { ObservationTextLog } from "../events/observation-text-log";
 import type { AgentEvent, AgentEventInput } from "../events/types";
-import { runtimeIdFactory, type SessionId, type TurnId } from "../ids/runtime-id";
+import { runtimeIdFactory, type SessionId } from "../ids/runtime-id";
 import { ImageAssetStore, type ImportedImageAsset } from "../image/image-asset-store";
 import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import {
@@ -52,7 +53,6 @@ import { SessionError } from "../session/session-errors";
 import {
   createSessionCompatibilityContract,
   SessionStore,
-  type CompletedTurnSnapshot,
   type SessionRecoveryResult,
   type StoredSkillActivation,
 } from "../session/session-store";
@@ -83,8 +83,6 @@ import {
   type AskUserResolution,
   type AskUserSnapshot,
   type BashGuardSnapshot,
-  type CompletedTurnHook,
-  type CompletedTurnHookFailure,
   type CreateNewRuntimeSessionInput,
   type CreateRuntimeSessionInput,
   type ExecuteTurnInput,
@@ -123,9 +121,6 @@ export {
   type AskUserSnapshot,
   type BashGuardSnapshot,
   type BashGuardSource,
-  type CompletedTurnHook,
-  type CompletedTurnHookFailure,
-  type CompletedTurnHookInput,
   type ContextSurfaceRefreshSummary,
   type CreateRuntimeSessionInput,
   type ExecuteTurnInput,
@@ -347,6 +342,16 @@ class DefaultRuntimeSession implements RuntimeSession {
     }
     let session: DefaultRuntimeSession;
     try {
+      if (
+        input.persistence !== false &&
+        input.persistence?.observationLogPath === undefined
+      ) {
+        await prepareSessionMemory(
+          store.sessionDirectory,
+          input.selection.sessionId,
+          input.homeRoot,
+        );
+      }
       session = new DefaultRuntimeSession(
         input,
         dependencies,
@@ -474,16 +479,9 @@ class DefaultRuntimeSession implements RuntimeSession {
         ...(input.memorySearch === undefined
           ? {}
           : { memorySearch: input.memorySearch }),
-        ...(input.memoryGet === undefined ? {} : { memoryGet: input.memoryGet }),
         ...(input.memoryCreate === undefined
           ? {}
           : { memoryCreate: input.memoryCreate }),
-        ...(input.memoryUpdate === undefined
-          ? {}
-          : { memoryUpdate: input.memoryUpdate }),
-        ...(input.memoryDelete === undefined
-          ? {}
-          : { memoryDelete: input.memoryDelete }),
         ...(session.skillCatalog.skills.size === 0
           ? {}
           : {
@@ -1244,9 +1242,6 @@ class DefaultRuntimeSession implements RuntimeSession {
       pendingLedgerTurn.finish(result);
       settled = true;
       this.requireTooling().turnUndoManager?.completeTurn(turn);
-      if (result.status === "completed") {
-        this.notifyCompletedTurn(turn);
-      }
       await this.runtimeSkills.settleClosedTurnSkills();
       if (result.status === "completed") {
         await this.contextMaintenance.evaluateClosedTurnContextPressure();
@@ -1267,55 +1262,6 @@ class DefaultRuntimeSession implements RuntimeSession {
       if (this.state === "executing") {
         this.state = "ready";
       }
-    }
-  }
-
-  private notifyCompletedTurn(turn: TurnIdentity): void {
-    const hook = this.input.completedTurnHook;
-    if (hook === undefined) {
-      return;
-    }
-    let snapshot: CompletedTurnSnapshot;
-    try {
-      snapshot = this.store.readCompletedTurnSnapshot(turn.turnId);
-    } catch {
-      this.recordCompletedTurnHookFailure(
-        hook,
-        turn.turnId,
-        "completed_turn_snapshot_failed",
-      );
-      return;
-    }
-    try {
-      hook.enqueue({
-        workspaceRoot: this.input.workspaceRoot,
-        sessionId: this.sessionId,
-        turnId: turn.turnId,
-        snapshot,
-      });
-    } catch {
-      this.recordCompletedTurnHookFailure(
-        hook,
-        turn.turnId,
-        "completed_turn_enqueue_failed",
-      );
-    }
-  }
-
-  private recordCompletedTurnHookFailure(
-    hook: CompletedTurnHook,
-    turnId: TurnId,
-    reason: CompletedTurnHookFailure["reason"],
-  ): void {
-    try {
-      hook.recordFailure({
-        workspaceRoot: this.input.workspaceRoot,
-        sessionId: this.sessionId,
-        turnId,
-        reason,
-      });
-    } catch {
-      // Optional completed-turn integrations never fault a committed turn.
     }
   }
 
@@ -1744,7 +1690,7 @@ function createEventSink(
       ),
       new ObservationTextLog(
         input.persistence?.observationLogPath ??
-          path.join(sessionDirectory, "observations.md"),
+          sessionMemoryPath(input.selection.sessionId, input.homeRoot),
       ),
     );
   }

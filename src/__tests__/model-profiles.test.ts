@@ -121,63 +121,15 @@ describe("parseModelProfiles", () => {
     );
   });
 
-  test("strictly parses the optional atomic-memory configuration", () => {
+  test("ignores obsolete memory configuration without requiring an extraction profile", () => {
     const result = parseModelProfiles(memoryJson(), "/test/models.json");
-    expect(result.memory).toEqual({
-      profile: "deepseek",
-      embedding: {
-        name: "global-memory-v1",
-        kind: "openai-compatible",
-        model: "embedding-3",
-        apiBase: "https://embedding.example.test/v1",
-        apiKey: "embedding-key",
-        dimensions: 2_048,
-      },
-    });
-  });
-
-  test("rejects incomplete, unknown, and invalid memory configuration", () => {
-    for (const memory of [
-      null,
-      {},
-      { profile: "deepseek" },
-      { embedding: validMemoryEmbedding() },
-      {
-        profile: "missing",
-        embedding: validMemoryEmbedding(),
-      },
-      {
-        profile: "deepseek",
-        embedding: { ...validMemoryEmbedding(), kind: "custom" },
-      },
-      {
-        profile: "deepseek",
-        embedding: { ...validMemoryEmbedding(), apiBase: "not a URL" },
-      },
-      {
-        profile: "deepseek",
-        embedding: { ...validMemoryEmbedding(), dimensions: 0 },
-      },
-      {
-        profile: "deepseek",
-        embedding: { ...validMemoryEmbedding(), extra: true },
-      },
-      {
-        profile: "deepseek",
-        embedding: validMemoryEmbedding(),
-        extra: true,
-      },
-    ]) {
-      expect(() =>
-        parseModelProfiles(
-          JSON.stringify({
-            ...JSON.parse(VALID_JSON),
-            memory,
-          }),
-          "/test/models.json",
-        ),
-      ).toThrow();
-    }
+    expect(result).not.toHaveProperty("memory");
+    expect(() =>
+      parseModelProfiles(
+        JSON.stringify({ ...JSON.parse(VALID_JSON), memory: { profile: "missing" } }),
+        "/test/models.json",
+      ),
+    ).not.toThrow();
   });
 
   test("rejects invalid JSON", () => {

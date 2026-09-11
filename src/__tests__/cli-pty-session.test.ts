@@ -277,7 +277,7 @@ test(
       observeRestoredViewport("view", viewCloseMark);
 
       await submitPrompt(harness, "/memory");
-      await harness.waitForScreen("No stored memories.");
+      await harness.waitForScreen("8 memories");
       const memoryCloseMark = harness.markTranscript();
       await harness.press("escape");
       await harness.waitForPromptReady();
@@ -777,17 +777,6 @@ function transientSurfaceWorkspaceFiles(): Readonly<Record<string, string>> {
           apiKey: "pty-placeholder-key",
           contextWindowTokens: 128 * 1_024,
           maxSupportedOutputTokens: 16 * 1_024,
-        },
-      },
-      memory: {
-        profile: "work",
-        embedding: {
-          name: "pty-memory-space",
-          kind: "openai-compatible",
-          model: "pty-embedding",
-          apiBase: "https://embedding.example.test/v1",
-          apiKey: "pty-embedding-key",
-          dimensions: 3,
         },
       },
     })}\n`,

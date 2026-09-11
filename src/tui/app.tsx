@@ -84,7 +84,9 @@ export type AppProps = {
   writeClipboard?: (markdown: string) => Promise<void>;
   onQuit?: () => void;
   initialNotice?: string;
-  listStoredMemories?: () => readonly StoredMemorySummary[];
+  listStoredMemories?: () =>
+    | readonly StoredMemorySummary[]
+    | Promise<readonly StoredMemorySummary[]>;
   memoryDisabledNotice?: string;
 };
 
@@ -418,13 +420,13 @@ export function App(props: AppProps) {
     restoreStaticViewport();
   };
 
-  const openMemoryView = () => {
+  const openMemoryView = async () => {
     if (props.listStoredMemories === undefined) {
       setNotice(props.memoryDisabledNotice ?? "memory disabled: not configured");
       return;
     }
     try {
-      const snapshot = props.listStoredMemories();
+      const snapshot = await props.listStoredMemories();
       setNotice(undefined);
       setMemoryView(snapshot);
     } catch (error) {
@@ -646,7 +648,7 @@ export function App(props: AppProps) {
           return true;
         }
         if (command.type === "memory") {
-          openMemoryView();
+          void openMemoryView();
           return true;
         }
         if (command.type === "copy") {

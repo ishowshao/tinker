@@ -46,7 +46,7 @@ import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 import { clipboardWriterForEnvironment } from "../tui/clipboard";
-import { initializeTuiMemory } from "./tui-memory";
+import { listMemoryFiles } from "../memory/memory-files";
 import { prepareShikiHighlighter } from "../tui/shiki-highlighter";
 import { createReasoningEffortController } from "../model/reasoning-effort";
 
@@ -63,13 +63,6 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
     options.publicConfig.mode === "profile" ? options.publicConfig.profiles : undefined;
   const config = options.initialRunnerConfig;
   const workspaceRoot = await realpath(config.workspaceRoot);
-  const memory = await initializeTuiMemory({
-    config:
-      options.publicConfig.mode === "profile" ? options.publicConfig.memory : undefined,
-    env: options.env,
-  });
-  const memoryCoordinator = memory.coordinator;
-  const memoryNotice = memory.notice;
   let controller: DefaultTuiSessionController | undefined;
   let instance: ReturnType<typeof render> | undefined;
   let disposeReason: SessionDisposeReason = { type: "tui_exit" };
@@ -125,31 +118,6 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
           source: sessionConfig.bashGuardSource,
           surface: "tui" as const,
         },
-        ...(memoryCoordinator === undefined
-          ? {}
-          : {
-              memorySearch: memoryCoordinator.createSearchToolExecutor({
-                workspaceRoot,
-                sessionId,
-              }),
-              memoryGet: memoryCoordinator.createGetToolExecutor({
-                workspaceRoot,
-                sessionId,
-              }),
-              memoryCreate: memoryCoordinator.createCreateToolExecutor({
-                workspaceRoot,
-                sessionId,
-              }),
-              memoryUpdate: memoryCoordinator.createUpdateToolExecutor({
-                workspaceRoot,
-                sessionId,
-              }),
-              memoryDelete: memoryCoordinator.createDeleteToolExecutor({
-                workspaceRoot,
-                sessionId,
-              }),
-              completedTurnHook: memoryCoordinator,
-            }),
       };
       if (mode === "resume") {
         return createRuntimeSession({
@@ -320,13 +288,7 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
         onQuit={() => {
           quitRequested = true;
         }}
-        initialNotice={memoryNotice}
-        memoryDisabledNotice={memoryNotice}
-        listStoredMemories={
-          memoryCoordinator === undefined
-            ? undefined
-            : () => memoryCoordinator.listStoredMemories()
-        }
+        listStoredMemories={() => listMemoryFiles()}
       />,
       { incrementalRendering: true },
     );
@@ -350,7 +312,6 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
               );
       }
     }
-    memoryCoordinator?.dispose();
   }
 
   if (primaryError !== undefined) {

@@ -1,3 +1,5 @@
+import { createMemorySearchToolExecutor } from "../memory/memory-search-tool";
+import { createFileMemoryCreateToolExecutor } from "../memory/memory-files";
 import { createAskUserToolExecutor } from "./ask-user";
 import { createBashToolExecutor } from "./bash";
 import { ShellTaskManager } from "./bash-task";
@@ -182,10 +184,7 @@ export function createDefaultTooling(options: {
   skillCoordinator?: SkillActivationCoordinator;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
-  memoryGet?: ToolExecutor;
   memoryCreate?: ToolExecutor;
-  memoryUpdate?: ToolExecutor;
-  memoryDelete?: ToolExecutor;
   enableTurnUndo?: boolean;
   imageAssetStore?: ImageAssetStore;
   supportsViewImage?: boolean;
@@ -259,21 +258,26 @@ export function createDefaultTooling(options: {
   registry.register(createContextStatusToolExecutor());
   registry.register(createContextSwapCandidatesToolExecutor());
   registry.register(createContextSwapToolExecutor());
-  if (options.memorySearch !== undefined) {
-    registry.register(options.memorySearch);
-  }
-  if (options.memoryGet !== undefined) {
-    registry.register(options.memoryGet);
-  }
-  if (options.memoryCreate !== undefined) {
-    registry.register(options.memoryCreate);
-  }
-  if (options.memoryUpdate !== undefined) {
-    registry.register(options.memoryUpdate);
-  }
-  if (options.memoryDelete !== undefined) {
-    registry.register(options.memoryDelete);
-  }
+  registry.register(
+    options.memorySearch ??
+      createMemorySearchToolExecutor({
+        workspaceRoot: options.workspaceRoot,
+        cwdState,
+        homeRoot: options.homeRoot,
+        ripgrep: {
+          command: toolingConfig.ripgrepPath,
+          timeoutMs: toolingConfig.grepTimeoutMs,
+          maxBufferBytes: toolingConfig.grepMaxBufferBytes,
+        },
+      }),
+  );
+  registry.register(
+    options.memoryCreate ??
+      createFileMemoryCreateToolExecutor({
+        workspaceRoot: options.workspaceRoot,
+        homeRoot: options.homeRoot,
+      }),
+  );
   if (options.skillCatalog !== undefined) {
     if (options.skillCatalog.skills.size === 0) {
       throw new Error("An empty Agent Skill catalog must not register tooling.");

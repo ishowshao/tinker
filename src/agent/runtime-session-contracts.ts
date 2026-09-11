@@ -15,7 +15,7 @@ import type { ContextSurfaceComponent } from "../context/context-surface";
 import type { ToolCompletionInput } from "../context/protocol-frame";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEventInput, AgentEventType } from "../events/types";
-import type { RuntimeIdFactory, SessionId, TurnId } from "../ids/runtime-id";
+import type { RuntimeIdFactory, SessionId } from "../ids/runtime-id";
 import type { ImportedImageAsset } from "../image/image-asset-store";
 import type { ImageAssetRef, UserMessage } from "../image/image-types";
 import type { ProjectInstructionManifest } from "../instructions/project-instructions";
@@ -28,11 +28,7 @@ import type {
 } from "../model/model-context-profile";
 import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import type { ObservationBuilder } from "../observation/observation-builder";
-import type {
-  CompletedTurnSnapshot,
-  SessionRecoveryResult,
-  SessionStore,
-} from "../session/session-store";
+import type { SessionRecoveryResult, SessionStore } from "../session/session-store";
 import type { SkillCatalogSnapshot } from "../skills/skill-loader";
 import type { createDefaultTooling } from "../tools/registry";
 import type { TurnUndoResult } from "../tools/turn-undo-manager";
@@ -211,25 +207,6 @@ export type SkillsUpdateSummary = {
   readonly addedOverrideCount: number;
 };
 
-export type CompletedTurnHookInput = {
-  readonly workspaceRoot: string;
-  readonly sessionId: SessionId;
-  readonly turnId: TurnId;
-  readonly snapshot: CompletedTurnSnapshot;
-};
-
-export type CompletedTurnHookFailure = {
-  readonly workspaceRoot: string;
-  readonly sessionId: SessionId;
-  readonly turnId: TurnId;
-  readonly reason: "completed_turn_snapshot_failed" | "completed_turn_enqueue_failed";
-};
-
-export type CompletedTurnHook = {
-  enqueue(input: CompletedTurnHookInput): void;
-  recordFailure(input: CompletedTurnHookFailure): void;
-};
-
 export type CommonRuntimeSessionInput = {
   workspaceRoot: string;
   homeRoot?: string;
@@ -254,11 +231,7 @@ export type CommonRuntimeSessionInput = {
   webFetchRefiner?: Refiner;
   toolingConfig?: PublicToolingConfig;
   memorySearch?: ToolExecutor;
-  memoryGet?: ToolExecutor;
   memoryCreate?: ToolExecutor;
-  memoryUpdate?: ToolExecutor;
-  memoryDelete?: ToolExecutor;
-  completedTurnHook?: CompletedTurnHook;
   enableTurnUndo?: boolean;
   enableAskUser?: boolean;
   enableProviderRetryPrompt?: boolean;

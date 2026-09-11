@@ -467,7 +467,9 @@ function renderMemoryCreateObservation(
   }
   const text = memoryMutationText(call);
   const result = `MemoryCreate ${raw.status} memory=${raw.memoryId} created_at=${raw.createdAt}.`;
-  return text === undefined ? result : `${result}\ntext: ${text}`;
+  const location =
+    raw.filePath === undefined ? result : `${result}\nPath: ${raw.filePath}`;
+  return text === undefined ? location : `${location}\ntext: ${text}`;
 }
 
 function renderMemoryUpdateObservation(

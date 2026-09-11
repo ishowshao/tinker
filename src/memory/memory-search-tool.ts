@@ -1,189 +1,29 @@
-import { throwIfTurnCancelled } from "../agent/turn-cancellation";
-import {
-  defineToolExecutor,
-  type MemorySearchRawResult,
-  type ToolDefinition,
-  type ToolExecutor,
-} from "../tools/types";
-import {
-  MAX_MEMORY_KEYWORD_BYTES,
-  MAX_MEMORY_KEYWORDS,
-  MAX_MEMORY_QUERY_BYTES,
-  MEMORY_SEARCH_TOOL_NAME,
-} from "./contracts";
+import { createGrepToolExecutor, type GrepToolOptions } from "../tools/grep";
+import { type ToolExecutor } from "../tools/types";
+import { ensureMemoryDirectory, memoryDirectory } from "./memory-files";
 
-export const MEMORY_SEARCH_TOOL_DEFINITION: ToolDefinition = Object.freeze({
-  name: MEMORY_SEARCH_TOOL_NAME,
-  description:
-    "Search memories retained from historical conversation turns across sessions and workspaces. Use this proactively when prior user preferences, project decisions, environment facts, or verified solutions may help. Put exact-match terms in `keywords`, put a concise semantic description in `query`, and provide both for hybrid recall. Each result is a historical record containing a one-line index text, a possibly truncated detailed summary, a `memoryId`, and a `sourceSessionId`. Results may be stale or incorrect, so verify current workspace facts with current tools. To read the full stored record for a result, call `MemoryGet` with its `memoryId`.",
-  parameters: {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      query: {
-        type: "string",
-        minLength: 1,
-        maxLength: MAX_MEMORY_QUERY_BYTES,
-        description:
-          "A concise semantic description of the fact, preference, decision, or solution to recall. Drives vector similarity search.",
-      },
-      keywords: {
-        type: "array",
-        maxItems: MAX_MEMORY_KEYWORDS,
-        items: {
-          type: "string",
-          minLength: 1,
-          maxLength: MAX_MEMORY_KEYWORD_BYTES,
-        },
-        description:
-          "Exact terms to match literally, such as identifiers, error strings, paths, or project names. Drives keyword search. Keywords shorter than 3 characters cannot be matched.",
-      },
-    },
-    required: [],
-  },
-});
-
-export function createMemorySearchToolExecutor(options: {
-  readonly search: (
-    query: string | null,
-    keywords: readonly string[],
-    signal: AbortSignal,
-  ) => Promise<MemorySearchRawResult>;
-  readonly recordInvalidCall: (input: {
-    readonly queryBytes: number;
-    readonly keywordCount: number;
-  }) => Promise<void>;
-}): ToolExecutor {
-  return defineToolExecutor("memory_search", {
-    definition: MEMORY_SEARCH_TOOL_DEFINITION,
-    async execute(args, _call, context): Promise<MemorySearchRawResult> {
-      throwIfTurnCancelled(context.signal);
-      const parsed = parseMemorySearchArgs(args);
-      if (!parsed.ok) {
-        await options.recordInvalidCall({
-          queryBytes: parsed.queryBytes,
-          keywordCount: parsed.keywordCount,
-        });
-        return { ok: false, error: parsed.error };
-      }
-      const result = await options.search(
-        parsed.query,
-        parsed.keywords,
-        context.signal,
-      );
-      throwIfTurnCancelled(context.signal);
-      return result;
-    },
-  });
-}
-
-type ParsedMemorySearchArgs =
-  | {
-      readonly ok: true;
-      readonly query: string | null;
-      readonly keywords: readonly string[];
-    }
-  | {
-      readonly ok: false;
-      readonly queryBytes: number;
-      readonly keywordCount: number;
-      readonly error: string;
-    };
-
-function invalidMemorySearchArgs(
-  args: Record<string, unknown>,
-  error: string,
-  queryBytes?: number,
-): ParsedMemorySearchArgs {
-  return {
-    ok: false,
-    queryBytes:
-      queryBytes ??
-      (typeof args.query === "string" ? Buffer.byteLength(args.query, "utf8") : 0),
-    keywordCount: Array.isArray(args.keywords) ? args.keywords.length : 0,
-    error,
+export function createMemorySearchToolExecutor(
+  options: GrepToolOptions & { homeRoot?: string },
+): ToolExecutor {
+  const grep = createGrepToolExecutor(options);
+  const properties = {
+    ...(grep.definition.parameters.properties as Record<string, unknown>),
   };
-}
-
-function parseMemorySearchArgs(args: unknown): ParsedMemorySearchArgs {
-  if (!isRecord(args)) {
-    return {
-      ok: false,
-      queryBytes: 0,
-      keywordCount: 0,
-      error:
-        "MemorySearch arguments must be an object containing only query and keywords.",
-    };
-  }
-  const unexpected = Object.keys(args).find(
-    (key) => key !== "query" && key !== "keywords",
-  );
-  if (unexpected !== undefined) {
-    return invalidMemorySearchArgs(
-      args,
-      `MemorySearch received unexpected field: ${unexpected}.`,
-    );
-  }
-
-  let query: string | null = null;
-  if (args.query !== undefined) {
-    if (typeof args.query !== "string") {
-      return invalidMemorySearchArgs(args, "MemorySearch.query must be a string.");
-    }
-    const trimmed = args.query.trim();
-    const bytes = Buffer.byteLength(trimmed, "utf8");
-    if (bytes < 1 || bytes > MAX_MEMORY_QUERY_BYTES) {
-      return invalidMemorySearchArgs(
-        args,
-        `MemorySearch.query must be 1 to ${MAX_MEMORY_QUERY_BYTES} UTF-8 bytes after trimming.`,
-        bytes,
-      );
-    }
-    query = trimmed;
-  }
-
-  const keywords: string[] = [];
-  if (args.keywords !== undefined) {
-    if (!Array.isArray(args.keywords)) {
-      return invalidMemorySearchArgs(
-        args,
-        "MemorySearch.keywords must be an array of strings.",
-      );
-    }
-    if (args.keywords.length > MAX_MEMORY_KEYWORDS) {
-      return invalidMemorySearchArgs(
-        args,
-        `MemorySearch.keywords may contain at most ${MAX_MEMORY_KEYWORDS} entries.`,
-      );
-    }
-    for (const entry of args.keywords) {
-      if (typeof entry !== "string") {
-        return invalidMemorySearchArgs(
-          args,
-          "Every MemorySearch keyword must be a string.",
-        );
+  delete properties.path;
+  return {
+    ...grep,
+    definition: {
+      ...grep.definition,
+      name: "MemorySearch",
+      description: `Search historical session records and explicitly saved notes across workspaces. Use proactively when earlier decisions, preferences, or work may help. This is Grep with its path fixed to ${memoryDirectory(options.homeRoot)}. Read returned paths to see complete records. ${grep.definition.description}`,
+      parameters: { ...grep.definition.parameters, properties },
+    },
+    async execute(args, call, context) {
+      const directory = await ensureMemoryDirectory(options.homeRoot);
+      if (typeof args !== "object" || args === null || Array.isArray(args)) {
+        return grep.execute(args, call, context);
       }
-      const trimmed = entry.trim();
-      const bytes = Buffer.byteLength(trimmed, "utf8");
-      if (bytes < 1 || bytes > MAX_MEMORY_KEYWORD_BYTES) {
-        return invalidMemorySearchArgs(
-          args,
-          `Every MemorySearch keyword must be 1 to ${MAX_MEMORY_KEYWORD_BYTES} UTF-8 bytes after trimming.`,
-        );
-      }
-      keywords.push(trimmed);
-    }
-  }
-
-  if (query === null && keywords.length === 0) {
-    return invalidMemorySearchArgs(
-      args,
-      "MemorySearch requires a non-empty query or at least one keyword.",
-    );
-  }
-  return { ok: true, query, keywords: Object.freeze(keywords) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+      return grep.execute({ ...args, path: directory }, call, context);
+    },
+  };
 }
