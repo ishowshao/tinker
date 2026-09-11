@@ -30,7 +30,7 @@ content, recall session history, and call tools exposed by MCP servers.
   history retrieval, and session catalog operations. SQLite is the recovery
   source of truth; event logs and searchable session Markdown are projections.
 - `src/memory` owns plain-text session records and explicit Markdown notes across
-  sessions and workspaces. MemorySearch reuses Grep with a fixed memory directory;
+  sessions and workspaces. MemorySearch scans Markdown lines for literal keywords;
   MemoryCreate writes notes. Read opens either source. Global Memory is separate
   from Recall, which retrieves canonical session history.
 - `src/model` isolates provider-specific request mapping, streaming, token

@@ -427,7 +427,18 @@ export type ContextMaintenanceHandle = {
   ): Promise<ContextSwapRawResult>;
 };
 
+export type MemorySearchLine = { lineNumber: number; match: boolean; text: string };
+export type MemoryTextSearchResult = {
+  ok: true;
+  format: "text";
+  files: readonly { filePath: string; lines: readonly MemorySearchLine[] }[];
+  returnedResults: number;
+  hasMore: boolean;
+  nextOffset?: number;
+};
+
 export type MemorySearchRawResult =
+  | MemoryTextSearchResult
   | {
       ok: true;
       degraded: "vector" | "fts" | null;

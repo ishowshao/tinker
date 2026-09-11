@@ -974,6 +974,8 @@ function toolRawResultSummary(name: string, args: unknown, raw: ToolRawResult): 
       if (!raw.ok) {
         return base;
       }
+      if ("format" in raw)
+        return `${base} -> ${raw.returnedResults} matching lines in ${raw.files.length} files`;
       return `${base} -> ${raw.matches.length} derived memor${raw.matches.length === 1 ? "y" : "ies"}`;
     case "memory_get":
       if (!raw.ok) {

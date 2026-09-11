@@ -39,24 +39,19 @@ async function fixture() {
   };
 }
 
-test("MemoryCreate writes Markdown; MemorySearch is fixed-path Grep and Read opens both sources", async () => {
+test("MemoryCreate writes Markdown; MemorySearch finds both sources and Read opens both sources", async () => {
   const f = await fixture();
   const tooling = createDefaultTooling(f);
   try {
     const searchSchema = tooling.registry
       .definitions()
       .find((tool) => tool.name === "MemorySearch")!;
-    const grepSchema = tooling.registry
-      .definitions()
-      .find((tool) => tool.name === "Grep")!;
-    const expected = {
-      ...(grepSchema.parameters.properties as Record<string, unknown>),
-    };
-    delete expected.path;
-    expect(searchSchema.parameters).toEqual({
-      ...grepSchema.parameters,
-      properties: expected,
-    });
+    expect(Object.keys(searchSchema.parameters.properties as object)).toEqual([
+      "keywords",
+      "context",
+      "limit",
+      "offset",
+    ]);
     const note = await tooling.runtime.execute({
       name: "MemoryCreate",
       args: { text: "发布 policy", summary: "Use AFTER_APPROVAL for releases." },
@@ -73,34 +68,25 @@ test("MemoryCreate writes Markdown; MemorySearch is fixed-path Grep and Read ope
     await mkdir(path.dirname(record), { recursive: true });
     await writeFile(record, "# Session\n\nUser: verify AFTER_APPROVAL\n");
     await writeFile(path.join(f.workspaceRoot, "outside.md"), "AFTER_APPROVAL");
-    const args = {
-      pattern: "AFTER_APPROVAL",
-      output_mode: "content",
-      "-C": 1,
-      head_limit: 1,
-    };
+    const args = { keywords: ["after_approval"], context: 1, limit: 1 };
     const memory = await tooling.runtime.execute({ name: "MemorySearch", args });
-    const grep = await tooling.runtime.execute({
-      name: "Grep",
-      args: { ...args, path: memoryDirectory(f.homeRoot) },
-    });
-    expect(memory).toEqual(grep);
     expect(memory).toMatchObject({
-      kind: "grep",
+      kind: "memory_search",
       ok: true,
+      format: "text",
       hasMore: true,
       nextOffset: 1,
+      files: [{ filePath: note.filePath }],
     });
     const second = await tooling.runtime.execute({
       name: "MemorySearch",
       args: { ...args, offset: 1 },
     });
-    expect(second).toMatchObject({ ok: true, filenames: [record] });
-    const all = await tooling.runtime.execute({
-      name: "MemorySearch",
-      args: { pattern: "AFTER_APPROVAL", path: f.workspaceRoot },
+    expect(second).toMatchObject({
+      ok: true,
+      files: [{ filePath: record }],
+      hasMore: false,
     });
-    expect(all).toMatchObject({ ok: true, filenames: [note.filePath, record] });
     const read = await tooling.runtime.execute({
       name: "Read",
       args: { file_path: note.filePath },

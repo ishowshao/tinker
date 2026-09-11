@@ -1,3 +1,4 @@
+import { renderMemoryTextSearch } from "../memory/memory-search-output";
 import type { ToolCall } from "../agent/types";
 import type { ToolResultContent } from "../agent/types";
 import {
@@ -410,6 +411,7 @@ function renderMemorySearchObservation(raw: MemorySearchRawResult): string {
   if (!raw.ok) {
     return `MemorySearch unavailable: ${raw.error}`;
   }
+  if ("format" in raw) return renderMemoryTextSearch(raw);
   const degradedNote =
     raw.degraded === "vector"
       ? " vector search unavailable; keyword results only."

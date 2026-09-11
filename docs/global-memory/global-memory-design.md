@@ -47,14 +47,24 @@ App Store 审核通过后自动发布。
 
 ## MemorySearch 与 Read
 
-MemorySearch 复用 Grep 执行器，schema 是 Grep 去掉 path。执行时固定 path 为整个
-memory 目录，复用 pattern、glob、输出模式、上下文、分页、大小写和 multiline
-行为以及现有 ripgrep 配置。结果使用 grep raw kind；Read 按返回路径和行号读取。
-不增加向量、语义排序或额外索引。
+MemorySearch 独立遍历 memory 目录的 Markdown 文件，逐行进行忽略大小写的字面量
+子串匹配，不依赖 Grep 或 rg。只搜索普通 .md 文件，不跟随符号链接。
 
-MemoryGet、MemoryUpdate、MemoryDelete 不再注册。旧会话中这些工具及旧
-MemorySearch 的结果类型仍保留解码和展示支持。新会话的记忆工具仅有 Search/Create，
-在 TUI 与 one-shot 中均无需配置即可使用。
+参数为 keywords（必填非空数组，任意关键词命中即可）、context（默认 3）、limit
+（默认 20，至少 1）、offset（默认 0）。context/offset 为非负安全整数。关键词去掉
+首尾空白，不允许空串或换行；不解释正则，同一行命中多个关键词只计一次。
+
+文件按路径稳定排序。逐行流式读取，选满当前页并补齐上下文、确认下一个命中后即可
+停止，不计算全库总数。结果返回 hasMore/nextOffset，文件变动可能影响后续分页。
+上下文可以包含下一页的命中，重叠片段合并。长行最多保留 500 个 Unicode 码点，
+围绕最早命中的位置截取；无命中的上下文长行截取开头。原文由 Read 按行读取。
+
+内容按文件分组，每个路径仅展示一次；组内保留行号，`>` 标记命中行，`…` 分隔
+不连续片段。结果以 memory_search raw kind 保存结构化 files/lines，format 为 text，
+观察由这些结构生成。旧向量记忆结果以及前一版 grep 结果仍可解码展示。
+
+MemoryGet、MemoryUpdate、MemoryDelete 不再注册。Search/Create 在 TUI 与 one-shot
+中均无需专用配置即可使用。
 
 ## 浏览与旧数据
 

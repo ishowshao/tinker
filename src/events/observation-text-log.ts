@@ -197,6 +197,13 @@ function toolCallSummary(call: ToolCall): string {
       .join("\n");
   }
 
+  if (call.name === "MemorySearch" && Array.isArray(args.keywords)) {
+    return [
+      `Call ID: ${call.toolCallId}`,
+      `Keywords: ${JSON.stringify(args.keywords)}`,
+    ].join("\n");
+  }
+
   const filePath = stringProperty(args, "file_path");
   const pattern = stringProperty(args, "pattern");
   return [

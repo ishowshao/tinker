@@ -261,14 +261,7 @@ export function createDefaultTooling(options: {
   registry.register(
     options.memorySearch ??
       createMemorySearchToolExecutor({
-        workspaceRoot: options.workspaceRoot,
-        cwdState,
         homeRoot: options.homeRoot,
-        ripgrep: {
-          command: toolingConfig.ripgrepPath,
-          timeoutMs: toolingConfig.grepTimeoutMs,
-          maxBufferBytes: toolingConfig.grepMaxBufferBytes,
-        },
       }),
   );
   registry.register(

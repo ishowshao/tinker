@@ -507,9 +507,16 @@ one-shot CLI. Session transcripts are appended to
 to `memory/notes/<id>.md`, using `text` as the heading and optional `summary` as
 the body, with creation time and source workspace.
 
-`MemorySearch` has the same parameters and behavior as `Grep`, except `path` is
-not exposed: it always searches `<home>/.tinker/memory/`. Use `Read` on the returned
-paths, optionally with line offsets. There are no MemoryGet, MemoryUpdate, or
+`MemorySearch` searches Markdown under `<home>/.tinker/memory/` using literal,
+case-insensitive keywords. Supply `keywords` (any keyword may match), optionally
+`context` (default 3), `limit` (default 20 matching lines), and `offset` (default 0).
+Each line counts once, even if several keywords match. Keywords cannot span lines.
+Passages are grouped by file with line numbers; `>` marks matching lines and `…`
+separates passages. Long lines retain up to 500 code points around the earliest
+match. Use `Read` with `offset` and `limit` to expand a passage, or `nextOffset` to
+continue searching. There are no regex, glob, output-mode, or multiline parameters.
+Results follow file-path order; changes between calls can affect pagination.
+There are no MemoryGet, MemoryUpdate, or
 MemoryDelete tools. Resume appends to the same record; cloning copies historical
 content; deleting a session leaves its memory record in place. `/memory` browses
 previews of records and notes.
