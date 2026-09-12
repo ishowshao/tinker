@@ -5,6 +5,18 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-09-12
+
+### Changed
+
+- Tighten the Bash output preview window from 200 lines to 50 lines (keeping
+  the first and last 25 lines). Model observations for shell commands now stay
+  within a smaller context budget, while the complete output remains available
+  through the reported `outputFilePath` and `TaskOutput` pagination.
+- Streamline the runtime system instructions into a concise sectioned format.
+  Detailed tool-usage guidance moves into the tool descriptions themselves,
+  reducing the static system prompt sent with every model request.
+
 ## [2.12.0] - 2026-09-11
 
 ### Changed
@@ -481,7 +493,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.12.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.13.0...HEAD
+[2.13.0]: https://github.com/ishowshao/tinker/releases/tag/v2.13.0
 [2.12.0]: https://github.com/ishowshao/tinker/releases/tag/v2.12.0
 [2.11.0]: https://github.com/ishowshao/tinker/releases/tag/v2.11.0
 [2.10.0]: https://github.com/ishowshao/tinker/releases/tag/v2.10.0
