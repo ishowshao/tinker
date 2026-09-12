@@ -26,30 +26,30 @@ describe("bounded output preview", () => {
     }
   });
 
-  test("keeps 200 lines and windows 201 lines with the same complete and streaming contract", () => {
-    const twoHundred = numberedLines(MAX_PREVIEW_LINES);
-    expect(preview(twoHundred)).toEqual({
-      preview: twoHundred.join("\n"),
+  test("keeps 50 lines and windows 51 lines with the same complete and streaming contract", () => {
+    const fifty = numberedLines(MAX_PREVIEW_LINES);
+    expect(preview(fifty)).toEqual({
+      preview: fifty.join("\n"),
       truncated: false,
     });
 
-    const twoHundredOne = numberedLines(MAX_PREVIEW_LINES + 1);
-    const complete = preview(twoHundredOne);
+    const fiftyOne = numberedLines(MAX_PREVIEW_LINES + 1);
+    const complete = preview(fiftyOne);
     const streaming = buildBoundedOutputPreview({
-      outputLines: twoHundredOne.length,
-      firstLines: twoHundredOne.slice(0, PREVIEW_EDGE_LINES),
-      lastLines: twoHundredOne.slice(-PREVIEW_EDGE_LINES),
+      outputLines: fiftyOne.length,
+      firstLines: fiftyOne.slice(0, PREVIEW_EDGE_LINES),
+      lastLines: fiftyOne.slice(-PREVIEW_EDGE_LINES),
     });
 
     expect(complete).toEqual(streaming);
     expect(complete.truncated).toBe(true);
     expect(complete.omittedLines).toBe(1);
-    expect(complete.preview).toContain("line-100\n");
+    expect(complete.preview).toContain("line-25\n");
     expect(complete.preview).toContain(
-      "... output omitted: lines 101-101 (1 line). Full output is available at outputFilePath.",
+      "... output omitted: lines 26-26 (1 line). Full output is available at outputFilePath.",
     );
-    expect(complete.preview).toContain("\nline-102");
-    expect(complete.preview).not.toContain("\nline-101\n");
+    expect(complete.preview).toContain("\nline-27");
+    expect(complete.preview).not.toContain("\nline-26\n");
   });
 
   test("bounds a one-MiB logical line and reports its exact omitted UTF-8 bytes", () => {
@@ -116,7 +116,7 @@ describe("bounded output preview", () => {
   test("does not double-count lines omitted by line and total-byte windows", () => {
     const lines = Array.from(
       { length: 240 },
-      (_, index) => `record-${index + 1}-${"x".repeat(256)}`,
+      (_, index) => `record-${index + 1}-${"x".repeat(1_024)}`,
     );
     const result = preview(lines);
     const retainedLineNumbers = result.preview

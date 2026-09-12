@@ -640,32 +640,32 @@ describe("Bash tool", () => {
         await tooling.runtime.execute({
           providerToolCallId: "call_1",
           name: "Bash",
-          args: { command: "for i in $(seq 1 205); do echo line-$i; done" },
+          args: { command: "for i in $(seq 1 55); do echo line-$i; done" },
         }),
       );
 
       expect(raw.ok).toBe(true);
       expect(raw.truncated).toBe(true);
-      expect(raw.outputLines).toBe(205);
+      expect(raw.outputLines).toBe(55);
       expect(raw.omittedLines).toBe(5);
       expect(raw.preview).toContain("line-1");
-      expect(raw.preview).toContain("line-100");
+      expect(raw.preview).toContain("line-25");
       expect(raw.preview).toContain(
-        "... output omitted: lines 101-105 (5 lines). Full output is available at outputFilePath.",
+        "... output omitted: lines 26-30 (5 lines). Full output is available at outputFilePath.",
       );
-      expect(raw.preview).toContain("line-106");
-      expect(raw.preview).toContain("line-205");
-      expect(raw.preview).not.toContain("line-105\n");
+      expect(raw.preview).toContain("line-31");
+      expect(raw.preview).toContain("line-55");
+      expect(raw.preview).not.toContain("line-30\n");
 
       const oneOmitted = asBashRawResult(
         await tooling.runtime.execute({
           providerToolCallId: "call_2",
           name: "Bash",
-          args: { command: "for i in $(seq 1 201); do echo line-$i; done" },
+          args: { command: "for i in $(seq 1 51); do echo line-$i; done" },
         }),
       );
       expect(oneOmitted.preview).toContain(
-        "... output omitted: lines 101-101 (1 line). Full output is available at outputFilePath.",
+        "... output omitted: lines 26-26 (1 line). Full output is available at outputFilePath.",
       );
     } finally {
       await rm(workspace, { recursive: true });

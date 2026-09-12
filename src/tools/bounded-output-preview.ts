@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
-export const MAX_PREVIEW_LINES = 200;
-export const PREVIEW_EDGE_LINES = 100;
+export const MAX_PREVIEW_LINES = 50;
+export const PREVIEW_EDGE_LINES = 25;
 export const MAX_PREVIEW_BYTES = 32 * 1024;
 export const MAX_PREVIEW_LINE_BYTES = 8 * 1024;
 
