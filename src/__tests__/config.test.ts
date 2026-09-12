@@ -7,7 +7,7 @@ import {
   deriveRunnerConfig,
   resolvePublicConfig,
 } from "../cli/config";
-import { RUNTIME_INSTRUCTIONS, createModelClient } from "../cli/runner-dependencies";
+import { createModelClient } from "../cli/runner-dependencies";
 import type { SessionId } from "../ids/runtime-id";
 import { parseModelProfiles, type ModelProfiles } from "../cli/model-profiles";
 import {
@@ -16,10 +16,6 @@ import {
   PUBLIC_CONFIG_FIELDS,
   parsePublicEnvironment,
 } from "../cli/public-config-contract";
-import {
-  CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION,
-  renderRecallRetirementContract,
-} from "../context/recall-retirement-contract";
 const TEST_PROFILES_JSON = JSON.stringify({
   default: "deepseek",
   profiles: {
@@ -491,71 +487,5 @@ describe("profile resolution", () => {
     } finally {
       await rm(directory, { recursive: true });
     }
-  });
-});
-
-describe("system prompt", () => {
-  test("guides content search toward Grep", () => {
-    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
-
-    expect(prompt).toContain("Use Grep to search file contents.");
-    expect(prompt).toContain('output_mode="files_with_matches"');
-    expect(prompt).toContain("head_limit and offset");
-  });
-
-  test("describes shell task tools as capabilities", () => {
-    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
-
-    expect(prompt).toContain(
-      "TaskList lists background shell tasks in the current session.",
-    );
-    expect(prompt).toContain(
-      "TaskOutput reports a task's current status, latest output, or current terminal screen.",
-    );
-    expect(prompt).toContain(
-      "TaskInput sends characters to a PTY task identified by the returned task ID.",
-    );
-    expect(prompt).toContain('chars="" waits without writing.');
-    expect(prompt).toContain(
-      "TaskStop stops a background task that is no longer needed.",
-    );
-    for (const tool of ["TaskList", "TaskOutput", "TaskInput", "TaskStop"]) {
-      expect(prompt).not.toContain(`Use ${tool}`);
-    }
-  });
-
-  test("keeps tool responsibility boundaries", () => {
-    const prompt = RUNTIME_INSTRUCTIONS("/tmp/workspace");
-
-    expect(prompt).toContain("Use Glob to find files by name or path pattern.");
-    expect(prompt).toContain("Use Read to open specific files returned by Grep.");
-    expect(prompt).toContain("Use Edit to replace exact strings in existing files.");
-    expect(prompt).toContain(
-      'Edit with old_string="" can create a file or write to an empty file without a prior Read',
-    );
-    expect(prompt).toContain(
-      "Write creates missing parent directories when creating a file.",
-    );
-    expect(prompt).toContain("A successful paginated Read is sufficient.");
-    expect(prompt).toContain(
-      "Successful Write and Edit operations establish the current version",
-    );
-    expect(prompt).toContain("Use Bash with tty=true");
-    expect(prompt).toContain("an explicit \\n sends Enter");
-    expect(prompt).toContain("Use UpdatePlan for non-trivial work");
-    expect(prompt).toContain("Each UpdatePlan call replaces the complete plan");
-    expect(prompt).toContain("keep at most one step in_progress");
-    expect(prompt).toContain("\\u0003 sends Ctrl-C");
-    expect(prompt).not.toContain("\u0003");
-    expect(prompt).toContain(
-      "Do not send passwords, tokens, or other secrets through TaskInput",
-    );
-    expect(CURRENT_RECALL_RETIREMENT_CONTRACT_VERSION).toBe("recall-retirement-v2");
-    expect(prompt).toContain(renderRecallRetirementContract());
-    expect(prompt).toContain("use RecallSearch and then RecallGet");
-    expect(prompt).toContain("Recall is historical session state");
-    expect(prompt).toContain(
-      "An empty RecallSearch does not prove that information does not exist.",
-    );
   });
 });

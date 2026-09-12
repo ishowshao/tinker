@@ -48,7 +48,15 @@ export function createBashToolExecutor(options: BashToolOptions): ToolExecutor {
     definition: {
       name: "Bash",
       description:
-        "Run a shell command locally. If the foreground timeout expires while the command is still running, it continues as a background task and returns a task ID; it is not killed. Use TaskOutput to inspect progress, then decide whether to keep waiting or stop it with TaskStop.",
+        "Run a shell command locally. " +
+        "If the foreground timeout expires while the command is still running, " +
+        "it continues as a background task and returns a task ID; it is not killed. " +
+        "Use TaskOutput to inspect progress, then decide whether to keep waiting or stop it with TaskStop. " +
+        "Use run_in_background=true for persistent processes such as dev servers and watch commands, " +
+        "or when you have independent work to do while a command runs. " +
+        "For finite commands whose result is needed next, such as builds, tests, and checks, " +
+        "prefer foreground execution when no independent work remains. " +
+        "Set a sufficient foreground timeout; the call returns as soon as the command finishes.",
       parameters: {
         type: "object",
         additionalProperties: false,
