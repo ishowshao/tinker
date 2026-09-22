@@ -592,7 +592,7 @@ describe("SessionCatalog listing", () => {
       await rm(workspace, { recursive: true, force: true });
       await rm(homeRoot, { recursive: true, force: true });
     }
-  });
+  }, 15000); // Creates and fsyncs 25 real databases; this is not a latency assertion.
 
   test("keeps a corrupt session as an unavailable summary without blocking the list", async () => {
     const workspace = await mkdtemp(path.join(os.tmpdir(), "tinker-catalog-corrupt-"));

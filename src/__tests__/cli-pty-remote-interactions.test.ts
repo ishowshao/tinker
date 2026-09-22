@@ -87,7 +87,19 @@ test("PTY: Esc ends a service provider retry without inventing a new prompt", as
         f.sessionId,
       ],
     });
-    await harness.press("escape");
+    // A restored interaction can paint before Ink subscribes to keyboard input.
+    const stopDeadline = Date.now() + 5000;
+    while (
+      f.service.session(f.sessionId).view().interaction &&
+      Date.now() < stopDeadline
+    ) {
+      await harness.press("escape");
+      await Bun.sleep(100);
+    }
+    expect(
+      f.service.session(f.sessionId).view().interaction,
+      harness.diagnosticText("provider retry dismissed by Escape"),
+    ).toBeUndefined();
     await harness.waitForPromptReady();
     expect((await f.terminal(receipt)).status).toBe("failed");
     expect(

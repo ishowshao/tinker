@@ -795,7 +795,11 @@ describe("Recall session selection", () => {
     await f.target.close("tui_exit");
     await rm(`${f.target.databasePath}-wal`, { force: true });
     await rm(`${f.target.databasePath}-shm`, { force: true });
-    await writeFile(f.target.databasePath, "not sqlite");
+    // Replace the inode so deferred SQLite cleanup cannot rewrite the corrupt fixture.
+    const corruptPath = `${f.target.databasePath}.corrupt`;
+    await writeFile(corruptPath, "not sqlite", { mode: 0o600 });
+    await rename(corruptPath, f.target.databasePath);
+    expect(await readFile(f.target.databasePath, "utf8")).toBe("not sqlite");
     expect(
       await f.execute("RecallSearch", {
         sessionId: f.target.sessionId,
