@@ -5,6 +5,57 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-23
+
+### Changed
+
+- Make the default `tinker` TUI a client of a shared local service. Tasks belong
+  to the service and continue after the terminal exits or disconnects; use
+  `/resume` to reconnect to a running or completed session. The existing TUI
+  layout, editing, shortcuts, and interaction controls are preserved.
+- Automatically register local workspaces with the service. Multiple terminals
+  can use independent sessions or connect to the same session. Existing local
+  sessions are adopted only after their original process releases ownership.
+- Keep independent in-process execution available with `tinker --local` (also
+  required on Windows, where default local service startup is not supported).
+  One-shot `tinker run` remains independent. Default service/client configuration
+  is bootstrapped in the user's Tinker home; existing explicit configurations
+  remain supported. See `docs/remote-access.md` for configuration and migration.
+- Require services using the current installation to be stopped before
+  `tinker update` replaces package files. Use `tinker serve --stop`, update, then
+  `tinker serve --background`; system-managed services resume supervision.
+  Older services without the stop endpoint must be stopped explicitly before
+  switching to 3.0.0. Updates do not automatically interrupt active work.
+
+### Added
+
+- Connect the full TUI to service-side history, streaming output, tool state,
+  stop and follow-up input, user questions, command confirmations, provider
+  retries, images, context maintenance, undo, cloning, model selection, and
+  reasoning configuration. File completion and project commands use the server
+  workspace, and connection/task status appears in the existing bottom bar.
+- Support terminal and iOS handoff, reconnection, and durable request receipts
+  that prevent duplicate execution when a response is lost. Service restarts
+  mark unfinished work interrupted instead of replaying uncertain operations.
+- Add opt-in macOS LaunchAgent supervision through `tinker serve --install`,
+  with status, stop, restart, and uninstall commands. Supervision runs in the
+  user login session; it does not keep a sleeping Mac awake.
+- Load session runtimes on demand and reclaim disconnected idle runtimes while
+  preserving history, session settings, and ownership. Configurable resident
+  limits default to 16 loaded runtimes, 4 concurrent turns, 32 running or queued
+  turns, and a five-minute idle timeout. Active tasks and interactions are kept.
+- Drain work before stopping or restarting the service. The default 30-second
+  grace period cancels shutdown if work is still active; explicit `--force`
+  interrupts remaining work after that period.
+
+### Fixed
+
+- Preserve canonical history and pending interaction identity across client
+  disconnects, reject competing stale interaction responses, and prevent local
+  processes from taking over service-owned sessions during idle reclamation.
+- Synchronize background-process and attached-terminal tests with observable
+  readiness and cancellation rather than assuming immediate process/input setup.
+
 ## [2.13.0] - 2026-09-12
 
 ### Changed
@@ -493,7 +544,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v2.13.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/ishowshao/tinker/releases/tag/v3.0.0
 [2.13.0]: https://github.com/ishowshao/tinker/releases/tag/v2.13.0
 [2.12.0]: https://github.com/ishowshao/tinker/releases/tag/v2.12.0
 [2.11.0]: https://github.com/ishowshao/tinker/releases/tag/v2.11.0

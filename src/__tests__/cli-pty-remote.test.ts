@@ -102,7 +102,6 @@ test("PTY: full service TUI streams, steers, renders tools and stops an attached
   const { RemoteExecutionModel, remoteTuiFixture } = await import(
     "./helpers/remote-tui-test-support"
   );
-  const { until } = await import("./helpers/remote-test-support");
   const model = new RemoteExecutionModel();
   const f = await remoteTuiFixture(model);
   let harness;
@@ -148,8 +147,14 @@ test("PTY: full service TUI streams, steers, renders tools and stops an attached
     expect(model.aborted).toBe(false);
     harness = await start("Send a follow-up for the active turn");
     await harness.waitForScreen("REMOTE_STREAM_2");
-    await harness.press("escape");
-    await until(() => model.aborted);
+    // Ink may paint the restored view before its input effect subscribes.
+    // Retry the idempotent stop key until the service observes cancellation.
+    const stopDeadline = Date.now() + 5000;
+    while (!model.aborted && Date.now() < stopDeadline) {
+      await harness.press("escape");
+      await Bun.sleep(100);
+    }
+    expect(model.aborted, harness.diagnosticText("attached task cancelled")).toBe(true);
     await harness.waitForPromptReady();
     await harness.type("/quit");
     await harness.waitForScreen("Exit the TUI");
