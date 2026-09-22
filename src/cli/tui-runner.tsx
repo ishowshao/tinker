@@ -1,10 +1,6 @@
 import { render } from "ink";
 import { realpath } from "node:fs/promises";
-import {
-  createRuntimeSession,
-  type RuntimeSession,
-  type SessionDisposeReason,
-} from "../agent/runtime-session";
+import type { RuntimeSession, SessionDisposeReason } from "../agent/runtime-session";
 import type { EventSink } from "../events/event-sink";
 import type { AgentEvent } from "../events/types";
 import type {
@@ -13,11 +9,6 @@ import type {
 } from "../agent/assistant-text-delta";
 import { createUuidV7 } from "../ids/uuid-v7";
 import type { SessionId } from "../ids/runtime-id";
-import {
-  buildSystemPrompt,
-  loadProjectInstructions,
-  projectInstructionManifest,
-} from "../instructions/project-instructions";
 import { ResumeProjectionReader } from "../session/resume-projection";
 import { SessionCatalog } from "../session/session-catalog";
 import { App } from "../tui/app";
@@ -36,19 +27,13 @@ import {
   type ResolvedPublicConfig,
   type RunnerConfig,
 } from "./config";
-import {
-  createRunnerModelClient,
-  createWebFetchRefiner,
-  RUNTIME_INSTRUCTIONS,
-} from "./runner-dependencies";
+import { createInteractiveRuntimeSession } from "./interactive-runtime";
 import { resolveSessionProfileName, type ModelProfile } from "./model-profiles";
-import { loadSkillCatalog } from "../skills/skill-loader";
 import { loadProjectSlashCommands } from "../tui/project-slash-commands";
 import { createWorkspaceFileLister } from "../tui/workspace-file-search";
 import { clipboardWriterForEnvironment } from "../tui/clipboard";
 import { listMemoryFiles } from "../memory/memory-files";
 import { prepareShikiHighlighter } from "../tui/shiki-highlighter";
-import { createReasoningEffortController } from "../model/reasoning-effort";
 
 export type RunTuiOptions = {
   readonly publicConfig: ResolvedPublicConfig;
@@ -76,61 +61,16 @@ export async function runTui(options: RunTuiOptions): Promise<void> {
       mode: "new" | "resume",
       sessionId: SessionId,
       sink: EventSink & AssistantTextDeltaSink,
-    ): Promise<RuntimeSession> => {
-      const reasoningEffort = createReasoningEffortController(sessionConfig.reasoning);
-      const modelClient = createRunnerModelClient(
-        sessionConfig,
-        undefined,
-        options.env,
-        reasoningEffort,
-      );
-      const projectInstructions = await loadProjectInstructions(workspaceRoot);
-      const skillCatalog = await loadSkillCatalog({ workspaceRoot });
-      const common = {
+    ): Promise<RuntimeSession> =>
+      createInteractiveRuntimeSession({
+        config: sessionConfig,
         workspaceRoot,
-        modelName: sessionConfig.modelName,
-        profileName: sessionConfig.profileName,
-        maxIterations: sessionConfig.maxIterations,
-        includeReasoningContent: sessionConfig.includeReasoningContent,
-        contextProfile: sessionConfig.contextProfile,
-        contextBudget: sessionConfig.contextBudget,
-        modelClient,
-        systemPrompt: buildSystemPrompt({
-          workspaceRoot,
-          runtimeInstructions: RUNTIME_INSTRUCTIONS(workspaceRoot),
-          projectInstructions,
-        }),
-        projectInstruction: projectInstructionManifest(projectInstructions),
-        skillCatalog,
-        presentationSinks: [sink],
-        assistantTextDeltaSink: sink,
-        webFetchRefiner: createWebFetchRefiner(
-          sessionConfig,
-          options.env,
-          reasoningEffort,
-        ),
-        toolingConfig: options.publicConfig.tooling,
-        enableTurnUndo: true,
-        enableAskUser: true,
-        enableProviderRetryPrompt: true,
-        bashGuard: {
-          mode: sessionConfig.bashGuardMode,
-          source: sessionConfig.bashGuardSource,
-          surface: "tui" as const,
-        },
-      };
-      if (mode === "resume") {
-        return createRuntimeSession({
-          ...common,
-          selection: { mode, sessionId },
-        });
-      }
-
-      return createRuntimeSession({
-        ...common,
         selection: { mode, sessionId },
+        toolingConfig: options.publicConfig.tooling,
+        env: options.env,
+        sink,
+        owner: "local-tui",
       });
-    };
 
     const projectionStore = new TuiProjectionStore({
       sessionId: config.sessionId,
