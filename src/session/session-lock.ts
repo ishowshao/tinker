@@ -46,6 +46,8 @@ const defaultDependencies: SessionLeaseDependencies = {
 
 export class SessionLease {
   private released = false;
+  private retained = false;
+  private writerActive = true;
   private lockPath: string;
 
   private constructor(
@@ -167,7 +169,37 @@ export class SessionLease {
     this.lockPath = path.join(sessionDirectory, "active.lock");
   }
 
+  /** Keep the canonical process lease while its current SQLite writer is unloaded. */
+  retainOwnership(): this {
+    this.requireActive();
+    this.retained = true;
+    return this;
+  }
+  claim(sessionDirectory: string, sessionId: SessionId): this {
+    this.requireActive();
+    if (
+      !this.retained ||
+      this.writerActive ||
+      sessionId !== this.record.sessionId ||
+      path.join(sessionDirectory, "active.lock") !== this.lockPath
+    )
+      throw new Error("Retained session lease is not available for this writer.");
+    this.writerActive = true;
+    return this;
+  }
+  async releaseOwnership(): Promise<void> {
+    if (this.released) return;
+    if (this.retained && this.writerActive)
+      throw new Error("Close the session writer before releasing service ownership.");
+    this.retained = false;
+    await this.release();
+  }
+
   async release(): Promise<void> {
+    if (this.retained && !this.released) {
+      this.writerActive = false;
+      return;
+    }
     if (this.released) {
       return;
     }

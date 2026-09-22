@@ -87,9 +87,10 @@ test("adoption acquires one canonical runtime for concurrent full clients withou
     expect(f.service.session(local.record.id).initialized).toBe(true);
     expect(
       (
-        await new SessionCatalog({ workspaceRoot: f.workspace, homeRoot: f.root }).get(
-          parseSessionId(local.record.id),
-        )
+        await new SessionCatalog({
+          workspaceRoot: f.workspace,
+          homeRoot: f.root,
+        }).get(parseSessionId(local.record.id))
       ).turnCount,
     ).toBe(1);
   } finally {
@@ -118,9 +119,14 @@ for (const signal of ["SIGTERM", "SIGKILL"] as const) {
         { stdout: "pipe", stderr: "pipe" },
       );
       const reader = (owner.stdout as ReadableStream<Uint8Array>).getReader();
-      expect(new TextDecoder().decode((await reader.read()).value)).toContain(
-        "LEASE_READY",
-      );
+      const ready = await reader.read();
+      if (ready.done) {
+        const error = await new Response(
+          owner.stderr as ReadableStream<Uint8Array>,
+        ).text();
+        throw new Error(`Local session owner exited (${await owner.exited}): ${error}`);
+      }
+      expect(new TextDecoder().decode(ready.value)).toContain("LEASE_READY");
       reader.releaseLock();
       expect(
         String(
@@ -239,6 +245,8 @@ test("explicit empty-session adoption and restarted service retain the original 
     const store = await RemoteServiceStore.open(path.join(f.root, "service"));
     reopened = new RemoteService(store, f.workspaces, f.factory, f.root);
     await reopened.initialize();
+    expect(reopened.session(local.record.id).initialized).toBe(false);
+    await reopened.session(local.record.id).open();
     expect(reopened.session(local.record.id).initialized).toBe(true);
     expect(reopened.session(local.record.id).history().messages).toHaveLength(0);
     expect(model.requests).toBe(0);

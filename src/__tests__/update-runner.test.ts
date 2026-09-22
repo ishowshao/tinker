@@ -19,6 +19,23 @@ const GLOBAL_ROOT = `${PREFIX}/lib/node_modules`;
 const PACKAGE_ROOT = `${GLOBAL_ROOT}/tinker-agent`;
 
 describe("CLI update runner", () => {
+  test("refuses to replace package files while a service is still using the installation", async () => {
+    const harness = updateHarness("1.8.0");
+    harness.dependencies.assertServiceUpgradeSafe = async () => {
+      throw new Error("Stop the running service before upgrading");
+    };
+    const result = await runUpdate(
+      {
+        metadata: { name: "tinker-agent", version: "1.7.0" },
+        stdout: new MemoryWriter(),
+        env: {},
+      },
+      harness.dependencies,
+    ).catch((error: unknown) => error);
+    expect(String(result)).toContain("Stop the running service");
+    expect(harness.calls.some((args) => args[0] === "install")).toBe(false);
+  });
+
   test("updates the active global installation to the exact npm latest version", async () => {
     const writer = new MemoryWriter();
     const harness = updateHarness("1.8.0");
@@ -206,6 +223,7 @@ describe("CLI update runner", () => {
 function updateHarness(latestVersion: string, failAt?: "view" | "install") {
   const calls: string[][] = [];
   const dependencies: Mutable<UpdateRunnerDependencies> = {
+    assertServiceUpgradeSafe: async () => undefined,
     packageRoot: PACKAGE_ROOT,
     npmCwd: "/tmp",
     runNpm: async (input) => {

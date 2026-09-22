@@ -374,10 +374,9 @@ export class SessionStore implements SessionLedgerCommitter {
       await validateSecureOptionalFile(optionalFile, input.sessionId);
     }
 
-    const lease = await SessionLease.acquire({
-      sessionDirectory,
-      sessionId: input.sessionId,
-    });
+    const lease = input.lease
+      ? input.lease.claim(sessionDirectory, input.sessionId)
+      : await SessionLease.acquire({ sessionDirectory, sessionId: input.sessionId });
     let database: Database | undefined;
     try {
       database = openWritableDatabase(databasePath);
@@ -1315,6 +1314,10 @@ export class SessionStore implements SessionLedgerCommitter {
         await removeKnownInitializationFiles(stagingDirectory).catch(() => undefined);
       }
     }
+  }
+
+  retainLease(): SessionLease {
+    return this.lease.retainOwnership();
   }
 
   async close(reason: SessionCloseReason): Promise<void> {

@@ -72,8 +72,8 @@ this one-time certificate generation. The complete bundle is published atomicall
 so concurrent first launches share one identity. The directory is private (0700)
 and configuration/credential files are 0600. The self-signed local certificate is
 trusted only through that client configuration, not installed into system trust.
-It expires after 365 days; certificate renewal/system supervision belong to the
-resident-operation phase and are not automatic yet.
+It expires after 365 days; certificate renewal is not automatic. System supervision
+can be installed explicitly as described below.
 
 Auto-created service configuration binds to loopback with a dynamically selected
 port and starts with an empty workspace list. Local registration fills the durable
@@ -112,7 +112,7 @@ bun run tinker connect --config .data/client.json --tui --workspace tinker
 `--background` returns JSON only after the service is ready, or reuses a ready
 service with matching configuration. Multiple concurrent launchers converge on
 the same instance. The detached process survives launcher and terminal exit;
-it is not yet a login service or a crash-restarting supervisor. Without either
+install the optional LaunchAgent below for login startup and crash restart. Without either
 flag, `serve` continues running in the foreground. `--status` does not start or
 repair anything; it returns exit 0 for online, exit 1 when not ready or on error.
 The two flags are mutually exclusive. Plain `bun run tinker` now opens the full
@@ -149,8 +149,126 @@ single-service operation.
 Port `0` is useful for isolated services, but existing client pairing files still
 need the actual URL returned by startup and can change after restart. Keep a
 fixed port for manually paired clients. The default entry updates its auto-created
-local client URL after each startup. Log rotation and system supervision remain
-part of resident operation.
+local client URL after each startup. The optional system supervisor uses the same
+state-directory ownership and discovery mechanism.
+
+## Resident operation
+
+The service retains lightweight canonical session leases after startup, and opens
+runtimes only when a client or operation needs them. Startup repairs interrupted
+canonical state without loading providers, Skills or MCP runtimes for every old
+session. Idle unloading closes SQLite readers, runtime/tool resources and MCP
+connections, and discards projection/event buffers while retaining the canonical
+lease and history. A local process cannot take over an unloaded service session.
+A resumed client reconstructs its view from canonical state. Model profile and
+session reasoning/YOLO overrides survive unloading.
+
+A runtime is reclaimable only when it has no connected clients, HTTP request,
+turn, queued prompt, interaction, maintenance operation or running/stopping
+background task. Clients disconnecting never cancel accepted work. On pressure,
+the oldest reclaimable runtime is unloaded; if every slot is busy or connected,
+the request fails with `RUNTIME_LIMIT` instead of evicting active work. Historical
+session count is independent of this runtime cap.
+
+Optional `resident` configuration in `service.json` (shown with defaults):
+
+```json
+{
+  "resident": {
+    "maxLoadedSessions": 16,
+    "maxConcurrentTurns": 4,
+    "maxPendingTurns": 32,
+    "idleTimeoutMs": 300000,
+    "shutdownGraceMs": 30000
+  }
+}
+```
+
+The pending-turn limit includes running and queued work across the service;
+per-session queues retain their existing eight-waiter cap. FIFO execution slots
+limit concurrent turns, and queued cancellation does not run the model. New work
+beyond capacity is rejected before acceptance. Control requests retain admission
+headroom so clients can answer interactions or stop tasks under load. The three
+count limits accept integers 1–4096; durations accept 1–86400000 milliseconds.
+Concurrent turns cannot exceed loaded runtimes, and pending turns cannot be less
+than concurrent turns. Configuration changes require a restart. `serve --status`
+reports version, phase, loaded/managed session counts, execution/queue counts and
+policy; the authenticated `GET /v1/service` also exposes resource status.
+
+### macOS login startup and crash restart
+
+```sh
+bun run tinker serve --install
+bun run tinker serve --status
+bun run tinker serve --stop
+bun run tinker serve --background
+bun run tinker serve --uninstall
+```
+
+These commands also accept `--config <service.json>`. Installation drains any
+existing detached service, writes a per-user LaunchAgent in the OS user's
+`~/Library/LaunchAgents/` and starts it in the GUI login domain. `TINKER_HOME`
+continues to select service/session data, not the LaunchAgents directory.
+Repeated installation reuses an existing installation. The job runs `serve` in
+the foreground and conditionally restarts it through a private enabled marker,
+with a 10-second crash restart throttle. Plain `tinker` and `serve --background`
+reuse/reactivate the supervisor instead of starting a competing detached owner.
+The mechanism follows Apple's [LaunchAgent lifecycle](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
+and [conditional KeepAlive contract](https://github.com/apple-oss-distributions/launchd/blob/main/man/launchd.plist.5).
+
+Installation captures `TINKER_*`, Exa credentials, PATH/HOME, locale/timezone and
+proxy/TLS environment into private `supervisor-env.json` (0600) beside the service
+state. The plist contains that file path rather than provider credentials. Put any
+additional MCP/tool environment keys in that file before restarting. Both the
+runtime configuration and child tools receive the restored environment. It is a
+per-user login agent: logout stops it, and it does not keep the machine awake or
+run before login. macOS needs a GUI login domain; other platforms retain explicit
+foreground/background operation and do not install a supervisor in this batch.
+
+`--stop` disables automatic restart and waits for the service to release its
+lease. `--background` or the next default TUI launch enables it again.
+`--uninstall` stops and removes only this job, its enabled marker and saved
+supervisor environment; it retains service/client configuration and all history.
+CLI registration/removal is explicit; starting the default TUI never installs a
+login agent. Inspect the private `service.log` for startup/shutdown diagnostics.
+Log rotation and certificate renewal remain manual operational tasks.
+
+### Shutdown and upgrade
+
+```sh
+bun run tinker serve --restart
+bun run tinker serve --stop --force
+# For a global npm installation:
+tinker serve --stop
+tinker update
+tinker serve --background
+```
+
+`--stop`, `--restart`, installation and removal use the private local control
+socket. The service first stops accepting new work, while allowing answers and
+explicit stop requests for existing tasks. It waits up to `shutdownGraceMs` for
+turns, maintenance and background tasks to finish. Without `--force`, timeout
+cancels shutdown, restores admission and reports `SERVICE_BUSY`. With `--force`,
+remaining work is interrupted after the grace period. Receipts preserve that
+interruption across restarts, including when a runtime cooperatively cancels its
+canonical turn; uncertain work is never replayed. Signals also drain up to the
+grace period, then dispose resources; a hard shutdown deadline prevents a stuck
+runtime from indefinitely keeping the process alive. A hard exit leaves canonical
+recovery to the next service startup.
+
+`tinker update` checks all private live discovery sockets for services using the
+same package installation before npm replaces files. An enabled supervisor also
+blocks upgrade while its process is in crash backoff. Stop it explicitly first;
+updates do not force cancellation or silently switch a running service to a new
+version. A different published application version is rejected by default startup
+with instructions to restart. Source-checkout changes require `serve --restart`
+as well, even when `package.json` has the same version. Failed upgrades leave the
+service stopped for inspection or rollback; session data stays outside the package.
+
+A service started before the resident control endpoint existed needs a one-time
+explicit process stop. `serve --status` can report its live PID even if normalized
+configuration differs. The new control command reports the verified PID when it
+cannot drain an older service; it never sends a signal based on a stale PID file.
 
 ## Current directory and existing sessions
 

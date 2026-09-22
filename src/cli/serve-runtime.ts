@@ -16,7 +16,7 @@ export function createHostedRuntimeFactory(
   homeRoot?: string,
 ): HostedRuntimeFactory {
   const entries = () => (typeof workspaces === "function" ? workspaces() : workspaces);
-  const factory: HostedRuntimeFactory = async ({ record, sink }) => {
+  const factory: HostedRuntimeFactory = async ({ record, sink, lease }) => {
     const workspace = entries().find((entry) => entry.id === record.workspaceId);
     if (!workspace || workspace.path !== record.workspacePath)
       throw new Error("Managed workspace configuration changed.");
@@ -39,6 +39,7 @@ export function createHostedRuntimeFactory(
     });
     const runtime = await createInteractiveRuntimeSession({
       config,
+      sessionLease: lease,
       workspaceRoot: workspace.path,
       ...(homeRoot === undefined ? {} : { homeRoot }),
       selection: { mode: record.initialized ? "resume" : "new", sessionId },

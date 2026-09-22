@@ -90,10 +90,11 @@ if (mode === "client") {
   const service = new RemoteService(
     store,
     workspaces,
-    async ({ record, sink }) => {
+    async ({ record, sink, lease }) => {
       const sessionId = parseSessionId(record.id);
       const runtime = await createRuntimeSession(
         {
+          sessionLease: lease,
           workspaceRoot: workspace,
           homeRoot: root,
           ...(record.initialized

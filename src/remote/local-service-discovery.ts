@@ -22,6 +22,8 @@ export type LocalServiceTarget = {
 };
 export type LocalServiceInstance = {
   version: 1;
+  appVersion?: string;
+  packageRoot?: string;
   instanceId: string;
   pid: number;
   startedAt: string;
@@ -71,8 +73,17 @@ export function localServicePaths(directory: string) {
 /** Live, read-only local probe. A PID or a leftover descriptor never proves readiness. */
 export async function discoverLocalService(
   target: LocalServiceTarget,
+  allowDifferentConfig = false,
 ): Promise<LocalServiceInstance | undefined> {
-  return (await requestLocalService(target))?.instance;
+  return (await requestLocalService(target, undefined, undefined, allowDifferentConfig))
+    ?.instance;
+}
+
+export async function shutdownLocalService(
+  target: LocalServiceTarget,
+  force: boolean,
+): Promise<LocalServiceInstance | undefined> {
+  return (await requestLocalService(target, undefined, { force }))?.instance;
 }
 
 export async function registerLocalWorkspace(
@@ -94,6 +105,8 @@ type LocalServiceReply = {
 async function requestLocalService(
   target: LocalServiceTarget,
   directory?: string,
+  shutdown?: { force: boolean },
+  allowDifferentConfig = false,
 ): Promise<LocalServiceReply | undefined> {
   if (process.platform === "win32")
     throw new Error("Local service discovery currently requires macOS/Linux.");
@@ -127,7 +140,14 @@ async function requestLocalService(
         if (error) reject(error);
         else resolve(value);
       };
-      socket.setTimeout(directory === undefined ? 1000 : 10000, () => finish());
+      socket.setTimeout(
+        shutdown
+          ? (target.config.resident?.shutdownGraceMs ?? 30000) + 15000
+          : directory === undefined
+            ? 1000
+            : 10000,
+        () => finish(),
+      );
       socket.once("error", (error: NodeJS.ErrnoException) => {
         if (["ENOENT", "ECONNREFUSED", "ECONNRESET"].includes(error.code ?? ""))
           finish();
@@ -135,7 +155,7 @@ async function requestLocalService(
       });
       socket.once("connect", () =>
         socket.write(
-          `${directory === undefined ? nonce : JSON.stringify({ nonce, command: "register-workspace", directory, fingerprint: target.fingerprint })}\n`,
+          `${shutdown ? JSON.stringify({ nonce, command: "shutdown", force: shutdown.force }) : directory === undefined ? nonce : JSON.stringify({ nonce, command: "register-workspace", directory, fingerprint: target.fingerprint })}\n`,
         ),
       );
       socket.on("data", (chunk: string) => {
@@ -170,9 +190,18 @@ async function requestLocalService(
       socket.once("end", () => finish());
     },
   );
-  if (response && response.instance.fingerprint !== target.fingerprint)
+  if (
+    !shutdown &&
+    !allowDifferentConfig &&
+    response &&
+    response.instance.fingerprint !== target.fingerprint
+  )
     throw new Error(
       "The running service uses different configuration or TINKER_HOME. Stop it before changing configuration.",
+    );
+  if (shutdown && response?.error?.startsWith("Invalid local workspace registration"))
+    throw new Error(
+      `This older service cannot drain through the control endpoint. Stop its verified live pid ${response.instance.pid} explicitly, then retry.`,
     );
   if (response?.error) throw new Error(response.error);
   return response;
@@ -186,6 +215,11 @@ export async function publishLocalService(
   registerWorkspace?: (
     directory: string,
   ) => Promise<RemoteServiceConfig["workspaces"][number]>,
+  administration?: {
+    appVersion: string;
+    status(): Record<string, unknown>;
+    shutdown(force: boolean): Promise<() => void>;
+  },
 ): Promise<() => Promise<void>> {
   const files = localServicePaths(target.config.stateDirectory);
   const socketRoot = path.dirname(files.socket);
@@ -202,6 +236,8 @@ export async function publishLocalService(
     );
   const instance: LocalServiceInstance = {
     version: 1,
+    appVersion: administration?.appVersion,
+    packageRoot: await realpath(new URL("../../", import.meta.url)),
     instanceId,
     pid: process.pid,
     startedAt: new Date().toISOString(),
@@ -226,12 +262,17 @@ export async function publishLocalService(
       }
       if (!input.includes("\n")) return;
       handling = true;
-      socket.setTimeout(10000, () => socket.destroy());
+      socket.setTimeout(
+        (target.config.resident?.shutdownGraceMs ?? 30000) + 15000,
+        () => socket.destroy(),
+      );
       const reply = async () => {
         let nonce = input.trim();
         try {
           if (!input.startsWith("{")) {
-            socket.end(`${JSON.stringify({ nonce, instance })}\n`);
+            socket.end(
+              `${JSON.stringify({ nonce, instance: { ...instance, ...administration?.status() } })}\n`,
+            );
             return;
           }
           const command = JSON.parse(input.trim()) as {
@@ -239,8 +280,21 @@ export async function publishLocalService(
             command: string;
             directory: string;
             fingerprint: string;
+            force?: boolean;
           };
           nonce = command.nonce;
+          if (
+            command.command === "shutdown" &&
+            administration &&
+            typeof nonce === "string" &&
+            nonce.length <= 100 &&
+            typeof command.force === "boolean"
+          ) {
+            const stop = await administration.shutdown(command.force);
+            socket.end(`${JSON.stringify({ nonce, instance })}\n`);
+            setTimeout(stop, 100);
+            return;
+          }
           if (
             typeof nonce !== "string" ||
             nonce.length > 100 ||
@@ -265,6 +319,7 @@ export async function publishLocalService(
   });
   let listening = false;
   const temp = `${files.instance}.${instanceId}.tmp`;
+  const discoveryTemp = `${files.socket}.json.${instanceId}.tmp`;
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -276,7 +331,12 @@ export async function publishLocalService(
     await chmod(files.socket, 0o600);
     await writeFile(temp, `${JSON.stringify(instance)}\n`, { mode: 0o600 });
     await rename(temp, files.instance);
+    await writeFile(discoveryTemp, `${JSON.stringify(instance)}\n`, {
+      mode: 0o600,
+    });
+    await rename(discoveryTemp, `${files.socket}.json`);
   } catch (error) {
+    await removeIfMissing(discoveryTemp);
     if (listening) await new Promise<void>((resolve) => server.close(() => resolve()));
     await removeIfMissing(temp);
     throw error;
@@ -284,6 +344,13 @@ export async function publishLocalService(
   return async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await removeIfMissing(files.instance);
+    // Keep the installation guard while launchd may restart this process.
+    if (
+      !(await Bun.file(
+        path.join(target.config.stateDirectory, "supervisor.enabled"),
+      ).exists())
+    )
+      await removeIfMissing(`${files.socket}.json`);
   };
 }
 

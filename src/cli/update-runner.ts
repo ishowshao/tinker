@@ -1,3 +1,4 @@
+import { assertServiceUpgradeSafe } from "./service-upgrade";
 import { spawn } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +27,7 @@ type NpmCommandInput = {
 
 export type UpdateRunnerDependencies = {
   readonly packageRoot: string;
+  readonly assertServiceUpgradeSafe: (packageRoot: string) => Promise<void>;
   readonly npmCwd: string;
   readonly runNpm: (input: NpmCommandInput) => Promise<NpmCommandResult>;
   readonly canonicalizePath: (filePath: string) => Promise<string>;
@@ -41,6 +43,7 @@ type UpdateInput = {
 };
 
 const DEFAULT_DEPENDENCIES: UpdateRunnerDependencies = {
+  assertServiceUpgradeSafe,
   packageRoot: path.resolve(fileURLToPath(new URL("../../", import.meta.url))),
   npmCwd: tmpdir(),
   runNpm,
@@ -116,6 +119,7 @@ export async function runUpdate(
     return 0;
   }
 
+  await dependencies.assertServiceUpgradeSafe(dependencies.packageRoot);
   await writeCliOutput(input.stdout, `Updating to ${latestVersion}...\n`);
   await runNpmChecked(
     dependencies,

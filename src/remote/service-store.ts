@@ -16,6 +16,7 @@ export type ManagedSessionRecord = RemoteSessionInfo & {
   workspacePath: string;
   initialized: boolean;
   profileName?: string;
+  residentState?: { reasoning?: string; yolo?: boolean };
 };
 type ReceiptRow = {
   device: string;

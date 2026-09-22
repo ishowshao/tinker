@@ -56,6 +56,7 @@ export type RemoteOperationInput = { requestId: string } & (
 );
 
 export type OperationReceipt = {
+  shutdownInterrupted?: boolean;
   requestId: string;
   sessionId: string;
   kind: RemoteOperationInput["kind"];

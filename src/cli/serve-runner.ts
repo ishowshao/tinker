@@ -1,3 +1,14 @@
+import { loadPackageMetadata } from "./package-metadata";
+import { prepareDefaultServiceConfig } from "./default-service-config";
+import { stopLocalService } from "./service-control";
+import {
+  disableSupervisor,
+  installSupervisor,
+  startSupervisor,
+  uninstallSupervisor,
+  supervisedEnvironment,
+  supervisorPaths,
+} from "./service-supervisor";
 import {
   defaultServiceConfigPath,
   discoverLocalService,
@@ -14,18 +25,55 @@ import { writeCliOutput, type CliOutputWriter } from "./output";
 export async function runServe(input: {
   configPath?: string;
   background?: boolean;
+  install?: boolean;
+  uninstall?: boolean;
+  stop?: boolean;
+  restart?: boolean;
+  force?: boolean;
   status?: boolean;
   env: NodeJS.ProcessEnv;
   stdout: CliOutputWriter;
 }): Promise<number> {
+  const env = await supervisedEnvironment(input.env);
+  // MCP and tool subprocesses inherit the service process environment.
+  if (input.env.TINKER_SERVICE_ENV_FILE) Object.assign(process.env, env);
+  if (input.install && !input.configPath) await prepareDefaultServiceConfig(env);
   const target = await loadLocalServiceTarget(
-    input.configPath ?? defaultServiceConfigPath(input.env),
-    input.env,
+    input.configPath ?? defaultServiceConfigPath(env),
+    env,
   );
+  if (input.install && (await Bun.file(supervisorPaths(target).marker).exists())) {
+    const instance = await ensureLocalService(target, env);
+    await writeCliOutput(
+      input.stdout,
+      `${JSON.stringify({ status: "online", ...instance })}\n`,
+    );
+    return 0;
+  }
+  if (input.install || input.uninstall || input.stop || input.restart) {
+    await disableSupervisor(target);
+    try {
+      await stopLocalService(target, input.force);
+    } catch (error) {
+      await startSupervisor(target).catch(() => undefined);
+      throw error;
+    }
+    if (input.uninstall) await uninstallSupervisor(target);
+    if (input.install) await installSupervisor(target, env);
+    const instance =
+      input.install || input.restart
+        ? await ensureLocalService(target, env)
+        : undefined;
+    await writeCliOutput(
+      input.stdout,
+      `${JSON.stringify(instance ? { status: "online", ...instance } : { status: "stopped", stateDirectory: target.config.stateDirectory })}\n`,
+    );
+    return 0;
+  }
   if (input.background || input.status) {
     const instance = input.status
-      ? await discoverLocalService(target)
-      : await ensureLocalService(target, input.env);
+      ? await discoverLocalService(target, true)
+      : await ensureLocalService(target, env);
     await writeCliOutput(
       input.stdout,
       `${JSON.stringify(
@@ -47,8 +95,9 @@ export async function runServe(input: {
     service = new RemoteService(
       store,
       config.workspaces,
-      createHostedRuntimeFactory(() => service.workspaces, input.env, homeRoot),
+      createHostedRuntimeFactory(() => service.workspaces, env, homeRoot),
       homeRoot,
+      config.resident,
     );
   } catch (error) {
     await store.close();
@@ -58,12 +107,33 @@ export async function runServe(input: {
   let unpublish: (() => Promise<void>) | undefined;
   let stopRequested = false;
   let signalStop: (() => void) | undefined;
+  let hardStop: ReturnType<typeof setTimeout> | undefined;
+  const setDeadline = () => {
+    hardStop ??= setTimeout(
+      () => {
+        console.error(
+          "Service shutdown timed out; recovery will mark unfinished work interrupted on restart.",
+        );
+        process.exit(1);
+      },
+      (config.resident?.shutdownGraceMs ?? 30000) + 10000,
+    );
+    hardStop.unref();
+  };
   const stop = () => {
+    setDeadline();
     stopRequested = true;
     signalStop?.();
   };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  const onSignal = () => {
+    setDeadline();
+    void service
+      .drain(true)
+      .catch(() => undefined)
+      .finally(stop);
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
   try {
     await service.initialize();
     transport = startRemoteHttpServer(service, config);
@@ -74,6 +144,14 @@ export async function runServe(input: {
         service.epoch,
         transport.port,
         (directory) => service.registerLocalWorkspace(directory),
+        {
+          appVersion: (await loadPackageMetadata()).version,
+          status: () => service.residentStatus(),
+          shutdown: async (force) => {
+            await service.drain(force);
+            return stop;
+          },
+        },
       );
     await writeCliOutput(
       input.stdout,
@@ -85,8 +163,8 @@ export async function runServe(input: {
     });
     return 0;
   } finally {
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     try {
       await unpublish?.();
     } finally {
@@ -94,6 +172,7 @@ export async function runServe(input: {
         await transport?.stopTransport();
       } finally {
         await service.close();
+        if (hardStop) clearTimeout(hardStop);
       }
     }
   }

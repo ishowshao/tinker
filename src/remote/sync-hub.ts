@@ -89,6 +89,8 @@ export class RemoteSyncHub {
     }
   }
   close(): void {
+    this.ring.length = 0;
+    this.ringBytes = 0;
     this.listeners.clear();
     this.pending = [];
   }

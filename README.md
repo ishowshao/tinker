@@ -164,7 +164,9 @@ the current workspace. Exiting the TUI leaves accepted tasks running; use
 `/resume` to reconnect. `tinker --local` explicitly runs the independent TUI;
 `run` remains independent. Existing `.data` service configurations remain available
 through explicit `connect`. See [local startup and configuration](docs/remote-access.md#default-local-service-entry)
-for configuration, environment changes and current lifecycle limits.
+for configuration, environment changes and lifecycle limits. Optional macOS login
+startup and crash restart are available through `tinker serve --install`;
+`serve --stop`, `--restart` and `--uninstall` manage the resident service.
 
 `run` accepts exactly one Prompt source: one shell-quoted argument, explicit stdin,
 or a UTF-8 text file. Use stdin for multiline code, private patches, or Prompt text
@@ -189,6 +191,11 @@ The installed package exposes this public CLI:
 | Command | Description |
 | --- | --- |
 | `tinker` | Start the full TUI through the shared local service; exiting detaches only. |
+| `tinker serve --install` | Install and start a macOS per-user LaunchAgent with crash restart. |
+| `tinker serve --uninstall` | Drain, stop and remove the LaunchAgent; retain history and configuration. |
+| `tinker serve --stop` | Drain and stop the service; disable supervisor restart until the next start. |
+| `tinker serve --restart` | Drain and restart with the current executable and configuration. |
+| `tinker serve --restart --force` | Allow interruption after the configured shutdown grace period. |
 | `tinker --local` | Run the TUI independently without a service (explicit fallback). |
 | `tinker --profile <profile-name>` | Start the TUI with a selected model profile. |
 | `tinker run [--profile <profile-name>] [--yolo] <prompt>` | Submit one shell-quoted prompt argument. |

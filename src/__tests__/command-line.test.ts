@@ -9,6 +9,22 @@ import { CliUsageError, renderUsageError } from "../cli/output";
 const VERSION = "9.8.7";
 
 describe("CLI command line", () => {
+  test("resident management modes are explicit and force is never meaningful alone", async () => {
+    for (const mode of ["install", "uninstall", "stop", "restart"])
+      expect(await parseCommand(["serve", `--${mode}`, "--force"])).toEqual({
+        type: "serve",
+        [mode]: true,
+        force: true,
+      });
+    for (const args of [
+      ["serve", "--force"],
+      ["serve", "--install", "--restart"],
+      ["serve", "--stop", "--background"],
+    ])
+      expect(
+        await parseCommandLine(args, VERSION).catch((error: unknown) => error),
+      ).toBeInstanceOf(CliUsageError);
+  });
   test("independent TUI is explicit and cannot change one-shot or remote commands", async () => {
     expect(await parseCommand(["--local", "--profile", "large"])).toEqual({
       type: "tui",

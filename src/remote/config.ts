@@ -1,3 +1,4 @@
+import { parseResidentPolicy, type ResidentPolicy } from "./resident-policy";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +11,7 @@ export type RemoteWorkspaceConfig = {
   profile?: string;
 };
 export type RemoteServiceConfig = {
+  resident?: ResidentPolicy;
   stateDirectory: string;
   hostname: string;
   port: number;
@@ -68,6 +70,7 @@ export async function loadRemoteConfig(file: string): Promise<RemoteServiceConfi
   if (hostname !== "127.0.0.1" && hostname !== "::1")
     throw new Error("Bind the service to loopback; expose only the relay TCP port.");
   return {
+    resident: parseResidentPolicy(raw.resident),
     stateDirectory: await canonicalDirectory(
       resolve(raw.stateDirectory ?? "./state", "stateDirectory"),
     ),

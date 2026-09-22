@@ -1,4 +1,9 @@
 import {
+  DEFAULT_RESIDENT_POLICY,
+  TurnSlots,
+  type ResidentPolicy,
+} from "./resident-policy";
+import {
   isSessionOperation,
   type SessionOperation,
   type SessionOperationResult,
@@ -38,12 +43,20 @@ export class RemoteService {
   private readonly hosted = new Map<string, HostedSession>();
   private submitting: Promise<void> = Promise.resolve();
   private stopping = false;
+  private draining = false;
+  private admissions = 0;
+  private sweepTimer?: ReturnType<typeof setInterval>;
+  private readonly loaded = new Set<string>();
+  private loadTail: Promise<void> = Promise.resolve();
+  private readonly slots: TurnSlots;
   constructor(
     readonly store: RemoteServiceStore,
     workspaces: readonly RemoteWorkspaceConfig[],
     private readonly factory: HostedRuntimeFactory,
     readonly homeRoot?: string,
+    readonly policy: ResidentPolicy = { ...DEFAULT_RESIDENT_POLICY },
   ) {
+    this.slots = new TurnSlots(policy.maxConcurrentTurns);
     this.workspaceEntries = mergeWorkspaces(workspaces, store.workspaces());
   }
 
@@ -54,7 +67,8 @@ export class RemoteService {
     const canonical = await realpath(directory);
     if (!(await stat(canonical)).isDirectory())
       throw new Error("Workspace must be a directory.");
-    if (this.stopping) throw new Error("Service is stopping.");
+    if (this.stopping || this.draining)
+      throw new Error("Service is stopping or draining.");
     const existing = findContainingWorkspace(this.workspaces, canonical);
     if (existing) return existing;
     const record = localWorkspaceRecord(canonical);
@@ -65,14 +79,96 @@ export class RemoteService {
   }
 
   async initialize(): Promise<void> {
-    // Reacquire every managed canonical lease; no prompt is resubmitted on boot.
+    // Recover canonical state and retain lightweight ownership without constructing runtimes.
     for (const record of this.store.sessions()) {
       if (!record.initialized) continue;
       try {
-        await this.session(record.id).open();
+        await this.session(record.id).prepareDormant(this.homeRoot);
       } catch {
         /* A failed workspace/session remains visible with its error. */
       }
+    }
+    this.sweepTimer = setInterval(
+      () => {
+        void this.sweepIdle().catch(() => undefined);
+      },
+      Math.min(this.policy.idleTimeoutMs, 30000),
+    );
+    this.sweepTimer.unref();
+  }
+  async sweepIdle(now = Date.now()): Promise<void> {
+    for (const session of this.hosted.values())
+      if (session.reclaimable && now - session.lastUsed >= this.policy.idleTimeoutMs)
+        await session.suspend();
+  }
+  private makeSession(record: ManagedSessionRecord): HostedSession {
+    return new HostedSession(record, this.store, this.epoch, this.factory, {
+      load: () => this.reserveRuntime(record.id),
+      unload: () => {
+        this.loaded.delete(record.id);
+      },
+      acquireTurn: (signal) => this.slots.acquire(signal),
+    });
+  }
+  private reserveRuntime(id: string): Promise<void> {
+    const reservation = this.loadTail.then(async () => {
+      if (this.loaded.has(id)) return;
+      if (this.stopping)
+        throw new RemoteError(503, "SERVICE_STOPPING", "Service is stopping.");
+      if (this.loaded.size >= this.policy.maxLoadedSessions) {
+        const candidate = [...this.hosted.values()]
+          .filter((session) => session.reclaimable)
+          .sort((a, b) => a.lastUsed - b.lastUsed)[0];
+        if (candidate) await candidate.suspend();
+      }
+      if (this.loaded.size >= this.policy.maxLoadedSessions)
+        throw new RemoteError(
+          429,
+          "RUNTIME_LIMIT",
+          "All runtime slots are active or connected. Disconnect an idle client or wait for running work.",
+        );
+      this.loaded.add(id);
+    });
+    this.loadTail = reservation.catch(() => undefined);
+    return reservation;
+  }
+  residentStatus() {
+    return {
+      phase: this.stopping ? "stopping" : this.draining ? "draining" : "ready",
+      loadedSessions: this.loaded.size,
+      managedSessions: this.store.sessions().length,
+      runningTurns: this.slots.running,
+      waitingTurns: this.slots.queued,
+      pendingTurns: [...this.hosted.values()].reduce(
+        (sum, session) => sum + session.pendingCount,
+        0,
+      ),
+      policy: this.policy,
+    };
+  }
+  async drain(force = false): Promise<void> {
+    if (this.draining || this.stopping)
+      throw new RemoteError(
+        409,
+        "SERVICE_DRAINING",
+        "Service shutdown is already in progress.",
+      );
+    this.draining = true;
+    const deadline = Date.now() + this.policy.shutdownGraceMs;
+    while (
+      this.admissions > 0 ||
+      [...this.hosted.values()].some((session) => session.busy)
+    ) {
+      if (Date.now() >= deadline) {
+        if (force) return;
+        this.draining = false;
+        throw new RemoteError(
+          409,
+          "SERVICE_BUSY",
+          "Work is still active; shutdown was cancelled. Retry after completion or use --force to interrupt.",
+        );
+      }
+      await Bun.sleep(25);
     }
   }
   workspace(id: string): RemoteWorkspaceConfig {
@@ -102,7 +198,7 @@ export class RemoteService {
         "WORKSPACE_CHANGED",
         "The managed session belongs to a different workspace path.",
       );
-    const hosted = new HostedSession(record, this.store, this.epoch, this.factory);
+    const hosted = this.makeSession(record);
     this.hosted.set(id, hosted);
     return hosted;
   }
@@ -125,7 +221,7 @@ export class RemoteService {
             title: record.title,
             modelName: record.modelName,
             owner: "service" as const,
-            status: record.initialized ? "idle" : "interrupted",
+            status: record.initialized ? record.status : "interrupted",
             updatedAt: record.updatedAt,
           }
         );
@@ -195,8 +291,28 @@ export class RemoteService {
   }
 
   submit(input: RemoteOperationInput, device: string): Promise<OperationReceipt> {
+    const controls = ["answer", "confirm", "provider_retry", "stop"].includes(
+      input.kind,
+    );
+    const admissionLimit =
+      this.policy.maxPendingTurns +
+      this.policy.maxLoadedSessions +
+      (controls ? 32 : 16);
+    if (this.admissions >= admissionLimit)
+      return Promise.reject(
+        new RemoteError(
+          429,
+          "ADMISSION_LIMIT",
+          "Too many concurrent service operations; retry after current admissions finish.",
+        ),
+      );
+    this.admissions++;
     // Serializes acceptance, catalog lookup and deletion; never model execution.
-    const result = this.submitting.then(() => this.accept(input, device));
+    const result = this.submitting
+      .then(() => this.accept(input, device))
+      .finally(() => {
+        this.admissions--;
+      });
     this.submitting = result.then(
       () => undefined,
       () => undefined,
@@ -211,16 +327,29 @@ export class RemoteService {
     if (existing) return existing;
     if (this.stopping)
       throw new RemoteError(503, "SERVICE_STOPPING", "The local service is stopping.");
+    if (
+      this.draining &&
+      !["answer", "confirm", "provider_retry", "stop"].includes(input.kind)
+    )
+      throw new RemoteError(
+        503,
+        "SERVICE_DRAINING",
+        "Service is draining; wait before submitting new work.",
+      );
+    if (
+      input.kind === "prompt" &&
+      this.residentStatus().pendingTurns >= this.policy.maxPendingTurns
+    )
+      throw new RemoteError(
+        429,
+        "SERVICE_QUEUE_FULL",
+        "The service pending-turn limit has been reached.",
+      );
     if (input.kind === "adopt") return this.adopt(input, device);
     if (input.kind === "create") {
       const workspace = this.workspace(input.workspaceId);
       const id = createUuidV7();
-      if (this.store.sessions().length >= 128)
-        throw new RemoteError(
-          409,
-          "SESSION_LIMIT",
-          "The service has reached its 128 managed session limit.",
-        );
+      await this.reserveRuntime(id);
       const record: ManagedSessionRecord = {
         id,
         workspaceId: workspace.id,
@@ -286,12 +415,7 @@ export class RemoteService {
       this.session(id).receiptChanged();
       return completed;
     }
-    if (this.store.sessions().length >= 128)
-      throw new RemoteError(
-        409,
-        "SESSION_LIMIT",
-        "The service has reached its 128 managed session limit.",
-      );
+
     const summary = await new SessionCatalog({
       workspaceRoot: workspace.path,
       homeRoot: this.homeRoot,
@@ -325,7 +449,7 @@ export class RemoteService {
     // A receipt records intent, not ownership. HostedSession publishes the managed
     // record only after the runtime has acquired the canonical session lease.
     const receipt = this.store.accept(input, device, id);
-    const hosted = new HostedSession(record, this.store, this.epoch, this.factory);
+    const hosted = this.makeSession(record);
     this.hosted.set(id, hosted);
     try {
       await hosted.open();
@@ -464,8 +588,7 @@ export class RemoteService {
       return { kind, value: null };
     }
     if (this.stopping) throw new Error("Service is stopping.");
-    if (this.store.sessions().length >= 128)
-      throw new Error("Managed session limit reached.");
+
     if (kind === "switch_model") {
       if (this.session(input.sessionId).hasTurns)
         throw new Error("Cannot switch models after the session has turns.");
@@ -474,24 +597,33 @@ export class RemoteService {
         throw new Error("Unknown model profile.");
     }
     const id = createUuidV7();
-    if (kind === "fork") await runtime.cloneSession(parseSessionId(id));
-    if (this.stopping) throw new Error("Service is stopping.");
-    this.store.saveSession({
-      ...source,
-      id,
-      initialized: kind === "fork",
-      status: "accepted",
-      profileName: kind === "switch_model" ? input.profileName : source.profileName,
-      updatedAt: new Date().toISOString(),
-      title: kind === "fork" ? source.title : "New session",
-    });
-    await this.session(id).open();
-    return { kind, value: id };
+    await this.reserveRuntime(id);
+    try {
+      if (kind === "fork") await runtime.cloneSession(parseSessionId(id));
+      if (this.stopping) throw new Error("Service is stopping.");
+      this.store.saveSession({
+        ...source,
+        id,
+        initialized: kind === "fork",
+        status: "accepted",
+        profileName: kind === "switch_model" ? input.profileName : source.profileName,
+        residentState: kind === "switch_model" ? undefined : source.residentState,
+        updatedAt: new Date().toISOString(),
+        title: kind === "fork" ? source.title : "New session",
+      });
+      await this.session(id).open();
+      return { kind, value: id };
+    } catch (error) {
+      this.loaded.delete(id);
+      throw error;
+    }
   }
 
   async close(): Promise<void> {
     this.stopping = true;
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
     await this.submitting;
+    await this.loadTail;
     const results = await Promise.allSettled(
       [...this.hosted.values()].map((session) => session.close()),
     );

@@ -10,6 +10,11 @@ export type CliCommand =
       readonly type: "serve";
       readonly configPath?: string;
       readonly background?: boolean;
+      readonly install?: boolean;
+      readonly uninstall?: boolean;
+      readonly stop?: boolean;
+      readonly restart?: boolean;
+      readonly force?: boolean;
       readonly status?: boolean;
     }
   | {
@@ -163,6 +168,8 @@ export async function parseCommandLine(
         contract.serve.statusOption.flags,
         contract.serve.statusOption.description,
       );
+      for (const option of contract.serve.residentOptions)
+        subcommand.option(option.flags, option.description);
     } else
       subcommand.requiredOption(
         command.configOption.flags,
@@ -181,6 +188,11 @@ export async function parseCommandLine(
       (options: {
         config?: string;
         background?: boolean;
+        install?: boolean;
+        uninstall?: boolean;
+        stop?: boolean;
+        restart?: boolean;
+        force?: boolean;
         status?: boolean;
         tui?: boolean;
         workspace?: string;
@@ -190,12 +202,36 @@ export async function parseCommandLine(
         if (options.config !== undefined && !options.config.trim())
           throw new CliUsageError("--config requires a non-empty path.", type);
         if (type === "serve") {
-          if (options.background && options.status)
+          if (
+            [
+              options.background,
+              options.status,
+              options.install,
+              options.uninstall,
+              options.stop,
+              options.restart,
+            ].filter(Boolean).length > 1
+          )
             throw new CliUsageError(
-              "--background and --status are mutually exclusive.",
+              "Service management modes are mutually exclusive.",
+              type,
+            );
+          if (
+            options.force &&
+            ![options.install, options.uninstall, options.stop, options.restart].some(
+              Boolean,
+            )
+          )
+            throw new CliUsageError(
+              "--force requires --install, --uninstall, --stop or --restart.",
               type,
             );
           selectedCommand = Object.freeze({
+            ...(options.install ? { install: true } : {}),
+            ...(options.uninstall ? { uninstall: true } : {}),
+            ...(options.stop ? { stop: true } : {}),
+            ...(options.restart ? { restart: true } : {}),
+            ...(options.force ? { force: true } : {}),
             type,
             ...(options.config === undefined ? {} : { configPath: options.config }),
             ...(options.background ? { background: true } : {}),

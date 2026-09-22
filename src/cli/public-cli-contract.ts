@@ -53,6 +53,31 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     profileOption: PROFILE_OPTION,
   }),
   serve: Object.freeze({
+    residentOptions: Object.freeze([
+      {
+        flags: "--install",
+        description:
+          "Install and start a macOS per-user LaunchAgent with crash restart.",
+      },
+      {
+        flags: "--uninstall",
+        description:
+          "Drain, stop and remove the LaunchAgent; retain history and configuration.",
+      },
+      {
+        flags: "--stop",
+        description:
+          "Drain and stop the service; disable supervisor restart until the next start.",
+      },
+      {
+        flags: "--restart",
+        description: "Drain and restart with the current executable and configuration.",
+      },
+      {
+        flags: "--force",
+        description: "Allow interruption after the configured shutdown grace period.",
+      },
+    ] satisfies readonly PublicCliOption[]),
     command: "serve",
     description: "Run the local daemon for paired remote clients.",
     configOption: Object.freeze({

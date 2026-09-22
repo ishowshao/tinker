@@ -88,6 +88,10 @@ export function renderPublicCliCommands(): string {
   const helpCommand = firstCommandWord(contract.helpCommand.command);
   const rows = [
     ["`tinker`", contract.tui.description],
+    ...contract.serve.residentOptions.map((option) => [
+      `\`tinker serve ${option.flags === "--force" ? "--restart --force" : option.flags}\``,
+      option.description,
+    ]),
     [
       `\`tinker ${contract.tui.localOption.flags}\``,
       contract.tui.localOption.description,

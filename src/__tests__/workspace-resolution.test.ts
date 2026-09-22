@@ -58,6 +58,7 @@ test("workspace registry upgrades legacy service state without replacing session
   let reopened: RemoteServiceStore | undefined;
   try {
     const completed = await f.terminal(await f.prompt("KEEP_CANONICAL"));
+    await f.service.session(f.sessionId).suspend();
     const before = f.store.sessions();
     await f.service.close();
     const database = new Database(path.join(f.root, "service/remote.sqlite"));

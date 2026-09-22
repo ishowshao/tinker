@@ -190,6 +190,8 @@ describe("remote service lifecycle and canonical history", () => {
       expect((await reopened.submit(ambiguous, "phone")).status).toBe("interrupted");
       expect(store.get(done.requestId).status).toBe("completed");
       expect(model.requests).toBe(1);
+      expect(reopened.session(f.sessionId).initialized).toBe(false);
+      await reopened.session(f.sessionId).open();
       expect(reopened.session(f.sessionId).view().history.messages.at(-1)?.text).toBe(
         "Complete answer 1",
       );

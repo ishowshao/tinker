@@ -170,6 +170,7 @@ const defaultDependencies: RuntimeSessionFactoryDependencies = {
           ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
         })
       : SessionStore.openExisting({
+          lease: input.sessionLease,
           workspaceRoot: input.workspaceRoot,
           sessionId: input.selection.sessionId,
           ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
@@ -1071,6 +1072,10 @@ class DefaultRuntimeSession implements RuntimeSession {
       },
     );
     return completion;
+  }
+
+  retainSessionLease() {
+    return this.store.retainLease();
   }
 
   dispose(reason: SessionDisposeReason): Promise<void> {

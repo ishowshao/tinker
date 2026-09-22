@@ -37,6 +37,7 @@ export function startRemoteHttpServer(
     maxRequestBodySize: Math.ceil(IMAGE_INPUT_POLICY.maxBytesPerImage / 3) * 4 + 4096,
     idleTimeout: 30,
     async fetch(request, server) {
+      let releaseRequest: (() => void) | undefined;
       try {
         // Native clients authenticate in headers. Browser-origin requests are not supported.
         if (request.headers.has("origin"))
@@ -60,7 +61,11 @@ export function startRemoteHttpServer(
         if (parts[0] !== "v1")
           throw new RemoteError(404, "NOT_FOUND", "Unknown API version or route.");
         if (request.method === "GET" && url.pathname === "/v1/service")
-          return json({ version: 1, instanceId: service.epoch });
+          return json({
+            version: 1,
+            instanceId: service.epoch,
+            ...service.residentStatus(),
+          });
         if (request.method === "GET" && url.pathname === "/v1/workspaces/resolve") {
           const directory = url.searchParams.get("directory");
           if (!directory || directory.length > 4096)
@@ -142,7 +147,14 @@ export function startRemoteHttpServer(
           parts.length === 4 &&
           parts[1] === "sessions"
         ) {
+          if (service.residentStatus().phase !== "ready")
+            throw new RemoteError(
+              503,
+              "SERVICE_DRAINING",
+              "Service is draining; new mutations are not accepted.",
+            );
           const session = service.session(requireId(parts[2], "sessionId", true));
+          releaseRequest = session.attach(true);
           await session.open();
           session.assertAvailable();
           const response = await sessionPost(
@@ -155,6 +167,7 @@ export function startRemoteHttpServer(
         }
         if (request.method === "GET" && parts.length === 4 && parts[1] === "sessions") {
           const session = service.session(requireId(parts[2], "sessionId", true));
+          releaseRequest = session.attach(true);
           await session.open();
           session.assertAvailable();
           if (
@@ -251,6 +264,8 @@ export function startRemoteHttpServer(
           },
           500,
         );
+      } finally {
+        releaseRequest?.();
       }
     },
     websocket: {

@@ -197,6 +197,8 @@ test("service restart retains completed deletion receipts and never replays an a
     expect((await reopened.submit(ambiguous, "phone")).status).toBe("interrupted");
     expect(store.session(f.sessionId)).toBeUndefined();
     expect(store.session(survivor.sessionId)).toBeDefined();
+    expect(reopened.session(survivor.sessionId).initialized).toBe(false);
+    await reopened.session(survivor.sessionId).open();
     expect(reopened.session(survivor.sessionId).initialized).toBe(true);
   } finally {
     if (reopened) {

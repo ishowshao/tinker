@@ -1,3 +1,4 @@
+import type { SessionLease } from "./session-lock";
 import type {
   ContextRevisionId,
   IterationId,
@@ -269,6 +270,7 @@ export type CreateNewSessionStoreInput = {
 };
 
 export type OpenSessionStoreInput = {
+  lease?: SessionLease;
   workspaceRoot: string;
   sessionId: SessionId;
   clock?: () => string;

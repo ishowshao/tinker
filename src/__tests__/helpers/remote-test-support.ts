@@ -29,6 +29,7 @@ export async function remoteFixture(
   model: ModelClient,
   catalog?: import("../../client/model-catalog").ClientModelCatalog,
   beforeOpen?: (record: ManagedSessionRecord) => Promise<void>,
+  policy?: import("../../remote/resident-policy").ResidentPolicy,
 ) {
   const root = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "tinker-remote-test-")),
@@ -37,12 +38,13 @@ export async function remoteFixture(
   await mkdir(workspace);
   const store = await RemoteServiceStore.open(path.join(root, "service"));
   let factoryCalls = 0;
-  const factory: HostedRuntimeFactory = async ({ record, sink }) => {
+  const factory: HostedRuntimeFactory = async ({ record, sink, lease }) => {
     factoryCalls += 1;
     await beforeOpen?.(record);
     const sessionId = parseSessionId(record.id);
     const runtime = await createRuntimeSession(
       {
+        sessionLease: lease,
         workspaceRoot: workspace,
         homeRoot: root,
         ...(record.initialized
@@ -85,7 +87,7 @@ export async function remoteFixture(
     if (catalog) catalog = { ...catalog, defaultProfile: name };
   };
   const workspaces = [{ id: "test", name: "Test workspace", path: workspace }];
-  const service = new RemoteService(store, workspaces, factory, root);
+  const service = new RemoteService(store, workspaces, factory, root, policy);
   const create = await service.submit(
     { kind: "create", workspaceId: "test", requestId: randomUUID() },
     "phone",

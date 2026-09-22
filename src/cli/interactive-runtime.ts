@@ -20,6 +20,7 @@ import {
 } from "./runner-dependencies";
 
 type InteractiveRuntimeInput = {
+  sessionLease?: CreateRuntimeSessionInput["sessionLease"];
   config: RunnerConfig;
   workspaceRoot: string;
   homeRoot?: string;
@@ -46,6 +47,7 @@ export async function buildInteractiveRuntimeInput(
   const projectInstructions = await loadProjectInstructions(workspaceRoot);
   const skillCatalog = await loadSkillCatalog({ workspaceRoot });
   return {
+    sessionLease: input.sessionLease,
     workspaceRoot,
     ...(input.homeRoot === undefined ? {} : { homeRoot: input.homeRoot }),
     ...(input.selection.mode === "new"

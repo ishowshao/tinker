@@ -1,3 +1,5 @@
+import { startSupervisor } from "./service-supervisor";
+import { loadPackageMetadata } from "./package-metadata";
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { chmod, mkdir, open } from "node:fs/promises";
@@ -22,19 +24,27 @@ export async function ensureLocalService(
   env: NodeJS.ProcessEnv,
   timeoutMs = 30000,
 ): Promise<LocalServiceInstance> {
+  const version = (await loadPackageMetadata()).version;
+  const checkVersion = (instance: LocalServiceInstance) => {
+    if (instance.appVersion && instance.appVersion !== version)
+      throw new Error(
+        "A different Tinker version is running. Use tinker serve --restart before connecting; active work is not interrupted automatically.",
+      );
+    return instance;
+  };
   const paths = localServicePaths(target.config.stateDirectory);
   if (process.platform === "win32")
     throw new Error("Background service startup currently requires macOS/Linux.");
   const deadline = Date.now() + timeoutMs;
   const existing = await discoverLocalService(target);
-  if (existing) return existing;
+  if (existing) return checkVersion(existing);
   await mkdir(paths.startup, { recursive: true, mode: 0o700 });
   await chmod(target.config.stateDirectory, 0o700);
   await chmod(paths.startup, 0o700);
   let lease: SessionLease | undefined;
   while (Date.now() < deadline && !lease) {
     const running = await discoverLocalService(target);
-    if (running) return running;
+    if (running) return checkVersion(running);
     try {
       lease = await SessionLease.acquire({
         sessionDirectory: paths.startup,
@@ -54,16 +64,17 @@ export async function ensureLocalService(
     throw new Error(
       `Timed out waiting for service startup ownership. Check ${paths.startup}.`,
     );
+  let supervised = false;
   let child: ChildProcess | undefined;
   let childFailure: Error | undefined;
   try {
     while (Date.now() < deadline) {
       const running = await discoverLocalService(target);
-      if (running) return running;
+      if (running) return checkVersion(running);
       if (childFailure) throw childFailure;
       if (child && (child.exitCode !== null || child.signalCode !== null))
         throw new Error(`Service exited before becoming ready. Check ${paths.log}.`);
-      if (!child) {
+      if (!child && !supervised) {
         const ownership = await inspectSessionLock({
           sessionDirectory: target.config.stateDirectory,
           sessionId: SERVICE_LEASE_ID,
@@ -71,6 +82,8 @@ export async function ensureLocalService(
         // A foreground service or an orphaned starter's child may be initializing.
         // Never kill it, steal its lease, or start a second runtime owner.
         if (ownership === "none" || ownership === "stale") {
+          supervised = await startSupervisor(target);
+          if (supervised) continue;
           const log = await open(
             paths.log,
             constants.O_WRONLY |

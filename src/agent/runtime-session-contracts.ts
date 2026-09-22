@@ -1,3 +1,4 @@
+import type { SessionLease } from "../session/session-lock";
 import type {
   ProviderRetryDecision,
   ProviderRetrySnapshot,
@@ -133,6 +134,7 @@ export type RuntimeSession = {
   askUser(): AskUserSnapshot;
   subscribeAskUser(listener: () => void): () => void;
   resolveAskUser(response: AskUserResolution): Promise<void>;
+  retainSessionLease(): SessionLease;
   dispose(reason: SessionDisposeReason): Promise<void>;
 };
 
@@ -214,6 +216,7 @@ export type SkillsUpdateSummary = {
 };
 
 export type CommonRuntimeSessionInput = {
+  sessionLease?: SessionLease;
   workspaceRoot: string;
   homeRoot?: string;
   modelName: string;

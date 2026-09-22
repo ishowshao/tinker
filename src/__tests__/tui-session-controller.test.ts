@@ -352,6 +352,9 @@ function fakeRuntime(
   const disposals: SessionDisposeReason[] = [];
   const clones: SessionId[] = [];
   const runtime: RuntimeSession = {
+    retainSessionLease: () => {
+      throw new Error("Local controller does not retain service ownership.");
+    },
     sessionId,
     resumed: false,
     recovery: { syntheticCompletionCount: 0, recallIndexRebuilt: false },
