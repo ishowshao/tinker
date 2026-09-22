@@ -20,7 +20,6 @@ import { ContextBudgetExceededError } from "../model/model-request-preflight";
 import { ModelRequestMediaAggregateError } from "../model/model-client";
 import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import type { SessionId } from "../ids/runtime-id";
-import { readLastAssistantResponse } from "../session/session-last-response-reader";
 import type { PromptHistory } from "./prompt-history";
 import { Footer } from "./components/footer";
 import { AssistantMarkdownProvider } from "./components/assistant-markdown";
@@ -226,7 +225,7 @@ export function App(props: AppProps) {
   const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
   const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
-  const cycleReasoningEffort = () => {
+  const cycleReasoningEffort = async () => {
     const current = binding.reasoningEffort?.();
     if (current === undefined) {
       return;
@@ -239,7 +238,7 @@ export function App(props: AppProps) {
       return;
     }
     try {
-      const updated = binding.setReasoningEffort?.(nextEffort);
+      const updated = await binding.setReasoningEffort?.(nextEffort);
       if (updated === undefined) {
         throw new Error("Reasoning effort control is unavailable.");
       }
@@ -462,10 +461,7 @@ export function App(props: AppProps) {
     void Promise.resolve()
       .then(() =>
         props.readLastResponse === undefined
-          ? readLastAssistantResponse({
-              workspaceRoot,
-              sessionId: binding.sessionId,
-            })
+          ? binding.readLastResponse()
           : props.readLastResponse(workspaceRoot, binding.sessionId),
       )
       .then(async (markdown) => {
@@ -496,7 +492,7 @@ export function App(props: AppProps) {
         return false;
       }
       try {
-        const queued = binding.queueFollowUp?.(submission.userMessage);
+        const queued = await binding.queueFollowUp?.(submission.userMessage);
         if (queued === undefined) {
           throw new Error("TUI session binding does not support follow-up queuing.");
         }
@@ -605,10 +601,10 @@ export function App(props: AppProps) {
     }
   };
 
-  const onSubmit = (
+  const onSubmit = async (
     submission: PromptSubmission,
     signal: AbortSignal,
-  ): PromptSubmissionOutcome | Promise<PromptSubmissionOutcome> => {
+  ): Promise<PromptSubmissionOutcome> => {
     const { userMessage } = submission;
     const trimmed = userMessage.content.trim();
     const shouldRestoreViewport = showStatus || showSkills || showMcp;
@@ -664,7 +660,7 @@ export function App(props: AppProps) {
           return true;
         }
         if (command.type === "yolo") {
-          binding.setYoloMode(command.enabled);
+          await binding.setYoloMode(command.enabled);
           setNotice(
             command.enabled
               ? "YOLO enabled for this session; dangerous Bash commands will run without confirmation."
@@ -770,7 +766,7 @@ export function App(props: AppProps) {
             if (command.type === "reasoning_status") {
               setNotice(formatReasoningEffortStatus(current));
             } else if (command.type === "reasoning_reset") {
-              const reset = binding.resetReasoningEffort?.();
+              const reset = await binding.resetReasoningEffort?.();
               if (reset === undefined) {
                 throw new Error("Reasoning effort control is unavailable.");
               }
@@ -778,7 +774,7 @@ export function App(props: AppProps) {
                 `Reasoning effort reset to profile default ${JSON.stringify(reset.defaultEffort)}.`,
               );
             } else {
-              const updated = binding.setReasoningEffort?.(command.effort);
+              const updated = await binding.setReasoningEffort?.(command.effort);
               if (updated === undefined) {
                 throw new Error("Reasoning effort control is unavailable.");
               }
@@ -1034,7 +1030,9 @@ export function App(props: AppProps) {
                   verifyImageAssets={binding.verifyImageAssets}
                   onCycleReasoningEffort={
                     hasReasoningEffort && promptScheduler.state !== "running"
-                      ? cycleReasoningEffort
+                      ? () => {
+                          void cycleReasoningEffort();
+                        }
                       : undefined
                   }
                   onSubmit={onSubmit}

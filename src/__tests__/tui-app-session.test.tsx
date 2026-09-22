@@ -73,8 +73,8 @@ function createSessionControllerWithProfiles(
     ...baseBinding,
     profileName: "deepseek",
     reasoningEffort: () => reasoningEffort.snapshot(),
-    setReasoningEffort: (effort: string) => reasoningEffort.set(effort),
-    resetReasoningEffort: () => reasoningEffort.reset(),
+    setReasoningEffort: async (effort: string) => reasoningEffort.set(effort),
+    resetReasoningEffort: async () => reasoningEffort.reset(),
   };
   return {
     ...base,

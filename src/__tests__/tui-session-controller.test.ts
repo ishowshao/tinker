@@ -4,12 +4,39 @@ import type { SessionId } from "../ids/runtime-id";
 import type { SessionCatalog, SessionSummary } from "../session/session-catalog";
 import { TuiProjectionStore } from "../tui/tui-projection-store";
 import {
-  DefaultTuiSessionController,
-  managedTuiBinding,
-} from "../tui/tui-session-controller";
+  LocalWorkspaceClient,
+  createLocalSessionBinding,
+} from "../client/local-workspace-client";
 import { createTestRuntime } from "./test-runtime";
 
-describe("DefaultTuiSessionController", () => {
+describe("LocalWorkspaceClient", () => {
+  test("exposes a stable client without runtime ownership and rejects commands asynchronously", async () => {
+    const current = fakeRuntime("current-session" as SessionId);
+    const owned = binding(current.runtime);
+    const unused = async () => {
+      throw new Error("not used");
+    };
+    const controller = new LocalWorkspaceClient(
+      owned,
+      emptyCatalog(),
+      unused,
+      unused,
+      unused,
+    );
+    const client = controller.getBinding();
+    expect(controller.getBinding()).toBe(client);
+    expect("runtimeSession" in client).toBe(false);
+    expect("dispose" in client).toBe(false);
+    expect("catalog" in client).toBe(false);
+    // Runtime throws synchronously; the client boundary must return a rejection.
+    const update = client.setReasoningEffort!("high");
+    expect(update).toBeInstanceOf(Promise);
+    expect(update).rejects.toThrow("not used");
+    expect(current.disposals).toEqual([]);
+    await controller.dispose({ type: "tui_exit" });
+    expect(current.disposals).toEqual([{ type: "tui_exit" }]);
+  });
+
   test("lists every stored session candidate through catalog listAll", async () => {
     const current = fakeRuntime("019f53e0-0000-7000-8000-000000000099" as SessionId);
     const summaries = [
@@ -31,7 +58,7 @@ describe("DefaultTuiSessionController", () => {
       },
       delete: async () => undefined,
     } as unknown as SessionCatalog;
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       catalog,
       async () => {
@@ -66,7 +93,7 @@ describe("DefaultTuiSessionController", () => {
         deletedFileCount: 0,
       };
     };
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => {
@@ -96,7 +123,7 @@ describe("DefaultTuiSessionController", () => {
 
   test("keeps the current binding when target preparation fails", async () => {
     const current = fakeRuntime("current-session" as SessionId);
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => {
@@ -122,7 +149,7 @@ describe("DefaultTuiSessionController", () => {
     const target = fakeRuntime("target-session" as SessionId);
     let notifications = 0;
     const commits: SessionId[] = [];
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => binding(target.runtime),
@@ -150,7 +177,7 @@ describe("DefaultTuiSessionController", () => {
     const current = fakeRuntime("current-session" as SessionId);
     let openedSessionId: SessionId | undefined;
     let target: ReturnType<typeof fakeRuntime> | undefined;
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async (sessionId) => {
@@ -177,7 +204,7 @@ describe("DefaultTuiSessionController", () => {
 
   test("keeps the source binding when a published clone cannot be activated", async () => {
     const current = fakeRuntime("current-session" as SessionId);
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => {
@@ -204,7 +231,7 @@ describe("DefaultTuiSessionController", () => {
       throw new Error("source dispose failed");
     };
     let target: ReturnType<typeof fakeRuntime> | undefined;
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async (sessionId) => {
@@ -240,7 +267,7 @@ describe("DefaultTuiSessionController", () => {
     const targetBinding = binding(target.runtime, "deepseek");
     let receivedProfile: string | undefined;
     let notifications = 0;
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       currentBinding,
       emptyCatalog(),
       async () => {
@@ -269,7 +296,7 @@ describe("DefaultTuiSessionController", () => {
 
   test("keeps the current session when fresh session creation fails", async () => {
     const current = fakeRuntime("current-session" as SessionId);
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => {
@@ -291,7 +318,7 @@ describe("DefaultTuiSessionController", () => {
   test("rejects clear while the current runtime cannot switch sessions", async () => {
     const current = fakeRuntime("current-session" as SessionId, false);
     let createCount = 0;
-    const controller = new DefaultTuiSessionController(
+    const controller = new LocalWorkspaceClient(
       binding(current.runtime),
       emptyCatalog(),
       async () => {
@@ -390,7 +417,7 @@ function fakeRuntime(
 }
 
 function binding(runtime: RuntimeSession, profileName?: string) {
-  return managedTuiBinding({
+  return createLocalSessionBinding({
     runtimeSession: runtime,
     modelName: "test-model",
     workspaceRoot: "/tmp/tinker",
