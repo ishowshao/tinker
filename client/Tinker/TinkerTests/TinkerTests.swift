@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Testing
 @testable import Tinker
 
@@ -57,6 +58,58 @@ struct TinkerTests {
         #expect(result.last?.text == "updated")
     }
 
+    @Test func remoteAnswerDismissesAnAlreadyOpenInteractionSheet() {
+        let presentation = RemoteInteractionPresentation()
+        #expect(presentation.update("first"))
+        let alert = DismissalTrackingAlert(title: "Question", message: nil, preferredStyle: .actionSheet)
+        let answer = UIAlertAction(title: "Answer", style: .default)
+        alert.addAction(answer)
+        presentation.track(alert)
+        #expect(!presentation.update("first"))
+        #expect(answer.isEnabled)
+        #expect(!alert.wasDismissed)
+        #expect(presentation.update(nil))
+        #expect(!answer.isEnabled)
+        #expect(alert.wasDismissed)
+    }
+
+    @Test func replacementInteractionInvalidatesOldSheetEvenWhenContentMatches() {
+        let presentation = RemoteInteractionPresentation()
+        presentation.update("first")
+        let alert = DismissalTrackingAlert(title: "Same question", message: nil, preferredStyle: .actionSheet)
+        let answer = UIAlertAction(title: "Answer", style: .default)
+        alert.addAction(answer)
+        presentation.track(alert)
+        #expect(presentation.update("second"))
+        #expect(!answer.isEnabled)
+        #expect(alert.wasDismissed)
+    }
+
+    @Test func crossClientInteractionAndRestartReplaceProvisionalState() throws {
+        var state = RemoteSyncState()
+        var initial = try frame(sequence: 10, type: "snapshot")
+        initial.view?.interaction = RemoteInteraction(id: "retry", kind: "question", question: "Retry provider?", options: [RemoteOption(description: "Retry"), RemoteOption(description: "Stop")])
+        initial.view?.status = "waiting_input"
+        initial.view?.activeRequestId = "active"
+        try state.receive(initial)
+        #expect(state.view?.interaction?.options?.count == 2)
+        var answered = try frame(sequence: 11, type: "event")
+        answered.change?.activity.interaction = nil
+        try state.receive(answered)
+        #expect(state.view?.interaction == nil)
+        var restarted = try frame(sequence: 0, type: "snapshot")
+        restarted.epoch = "restarted"
+        restarted.view?.status = "interrupted"
+        restarted.view?.streaming = nil
+        restarted.view?.activeRequestId = nil
+        try state.receive(restarted)
+        #expect(state.view?.status == "interrupted")
+        #expect(state.view?.activeRequestId == nil)
+        #expect(state.view?.streaming == nil)
+        #expect(throws: (any Error).self) { try state.receive(answered) }
+        #expect(state.epoch == "restarted")
+    }
+
     private func message(id: String, ordinal: Int, text: String) -> RemoteMessage {
         RemoteMessage(id: id, ordinal: ordinal, role: "assistant", text: text, turnId: "turn", turnStatus: "completed", createdAt: "now")
     }
@@ -70,5 +123,14 @@ struct TinkerTests {
         else { body = ["change": ["activity": object, "messages": []]] }
         let value = body.merging(["version": 1, "type": type, "epoch": "epoch", "sequence": sequence]) { _, new in new }
         return try JSONDecoder().decode(RemoteFrame.self, from: JSONSerialization.data(withJSONObject: value))
+    }
+}
+
+@MainActor
+private final class DismissalTrackingAlert: UIAlertController {
+    var wasDismissed = false
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        wasDismissed = true
+        completion?()
     }
 }

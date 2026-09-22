@@ -9,7 +9,7 @@ final class SessionViewController: UIViewController, UITableViewDataSource, UITa
     private let composer = UITextView()
     private let sendButton = UIButton(configuration: .filled())
     private let interactionStack = UIStackView()
-    private var shownInteractionId: String?
+    private let interactionPresentation = RemoteInteractionPresentation()
     private var rows: [Row] = []
     private struct Row: Equatable { var id: String; var title: String; var text: String; var kind: String }
 
@@ -83,8 +83,7 @@ final class SessionViewController: UIViewController, UITableViewDataSource, UITa
             else { table.contentOffset = oldOffset }
         }
         table.tableHeaderView?.isHidden = !(view?.history.hasMore ?? false)
-        if shownInteractionId != view?.interaction?.id {
-            shownInteractionId = view?.interaction?.id
+        if interactionPresentation.update(view?.interaction?.id) {
             renderInteraction(view?.interaction)
         }
     }
@@ -102,6 +101,7 @@ final class SessionViewController: UIViewController, UITableViewDataSource, UITa
         interactionStack.addArrangedSubview(button)
     }
     private func presentInteraction(_ pending: RemoteInteraction) {
+        guard currentInteractionMatches(pending) else { return }
         let alert = UIAlertController(title: pending.kind == "question" ? pending.question : "确认工具执行", message: pending.kind == "confirmation" ? "\(pending.command ?? "")\n\n\(pending.reason ?? "")" : nil, preferredStyle: .actionSheet)
         if pending.kind == "question" {
             for (index, option) in (pending.options ?? []).enumerated() {
@@ -114,12 +114,18 @@ final class SessionViewController: UIViewController, UITableViewDataSource, UITa
         }
         alert.addAction(UIAlertAction(title: "稍后处理", style: .cancel))
         alert.popoverPresentationController?.sourceView = interactionStack
+        interactionPresentation.track(alert)
         present(alert, animated: true)
     }
+    private func currentInteractionMatches(_ pending: RemoteInteraction) -> Bool {
+        store.sync.view?.session.id == sessionId && store.sync.view?.interaction?.id == pending.id
+    }
     private func answer(_ pending: RemoteInteraction, selectedIndex: Int?) {
+        guard currentInteractionMatches(pending) else { return }
         do { try store.enqueue(RemoteOperation(kind: "answer", sessionId: sessionId, interactionId: pending.id, selectedIndex: selectedIndex)) } catch { showError(error) }
     }
     private func confirm(_ pending: RemoteInteraction, decision: String) {
+        guard currentInteractionMatches(pending) else { return }
         do { try store.enqueue(RemoteOperation(kind: "confirm", sessionId: sessionId, interactionId: pending.id, decision: decision)) } catch { showError(error) }
     }
     @objc private func send() {
@@ -130,7 +136,7 @@ final class SessionViewController: UIViewController, UITableViewDataSource, UITa
         catch { showError(error) }
     }
     @objc private func stop() {
-        guard let requestId = store.sync.view?.activeRequestId else { return }
+        guard store.sync.view?.session.id == sessionId, let requestId = store.sync.view?.activeRequestId else { return }
         do { try store.enqueue(RemoteOperation(kind: "stop", sessionId: sessionId, targetRequestId: requestId)) } catch { showError(error) }
     }
     @objc private func loadOlder() { Task { await store.loadOlderHistory() } }
@@ -170,4 +176,24 @@ private final class RemoteMessageCell: UITableViewCell {
         body.textColor = .label; body.text = text
         body.accessibilityIdentifier = kind == "assistant" ? "assistantText" : "messageText"
     }
+}
+
+/// Keeps a presented sheet tied to the server interaction that created it.
+@MainActor
+final class RemoteInteractionPresentation {
+    private var interactionId: String?
+    private weak var alert: UIAlertController?
+
+    @discardableResult
+    func update(_ nextId: String?) -> Bool {
+        guard nextId != interactionId else { return false }
+        interactionId = nextId
+        // Disable immediately, including while a dismissal animation is in flight.
+        alert?.actions.forEach { $0.isEnabled = false }
+        alert?.dismiss(animated: false)
+        alert = nil
+        return true
+    }
+
+    func track(_ alert: UIAlertController) { self.alert = alert }
 }

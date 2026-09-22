@@ -202,6 +202,23 @@ export function App(props: AppProps) {
     write(clearTerminal);
     setStaticRenderEpoch((current) => current + 1);
   }, [write]);
+  const presentationRevision = binding.projectionStore.getPresentationRevision?.();
+  const renderedPresentation = useRef({
+    sessionId: binding.sessionId,
+    revision: presentationRevision,
+  });
+  useEffect(() => {
+    const previous = renderedPresentation.current;
+    renderedPresentation.current = {
+      sessionId: binding.sessionId,
+      revision: presentationRevision,
+    };
+    if (
+      previous.sessionId === binding.sessionId &&
+      previous.revision !== presentationRevision
+    )
+      restoreStaticViewport();
+  }, [binding.sessionId, presentationRevision, restoreStaticViewport]);
   const staticItems = useMemo<Array<typeof STATIC_HEADER | TuiCommittedItem>>(
     () => [STATIC_HEADER, ...log.committed],
     [log.committed],

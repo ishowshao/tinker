@@ -7,6 +7,10 @@ export type TuiServiceStatus = { connection: string; activity: string; error?: s
 export type TuiSessionView = Pick<
   TuiProjectionStore,
   "getSnapshot" | "getLogSnapshot" | "subscribe"
-> & { getServiceStatus?: () => TuiServiceStatus };
+> & {
+  getServiceStatus?: () => TuiServiceStatus;
+  /** Changes when canonical recovery replaces previously printed rows. */
+  getPresentationRevision?: () => string | undefined;
+};
 export type TuiSessionBinding = SessionClient<TuiSessionView>;
 export type TuiSessionController = WorkspaceClient<TuiSessionView>;

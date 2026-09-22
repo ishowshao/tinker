@@ -208,6 +208,25 @@ build directory, the device destination and development signing. Unlock/trust th
 device. Run the app outside Xcode's debugger; the opt-in Debug acceptance trace
 (`TINKER_ACCEPTANCE_DIAGNOSTICS=1`) records launch/foreground/background, PID,
 request/session ID and the `P_TRACED` debugger flag, without prompts or credentials.
+
+For isolated simulator acceptance without a model provider or public relay, run
+`bun src/__tests__/fixtures/ios-acceptance-service.ts <new-temporary-directory>`.
+The fixture starts a loopback HTTPS service with a deterministic model, real Bash
+and AskUser tools, and an HTTP-created session awaiting a question response.
+It writes a private `pairing.json` and certificates into that directory. Use this
+pairing file in the `.xctestrun` preparation above. On a dedicated simulator,
+install its CA with `xcrun simctl keychain SIMULATOR_ID add-root-cert
+<new-temporary-directory>/certificates/ca.crt`. Keep simulator ad-hoc signing
+enabled so the app can use Keychain; do not build the network tests with
+`CODE_SIGNING_ALLOWED=NO`.
+
+This also enables the protocol-to-UIKit handoff test: open a pending question,
+background and foreground the app, answer through another HTTPS client, verify
+the open sheet disappears, and relaunch to recover the completed session. The
+existing background execution and explicit-stop journeys run against the same
+fixture. Stop the fixture after testing and remove the dedicated simulator and
+temporary credentials. These direct local transport checks do not validate a
+public relay, physical-device lock screen or cellular network switching.
 Release builds do not emit this trace. App-side trace plus canonical timestamps
 must demonstrate that the accepted turn continued while the actual device was
 backgrounded/locked/terminated. A simulator is insufficient evidence for that claim.

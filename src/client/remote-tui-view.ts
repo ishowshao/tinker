@@ -11,6 +11,7 @@ export class RemoteTuiView {
   private connection = "connecting";
   private error?: string;
   private activity = "idle";
+  private epoch?: string;
   private live: TuiTimelineLog["live"] = [];
 
   constructor(snapshot: RemoteTuiSnapshot) {
@@ -22,6 +23,7 @@ export class RemoteTuiView {
     activity: this.activity,
     error: this.error,
   });
+  readonly getPresentationRevision = () => this.epoch;
   readonly getSnapshot = () => this.state;
   readonly getLogSnapshot = () => this.log;
   readonly subscribe = (listener: () => void) => {
@@ -31,6 +33,13 @@ export class RemoteTuiView {
     };
   };
   update(snapshot: RemoteTuiSnapshot): void {
+    // Runtime-generated row IDs are not stable across a service restart. Replace
+    // the old projection with canonical recovery and request a terminal redraw.
+    if (this.epoch !== snapshot.cursor.epoch) {
+      this.epoch = snapshot.cursor.epoch;
+      this.printed.clear();
+      this.log = { committed: [], live: [] };
+    }
     this.error = undefined;
     this.activity = snapshot.activity.status;
     this.state = {

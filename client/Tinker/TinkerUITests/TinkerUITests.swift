@@ -65,9 +65,76 @@ final class TinkerUITests: XCTestCase {
     }
 
     @MainActor
+    func testProtocolHandoffAndRemoteAnswerDismissesOpenSheet() async throws {
+        let pairing = try pairingData()
+        guard let sessionId = pairing["acceptanceSessionId"] as? String else {
+            throw XCTSkip("Requires the isolated iOS acceptance service fixture.")
+        }
+        let app = try connectedApp()
+        app.cells["workspace-workspace"].tap()
+        let row = app.cells.containing(NSPredicate(format: "label CONTAINS %@", "IOS_PROTOCOL_HANDOFF")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15))
+        row.tap()
+        XCTAssertTrue(app.buttons["answerInteraction"].waitForExistence(timeout: 20))
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(app.wait(for: .runningBackground, timeout: 10))
+        app.activate()
+        XCTAssertTrue(app.buttons["answerInteraction"].waitForExistence(timeout: 20))
+        app.buttons["answerInteraction"].tap()
+        XCTAssertTrue(app.buttons["Current workspace"].waitForExistence(timeout: 10))
+        attach(app, name: "Protocol task handed to UIKit with pending question")
+
+        let snapshot = try await protocolRequest(pairing, route: "/v1/sessions/\(sessionId)/snapshot")
+        let view = try XCTUnwrap(snapshot["view"] as? [String: Any])
+        let interaction = try XCTUnwrap(view["interaction"] as? [String: Any])
+        let interactionId = try XCTUnwrap(interaction["id"] as? String)
+        _ = try await protocolRequest(pairing, route: "/v1/operations", operation: [
+            "requestId": UUID().uuidString.lowercased(), "kind": "answer",
+            "sessionId": sessionId, "interactionId": interactionId, "selectedIndex": 0
+        ])
+        let gone = NSPredicate(format: "exists == false")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: gone, object: app.buttons["Current workspace"])], timeout: 15), .completed)
+        waitForStatus(app, containing: "已完成", timeout: 20)
+        XCTAssertFalse(app.buttons["answerInteraction"].exists)
+        attach(app, name: "Remote answer dismissed the UIKit sheet")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.cells["resumeSession"].waitForExistence(timeout: 20))
+        app.cells["resumeSession"].tap()
+        waitForStatus(app, containing: "已完成", timeout: 20)
+        XCTAssertFalse(app.buttons["answerInteraction"].exists)
+        attach(app, name: "Protocol handoff result recovered after relaunch")
+    }
+
+    private func pairingData() throws -> [String: Any] {
+        guard let text = ProcessInfo.processInfo.environment["TINKER_UI_PAIRING_JSON"] else {
+            throw XCTSkip("Set TINKER_UI_PAIRING_JSON in the test runner to run the real relay journeys.")
+        }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+    }
+
+    // The isolated fixture CA is installed only in the acceptance simulator.
+    // This protocol client uses normal HTTPS trust and does not bypass TLS checks.
+    private func protocolRequest(_ pairing: [String: Any], route: String, operation: [String: Any]? = nil) async throws -> [String: Any] {
+        let endpoint = try XCTUnwrap(pairing["url"] as? String)
+        let token = try XCTUnwrap(pairing["token"] as? String)
+        let url = try XCTUnwrap(URL(string: route, relativeTo: URL(string: endpoint)))
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let operation {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: operation)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let http = try XCTUnwrap(response as? HTTPURLResponse)
+        XCTAssertTrue((200..<300).contains(http.statusCode))
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @MainActor
     private func connectedApp() throws -> XCUIApplication {
-        guard let text = ProcessInfo.processInfo.environment["TINKER_UI_PAIRING_JSON"] else { throw XCTSkip("Set TINKER_UI_PAIRING_JSON in the test runner to run the real relay journeys.") }
-        let pairing = try JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any]
+        let pairing = try pairingData()
         let app = XCUIApplication()
         app.launchEnvironment["TINKER_ACCEPTANCE_DIAGNOSTICS"] = "1"
         addUIInterruptionMonitor(withDescription: "Local network permission") { alert in
