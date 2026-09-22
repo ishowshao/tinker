@@ -7,6 +7,7 @@ import type {
 import { expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { parseSessionId } from "../ids/runtime-id";
 import { SessionStore, resolveSessionDatabasePath } from "../session/session-store";
@@ -251,7 +252,9 @@ test("background tools and pending interactions prevent idle reclaim after clien
               providerToolCallId: "background",
               name: "Bash",
               args: {
-                command: "echo $$ > background.pid; while :; do sleep 1; done",
+                // Keep startup asynchronous even on fast hosts to exercise the readiness handshake.
+                command:
+                  "sleep 0.2; echo $$ > background.pid; while :; do sleep 1; done",
                 run_in_background: true,
               },
             },
@@ -268,7 +271,16 @@ test("background tools and pending interactions prevent idle reclaim after clien
   let pid: number | undefined;
   try {
     await f.terminal(await f.prompt());
-    pid = Number(await readFile(path.join(f.workspace, "background.pid"), "utf8"));
+    // Turn completion acknowledges the background task, not execution of its first command.
+    pid = await until(() => {
+      try {
+        const value = readFileSync(path.join(f.workspace, "background.pid"), "utf8");
+        return /^[1-9]\d*\n$/.test(value) ? Number(value) : undefined;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+      }
+    });
     await f.service.sweepIdle(Date.now() + 1000000);
     expect(f.service.session(f.sessionId).initialized).toBe(true);
     expect(f.service.session(f.sessionId).busy).toBe(true);
