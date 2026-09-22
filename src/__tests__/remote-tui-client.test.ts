@@ -46,12 +46,15 @@ test("full TUI clients connect, retain canonical history and detach independentl
       f.service.session(f.sessionId).tuiSnapshot(),
     );
     recoveredView.setConnection("online", "Temporary snapshot failure");
-    expect(recoveredView.getLogSnapshot().live[0].status).toBe("failed");
+    expect(recoveredView.getServiceStatus().error).toBe("Temporary snapshot failure");
+    expect(recoveredView.getLogSnapshot().live).toHaveLength(0);
     recoveredView.update(f.service.session(f.sessionId).tuiSnapshot());
-    expect(recoveredView.getLogSnapshot().live[0].status).toBe("info");
-    expect(recoveredView.getLogSnapshot().live[0].text).not.toContain(
-      "Temporary snapshot failure",
-    );
+    expect(recoveredView.getServiceStatus()).toEqual({
+      connection: "online",
+      activity: "idle",
+      error: undefined,
+    });
+    expect(recoveredView.getLogSnapshot().live).toHaveLength(0);
     first = await createRemoteTuiClient(clientConfig, "test", f.sessionId);
     second = await createRemoteTuiClient(clientConfig, "test", f.sessionId);
     expect(f.factoryCalls()).toBe(1);
@@ -61,7 +64,7 @@ test("full TUI clients connect, retain canonical history and detach independentl
     await until(() => model.requests === 1);
     await until(() => secondView.getSnapshot().status === "running");
     expect(secondView.getSnapshot().recentTurns).toHaveLength(0);
-    expect(secondView.getLogSnapshot().committed).toHaveLength(0);
+    expect(secondView.getSnapshot().activeTurn).toBeDefined();
     // A different terminal can create another session without stopping this task.
     await first.client.clear();
     expect(first.client.getBinding().sessionId).not.toBe(f.sessionId);
@@ -87,13 +90,9 @@ test("full TUI clients connect, retain canonical history and detach independentl
     const ids = secondView.getLogSnapshot().committed.map((item) => item.id);
     const port = server.port;
     await server.stopTransport();
-    await until(() =>
-      secondView.getLogSnapshot().live.some((item) => item.text.includes("offline")),
-    );
+    await until(() => secondView.getServiceStatus?.().connection === "offline");
     server = startRemoteHttpServer(f.service, { ...config, port });
-    await until(() =>
-      secondView.getLogSnapshot().live.some((item) => item.text.includes("online")),
-    );
+    await until(() => secondView.getServiceStatus?.().connection === "online");
     expect(secondView.getLogSnapshot().committed.map((item) => item.id)).toEqual(ids);
     expect(new Set(ids).size).toBe(ids.length);
     expect(await Bun.file(clientConfig.statePath).exists()).toBe(false);
@@ -104,15 +103,14 @@ test("full TUI clients connect, retain canonical history and detach independentl
     expect(failed).toBeInstanceOf(Error);
     expect((failed as Error).message).toContain("does not belong");
     expect(second.client.getBinding()).toBe(before);
-    expect(
-      second.client
-        .getBinding()
-        .executeTurn(
-          { role: "user", content: "not supported" },
-          new AbortController().signal,
-        ),
-    ).rejects.toThrow("supports session creation");
-    expect(model.requests).toBe(1);
+    const result = await second.client
+      .getBinding()
+      .executeTurn(
+        { role: "user", content: "another task" },
+        new AbortController().signal,
+      );
+    expect(result.status).toBe("completed");
+    expect(model.requests).toBe(2);
   } finally {
     await first?.close({ type: "client_exit" });
     await second?.close({ type: "client_exit" });

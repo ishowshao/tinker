@@ -1,3 +1,5 @@
+import { sessionPost, sessionRead } from "./session-reads";
+import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import type { ServerWebSocket } from "bun";
 import { authenticateDevice, type RemoteServiceConfig } from "./config";
 import {
@@ -14,6 +16,7 @@ type SocketData = {
   session: HostedSession;
   cursor?: RemoteCursor;
   unsubscribe?: () => void;
+  release?: () => void;
   device: string;
 };
 const SOCKET_BUFFER_LIMIT = 2 * 1024 * 1024;
@@ -30,7 +33,7 @@ export function startRemoteHttpServer(
       cert: Bun.file(config.tls.certFile),
       key: Bun.file(config.tls.keyFile),
     },
-    maxRequestBodySize: 72 * 1024,
+    maxRequestBodySize: Math.ceil(IMAGE_INPUT_POLICY.maxBytesPerImage / 3) * 4 + 4096,
     idleTimeout: 30,
     async fetch(request, server) {
       try {
@@ -88,16 +91,60 @@ export function startRemoteHttpServer(
           if (request.method === "POST" && parts.length === 2) {
             if (!request.headers.get("content-type")?.startsWith("application/json"))
               throw new RemoteError(415, "JSON_REQUIRED", "Send application/json.");
-            const input = parseOperation(await request.json());
+            const body = await request.text();
+            if (Buffer.byteLength(body) > 72 * 1024)
+              throw new RemoteError(
+                413,
+                "BODY_TOO_LARGE",
+                "Operation body is too large.",
+              );
+            const input = parseOperation(JSON.parse(body));
             // Never use request.signal as a runtime cancellation signal.
             return json(await service.submit(input, device), 202);
           }
           if (request.method === "GET" && parts.length === 3)
             return json(service.store.get(requireId(parts[2], "requestId", true)));
         }
+        if (
+          request.method === "POST" &&
+          parts.length === 4 &&
+          parts[1] === "sessions"
+        ) {
+          const session = service.session(requireId(parts[2], "sessionId", true));
+          await session.open();
+          session.assertAvailable();
+          const response = await sessionPost(
+            session,
+            parts[3],
+            request,
+            service.homeRoot,
+          );
+          if (response) return response;
+        }
         if (request.method === "GET" && parts.length === 4 && parts[1] === "sessions") {
           const session = service.session(requireId(parts[2], "sessionId", true));
           await session.open();
+          session.assertAvailable();
+          if (
+            [
+              "files",
+              "last-response",
+              "view-file",
+              "memories",
+              "prompt-history",
+              "project-commands",
+              "git-branch",
+            ].includes(parts[3])
+          )
+            return json(
+              await sessionRead(
+                session,
+                parts[3],
+                url,
+                request.signal,
+                service.homeRoot,
+              ),
+            );
           if (parts[3] === "tui-snapshot") return json(session.tuiSnapshot());
           if (parts[3] === "snapshot") return json(session.hub.snapshot());
           if (parts[3] === "history") {
@@ -127,7 +174,17 @@ export function startRemoteHttpServer(
             );
             const cursor =
               epoch && sequence !== undefined ? { epoch, sequence } : undefined;
-            if (server.upgrade(request, { data: { session, cursor, device } })) return;
+            const release = session.attach();
+            try {
+              if (
+                server.upgrade(request, { data: { session, cursor, device, release } })
+              )
+                return;
+            } catch (error) {
+              release();
+              throw error;
+            }
+            release();
             throw new RemoteError(
               400,
               "WEBSOCKET_REQUIRED",
@@ -196,6 +253,7 @@ export function startRemoteHttpServer(
       close(socket) {
         sockets.delete(socket);
         socket.data.unsubscribe?.();
+        socket.data.release?.();
         // Detach only. The hosted runtime and its AbortController stay alive.
       },
     },
@@ -205,6 +263,7 @@ export function startRemoteHttpServer(
     async stopTransport() {
       for (const socket of sockets) {
         socket.data.unsubscribe?.();
+        socket.data.release?.();
         socket.terminate();
       }
       // Bun 1.3.14 can leave stop's promise pending after a closing TLS socket

@@ -1,3 +1,5 @@
+import type { TuiServiceStatus } from "../tui-session-controller";
+import { TurnCancelledError } from "../../agent/turn-cancellation";
 import os from "node:os";
 import path from "node:path";
 import { Box, Text, useInput, usePaste } from "ink";
@@ -68,6 +70,7 @@ export type PromptInputProps = {
   version?: string;
   workspaceRoot: string;
   gitBranch?: string;
+  serviceStatus?: TuiServiceStatus;
   contextUsage?: ContextUsageSnapshot;
   isDisabled?: boolean;
   placeholder?: string;
@@ -150,7 +153,7 @@ export function PromptInput(props: PromptInputProps) {
 
   useEffect(
     () => () => {
-      operation.current?.abort();
+      operation.current?.abort(new TurnCancelledError("session_dispose"));
     },
     [],
   );
@@ -784,6 +787,18 @@ export function PromptInput(props: PromptInputProps) {
                 <Text dimColor> · </Text>
                 <Text color={FOOTER_COLORS.cacheRate}>{cacheRate}</Text>
               </>
+            )}
+            {props.serviceStatus === undefined ? null : (
+              <Text
+                dimColor={!props.serviceStatus.error}
+                color={props.serviceStatus.error ? "red" : undefined}
+              >
+                {" · "}
+                {props.serviceStatus.connection}
+                {" · "}
+                {props.serviceStatus.activity}
+                {props.serviceStatus.error ? ` · ${props.serviceStatus.error}` : ""}
+              </Text>
             )}
             {props.version === undefined ? null : (
               <Text dimColor> · tinker {props.version}</Text>

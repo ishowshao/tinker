@@ -90,6 +90,23 @@ export class ImageAssetStore {
     return this.importFileInternal(sourcePath, false, options);
   }
 
+  async importBytes(
+    bytes: Buffer,
+    originalName: string,
+    options: {
+      signal?: AbortSignal;
+      accept?: (asset: ImageAssetRef) => void;
+    } = {},
+  ): Promise<ImportedImageAsset> {
+    throwIfAborted(options.signal);
+    const name = normalizeOriginalImageName(originalName);
+    const asset = await probeImageBytes(bytes, { fullDecode: true, sourceName: name });
+    options.accept?.(asset);
+    throwIfAborted(options.signal);
+    await this.publish(asset, bytes, options.signal);
+    return Object.freeze({ asset, originalName: name });
+  }
+
   private async importFileInternal(
     sourcePath: string,
     workspaceOnly: boolean,

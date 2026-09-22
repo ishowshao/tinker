@@ -24,6 +24,7 @@ export type PtyKey =
   | "ctrl_u";
 
 export type StartPtyTuiInput = {
+  readonly initialScreen?: string;
   readonly cliArgs?: readonly string[];
   readonly fakeModel: string;
   readonly rows?: number;
@@ -45,7 +46,7 @@ export interface PtyTuiFixture {
   start(
     input: Pick<
       StartPtyTuiInput,
-      "fakeModel" | "rows" | "columns" | "environment" | "cliArgs"
+      "fakeModel" | "rows" | "columns" | "environment" | "cliArgs" | "initialScreen"
     >,
   ): Promise<PtyTuiHarness>;
   dispose(): Promise<void>;
@@ -180,7 +181,8 @@ export async function startPtyTui(input: StartPtyTuiInput): Promise<PtyTuiHarnes
     });
     try {
       await harness.waitUntilHostReady();
-      await harness.waitForPromptReady();
+      if (input.initialScreen) await harness.waitForScreen(input.initialScreen);
+      else await harness.waitForPromptReady();
       return harness;
     } catch (error) {
       try {
@@ -255,7 +257,9 @@ export async function createPtyTuiFixture(
       });
       try {
         await harness.waitUntilHostReady();
-        await harness.waitForPromptReady();
+        if (startInput.initialScreen)
+          await harness.waitForScreen(startInput.initialScreen);
+        else await harness.waitForPromptReady();
         return harness;
       } catch (error) {
         try {

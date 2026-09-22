@@ -1,14 +1,14 @@
 import { Box, Text, useInput } from "ink";
 import { useState } from "react";
-import type { ModelProfile } from "../../cli/model-profiles";
+import type { ClientModelProfile } from "../../client/model-catalog";
 
 export type ModelPickerProps = {
-  profiles: readonly ModelProfile[];
+  profiles: readonly ClientModelProfile[];
   currentProfileName?: string;
   isSwitching?: boolean;
   error?: string;
   onCancel: () => void;
-  onSelect: (profile: ModelProfile) => void;
+  onSelect: (profile: ClientModelProfile) => void;
 };
 
 export function ModelPicker(props: ModelPickerProps) {
@@ -89,7 +89,7 @@ function ModelPickerContent(props: ModelPickerProps) {
 }
 
 function ProfileOption(props: {
-  profile: ModelProfile;
+  profile: ClientModelProfile;
   isSelected: boolean;
   isCurrent: boolean;
 }) {
@@ -117,7 +117,7 @@ function ProfileOption(props: {
 }
 
 function initialSelectedIndex(
-  profiles: readonly ModelProfile[],
+  profiles: readonly ClientModelProfile[],
   currentProfileName?: string,
 ): number {
   if (currentProfileName === undefined) {

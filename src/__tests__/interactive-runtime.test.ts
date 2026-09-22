@@ -130,8 +130,8 @@ describe("interactive runtime composition", () => {
         selection: { mode: "new", sessionId },
       });
       expect(input.systemPrompt).toContain("COMPOSITION_FIRST");
-      expect(input.enableTurnUndo).toBe(owner === "local-tui");
-      expect(input.enableProviderRetryPrompt).toBe(owner === "local-tui");
+      expect(input.enableTurnUndo).toBe(true);
+      expect(input.enableProviderRetryPrompt).toBe(true);
       expect(input.enableAskUser).toBe(true);
       expect(input.bashGuard).toEqual({
         mode: "guard",

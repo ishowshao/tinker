@@ -56,7 +56,7 @@ import {
 } from "./project-slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
 import type { ClientSessionSummary as SessionSummary } from "../client/session-client";
-import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
+import type { ClientModelProfile, ClientModelProfiles } from "../client/model-catalog";
 import { loadViewFile, type ViewFile } from "./view-file";
 import { writeClipboardText } from "./clipboard";
 import type { WorkspaceFileLister } from "./workspace-file-search";
@@ -73,7 +73,7 @@ export type AppProps = {
   history?: PromptHistory;
   projectSlashCommands?: readonly ProjectSlashCommand[];
   fileLister?: WorkspaceFileLister;
-  profiles?: ModelProfiles;
+  profiles?: ClientModelProfiles;
   persistDefaultProfile?: (profileName: string) => Promise<void>;
   readViewFile?: (workspaceRoot: string, filePath: string) => Promise<ViewFile>;
   readLastResponse?: (
@@ -207,11 +207,12 @@ export function App(props: AppProps) {
     [log.committed],
   );
 
+  const profiles = props.profiles ?? binding.modelProfiles?.();
   const canSwitchModel =
     state.recentTurns.length === 0 &&
     state.activeTurn === undefined &&
-    props.profiles !== undefined &&
-    props.profiles.profiles.size > 1;
+    profiles !== undefined &&
+    profiles.profiles.size > 1;
   const reasoningEffort = binding.reasoningEffort?.();
   const hasReasoningEffort = reasoningEffort !== undefined;
   const activeResumePicker =
@@ -224,7 +225,7 @@ export function App(props: AppProps) {
   );
   const availableCommands = [...builtInCommands, ...(props.projectSlashCommands ?? [])];
 
-  const profileList = props.profiles ? [...props.profiles.profiles.values()] : [];
+  const profileList = profiles ? [...profiles.profiles.values()] : [];
   const cycleReasoningEffort = async () => {
     const current = binding.reasoningEffort?.();
     if (current === undefined) {
@@ -281,6 +282,24 @@ export function App(props: AppProps) {
         return;
       }
 
+      if (binding.stopTurn !== undefined) {
+        if (isCancelling) return;
+        setIsCancelling(true);
+        setNotice("Cancelling current turn...");
+        void binding.stopTurn().then(
+          () => {
+            setIsCancelling(false);
+            setNotice((current) =>
+              current === "Cancelling current turn..." ? undefined : current,
+            );
+          },
+          (error: unknown) => {
+            setIsCancelling(false);
+            setNotice(`Stop failed: ${errorMessage(error)}`);
+          },
+        );
+        return;
+      }
       const controller = activeController.current;
       if (controller === undefined || controller.signal.aborted) {
         return;
@@ -383,7 +402,7 @@ export function App(props: AppProps) {
     restoreStaticViewport();
   };
 
-  const doSwitchModel = (profile: ModelProfile) => {
+  const doSwitchModel = (profile: ClientModelProfile) => {
     setShowModelPicker(false);
     setModelPickerState(undefined);
     setNotice(undefined);
@@ -393,7 +412,9 @@ export function App(props: AppProps) {
       .then(async () => {
         setGitBranchRefresh((current) => current + 1);
         try {
-          await props.persistDefaultProfile?.(profile.name);
+          await (
+            props.persistDefaultProfile ?? props.sessionController.persistDefaultProfile
+          )?.(profile.name);
           setNotice(`Switched to model profile "${profile.name}" (${profile.model}).`);
         } catch (error) {
           setNotice(
@@ -796,7 +817,7 @@ export function App(props: AppProps) {
             return false;
           }
           if (command.type === "model_switch") {
-            const targetProfile = props.profiles?.profiles.get(command.profileName);
+            const targetProfile = profiles?.profiles.get(command.profileName);
             if (targetProfile === undefined) {
               setNotice(`Unknown model profile: ${command.profileName}`);
               return false;
@@ -965,18 +986,22 @@ export function App(props: AppProps) {
                 />
               ) : askUser.pending !== undefined ? (
                 <AskUser
+                  key={askUser.interactionId}
                   question={askUser.pending.question}
                   options={askUser.pending.options}
                   onSelect={(selectedIndex) => {
                     void binding
-                      .resolveAskUser({ outcome: "selected", selectedIndex })
+                      .resolveAskUser(
+                        { outcome: "selected", selectedIndex },
+                        askUser.interactionId,
+                      )
                       .catch((error: unknown) =>
                         setNotice(`Answer failed: ${errorMessage(error)}`),
                       );
                   }}
                   onDismiss={() => {
                     void binding
-                      .resolveAskUser({ outcome: "dismissed" })
+                      .resolveAskUser({ outcome: "dismissed" }, askUser.interactionId)
                       .catch((error: unknown) =>
                         setNotice(`Dismiss failed: ${errorMessage(error)}`),
                       );
@@ -988,7 +1013,7 @@ export function App(props: AppProps) {
                   reason={bashGuard.pending.reason}
                   onDecision={(decision) => {
                     void binding
-                      .resolveBashConfirmation(decision)
+                      .resolveBashConfirmation(decision, bashGuard.interactionId)
                       .catch((error: unknown) =>
                         setNotice(`Bash confirmation failed: ${errorMessage(error)}`),
                       );
@@ -1010,6 +1035,7 @@ export function App(props: AppProps) {
                   version={props.version}
                   workspaceRoot={binding.workspaceRoot}
                   gitBranch={gitBranch}
+                  serviceStatus={binding.projectionStore.getServiceStatus?.()}
                   contextUsage={state.contextUsage}
                   isDisabled={
                     isSessionOperation ||

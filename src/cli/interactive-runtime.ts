@@ -30,10 +30,10 @@ type InteractiveRuntimeInput = {
   owner: "local-tui" | "service";
 };
 
-// Preserve current entry-point capabilities until the service protocol supports them.
+// Both interactive owners expose the same runtime interaction and undo capabilities.
 const CAPABILITIES = {
   "local-tui": { enableTurnUndo: true, enableProviderRetryPrompt: true },
-  service: { enableTurnUndo: false, enableProviderRetryPrompt: false },
+  service: { enableTurnUndo: true, enableProviderRetryPrompt: true },
 } as const;
 
 /** Composition only: callers retain config selection and runtime ownership. */

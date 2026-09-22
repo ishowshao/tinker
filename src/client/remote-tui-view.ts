@@ -1,8 +1,8 @@
-import { visibleTimelineItems, type TuiProjectionState } from "../tui/event-store";
+import { type TuiProjectionState } from "../tui/event-store";
 import type { TuiTimelineLog } from "../tui/tui-projection-store";
 import type { RemoteTuiSnapshot } from "../remote/tui-protocol";
 
-/** Retains printed history across refreshes; connection state stays in the live area. */
+/** Retains printed history across refreshes; service status is separate from the timeline. */
 export class RemoteTuiView {
   private readonly listeners = new Set<() => void>();
   private readonly printed = new Set<string>();
@@ -11,11 +11,17 @@ export class RemoteTuiView {
   private connection = "connecting";
   private error?: string;
   private activity = "idle";
+  private live: TuiTimelineLog["live"] = [];
 
   constructor(snapshot: RemoteTuiSnapshot) {
     this.state = snapshot.history;
     this.update(snapshot);
   }
+  readonly getServiceStatus = () => ({
+    connection: this.connection,
+    activity: this.activity,
+    error: this.error,
+  });
   readonly getSnapshot = () => this.state;
   readonly getLogSnapshot = () => this.log;
   readonly subscribe = (listener: () => void) => {
@@ -31,7 +37,8 @@ export class RemoteTuiView {
       ...snapshot.history,
       ...(snapshot.activity.activeRequestId ? { status: "running" as const } : {}),
     };
-    const added = visibleTimelineItems(snapshot.history).filter(
+    this.live = snapshot.timeline.live;
+    const added = snapshot.timeline.committed.filter(
       (item) => !this.printed.has(item.id),
     );
     for (const item of added) this.printed.add(item.id);
@@ -46,13 +53,7 @@ export class RemoteTuiView {
   private refresh(): void {
     this.log = {
       ...this.log,
-      live: [
-        {
-          id: "service-connection",
-          status: this.error ? "failed" : "info",
-          text: `Service: ${this.connection} · ${this.activity}${this.error ? ` · ${this.error}` : ""}`,
-        },
-      ],
+      live: this.live,
     };
     for (const listener of this.listeners) listener();
   }

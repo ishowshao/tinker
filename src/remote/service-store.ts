@@ -14,6 +14,7 @@ import {
 export type ManagedSessionRecord = RemoteSessionInfo & {
   workspacePath: string;
   initialized: boolean;
+  profileName?: string;
 };
 type ReceiptRow = {
   device: string;
@@ -94,6 +95,9 @@ export class RemoteServiceStore {
       )
       .run(record.id, JSON.stringify(record));
   }
+  releaseSession(id: string): void {
+    this.db.query("DELETE FROM managed_sessions WHERE id = ?").run(id);
+  }
   existing(input: RemoteOperationInput, device: string): OperationReceipt | undefined {
     const row = this.db
       .query("SELECT * FROM operations WHERE id = ?")
@@ -121,7 +125,9 @@ export class RemoteServiceStore {
       status: "accepted",
       createdAt: now,
       updatedAt: now,
-      ...(input.kind === "prompt" ? { prompt: input.prompt } : {}),
+      ...(input.kind === "prompt"
+        ? { prompt: input.prompt, attachments: input.attachments }
+        : {}),
     };
     this.db.transaction(() => {
       this.db
@@ -150,11 +156,12 @@ export class RemoteServiceStore {
       );
     return JSON.parse(row.receipt) as OperationReceipt;
   }
-  operations(sessionId: string): OperationReceipt[] {
+  operations(sessionId: string, includeResults = true): OperationReceipt[] {
     return (
       this.db
         .query(
-          "SELECT receipt FROM operations WHERE session_id = ? ORDER BY rowid DESC LIMIT 100",
+          `SELECT ${includeResults ? "receipt" : "json_remove(receipt, '$.result', '$.sessionResult') AS receipt"}
+          FROM operations WHERE session_id = ? ORDER BY rowid DESC LIMIT 100`,
         )
         .all(sessionId) as { receipt: string }[]
     )

@@ -22,6 +22,43 @@ const smallPolicy: TuiProjectionPolicy = {
 };
 
 describe("TuiProjectionStore", () => {
+  test("bounds a service transport tail without reprinting evicted visible items", async () => {
+    const store = new TuiProjectionStore({
+      sessionId,
+      modelName: "initial-model",
+      workspaceRoot: "/initial/workspace",
+      policy: smallPolicy,
+      committedItemLimit: 2,
+    });
+    const seen = new Set<string>();
+    let previous = new Set<string>();
+    store.subscribe(() => {
+      const committed = store.getLogSnapshot().committed;
+      expect(committed.length).toBeLessThanOrEqual(2);
+      for (const item of committed) {
+        if (!previous.has(item.id)) {
+          expect(seen.has(item.id)).toBe(false);
+          seen.add(item.id);
+        }
+      }
+      previous = new Set(committed.map((item) => item.id));
+    });
+    for (let number = 1; number <= 20; number += 1) {
+      const turn = turnIdentity(number);
+      await store.append(turnStarted(number * 2, turn, `prompt ${number}`));
+      await store.append(
+        turnFinished(
+          number * 2 + 1,
+          turn,
+          iterationIdentity(number, 1),
+          `answer ${number}`,
+        ),
+      );
+    }
+    expect(store.getSnapshot().recentTurns).toHaveLength(3);
+    expect(JSON.stringify(store.getLogSnapshot())).toContain("answer 20");
+  });
+
   test("keeps running items live and atomically commits their final form once", async () => {
     const store = createStore();
     const turn = turnIdentity(1);

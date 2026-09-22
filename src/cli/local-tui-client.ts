@@ -23,7 +23,8 @@ import {
   type RunnerConfig,
 } from "./config";
 import { createInteractiveRuntimeSession } from "./interactive-runtime";
-import { resolveSessionProfileName, type ModelProfile } from "./model-profiles";
+import { resolveSessionProfileName } from "./model-profiles";
+import type { ClientModelProfile } from "../client/model-catalog";
 
 export async function createLocalTuiClient(options: {
   publicConfig: ResolvedPublicConfig;
@@ -135,7 +136,7 @@ export async function createLocalTuiClient(options: {
     };
 
     const createSessionWithProfile = async (
-      profile: ModelProfile,
+      profile: ClientModelProfile,
     ): Promise<OwnedSessionBinding<TuiProjectionStore>> => {
       if (profiles === undefined) {
         throw new Error("Model profiles are not configured.");

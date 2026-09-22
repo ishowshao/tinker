@@ -368,6 +368,9 @@ function fakeRuntime(
     importImage: async () => {
       throw new Error("not used");
     },
+    importImageBytes: async () => {
+      throw new Error("not used");
+    },
     verifyImageAssets: async () => undefined,
     admitTurn: async ({ userMessage }) => ({
       turnId: createTestRuntime().turn.turnId,

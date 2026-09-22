@@ -60,6 +60,13 @@ test("PTY: full service TUI displays history, creates and reconnects sessions wi
     await harness.waitForScreen("REMOTE_HISTORY_SENTINEL");
     await harness.waitForScreen("Complete answer 1");
     expect(harness.screenText()).toContain("Tinker");
+    await harness.waitForScreen("online · completed");
+    expect(harness.screenText()).not.toContain("Service:");
+    const screen = harness.screenText();
+    expect(screen.lastIndexOf("online · completed")).toBeGreaterThan(
+      screen.lastIndexOf("test-model ·"),
+    );
+
     await harness.type("/clear");
     await harness.waitForScreen("Start a new session and clear conversation");
     await harness.press("enter");
@@ -73,16 +80,11 @@ test("PTY: full service TUI displays history, creates and reconnects sessions wi
     await harness.press("enter");
     await harness.waitForScreen("REMOTE_HISTORY_SENTINEL");
     await harness.waitForPromptReady();
-    await harness.type("this must not start a task");
-    await harness.waitForScreen("this must not start a task");
+    await harness.type("REMOTE_NEW_TASK");
+    await harness.waitForScreen("REMOTE_NEW_TASK");
     await harness.press("enter");
-    await harness.waitForScreen("supports session creation");
-    expect(model.requests).toBe(1);
-    // Rejected input remains editable under the existing admission UX.
-    for (let attempt = 0; attempt < 40 && !harness.promptReady(); attempt += 1) {
-      await harness.press("ctrl_u");
-      await Bun.sleep(25);
-    }
+    await harness.waitForScreen("Complete answer 2");
+    expect(model.requests).toBe(2);
     await harness.waitForPromptReady();
     await harness.type("/quit");
     await harness.waitForScreen("Exit the TUI");
@@ -92,6 +94,69 @@ test("PTY: full service TUI displays history, creates and reconnects sessions wi
   } finally {
     await harness?.dispose();
     await server.stopTransport();
+    await f.cleanup();
+  }
+}, 25000);
+
+test("PTY: full service TUI streams, steers, renders tools and stops an attached task with Esc", async () => {
+  const { RemoteExecutionModel, remoteTuiFixture } = await import(
+    "./helpers/remote-tui-test-support"
+  );
+  const { until } = await import("./helpers/remote-test-support");
+  const model = new RemoteExecutionModel();
+  const f = await remoteTuiFixture(model);
+  let harness;
+  const start = (initialScreen?: string) =>
+    startPtyTui({
+      initialScreen,
+      fakeModel: "must-not-run",
+      rows: 50,
+      columns: 140,
+      cliArgs: [
+        "connect",
+        "--config",
+        f.configPath,
+        "--tui",
+        "--workspace",
+        "test",
+        "--session",
+        f.sessionId,
+      ],
+    });
+  try {
+    harness = await start();
+    await harness.waitForPromptReady();
+    await harness.type("PTY_REMOTE_EXECUTE");
+    await harness.waitForScreen("PTY_REMOTE_EXECUTE");
+    await harness.press("enter");
+    await harness.waitForScreen("REMOTE_STREAM_1");
+    expect(harness.screenText()).not.toContain("REMOTE_DONE_1");
+    await harness.waitForScreen("Send a follow-up for the active turn");
+    await harness.type("PTY_REMOTE_FOLLOWUP");
+    await harness.waitForScreen("PTY_REMOTE_FOLLOWUP");
+    await harness.press("enter");
+    await harness.waitForScreen("Follow-up queued for the active turn (1 pending).");
+    model.calls[0].release();
+    await harness.waitForScreen("sleep 1");
+    await harness.waitForScreen("REMOTE_STREAM_2");
+    expect(model.calls[1].input).toContain("PTY_REMOTE_FOLLOWUP");
+    await harness.waitForScreen("REMOTE_TOOL_DONE");
+    await harness.waitForScreen((screen) => !screen.includes("(1 pending)"));
+    // Process exit detaches without stopping the model; the next terminal attaches live.
+    await harness.dispose();
+    harness = undefined;
+    expect(model.aborted).toBe(false);
+    harness = await start("Send a follow-up for the active turn");
+    await harness.waitForScreen("REMOTE_STREAM_2");
+    await harness.press("escape");
+    await until(() => model.aborted);
+    await harness.waitForPromptReady();
+    await harness.type("/quit");
+    await harness.waitForScreen("Exit the TUI");
+    await harness.press("enter");
+    expect(await harness.waitForExit(3000)).toEqual({ code: 0, signal: null });
+  } finally {
+    await harness?.dispose();
     await f.cleanup();
   }
 }, 25000);

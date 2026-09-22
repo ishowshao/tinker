@@ -18,7 +18,7 @@ import type { TurnUndoResult } from "../tools/turn-undo-manager";
 import type { ImageAssetRef } from "../image/image-types";
 import type { ImportedImageAsset } from "../image/image-asset-store";
 import type { SessionId } from "../ids/runtime-id";
-import type { ModelProfile } from "../cli/model-profiles";
+import type { ClientModelProfile, ClientModelProfiles } from "./model-catalog";
 import type { McpInventorySnapshot } from "../mcp/mcp-manager";
 import type { ReasoningEffortSnapshot } from "../model/reasoning-effort";
 import type { SessionSummary } from "../session/session-catalog";
@@ -38,6 +38,7 @@ export type SessionClient<View> = {
   modelName: string;
   workspaceRoot: string;
   profileName?: string;
+  modelProfiles?: () => ClientModelProfiles | undefined;
   projectionStore: View;
   readLastResponse(): Promise<string | undefined>;
   skills(): RuntimeSkillsSnapshot;
@@ -57,28 +58,33 @@ export type SessionClient<View> = {
   ) => Promise<void>;
   admitTurn?: (userMessage: UserMessage, signal: AbortSignal) => Promise<AcceptedTurn>;
   executeTurn(userMessage: UserMessage, signal: AbortSignal): Promise<RunAgentResult>;
+  stopTurn?: () => Promise<void>;
   promptScheduler?: () => PromptSchedulerSnapshot;
   subscribePromptScheduler?: (listener: () => void) => () => void;
   queueFollowUp?: (message: UserMessage) => Promise<QueueFollowUpResult>;
-  bashGuard(): BashGuardSnapshot;
+  bashGuard(): BashGuardSnapshot & { interactionId?: string };
   subscribeBashGuard(listener: () => void): () => void;
   setYoloMode(enabled: boolean): Promise<void>;
-  resolveBashConfirmation(decision: "allow" | "deny"): Promise<void>;
+  resolveBashConfirmation(
+    decision: "allow" | "deny",
+    interactionId?: string,
+  ): Promise<void>;
   providerRetry?: () => ProviderRetrySnapshot;
   subscribeProviderRetry?: (listener: () => void) => () => void;
   resolveProviderRetry?: (
     requestId: string,
     decision: ProviderRetryDecision,
   ) => Promise<void>;
-  askUser(): AskUserSnapshot;
+  askUser(): AskUserSnapshot & { interactionId?: string };
   subscribeAskUser(listener: () => void): () => void;
-  resolveAskUser(response: AskUserResolution): Promise<void>;
+  resolveAskUser(response: AskUserResolution, interactionId?: string): Promise<void>;
 };
 
 export type WorkspaceClient<View> = {
   getBinding: () => SessionClient<View>;
   subscribe: (listener: () => void) => () => void;
   listSessions: () => Promise<readonly ClientSessionSummary[]>;
+  persistDefaultProfile?: (profileName: string) => Promise<void>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
   undo: () => Promise<TurnUndoResult>;
@@ -86,7 +92,10 @@ export type WorkspaceClient<View> = {
   clear: (beforeCommit?: () => void) => Promise<void>;
   resume: (sessionId: SessionId, beforeCommit?: () => void) => Promise<void>;
   delete: (sessionId: SessionId) => Promise<void>;
-  switchModel: (profile: ModelProfile, beforeCommit?: () => void) => Promise<void>;
+  switchModel: (
+    profile: ClientModelProfile,
+    beforeCommit?: () => void,
+  ) => Promise<void>;
 };
 
 /** Closing a connection is distinct from an explicit task cancellation. */

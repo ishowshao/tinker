@@ -1,3 +1,10 @@
+import { encodeFailure } from "../remote/failures";
+import type { ClientModelCatalog } from "../client/model-catalog";
+import {
+  isSessionOperation,
+  type SessionOperationResult,
+} from "../remote/session-operations";
+import { TuiProjectionStore } from "../tui/tui-projection-store";
 import { ResumeProjectionReader } from "../session/resume-projection";
 import type { RemoteTuiSnapshot } from "../remote/tui-protocol";
 import { randomUUID } from "node:crypto";
@@ -23,21 +30,29 @@ import {
 import { type ManagedSessionRecord, RemoteServiceStore } from "../remote/service-store";
 import { RemoteSyncHub } from "../remote/sync-hub";
 
-export type HostedRuntimeFactory = (input: {
+export type HostedRuntimeFactory = ((input: {
   record: ManagedSessionRecord;
   sink: EventSink & AssistantTextDeltaSink;
 }) => Promise<{
   runtime: RuntimeSession;
   databasePath: string;
   modelName: string;
-}>;
+  profileName?: string;
+  modelCatalog?: ClientModelCatalog;
+}>) & {
+  profiles?: (workspaceId: string) => Promise<ClientModelCatalog | undefined>;
+  persistDefaultProfile?: (workspaceId: string, profileName: string) => Promise<void>;
+};
 
 export class HostedSession implements EventSink, AssistantTextDeltaSink {
   readonly name = "remote-view";
   readonly hub: RemoteSyncHub;
   private runtime?: RuntimeSession;
+  private maintenance?: Promise<unknown>;
+  private modelCatalog?: ClientModelCatalog;
+  private interactionSource?: object;
   private reader?: RemoteHistoryReader;
-  private databasePath?: string;
+  private projection?: TuiProjectionStore;
   private opening?: Promise<void>;
   private readonly queue: OperationReceipt[] = [];
   private active?: {
@@ -52,6 +67,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
   private lastOrdinal = 0;
   private streamTimer?: ReturnType<typeof setTimeout>;
   private stopping = false;
+  private connections = 0;
   private unsubscribers: (() => void)[] = [];
   private controlTail: Promise<void> = Promise.resolve();
 
@@ -64,14 +80,56 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
     this.hub = new RemoteSyncHub(epoch, () => this.view());
   }
 
+  assertAvailable(): void {
+    if (this.stopping)
+      throw new RemoteError(409, "SESSION_CLOSING", "Session is closing.");
+  }
+  get connectedClients(): number {
+    return this.connections;
+  }
+  attach(): () => void {
+    this.assertAvailable();
+    this.connections += 1;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        this.connections -= 1;
+      }
+    };
+  }
+  beginDelete(): void {
+    this.assertIdle();
+    if (this.connections > 0)
+      throw new RemoteError(
+        409,
+        "SESSION_CONNECTED",
+        "Cannot delete a session while a client is connected. Disconnect it first.",
+      );
+    this.stopping = true;
+  }
   open(): Promise<void> {
+    this.assertAvailable();
     return (this.opening ??= this.initialize());
   }
   private async initialize(): Promise<void> {
     try {
       const opened = await this.factory({ record: this.record, sink: this });
       this.runtime = opened.runtime;
-      this.databasePath = opened.databasePath;
+      this.modelCatalog = opened.modelCatalog;
+      this.projection = new TuiProjectionStore({
+        sessionId: this.record.id,
+        workspaceRoot: this.record.workspacePath,
+        modelName: opened.modelName,
+        committedItemLimit: 512,
+        initialSnapshot: ResumeProjectionReader.readDatabase({
+          databasePath: opened.databasePath,
+          workspaceRoot: this.record.workspacePath,
+          sessionId: parseSessionId(this.record.id),
+          modelName: opened.modelName,
+          closedTurnsOnly: true,
+        }),
+      });
       this.reader = new RemoteHistoryReader(
         opened.databasePath,
         parseSessionId(this.record.id),
@@ -81,6 +139,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
         ...this.record,
         initialized: true,
         modelName: opened.modelName,
+        profileName: opened.profileName,
         status: "idle",
       };
       this.store.saveSession(this.record);
@@ -94,6 +153,10 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
         const status = receipt.turnId
           ? this.reader.turnStatus(receipt.turnId)
           : undefined;
+        // A terminal turn cannot prove that an extended execution chain finished.
+        // Without its final result, a crash may have lost unconsumed follow-ups.
+        if (receipt.hasFollowUps && !receipt.result && receipt.status === "interrupted")
+          continue;
         if (receipt.kind === "prompt" && status && status !== "open") {
           this.store.update({
             ...receipt,
@@ -111,6 +174,8 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
         this.activity.error = last.error;
       }
       this.unsubscribers = [
+        this.runtime.subscribePromptScheduler(() => this.publish()),
+        this.runtime.subscribeProviderRetry(() => this.updateInteraction()),
         this.runtime.subscribeAskUser(() => this.updateInteraction()),
         this.runtime.subscribeBashGuard(() => this.updateInteraction()),
       ];
@@ -131,23 +196,40 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
     return { ...this.readActivity(), history: this.history() };
   }
   tuiSnapshot(): RemoteTuiSnapshot {
-    if (!this.databasePath || !this.runtime) throw new Error("Session is not ready.");
+    if (!this.projection || !this.runtime) throw new Error("Session is not ready.");
     const frame = this.hub.snapshot();
     return {
       version: 1,
       cursor: { epoch: frame.epoch, sequence: frame.sequence },
       activity: this.readActivity(),
-      history: ResumeProjectionReader.readDatabase({
-        databasePath: this.databasePath,
-        workspaceRoot: this.record.workspacePath,
-        sessionId: parseSessionId(this.record.id),
-        modelName: this.record.modelName,
-        closedTurnsOnly: true,
-      }),
+      history: this.projection.getSnapshot(),
+      timeline: this.projection.getLogSnapshot(),
+      promptScheduler: this.runtime.promptScheduler(),
+      profileName: this.record.profileName,
+      modelCatalog: this.modelCatalog,
+      reasoningEffort: this.runtime.reasoningEffort(),
+      supportsImageInput: this.runtime.supportsImageInput(),
       bashGuard: {
-        mode: this.runtime.bashGuard().mode,
-        source: this.runtime.bashGuard().source,
+        ...this.runtime.bashGuard(),
+        ...(this.runtime.bashGuard().pending
+          ? { interactionId: this.activity.interaction?.id }
+          : {}),
       },
+      askUser: {
+        ...this.runtime.askUser(),
+        ...(this.runtime.askUser().pending
+          ? { interactionId: this.activity.interaction?.id }
+          : {}),
+      },
+      providerRetry:
+        this.runtime.providerRetry().pending && this.activity.interaction
+          ? {
+              pending: {
+                ...this.runtime.providerRetry().pending!,
+                requestId: this.activity.interaction.id,
+              },
+            }
+          : {},
       skills: this.runtime.skills(),
       mcp: this.runtime.mcp(),
     };
@@ -161,11 +243,76 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
     return structuredClone({
       ...this.activity,
       session: { ...session, status: this.activity.status },
-      operations: this.store.operations(this.record.id),
+      // Final results are fetched by operation ID, not repeated in every live frame.
+      operations: this.store.operations(this.record.id, false),
     });
   }
 
+  updateModelCatalog(catalog: ClientModelCatalog | undefined): void {
+    this.modelCatalog = catalog;
+    this.publish();
+  }
+
+  assertIdle(): void {
+    if (
+      this.stopping ||
+      this.maintenance ||
+      this.active ||
+      this.queue.length ||
+      !this.runtime?.canSwitchSession()
+    )
+      throw new RemoteError(
+        409,
+        "SESSION_BUSY",
+        "A turn, context operation or background task is active.",
+      );
+  }
+  get id() {
+    return parseSessionId(this.record.id);
+  }
+  get hasTurns(): boolean {
+    return this.reader?.latestTurn() !== undefined;
+  }
+  exclusive<T>(operation: (runtime: RuntimeSession) => Promise<T>): Promise<T> {
+    this.assertIdle();
+    const pending = Promise.resolve()
+      .then(() => operation(this.runtime!))
+      .finally(() => {
+        if (this.maintenance === pending) this.maintenance = undefined;
+        this.publish();
+      });
+    this.maintenance = pending;
+    return pending;
+  }
+  runMaintenance(
+    receipt: OperationReceipt,
+    operation: (runtime: RuntimeSession) => Promise<SessionOperationResult>,
+  ): void {
+    const running = this.updateReceipt(receipt, { status: "running" });
+    void this.exclusive(operation).then(
+      (sessionResult) => {
+        this.updateReceipt(running, { status: "completed", sessionResult });
+        this.publish();
+      },
+      (error: unknown) => {
+        this.updateReceipt(running, {
+          status: "failed",
+          error: errorMessage(error),
+          failure: encodeFailure(error),
+        });
+        this.publish();
+      },
+    );
+  }
+
   validate(input: RemoteOperationInput): void {
+    if (isSessionOperation(input)) this.assertIdle();
+    if (input.kind === "prompt" && this.maintenance)
+      throw new RemoteError(
+        409,
+        "SESSION_BUSY",
+        "A session maintenance operation is active.",
+      );
     if (this.stopping)
       throw new RemoteError(503, "SERVICE_STOPPING", "The local service is stopping.");
     if (input.kind === "prompt" && this.queue.length >= 8)
@@ -174,12 +321,17 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
         "QUEUE_FULL",
         "This session already has eight queued requests.",
       );
-    if (input.kind === "answer" || input.kind === "confirm") {
+    if (
+      input.kind === "answer" ||
+      input.kind === "confirm" ||
+      input.kind === "provider_retry"
+    ) {
       const pending = this.activity.interaction;
       if (
         !pending ||
         pending.id !== input.interactionId ||
-        pending.kind !== (input.kind === "answer" ? "question" : "confirmation")
+        pending.kind !== (input.kind === "confirm" ? "confirmation" : "question") ||
+        (input.kind === "provider_retry" && !this.runtime?.providerRetry().pending)
       )
         throw new RemoteError(
           409,
@@ -194,6 +346,16 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
       )
         throw new RemoteError(400, "INVALID_ANSWER", "Answer index is out of range.");
     }
+    if (
+      input.kind === "follow_up" &&
+      (this.active?.receipt.requestId !== input.targetRequestId ||
+        this.runtime?.promptScheduler().state !== "running")
+    )
+      throw new RemoteError(
+        409,
+        "STALE_TURN",
+        "The targeted execution is no longer running.",
+      );
     if (input.kind === "stop") {
       const target = this.store.get(input.targetRequestId);
       if (target.sessionId !== this.record.id || target.kind !== "prompt")
@@ -245,7 +407,13 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
       this.updateReceipt(active.receipt, { status: "running" });
       this.publish();
       const accepted = await this.runtime!.admitTurn({
-        userMessage: { role: "user", content: active.receipt.prompt! },
+        userMessage: {
+          role: "user",
+          content: active.receipt.prompt!,
+          ...(active.receipt.attachments
+            ? { attachments: active.receipt.attachments }
+            : {}),
+        },
         signal: active.controller.signal,
       });
       active.receipt = this.updateReceipt(active.receipt, {
@@ -257,6 +425,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
       const result = await accepted.completion;
       this.updateReceipt(active.receipt, {
         status: result.status,
+        result,
         ...(result.status === "failed" ? { error: result.error } : {}),
       });
       this.activity.status = result.status;
@@ -266,6 +435,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
       this.updateReceipt(active.receipt, {
         status,
         error: errorMessage(error),
+        failure: encodeFailure(error),
       });
       this.activity.status = status;
       this.activity.error = errorMessage(error);
@@ -300,6 +470,28 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
             this.updateReceipt(this.queue.splice(index, 1)[0], {
               status: "cancelled",
             });
+        } else if (input.kind === "follow_up") {
+          const followUp = this.runtime!.queueFollowUp({
+            role: "user",
+            content: input.prompt,
+          });
+          this.updateReceipt(this.active!.receipt, { hasFollowUps: true });
+          this.updateReceipt(receipt, { status: "completed", followUp });
+          this.publish();
+          return;
+        } else if (
+          input.kind === "provider_retry" ||
+          (input.kind === "answer" && this.runtime!.providerRetry().pending)
+        ) {
+          const retry = this.runtime!.providerRetry().pending!;
+          await this.runtime!.resolveProviderRetry(
+            retry.requestId,
+            input.kind === "provider_retry"
+              ? input.decision
+              : input.selectedIndex === 0
+                ? "retry"
+                : "stop",
+          );
         } else if (input.kind === "answer") {
           await this.runtime!.resolveAskUser(
             input.selectedIndex === null
@@ -338,14 +530,28 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
   private updateInteraction(): void {
     const question = this.runtime?.askUser().pending;
     const confirmation = this.runtime?.bashGuard().pending;
-    if (question || confirmation) {
-      if (!this.activity.interaction) {
+    const retry = this.runtime?.providerRetry().pending;
+    const source = question ?? confirmation ?? retry;
+    if (source) {
+      if (source !== this.interactionSource) {
+        this.interactionSource = source;
         this.activity.interaction = question
           ? { id: randomUUID(), kind: "question", ...question }
-          : { id: randomUUID(), kind: "confirmation", ...confirmation! };
+          : confirmation
+            ? { id: randomUUID(), kind: "confirmation", ...confirmation }
+            : {
+                id: randomUUID(),
+                kind: "question",
+                question: `Provider request failed. Automatic retries exhausted. ${retry!.failure.error.slice(0, 500)}`,
+                options: [
+                  { description: "Retry again" },
+                  { description: "End this turn" },
+                ],
+              };
       }
       this.activity.status = "waiting_input";
     } else {
+      this.interactionSource = undefined;
       this.activity.interaction = undefined;
       if (this.active) this.activity.status = "running";
     }
@@ -358,6 +564,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
 
   async append(event: AgentEvent): Promise<void> {
     if (!this.reader) return;
+    await this.projection?.append(event);
     switch (event.type) {
       case "turn.started":
         this.activity.activeTurnId = event.turnId;
@@ -396,11 +603,12 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
       case "turn.steering.applied":
         break;
       default:
-        return;
+        break;
     }
     this.publish();
   }
   updateAssistantTextDelta(update: AssistantTextDeltaUpdate): void {
+    this.projection?.updateAssistantTextDelta(update);
     const previous = this.activity.streaming;
     this.activity.streaming = {
       iterationId: update.iterationId,
@@ -446,6 +654,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
         type: "runner_failed",
         error: "Remote service shutdown.",
       });
+    await this.maintenance?.catch(() => undefined);
     await this.active?.completion;
     await this.controlTail;
     for (const unsubscribe of this.unsubscribers) unsubscribe();

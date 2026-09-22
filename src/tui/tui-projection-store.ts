@@ -26,6 +26,8 @@ export type TuiProjectionStoreInput = {
   workspaceRoot: string;
   policy?: TuiProjectionPolicy;
   initialSnapshot?: TuiProjectionState;
+  /** Optional retained transport tail; local terminal scrollback stays unlimited. */
+  committedItemLimit?: number;
 };
 
 export type AssistantStreamSectionItem = Readonly<{
@@ -66,6 +68,7 @@ export class TuiProjectionStore implements EventSink, AssistantTextDeltaSink {
   readonly name = "tui-projection-store";
   private readonly listeners = new Set<() => void>();
   private readonly policy: TuiProjectionPolicy;
+  private readonly committedItemLimit?: number;
   private readonly printed = new Set<string>();
   private readonly physicallyAdoptedIterations = new Map<string, string>();
   private snapshot: TuiProjectionState;
@@ -73,6 +76,12 @@ export class TuiProjectionStore implements EventSink, AssistantTextDeltaSink {
   private assistantStreamAttempt?: AssistantStreamAttempt;
 
   constructor(input: TuiProjectionStoreInput) {
+    if (
+      input.committedItemLimit !== undefined &&
+      (!Number.isSafeInteger(input.committedItemLimit) || input.committedItemLimit < 1)
+    )
+      throw new Error("Committed item limit must be a positive integer.");
+    this.committedItemLimit = input.committedItemLimit;
     this.policy = validateTuiProjectionPolicy(
       input.policy ?? defaultTuiProjectionPolicy,
     );
@@ -82,6 +91,7 @@ export class TuiProjectionStore implements EventSink, AssistantTextDeltaSink {
         : validateInitialSnapshot(input, input.initialSnapshot, this.policy);
     if (input.initialSnapshot !== undefined) {
       this.refreshLog(visibleTimelineItems(this.snapshot));
+      this.retainLog();
     }
   }
 
@@ -279,9 +289,24 @@ export class TuiProjectionStore implements EventSink, AssistantTextDeltaSink {
   }
 
   private notifyListeners(): void {
+    this.retainLog();
     for (const listener of this.listeners) {
       listener();
     }
+  }
+
+  private retainLog(): void {
+    if (this.committedItemLimit === undefined) return;
+    this.log = {
+      ...this.log,
+      committed: this.log.committed.slice(-this.committedItemLimit),
+    };
+    // Only IDs still reachable from the bounded projection or transport tail can reappear.
+    const retained = new Set([
+      ...timelineStreamItems(this.snapshot).map((item) => item.id),
+      ...this.log.committed.map((item) => item.id),
+    ]);
+    for (const id of this.printed) if (!retained.has(id)) this.printed.delete(id);
   }
 
   private refreshLog(stream = timelineStreamItems(this.snapshot)): void {

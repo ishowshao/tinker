@@ -47,16 +47,22 @@ async function runFullTui(input: {
   );
   let instance: ReturnType<typeof render> | undefined;
   try {
-    await prepareShikiHighlighter();
+    const [history, projectSlashCommands] = await Promise.all([
+      connection.client.loadHistory(),
+      connection.client.projectCommands(),
+      prepareShikiHighlighter(),
+    ]);
     instance = render(
       <App
         sessionController={connection.client}
-        initialNotice="Service TUI preview: /clear creates; /resume connects. Task execution and live tool details are not enabled in this batch."
-        readViewFile={async () => {
-          throw new Error("Remote file viewing is not available in this batch.");
-        }}
+        initialNotice="Service TUI preview: /clear creates; /resume connects. Esc stops execution; input while running queues a follow-up."
+        history={history}
+        projectSlashCommands={projectSlashCommands}
+        readGitBranch={connection.client.readGitBranch}
+        fileLister={connection.client.listFiles}
+        readViewFile={connection.client.readFile}
         writeClipboard={clipboardWriterForEnvironment(input.env)}
-        memoryDisabledNotice="Remote memory browsing is not available in this batch."
+        listStoredMemories={connection.client.listStoredMemories}
       />,
       { incrementalRendering: true },
     );

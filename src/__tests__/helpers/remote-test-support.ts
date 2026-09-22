@@ -22,7 +22,10 @@ import {
   testModelOutput,
 } from "../test-runtime";
 
-export async function remoteFixture(model: ModelClient) {
+export async function remoteFixture(
+  model: ModelClient,
+  catalog?: import("../../client/model-catalog").ClientModelCatalog,
+) {
   const root = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "tinker-remote-test-")),
   );
@@ -40,7 +43,11 @@ export async function remoteFixture(model: ModelClient) {
         ...(record.initialized
           ? { selection: { mode: "resume" as const, sessionId } }
           : { selection: { mode: "new" as const, sessionId } }),
-        modelName: "test-model",
+        modelName:
+          catalog?.profiles.find(
+            (p) => p.name === (record.profileName ?? catalog?.defaultProfile),
+          )?.model ?? "test-model",
+        profileName: record.profileName ?? catalog?.defaultProfile,
         maxIterations: 10,
         includeReasoningContent: false,
         contextProfile: TEST_CONTEXT_PROFILE,
@@ -51,6 +58,8 @@ export async function remoteFixture(model: ModelClient) {
         assistantTextDeltaSink: sink,
         persistence: false,
         enableAskUser: true,
+        enableTurnUndo: true,
+        enableProviderRetryPrompt: true,
         bashGuard: { mode: "guard", source: "default", surface: "tui" },
       },
       { loadMcpConfig: async () => undefined },
@@ -58,8 +67,17 @@ export async function remoteFixture(model: ModelClient) {
     return {
       runtime,
       databasePath: await resolveSessionDatabasePath(workspace, sessionId, root),
-      modelName: "test-model",
+      modelName:
+        catalog?.profiles.find(
+          (p) => p.name === (record.profileName ?? catalog?.defaultProfile),
+        )?.model ?? "test-model",
+      profileName: record.profileName ?? catalog?.defaultProfile,
+      modelCatalog: catalog,
     };
+  };
+  factory.profiles = async () => catalog;
+  factory.persistDefaultProfile = async (_workspace, name) => {
+    if (catalog) catalog = { ...catalog, defaultProfile: name };
   };
   const workspaces = [{ id: "test", name: "Test workspace", path: workspace }];
   const service = new RemoteService(store, workspaces, factory, root);

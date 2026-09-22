@@ -100,6 +100,12 @@ export type RuntimeSession = {
     signal: AbortSignal,
     prospectiveMessageImageCount: number,
   ): Promise<ImportedImageAsset>;
+  importImageBytes(
+    bytes: Buffer,
+    originalName: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ): Promise<ImportedImageAsset>;
   verifyImageAssets(
     assets: readonly ImageAssetRef[],
     signal: AbortSignal,

@@ -1,3 +1,9 @@
+import {
+  isSessionOperation,
+  type SessionOperation,
+  type SessionOperationResult,
+} from "./session-operations";
+import type { RuntimeSession } from "../agent/runtime-session";
 import type { ClientSessionSummary } from "../client/session-client";
 import { randomUUID } from "node:crypto";
 import { createUuidV7 } from "../ids/uuid-v7";
@@ -25,7 +31,7 @@ export class RemoteService {
     readonly store: RemoteServiceStore,
     readonly workspaces: readonly RemoteWorkspaceConfig[],
     private readonly factory: HostedRuntimeFactory,
-    private readonly homeRoot?: string,
+    readonly homeRoot?: string,
   ) {}
 
   async initialize(): Promise<void> {
@@ -135,7 +141,7 @@ export class RemoteService {
   }
 
   submit(input: RemoteOperationInput, device: string): Promise<OperationReceipt> {
-    // Serializes acceptance and any async catalog lookup, never task execution.
+    // Serializes acceptance, catalog lookup and deletion; never model execution.
     const result = this.submitting.then(() => this.accept(input, device));
     this.submitting = result.then(
       () => undefined,
@@ -200,6 +206,7 @@ export class RemoteService {
           status: "accepted",
           updatedAt: new Date().toISOString(),
           initialized: false,
+          profileName: input.profileName,
         };
       }
       const receipt = this.store.accept(input, device, id, record);
@@ -219,14 +226,161 @@ export class RemoteService {
       );
       return receipt;
     }
+    if (input.kind === "delete_session") return this.deleteSession(input, device);
     const session = this.session(input.sessionId);
     // Attach/initialization must be complete before a new mutation can be accepted.
     await session.open();
     session.validate(input);
     const receipt = this.store.accept(input, device, input.sessionId);
-    if (input.kind === "prompt") session.enqueue(receipt);
+    if (isSessionOperation(input))
+      session.runMaintenance(receipt, (runtime) => this.maintain(input, runtime));
+    else if (input.kind === "prompt") session.enqueue(receipt);
     else session.control(input, receipt);
     return receipt;
+  }
+
+  private async deleteSession(
+    input: Extract<RemoteOperationInput, { kind: "delete_session" }>,
+    device: string,
+  ): Promise<OperationReceipt> {
+    const source = this.store.session(input.sessionId);
+    if (!source)
+      throw new RemoteError(
+        404,
+        "SESSION_NOT_MANAGED",
+        "Current session is not managed by this service.",
+      );
+    if (input.targetSessionId === input.sessionId)
+      throw new RemoteError(
+        409,
+        "SESSION_CURRENT",
+        "Cannot delete the current session.",
+      );
+    const workspace = this.workspace(source.workspaceId);
+    const record = this.store.session(input.targetSessionId);
+    if (record && record.workspaceId !== workspace.id)
+      throw new RemoteError(
+        403,
+        "WORKSPACE_MISMATCH",
+        "Session belongs to another workspace.",
+      );
+    const catalog = new SessionCatalog({
+      workspaceRoot: workspace.path,
+      homeRoot: this.homeRoot,
+    });
+    // Resolve through the workspace catalog even for unmanaged local sessions.
+    try {
+      await catalog.get(parseSessionId(input.targetSessionId));
+    } catch (error) {
+      throw new RemoteError(
+        404,
+        "SESSION_NOT_FOUND",
+        error instanceof Error ? error.message : "Session is not in this workspace.",
+      );
+    }
+    const target = record ? this.session(record.id) : undefined;
+    if (target) {
+      try {
+        await target.open();
+      } catch (error) {
+        throw new RemoteError(
+          409,
+          "SESSION_UNAVAILABLE",
+          error instanceof Error ? error.message : "Session is unavailable.",
+        );
+      }
+      target.beginDelete();
+    }
+    let receipt = this.store.accept(input, device, input.targetSessionId);
+    receipt = this.store.update({ ...receipt, status: "running" });
+    try {
+      if (target) {
+        await target.close();
+        this.hosted.delete(input.targetSessionId);
+        // Release ownership before removing canonical files. A crash can leave a local
+        // session, but never a managed record that reopens an already deleted database.
+        this.store.releaseSession(input.targetSessionId);
+      }
+      await catalog.delete(
+        parseSessionId(input.targetSessionId),
+        parseSessionId(input.sessionId),
+      );
+      return this.store.update({ ...receipt, status: "completed" });
+    } catch (error) {
+      if (record && !this.store.session(record.id)) {
+        try {
+          await catalog.get(parseSessionId(record.id));
+          this.store.saveSession(record);
+          await this.session(record.id).open();
+        } catch {
+          /* A removed catalog entry must never be resurrected. */
+        }
+      }
+      return this.store.update({
+        ...receipt,
+        status: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async maintain(
+    input: SessionOperation,
+    runtime: RuntimeSession,
+  ): Promise<SessionOperationResult> {
+    const kind = input.kind;
+    if (kind === "compact") return { kind, value: await runtime.compactContext() };
+    if (kind === "retire") return { kind, value: await runtime.retireContext() };
+    if (kind === "undo")
+      return { kind, value: await runtime.undoLatestFileMutationTurn() };
+    if (kind === "reasoning")
+      return {
+        kind,
+        value:
+          input.effort === null
+            ? runtime.resetReasoningEffort()
+            : runtime.setReasoningEffort(input.effort),
+      };
+    if (kind === "yolo") {
+      runtime.setYoloMode(input.enabled);
+      return { kind, value: null };
+    }
+    const source = this.store.session(input.sessionId)!;
+    if (kind === "default_profile") {
+      if (!this.factory.persistDefaultProfile)
+        throw new Error("Model profiles are not configured.");
+      await this.factory.persistDefaultProfile(source.workspaceId, input.profileName);
+      const catalog = await this.factory.profiles?.(source.workspaceId);
+      for (const record of this.store.sessions()) {
+        if (record.workspaceId === source.workspaceId)
+          this.hosted.get(record.id)?.updateModelCatalog(catalog);
+      }
+      return { kind, value: null };
+    }
+    if (this.stopping) throw new Error("Service is stopping.");
+    if (this.store.sessions().length >= 128)
+      throw new Error("Managed session limit reached.");
+    if (kind === "switch_model") {
+      if (this.session(input.sessionId).hasTurns)
+        throw new Error("Cannot switch models after the session has turns.");
+      const catalog = await this.factory.profiles?.(source.workspaceId);
+      if (!catalog?.profiles.some((p) => p.name === input.profileName))
+        throw new Error("Unknown model profile.");
+    }
+    const id = createUuidV7();
+    if (kind === "fork") await runtime.cloneSession(parseSessionId(id));
+    if (this.stopping) throw new Error("Service is stopping.");
+    this.store.saveSession({
+      ...source,
+      id,
+      initialized: kind === "fork",
+      status: "accepted",
+      profileName: kind === "switch_model" ? input.profileName : source.profileName,
+      updatedAt: new Date().toISOString(),
+      title: kind === "fork" ? source.title : "New session",
+    });
+    await this.session(id).open();
+    return { kind, value: id };
   }
 
   async close(): Promise<void> {

@@ -1,7 +1,8 @@
+import type { ClientModelProfile } from "../client/model-catalog";
 import { describe, expect, test } from "bun:test";
 import { render } from "ink-testing-library";
 import type { RunAgentResult } from "../agent/types";
-import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
+import type { ModelProfiles } from "../cli/model-profiles";
 import { parseModelProfiles } from "../cli/model-profiles";
 import type { SessionId } from "../ids/runtime-id";
 import { runtimeIdFactory } from "../ids/runtime-id";
@@ -60,7 +61,7 @@ const TEST_PROFILES: ModelProfiles = parseModelProfiles(
 function createSessionControllerWithProfiles(
   projectionStore: TuiProjectionStore,
   run: (prompt: string, signal: AbortSignal) => Promise<RunAgentResult>,
-  switchModel: (profile: ModelProfile) => Promise<void>,
+  switchModel: (profile: ClientModelProfile) => Promise<void>,
 ): TuiSessionController {
   const base = createSessionController(projectionStore, run);
   const baseBinding = base.getBinding();
@@ -849,7 +850,7 @@ describe("model switching", () => {
       timestamp: "2026-07-11T00:00:00.001Z",
       data: { phase: "initial", snapshot: contextSnapshot() },
     });
-    const switched: ModelProfile[] = [];
+    const switched: ClientModelProfile[] = [];
     const { stdin, lastFrame, cleanup } = render(
       <App
         sessionController={createSessionControllerWithProfiles(

@@ -13,7 +13,7 @@ export function createHostedRuntimeFactory(
   env: NodeJS.ProcessEnv,
   homeRoot?: string,
 ): HostedRuntimeFactory {
-  return async ({ record, sink }) => {
+  const factory: HostedRuntimeFactory = async ({ record, sink }) => {
     const workspace = workspaces.find((entry) => entry.id === record.workspaceId);
     if (!workspace || workspace.path !== record.workspacePath)
       throw new Error("Managed workspace configuration changed.");
@@ -22,7 +22,7 @@ export function createHostedRuntimeFactory(
       env: { ...env, TINKER_WORKSPACE: workspace.path },
       cwd: workspace.path,
     });
-    let profileName = workspace.profile;
+    let profileName = record.profileName ?? workspace.profile;
     if (record.initialized && publicConfig.mode === "profile") {
       const summary = await new SessionCatalog({
         workspaceRoot: workspace.path,
@@ -53,6 +53,8 @@ export function createHostedRuntimeFactory(
           homeRoot,
         ),
         modelName: config.modelName,
+        profileName: config.profileName,
+        modelCatalog: await factory.profiles!(workspace.id),
       };
     } catch (error) {
       await runtime.dispose({
@@ -62,4 +64,34 @@ export function createHostedRuntimeFactory(
       throw error;
     }
   };
+  const readConfig = async (workspaceId: string) => {
+    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace) throw new Error("Workspace is not configured.");
+    return resolvePublicConfig({
+      env: { ...env, TINKER_WORKSPACE: workspace.path },
+      cwd: workspace.path,
+    });
+  };
+  factory.profiles = async (workspaceId) => {
+    const config = await readConfig(workspaceId);
+    if (config.mode !== "profile") return undefined;
+    return {
+      defaultProfile: config.profiles.defaultProfile,
+      profiles: [...config.profiles.profiles.values()].map(
+        ({ name, model, contextWindowTokens, maxSupportedOutputTokens }) => ({
+          name,
+          model,
+          contextWindowTokens,
+          maxSupportedOutputTokens,
+        }),
+      ),
+    };
+  };
+  factory.persistDefaultProfile = async (workspaceId, profileName) => {
+    const config = await readConfig(workspaceId);
+    if (config.mode !== "profile")
+      throw new Error("Model profiles are not configured.");
+    await config.persistDefaultProfile(profileName);
+  };
+  return factory;
 }

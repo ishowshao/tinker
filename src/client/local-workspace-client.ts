@@ -5,7 +5,7 @@ import type {
 } from "../agent/runtime-session";
 import type { SessionId } from "../ids/runtime-id";
 import { createUuidV7 } from "../ids/uuid-v7";
-import type { ModelProfile } from "../cli/model-profiles";
+import type { ClientModelProfile } from "./model-catalog";
 import type { SessionCatalog, SessionSummary } from "../session/session-catalog";
 import { readLastAssistantResponse } from "../session/session-last-response-reader";
 import type {
@@ -32,7 +32,7 @@ export class LocalWorkspaceClient<View> implements WorkspaceClient<View> {
       sessionId: SessionId,
     ) => Promise<OwnedSessionBinding<View>>,
     private readonly createSessionWithProfile: (
-      profile: ModelProfile,
+      profile: ClientModelProfile,
     ) => Promise<OwnedSessionBinding<View>>,
     private readonly createFreshSession: (
       current: SessionClient<View>,
@@ -112,7 +112,7 @@ export class LocalWorkspaceClient<View> implements WorkspaceClient<View> {
     );
   }
 
-  switchModel(profile: ModelProfile, beforeCommit?: () => void): Promise<void> {
+  switchModel(profile: ClientModelProfile, beforeCommit?: () => void): Promise<void> {
     return this.serialize(() =>
       this.replaceSession(
         "Cannot switch models while a turn or background task is active.",

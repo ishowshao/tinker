@@ -202,3 +202,39 @@ describe("remote service lifecycle and canonical history", () => {
     }
   });
 });
+
+test("recovery does not infer completion of an extended chain from one closed turn", async () => {
+  const model = new RemoteTestModel();
+  const f = await remoteFixture(model);
+  let reopened: RemoteService | undefined;
+  try {
+    const prompt = await f.prompt("initial task");
+    await until(() => model.requests === 1);
+    const queued = await f.submit({
+      kind: "follow_up",
+      sessionId: f.sessionId,
+      targetRequestId: prompt.requestId,
+      prompt: "follow-up",
+    });
+    await f.terminal(queued);
+    model.release();
+    const done = await f.terminal(prompt);
+    expect(done.hasFollowUps).toBe(true);
+    // Simulate a crash after a turn committed but before the execution chain settled.
+    f.store.update({ ...done, status: "running", result: undefined });
+    const requests = model.requests;
+    await f.service.close();
+    const store = await RemoteServiceStore.open(`${f.root}/service`);
+    reopened = new RemoteService(store, f.workspaces, f.factory, f.root);
+    await reopened.initialize();
+    expect(store.get(prompt.requestId).status).toBe("interrupted");
+    expect(reopened.session(f.sessionId).view().status).toBe("interrupted");
+    expect(model.requests).toBe(requests);
+  } finally {
+    if (reopened) {
+      await reopened.close();
+      const { rm } = await import("node:fs/promises");
+      await rm(f.root, { recursive: true, force: true });
+    } else await f.cleanup();
+  }
+});

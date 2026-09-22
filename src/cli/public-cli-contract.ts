@@ -61,7 +61,8 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     description: "Attach a terminal client to a service; exiting detaches only.",
     tuiOption: Object.freeze({
       flags: "--tui",
-      description: "Use the full TUI for service sessions and history (preview).",
+      description:
+        "Use the full TUI for service sessions and task execution (preview).",
     } satisfies PublicCliOption),
     workspaceOption: Object.freeze({
       flags: "--workspace <id>",

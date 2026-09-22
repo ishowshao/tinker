@@ -1,3 +1,4 @@
+import { decodeFailure, type RemoteFailure } from "./failures";
 import { readFile, chmod, writeFile, rename, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -56,6 +57,7 @@ type ClientState = {
   failures: { requestId: string; message: string }[];
 };
 export type ClientSnapshot = {
+  cursor?: { epoch: string; sequence: number };
   connection: "connecting" | "online" | "offline" | "closed";
   view?: RemoteView;
   pending: number;
@@ -263,6 +265,7 @@ export class RemoteClient {
         );
         this.retryDelay = 500;
         this.emit({
+          cursor: { epoch: this.frame.epoch, sequence: this.frame.sequence },
           connection: "online",
           view: this.frame.type === "snapshot" ? this.frame.view : undefined,
           error: undefined,
@@ -312,7 +315,11 @@ export class RemoteClient {
         ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
         : AbortSignal.timeout(15000),
     });
-    const result = (await response.json()) as T & { error?: { message: string } };
+    const result = (await response.json()) as T & {
+      error?: { message: string };
+      failure?: RemoteFailure;
+    };
+    if (!response.ok && result.failure) throw decodeFailure(result.failure);
     if (!response.ok)
       throw new ClientHttpError(
         response.status,
@@ -347,7 +354,7 @@ export class RemoteClient {
     this.emit({ connection: "closed" });
   }
 }
-class ClientHttpError extends Error {
+export class ClientHttpError extends Error {
   constructor(
     readonly status: number,
     message: string,

@@ -1,3 +1,14 @@
+import { RemotePromptHistory } from "./remote-prompt-history";
+import type { LoadedPromptHistoryRecord } from "../tui/prompt-history";
+import type { ProjectSlashCommand } from "../tui/project-slash-commands";
+import type { ViewFile } from "../tui/view-file";
+import { RemoteImages } from "./remote-images";
+import type { ClientModelProfile } from "./model-catalog";
+import type {
+  SessionOperation,
+  SessionOperationResult,
+} from "../remote/session-operations";
+import { RemoteTasks } from "./remote-tasks";
 import { randomUUID } from "node:crypto";
 import { parseSessionId, type SessionId } from "../ids/runtime-id";
 import { RemoteClient, type RemoteClientConfig } from "../remote/client";
@@ -12,17 +23,10 @@ import type {
 } from "./session-client";
 import { RemoteTuiView } from "./remote-tui-view";
 
-const unsupported = async (): Promise<never> => {
-  throw new Error(
-    "This service TUI batch supports session creation, connection, history and status only.",
-  );
-};
-const EMPTY_INTERACTION = Object.freeze({});
-const noSubscription = () => () => {};
-
 class RemoteTuiSession {
   readonly view: RemoteTuiView;
   readonly binding: SessionClient<TuiSessionView>;
+  readonly tasks: RemoteTasks;
   private snapshot: RemoteTuiSnapshot;
   private readonly abort = new AbortController();
   private unsubscribe?: () => void;
@@ -37,23 +41,92 @@ class RemoteTuiSession {
   ) {
     this.snapshot = snapshot;
     this.view = new RemoteTuiView(snapshot);
+    const tasks = (this.tasks = new RemoteTasks(
+      transport,
+      snapshot.activity.session.id,
+      () => this.snapshot,
+      this.abort.signal,
+      (error) => this.view.setConnection(transport.getSnapshot().connection, error),
+    ));
+    const images = new RemoteImages(
+      transport,
+      snapshot.activity.session.id,
+      this.abort.signal,
+    );
     this.binding = {
       sessionId: parseSessionId(snapshot.history.sessionId),
       workspaceRoot: snapshot.history.workspaceRoot,
       modelName: snapshot.history.modelName,
+      profileName: snapshot.profileName,
+      modelProfiles: () =>
+        this.snapshot.modelCatalog
+          ? {
+              defaultProfile: this.snapshot.modelCatalog.defaultProfile,
+              profiles: new Map(
+                this.snapshot.modelCatalog.profiles.map((p) => [p.name, p]),
+              ),
+            }
+          : undefined,
+      reasoningEffort: () => this.snapshot.reasoningEffort,
+      setReasoningEffort: async (effort) => {
+        const result = await tasks.operate({ kind: "reasoning", effort });
+        await this.refreshNow();
+        if (result.kind !== "reasoning") throw new Error("Invalid reasoning response.");
+        return result.value;
+      },
+      resetReasoningEffort: async () => {
+        const result = await tasks.operate({ kind: "reasoning", effort: null });
+        await this.refreshNow();
+        if (result.kind !== "reasoning") throw new Error("Invalid reasoning response.");
+        return result.value;
+      },
+      supportsImageInput: () => this.snapshot.supportsImageInput,
       projectionStore: this.view,
-      readLastResponse: unsupported,
+      readLastResponse: async () =>
+        (
+          await transport.request<{ text?: string }>(
+            `/v1/sessions/${snapshot.activity.session.id}/last-response`,
+            undefined,
+            this.abort.signal,
+          )
+        ).text,
+      importImage: (sourcePath, signal, count) =>
+        images.import(sourcePath, signal, count),
+      verifyImageAssets: (assets, signal) => images.verify(assets, signal),
       skills: () => this.snapshot.skills,
       mcp: () => this.snapshot.mcp,
       bashGuard: () => this.snapshot.bashGuard,
       subscribeBashGuard: this.view.subscribe,
-      askUser: () => EMPTY_INTERACTION,
-      subscribeAskUser: noSubscription,
-      setYoloMode: unsupported,
-      resolveAskUser: unsupported,
-      resolveBashConfirmation: unsupported,
-      admitTurn: unsupported,
-      executeTurn: unsupported,
+      askUser: () => this.snapshot.askUser,
+      subscribeAskUser: this.view.subscribe,
+      providerRetry: () => this.snapshot.providerRetry,
+      subscribeProviderRetry: this.view.subscribe,
+      resolveProviderRetry: (requestId, decision) =>
+        tasks.respond({ kind: "provider_retry", interactionId: requestId, decision }),
+      setYoloMode: async (enabled) => {
+        await tasks.operate({ kind: "yolo", enabled });
+        await this.refreshNow();
+      },
+      resolveAskUser: async (response, interactionId) => {
+        if (!interactionId) throw new Error("Question identity is required.");
+        await tasks.respond({
+          kind: "answer",
+          interactionId,
+          selectedIndex:
+            response.outcome === "selected" ? response.selectedIndex : null,
+        });
+      },
+      resolveBashConfirmation: async (decision, interactionId) => {
+        if (!interactionId) throw new Error("Confirmation identity is required.");
+        await tasks.respond({ kind: "confirm", interactionId, decision });
+      },
+      admitTurn: (message, signal) => tasks.admitTurn(message, signal),
+      executeTurn: async (message, signal) =>
+        (await tasks.admitTurn(message, signal)).completion,
+      queueFollowUp: (message) => tasks.queueFollowUp(message),
+      stopTurn: () => tasks.stopTurn(),
+      promptScheduler: () => this.snapshot.promptScheduler,
+      subscribePromptScheduler: this.view.subscribe,
     };
   }
 
@@ -81,17 +154,29 @@ class RemoteTuiSession {
     if (this.abort.signal.aborted) return;
     const state = this.transport.getSnapshot();
     this.view.setConnection(state.connection, state.error);
-    const key = JSON.stringify([
-      state.connection,
-      state.view?.status,
-      state.view?.activeRequestId,
-      state.view?.history.messages.map((m) => [m.id, m.turnStatus]),
-    ]);
+    const key = JSON.stringify([state.connection, state.cursor]);
     if (key === this.lastKey) return;
     this.lastKey = key;
     if (state.connection !== "online") return;
     this.dirty = true;
     void this.refresh();
+  }
+  async refreshNow(): Promise<void> {
+    while (this.refreshing && !this.abort.signal.aborted)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    const next = await this.transport.request<RemoteTuiSnapshot>(
+      `/v1/sessions/${this.binding.sessionId}/tui-snapshot`,
+      undefined,
+      this.abort.signal,
+    );
+    validate(next, this.snapshot.activity.session.workspaceId, this.binding.sessionId);
+    if (
+      next.cursor.epoch === this.snapshot.cursor.epoch &&
+      next.cursor.sequence < this.snapshot.cursor.sequence
+    )
+      return;
+    this.snapshot = next;
+    this.view.update(next);
   }
   private async refresh(): Promise<void> {
     if (this.refreshing) return;
@@ -110,6 +195,11 @@ class RemoteTuiSession {
           this.snapshot.activity.session.workspaceId,
           this.binding.sessionId,
         );
+        if (
+          next.cursor.epoch === this.snapshot.cursor.epoch &&
+          next.cursor.sequence < this.snapshot.cursor.sequence
+        )
+          continue;
         this.snapshot = next;
         this.view.update(next);
       }
@@ -141,6 +231,7 @@ class RemoteTuiSession {
 /** No local runtime or local workspace reads. Each terminal owns only its subscriptions. */
 export class RemoteWorkspaceClient implements WorkspaceClient<TuiSessionView> {
   private current?: RemoteTuiSession;
+  private history?: RemotePromptHistory;
   private readonly listeners = new Set<() => void>();
   private readonly abort = new AbortController();
   private pending?: Promise<void>;
@@ -184,7 +275,14 @@ export class RemoteWorkspaceClient implements WorkspaceClient<TuiSessionView> {
   }
   clear(beforeCommit?: () => void): Promise<void> {
     return this.replace(
-      async () => this.operation({ kind: "create", workspaceId: this.workspaceId }),
+      async () =>
+        this.operation({
+          kind: "create",
+          workspaceId: this.workspaceId,
+          ...(this.current?.binding.profileName
+            ? { profileName: this.current.binding.profileName }
+            : {}),
+        }),
       beforeCommit,
     );
   }
@@ -259,16 +357,122 @@ export class RemoteWorkspaceClient implements WorkspaceClient<TuiSessionView> {
     this.pending = pending;
     return pending;
   }
-  compact = unsupported;
-  retire = unsupported;
-  undo = unsupported;
-  fork = unsupported;
-  delete = unsupported;
-  switchModel = unsupported;
+  private async maintain(
+    input: Omit<SessionOperation, "sessionId"> & Record<string, unknown>,
+  ): Promise<SessionOperationResult> {
+    if (!this.current) throw new Error("Service session is not connected.");
+    const current = this.current;
+    const result = await current.tasks.operate(input);
+    await current.refreshNow();
+    return result;
+  }
+  async compact() {
+    const result = await this.maintain({ kind: "compact" });
+    if (result.kind !== "compact") throw new Error("Invalid compaction response.");
+    return result.value;
+  }
+  async retire() {
+    const result = await this.maintain({ kind: "retire" });
+    if (result.kind !== "retire") throw new Error("Invalid retirement response.");
+    return result.value;
+  }
+  async undo() {
+    const result = await this.maintain({ kind: "undo" });
+    if (result.kind !== "undo") throw new Error("Invalid undo response.");
+    return result.value;
+  }
+  async fork(beforeCommit?: () => void): Promise<SessionId> {
+    let id: string | undefined;
+    await this.replace(async () => {
+      const result = await this.maintain({ kind: "fork" });
+      if (result.kind !== "fork") throw new Error("Invalid clone response.");
+      id = result.value;
+      return id;
+    }, beforeCommit);
+    return parseSessionId(id!);
+  }
+  switchModel(profile: ClientModelProfile, beforeCommit?: () => void): Promise<void> {
+    return this.replace(async () => {
+      const result = await this.maintain({
+        kind: "switch_model",
+        profileName: profile.name,
+      });
+      if (result.kind !== "switch_model")
+        throw new Error("Invalid model switch response.");
+      return result.value;
+    }, beforeCommit);
+  }
+  persistDefaultProfile = async (profileName: string): Promise<void> => {
+    await this.maintain({ kind: "default_profile", profileName });
+  };
+  readonly listFiles = (
+    _root: string,
+    signal: AbortSignal,
+  ): Promise<readonly string[]> =>
+    this.transport.request(
+      `/v1/sessions/${this.getBinding().sessionId}/files`,
+      undefined,
+      AbortSignal.any([signal, this.abort.signal]),
+    );
+  readonly readFile = (_root: string, filePath: string): Promise<ViewFile> =>
+    this.transport.request(
+      `/v1/sessions/${this.getBinding().sessionId}/view-file?path=${encodeURIComponent(filePath)}`,
+      undefined,
+      this.abort.signal,
+    );
+  readonly readGitBranch = async (): Promise<string | undefined> =>
+    (
+      await this.transport.request<{ branch?: string }>(
+        `/v1/sessions/${this.getBinding().sessionId}/git-branch`,
+        undefined,
+        this.abort.signal,
+      )
+    ).branch;
+  readonly projectCommands = (): Promise<readonly ProjectSlashCommand[]> =>
+    this.transport.request(
+      `/v1/sessions/${this.getBinding().sessionId}/project-commands`,
+      undefined,
+      this.abort.signal,
+    );
+  async loadHistory(): Promise<RemotePromptHistory> {
+    if (this.history) return this.history;
+    const records = await this.transport.request<LoadedPromptHistoryRecord[]>(
+      `/v1/sessions/${this.getBinding().sessionId}/prompt-history`,
+      undefined,
+      this.abort.signal,
+    );
+    this.history = new RemotePromptHistory(records, async (prompt) => {
+      await this.transport.request(
+        `/v1/sessions/${this.getBinding().sessionId}/prompt-history`,
+        { prompt },
+        this.abort.signal,
+      );
+    });
+    return this.history;
+  }
+  readonly listStoredMemories = (): Promise<
+    readonly import("../memory/contracts").StoredMemorySummary[]
+  > =>
+    this.transport.request(
+      `/v1/sessions/${this.getBinding().sessionId}/memories`,
+      undefined,
+      this.abort.signal,
+    );
+  async delete(sessionId: SessionId): Promise<void> {
+    if (sessionId === this.getBinding().sessionId)
+      throw new Error("Cannot delete the current session.");
+    if (this.pending) throw new Error("Another session operation is already running.");
+    const pending = this.current!.tasks.deleteSession(sessionId).finally(() => {
+      if (this.pending === pending) this.pending = undefined;
+    });
+    this.pending = pending;
+    await pending;
+  }
   async close(): Promise<void> {
     this.abort.abort();
-    await this.pending?.catch(() => undefined);
     await this.current?.close();
+    await this.pending?.catch(() => undefined);
+    await this.history?.flush();
     await this.transport.close();
     this.listeners.clear();
   }
@@ -278,7 +482,7 @@ export async function createRemoteTuiClient(
   config: RemoteClientConfig,
   workspaceId: string,
   sessionId?: string,
-): Promise<ClientConnection<TuiSessionView>> {
+): Promise<ClientConnection<TuiSessionView> & { client: RemoteWorkspaceClient }> {
   const client = new RemoteWorkspaceClient(config, workspaceId);
   try {
     await client.initialize(sessionId);
@@ -293,6 +497,13 @@ function validate(
   workspaceId: string,
   sessionId: string,
 ): void {
+  if (
+    !snapshot.timeline ||
+    !snapshot.promptScheduler ||
+    !snapshot.askUser ||
+    !snapshot.providerRetry
+  )
+    throw new Error("Update the service to enable full TUI interactions.");
   if (
     snapshot.version !== 1 ||
     snapshot.activity.session.workspaceId !== workspaceId ||

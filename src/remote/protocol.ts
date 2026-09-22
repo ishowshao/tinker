@@ -1,3 +1,12 @@
+import type { RemoteFailure } from "./failures";
+import {
+  parseSessionOperation,
+  type SessionOperation,
+  type SessionOperationResult,
+} from "./session-operations";
+import { validateUserMessage, type UserImageAttachment } from "../image/image-types";
+import type { RunAgentResult } from "../agent/types";
+import type { QueueFollowUpResult } from "../agent/runtime-session-contracts";
 import type {
   RemoteHistoryPage,
   RemoteMessage,
@@ -14,9 +23,23 @@ export type OperationStatus =
   | "interrupted";
 
 export type RemoteOperationInput = { requestId: string } & (
-  | { kind: "create"; workspaceId: string; title?: string }
+  | { kind: "create"; workspaceId: string; title?: string; profileName?: string }
+  | { kind: "delete_session"; sessionId: string; targetSessionId: string }
+  | SessionOperation
   | { kind: "adopt"; workspaceId: string; sessionId: string }
-  | { kind: "prompt"; sessionId: string; prompt: string }
+  | {
+      kind: "prompt";
+      sessionId: string;
+      prompt: string;
+      attachments?: readonly UserImageAttachment[];
+    }
+  | {
+      kind: "provider_retry";
+      sessionId: string;
+      interactionId: string;
+      decision: "retry" | "stop";
+    }
+  | { kind: "follow_up"; sessionId: string; targetRequestId: string; prompt: string }
   | { kind: "stop"; sessionId: string; targetRequestId: string }
   | {
       kind: "answer";
@@ -41,7 +64,13 @@ export type OperationReceipt = {
   updatedAt: string;
   turnId?: string;
   prompt?: string;
+  attachments?: readonly UserImageAttachment[];
+  sessionResult?: SessionOperationResult;
+  failure?: RemoteFailure;
   error?: string;
+  result?: RunAgentResult;
+  followUp?: QueueFollowUpResult;
+  hasFollowUps?: boolean;
 };
 
 export type RemoteSessionInfo = {
@@ -123,14 +152,35 @@ export function parseOperation(value: unknown): RemoteOperationInput {
   const sessionId = () => requireId(object.sessionId, "sessionId", true);
   let result: RemoteOperationInput;
   switch (kind) {
+    case "compact":
+    case "retire":
+    case "undo":
+    case "fork":
+    case "reasoning":
+    case "yolo":
+    case "switch_model":
+    case "default_profile":
+      result = { requestId, ...parseSessionOperation(object) };
+      break;
     case "create":
       result = {
         requestId,
         kind,
         workspaceId: requireId(object.workspaceId, "workspaceId"),
+        ...(object.profileName === undefined
+          ? {}
+          : { profileName: requireText(object.profileName, "profileName", 240) }),
         ...(object.title === undefined
           ? {}
           : { title: requireText(object.title, "title", 240) }),
+      };
+      break;
+    case "delete_session":
+      result = {
+        kind,
+        requestId,
+        sessionId: sessionId(),
+        targetSessionId: requireId(object.targetSessionId, "targetSessionId", true),
       };
       break;
     case "adopt":
@@ -147,6 +197,31 @@ export function parseOperation(value: unknown): RemoteOperationInput {
         kind,
         sessionId: sessionId(),
         prompt: requireText(object.prompt, "prompt", 64 * 1024),
+        ...(object.attachments === undefined
+          ? {}
+          : { attachments: object.attachments as readonly UserImageAttachment[] }),
+      };
+      try {
+        validateUserMessage({
+          role: "user",
+          content: result.prompt,
+          attachments: result.attachments,
+        });
+      } catch (error) {
+        throw new RemoteError(
+          400,
+          "INVALID_IMAGE_MESSAGE",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      break;
+    case "follow_up":
+      result = {
+        requestId,
+        kind,
+        sessionId: sessionId(),
+        targetRequestId: requireId(object.targetRequestId, "targetRequestId", true),
+        prompt: requireText(object.prompt, "prompt", 64 * 1024),
       };
       break;
     case "stop":
@@ -155,6 +230,21 @@ export function parseOperation(value: unknown): RemoteOperationInput {
         kind,
         sessionId: sessionId(),
         targetRequestId: requireId(object.targetRequestId, "targetRequestId", true),
+      };
+      break;
+    case "provider_retry":
+      if (object.decision !== "retry" && object.decision !== "stop")
+        throw new RemoteError(
+          400,
+          "INVALID_REQUEST",
+          "decision must be retry or stop.",
+        );
+      result = {
+        requestId,
+        kind,
+        sessionId: sessionId(),
+        interactionId: requireId(object.interactionId, "interactionId", true),
+        decision: object.decision,
       };
       break;
     case "confirm":

@@ -774,6 +774,29 @@ class DefaultRuntimeSession implements RuntimeSession {
     signal: AbortSignal,
     prospectiveMessageImageCount: number,
   ): Promise<ImportedImageAsset> {
+    const assertImageAllowed = this.imageAdmissionCheck(prospectiveMessageImageCount);
+    if (this.supportsImageInput()) assertImageAllowed();
+    return this.assetStore.importWorkspaceFile(sourcePath, {
+      signal,
+      accept: assertImageAllowed,
+    });
+  }
+
+  async importImageBytes(
+    bytes: Buffer,
+    originalName: string,
+    signal: AbortSignal,
+    prospectiveMessageImageCount: number,
+  ): Promise<ImportedImageAsset> {
+    const assertImageAllowed = this.imageAdmissionCheck(prospectiveMessageImageCount);
+    if (this.supportsImageInput()) assertImageAllowed();
+    return this.assetStore.importBytes(bytes, originalName, {
+      signal,
+      accept: assertImageAllowed,
+    });
+  }
+
+  private imageAdmissionCheck(prospectiveMessageImageCount: number): () => void {
     if (this.state !== "ready") {
       throw new Error(`Cannot import an image while RuntimeSession is ${this.state}.`);
     }
@@ -806,13 +829,7 @@ class DefaultRuntimeSession implements RuntimeSession {
       }
     };
 
-    if (this.supportsImageInput()) {
-      assertImageAllowed();
-    }
-    return this.assetStore.importWorkspaceFile(sourcePath, {
-      signal,
-      accept: assertImageAllowed,
-    });
+    return assertImageAllowed;
   }
 
   async verifyImageAssets(
