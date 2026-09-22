@@ -7,7 +7,13 @@ export type CliCommand =
   | { readonly type: "tui"; readonly profileName?: string }
   | { readonly type: "update" }
   | { readonly type: "serve"; readonly configPath: string }
-  | { readonly type: "connect"; readonly configPath: string }
+  | {
+      readonly type: "connect";
+      readonly configPath: string;
+      readonly tui?: boolean;
+      readonly workspaceId?: string;
+      readonly sessionId?: string;
+    }
   | {
       readonly type: "run";
       readonly profileName?: string;
@@ -134,17 +140,59 @@ export async function parseCommandLine(
 
   for (const type of ["serve", "connect"] as const) {
     const command = contract[type];
-    program
+    const subcommand = program
       .command(command.command)
       .description(command.description)
       .requiredOption(command.configOption.flags, command.configOption.description)
       .allowExcessArguments(false)
-      .exitOverride()
-      .action((options: { config: string }) => {
+      .exitOverride();
+    if (type === "connect") {
+      for (const option of [
+        contract.connect.tuiOption,
+        contract.connect.workspaceOption,
+        contract.connect.sessionOption,
+      ])
+        subcommand.option(option.flags, option.description);
+    }
+    subcommand.action(
+      (options: {
+        config: string;
+        tui?: boolean;
+        workspace?: string;
+        session?: string;
+      }) => {
         if (!options.config.trim())
           throw new CliUsageError("--config requires a non-empty path.", type);
-        selectedCommand = Object.freeze({ type, configPath: options.config });
-      });
+        if (
+          type === "connect" &&
+          (options.tui ||
+            options.workspace !== undefined ||
+            options.session !== undefined)
+        ) {
+          if (!options.tui || !options.workspace?.trim())
+            throw new CliUsageError(
+              "--tui requires --workspace <id>; --workspace and --session require --tui.",
+              type,
+            );
+          if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(options.workspace))
+            throw new CliUsageError("Invalid workspace ID.", type);
+          if (
+            options.session !== undefined &&
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+              options.session,
+            )
+          )
+            throw new CliUsageError("Invalid session ID.", type);
+          selectedCommand = Object.freeze({
+            type,
+            configPath: options.config,
+            tui: true,
+            workspaceId: options.workspace,
+            ...(options.session ? { sessionId: options.session } : {}),
+          });
+        } else selectedCommand = Object.freeze({ type, configPath: options.config });
+      },
+    );
   }
 
   program

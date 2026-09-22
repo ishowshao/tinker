@@ -1,3 +1,4 @@
+import type { ClientSessionSummary } from "../client/session-client";
 import { randomUUID } from "node:crypto";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { parseSessionId } from "../ids/runtime-id";
@@ -105,6 +106,32 @@ export class RemoteService {
           updatedAt: summary.updatedAt,
         })),
     ].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
+  async listTuiSessions(workspaceId: string): Promise<ClientSessionSummary[]> {
+    const workspace = this.workspace(workspaceId);
+    const catalog = new SessionCatalog({
+      workspaceRoot: workspace.path,
+      homeRoot: this.homeRoot,
+    });
+    const summaries = [...(await catalog.listAll())];
+    // The local picker omits empty sessions; service-owned empty sessions remain connectable.
+    for (const record of this.store.sessions()) {
+      if (
+        record.workspaceId === workspaceId &&
+        record.initialized &&
+        !summaries.some((s) => s.sessionId === record.id)
+      ) {
+        summaries.push(await catalog.get(parseSessionId(record.id)));
+      }
+    }
+    return summaries.map((summary) => {
+      const managed = this.store.session(summary.sessionId);
+      return {
+        ...summary,
+        ...(managed?.workspaceId === workspaceId ? { canConnect: true } : {}),
+      };
+    });
   }
 
   submit(input: RemoteOperationInput, device: string): Promise<OperationReceipt> {

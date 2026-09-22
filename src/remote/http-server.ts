@@ -74,6 +74,16 @@ export function startRemoteHttpServer(
             sessions: await service.listSessions(requireId(parts[2], "workspaceId")),
           });
         }
+        if (
+          request.method === "GET" &&
+          parts.length === 4 &&
+          parts[1] === "workspaces" &&
+          parts[3] === "tui-sessions"
+        ) {
+          return json({
+            sessions: await service.listTuiSessions(requireId(parts[2], "workspaceId")),
+          });
+        }
         if (parts[1] === "operations") {
           if (request.method === "POST" && parts.length === 2) {
             if (!request.headers.get("content-type")?.startsWith("application/json"))
@@ -88,6 +98,7 @@ export function startRemoteHttpServer(
         if (request.method === "GET" && parts.length === 4 && parts[1] === "sessions") {
           const session = service.session(requireId(parts[2], "sessionId", true));
           await session.open();
+          if (parts[3] === "tui-snapshot") return json(session.tuiSnapshot());
           if (parts[3] === "snapshot") return json(session.hub.snapshot());
           if (parts[3] === "history") {
             return json(

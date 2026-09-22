@@ -9,6 +9,52 @@ import { CliUsageError, renderUsageError } from "../cli/output";
 const VERSION = "9.8.7";
 
 describe("CLI command line", () => {
+  test("full service TUI requires explicit workspace selection and keeps legacy connect", async () => {
+    expect(await parseCommand(["connect", "--config", "client.json"])).toEqual({
+      type: "connect",
+      configPath: "client.json",
+    });
+    expect(
+      await parseCommand([
+        "connect",
+        "--config",
+        "client.json",
+        "--tui",
+        "--workspace",
+        "project",
+      ]),
+    ).toEqual({
+      type: "connect",
+      configPath: "client.json",
+      tui: true,
+      workspaceId: "project",
+    });
+    await expectUsage(
+      ["connect", "--config", "client.json", "--tui"],
+      "requires --workspace",
+      "connect",
+    );
+    await expectUsage(
+      ["connect", "--config", "client.json", "--workspace", "project"],
+      "require --tui",
+      "connect",
+    );
+    await expectUsage(
+      [
+        "connect",
+        "--config",
+        "client.json",
+        "--tui",
+        "--workspace",
+        "project",
+        "--session",
+        "bad",
+      ],
+      "Invalid session ID",
+      "connect",
+    );
+  });
+
   test("selects the TUI for empty argv and a single top-level profile", async () => {
     expect(await parseCommand([])).toEqual({ type: "tui" });
     expect(await parseCommand(["--profile", "kimi"])).toEqual({
@@ -228,7 +274,7 @@ async function captureUsage(args: readonly string[]): Promise<CliUsageError> {
 async function expectUsage(
   args: readonly string[],
   message: string,
-  scope: "root" | "run" | "update",
+  scope: "root" | "run" | "update" | "connect",
 ): Promise<void> {
   const error = await captureUsage(args);
   expect(error.message).toContain(message);

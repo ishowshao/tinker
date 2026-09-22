@@ -55,7 +55,7 @@ import {
   type ProjectSlashCommand,
 } from "./project-slash-commands";
 import type { TuiSessionController } from "./tui-session-controller";
-import type { SessionSummary } from "../session/session-catalog";
+import type { ClientSessionSummary as SessionSummary } from "../client/session-client";
 import type { ModelProfile, ModelProfiles } from "../cli/model-profiles";
 import { loadViewFile, type ViewFile } from "./view-file";
 import { writeClipboardText } from "./clipboard";

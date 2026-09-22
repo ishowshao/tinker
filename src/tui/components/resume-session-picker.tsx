@@ -1,6 +1,6 @@
 import { Box, Text, useInput, usePaste, useWindowSize } from "ink";
 import { useReducer, useRef } from "react";
-import type { SessionSummary } from "../../session/session-catalog";
+import type { ClientSessionSummary as SessionSummary } from "../../client/session-client";
 import {
   backspace,
   createLineEditorState,
@@ -470,7 +470,11 @@ function SessionCell(props: {
 }
 
 export function isSessionSelectable(session: SessionSummary): boolean {
-  return session.status === "resumable" || session.status === "interrupted";
+  return (
+    session.canConnect === true ||
+    session.status === "resumable" ||
+    session.status === "interrupted"
+  );
 }
 
 export function formatRelativeTime(updatedAt: string, now: Date): string {

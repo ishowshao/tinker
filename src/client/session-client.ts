@@ -31,6 +31,8 @@ import type {
   ProviderRetryDecision,
 } from "../agent/runtime-provider-retry";
 
+export type ClientSessionSummary = SessionSummary & { canConnect?: boolean };
+
 export type SessionClient<View> = {
   sessionId: SessionId;
   modelName: string;
@@ -76,7 +78,7 @@ export type SessionClient<View> = {
 export type WorkspaceClient<View> = {
   getBinding: () => SessionClient<View>;
   subscribe: (listener: () => void) => () => void;
-  listSessions: () => Promise<readonly SessionSummary[]>;
+  listSessions: () => Promise<readonly ClientSessionSummary[]>;
   compact: () => Promise<ContextCompactionResult>;
   retire: () => Promise<ContextRetirementResult>;
   undo: () => Promise<TurnUndoResult>;

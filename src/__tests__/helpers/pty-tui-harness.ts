@@ -24,6 +24,7 @@ export type PtyKey =
   | "ctrl_u";
 
 export type StartPtyTuiInput = {
+  readonly cliArgs?: readonly string[];
   readonly fakeModel: string;
   readonly rows?: number;
   readonly columns?: number;
@@ -42,7 +43,10 @@ export interface PtyTuiFixture {
   readonly homeRoot: string;
 
   start(
-    input: Pick<StartPtyTuiInput, "fakeModel" | "rows" | "columns" | "environment">,
+    input: Pick<
+      StartPtyTuiInput,
+      "fakeModel" | "rows" | "columns" | "environment" | "cliArgs"
+    >,
   ): Promise<PtyTuiHarness>;
   dispose(): Promise<void>;
 }
@@ -165,6 +169,7 @@ export async function startPtyTui(input: StartPtyTuiInput): Promise<PtyTuiHarnes
     ]);
     const harness = new PtyTuiHarnessImpl({
       scenario: input.fakeModel,
+      cliArgs: input.cliArgs,
       rows,
       columns,
       temporaryRoot,
@@ -239,6 +244,7 @@ export async function createPtyTuiFixture(
       const columns = positiveInteger(startInput.columns ?? DEFAULT_COLUMNS, "columns");
       const harness = new PtyTuiHarnessImpl({
         scenario: startInput.fakeModel,
+        cliArgs: startInput.cliArgs,
         rows,
         columns,
         temporaryRoot,
@@ -333,6 +339,7 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
 
   constructor(input: {
     readonly scenario: string;
+    readonly cliArgs?: readonly string[];
     readonly rows: number;
     readonly columns: number;
     readonly temporaryRoot: string;
@@ -363,6 +370,7 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
         "--",
         "node",
         path.join(repositoryRoot, "bin/tinker.js"),
+        ...(input.cliArgs ?? []),
       ],
       {
         cwd: input.workspaceRoot,

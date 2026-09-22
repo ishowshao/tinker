@@ -175,7 +175,10 @@ export async function main(
         const exitCode =
           parsed.command.type === "serve"
             ? await (await dependencies.loadServeRunner()).runServe(options)
-            : await (await dependencies.loadConnectRunner()).runConnect(options);
+            : await (await dependencies.loadConnectRunner()).runConnect({
+                ...parsed.command,
+                ...options,
+              });
         return finish(exitCode);
       } catch (error) {
         await writeCliOutput(

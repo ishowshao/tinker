@@ -106,6 +106,10 @@ export function renderPublicCliCommands(): string {
       `\`tinker ${contract[name].command} ${contract[name].configOption.flags}\``,
       contract[name].description,
     ]),
+    [
+      `\`tinker connect ${contract.connect.configOption.flags} ${contract.connect.tuiOption.flags} ${contract.connect.workspaceOption.flags} [${contract.connect.sessionOption.flags}]\``,
+      contract.connect.tuiOption.description,
+    ],
     [`\`tinker ${help}\``, "Show top-level CLI help."],
     [`\`tinker ${helpCommand} ${runCommand}\``, "Show one-shot command help."],
     [`\`tinker ${helpCommand} ${updateCommand}\``, "Show update command help."],

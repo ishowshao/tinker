@@ -112,8 +112,12 @@ export class RemoteClient {
   private diskTail: Promise<void> = Promise.resolve();
   private snapshot: ClientSnapshot = { connection: "connecting", pending: 0 };
   private readonly listeners = new Set<() => void>();
-  constructor(readonly config: RemoteClientConfig) {}
+  constructor(
+    readonly config: RemoteClientConfig,
+    private readonly persistent = true,
+  ) {}
   async initialize(): Promise<void> {
+    if (!this.persistent) return;
     try {
       this.state = JSON.parse(
         await readFile(this.config.statePath, "utf8"),
@@ -292,7 +296,7 @@ export class RemoteClient {
     }, this.retryDelay);
     this.retryDelay = Math.min(this.retryDelay * 2, 10000);
   }
-  async request<T>(route: string, input?: unknown): Promise<T> {
+  async request<T>(route: string, input?: unknown, signal?: AbortSignal): Promise<T> {
     const response = await fetch(new URL(route, this.config.url), {
       method: input === undefined ? "GET" : "POST",
       redirect: "error",
@@ -304,7 +308,9 @@ export class RemoteClient {
       ...(this.config.ca
         ? { tls: { ca: this.config.ca, rejectUnauthorized: true } }
         : {}),
-      signal: AbortSignal.timeout(15000),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+        : AbortSignal.timeout(15000),
     });
     const result = (await response.json()) as T & { error?: { message: string } };
     if (!response.ok)
@@ -315,6 +321,7 @@ export class RemoteClient {
     return result;
   }
   private persist(): Promise<void> {
+    if (!this.persistent) return Promise.resolve();
     const data = JSON.stringify(this.state);
     this.diskTail = this.diskTail.then(async () => {
       await mkdir(path.dirname(this.config.statePath), {

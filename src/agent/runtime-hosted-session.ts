@@ -1,3 +1,5 @@
+import { ResumeProjectionReader } from "../session/resume-projection";
+import type { RemoteTuiSnapshot } from "../remote/tui-protocol";
 import { randomUUID } from "node:crypto";
 import type { RuntimeSession } from "./runtime-session";
 import type {
@@ -35,6 +37,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
   readonly hub: RemoteSyncHub;
   private runtime?: RuntimeSession;
   private reader?: RemoteHistoryReader;
+  private databasePath?: string;
   private opening?: Promise<void>;
   private readonly queue: OperationReceipt[] = [];
   private active?: {
@@ -68,6 +71,7 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
     try {
       const opened = await this.factory({ record: this.record, sink: this });
       this.runtime = opened.runtime;
+      this.databasePath = opened.databasePath;
       this.reader = new RemoteHistoryReader(
         opened.databasePath,
         parseSessionId(this.record.id),
@@ -125,6 +129,28 @@ export class HostedSession implements EventSink, AssistantTextDeltaSink {
 
   view(): RemoteView {
     return { ...this.readActivity(), history: this.history() };
+  }
+  tuiSnapshot(): RemoteTuiSnapshot {
+    if (!this.databasePath || !this.runtime) throw new Error("Session is not ready.");
+    const frame = this.hub.snapshot();
+    return {
+      version: 1,
+      cursor: { epoch: frame.epoch, sequence: frame.sequence },
+      activity: this.readActivity(),
+      history: ResumeProjectionReader.readDatabase({
+        databasePath: this.databasePath,
+        workspaceRoot: this.record.workspacePath,
+        sessionId: parseSessionId(this.record.id),
+        modelName: this.record.modelName,
+        closedTurnsOnly: true,
+      }),
+      bashGuard: {
+        mode: this.runtime.bashGuard().mode,
+        source: this.runtime.bashGuard().source,
+      },
+      skills: this.runtime.skills(),
+      mcp: this.runtime.mcp(),
+    };
   }
   history(before?: number, limit?: number): RemoteHistoryPage {
     return this.reader?.page(before, limit) ?? { messages: [], hasMore: false };

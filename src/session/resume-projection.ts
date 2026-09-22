@@ -60,6 +60,22 @@ export class ResumeProjectionReader {
       input.sessionId,
       input.homeRoot,
     );
+    return this.readDatabase({ ...input, workspaceRoot, databasePath, policy });
+  }
+
+  /** Read completed history while a service-owned session may have an open tail. */
+  static readDatabase(input: {
+    workspaceRoot: string;
+    sessionId: SessionId;
+    modelName: string;
+    databasePath: string;
+    policy?: TuiProjectionPolicy;
+    closedTurnsOnly?: boolean;
+  }): TuiProjectionState {
+    const { workspaceRoot, databasePath } = input;
+    const policy = validateTuiProjectionPolicy(
+      input.policy ?? defaultTuiProjectionPolicy,
+    );
     const database = new Database(databasePath, {
       readonly: true,
       strict: true,
@@ -84,11 +100,12 @@ export class ResumeProjectionReader {
           { sessionId: input.sessionId },
         );
       }
+      const filter = input.closedTurnsOnly ? " WHERE status <> 'open'" : "";
       const totalTurns = count(
-        database.query("SELECT COUNT(*) AS count FROM turns").get(),
+        database.query(`SELECT COUNT(*) AS count FROM turns${filter}`).get(),
       );
       const turns = database
-        .query(`SELECT * FROM turns ORDER BY turn_number DESC LIMIT ?`)
+        .query(`SELECT * FROM turns${filter} ORDER BY turn_number DESC LIMIT ?`)
         .all(policy.recentTurnLimit)
         .reverse() as Array<Record<string, unknown>>;
       const recentTurns = turns.map((turn) => projectTurn(database, turn, policy));

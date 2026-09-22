@@ -59,6 +59,21 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
   connect: Object.freeze({
     command: "connect",
     description: "Attach a terminal client to a service; exiting detaches only.",
+    tuiOption: Object.freeze({
+      flags: "--tui",
+      description: "Use the full TUI for service sessions and history (preview).",
+    } satisfies PublicCliOption),
+    workspaceOption: Object.freeze({
+      flags: "--workspace <id>",
+      description: "Select a service workspace for --tui.",
+      valueName: "id",
+    } satisfies PublicCliOption),
+    sessionOption: Object.freeze({
+      flags: "--session <id>",
+      description:
+        "Connect an existing session with --tui; otherwise create a new one.",
+      valueName: "id",
+    } satisfies PublicCliOption),
     configOption: Object.freeze({
       flags: "--config <path>",
       description: "Read the paired client JSON configuration.",

@@ -187,6 +187,7 @@ The installed package exposes this public CLI:
 | `tinker update` | Update the global npm installation from the official npm registry. |
 | `tinker serve --config <path>` | Run the local daemon for paired remote clients. |
 | `tinker connect --config <path>` | Attach a terminal client to a service; exiting detaches only. |
+| `tinker connect --config <path> --tui --workspace <id> [--session <id>]` | Use the full TUI for service sessions and history (preview). |
 | `tinker --help` | Show top-level CLI help. |
 | `tinker help run` | Show one-shot command help. |
 | `tinker help update` | Show update command help. |
