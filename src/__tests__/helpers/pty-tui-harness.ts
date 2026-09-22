@@ -374,7 +374,8 @@ class PtyTuiHarnessImpl implements PtyTuiHarness {
         "--",
         "node",
         path.join(repositoryRoot, "bin/tinker.js"),
-        ...(input.cliArgs ?? []),
+        // Existing journeys exercise independent runtime; [] explicitly tests the default service entry.
+        ...(input.cliArgs ?? ["--local"]),
       ],
       {
         cwd: input.workspaceRoot,

@@ -27,12 +27,11 @@ export async function loadRemoteConfig(file: string): Promise<RemoteServiceConfi
     path.resolve(path.dirname(absolute), requireText(value, name, 4096));
   const tls = requireObject(raw.tls);
   const port = raw.port ?? 9443;
-  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535)
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error("Invalid service port.");
   if (!Array.isArray(raw.devices) || raw.devices.length === 0)
     throw new Error("At least one paired device is required.");
-  if (!Array.isArray(raw.workspaces) || raw.workspaces.length === 0)
-    throw new Error("At least one workspace is required.");
+  if (!Array.isArray(raw.workspaces)) throw new Error("Workspaces must be an array.");
   const devices = raw.devices.map((entry) => {
     const device = requireObject(entry);
     const tokenSha256 = requireText(device.tokenSha256, "tokenSha256", 64);
@@ -69,7 +68,9 @@ export async function loadRemoteConfig(file: string): Promise<RemoteServiceConfi
   if (hostname !== "127.0.0.1" && hostname !== "::1")
     throw new Error("Bind the service to loopback; expose only the relay TCP port.");
   return {
-    stateDirectory: resolve(raw.stateDirectory, "stateDirectory"),
+    stateDirectory: await canonicalDirectory(
+      resolve(raw.stateDirectory ?? "./state", "stateDirectory"),
+    ),
     hostname,
     port,
     tls: {
@@ -79,6 +80,17 @@ export async function loadRemoteConfig(file: string): Promise<RemoteServiceConfi
     devices,
     workspaces,
   };
+}
+
+async function canonicalDirectory(directory: string): Promise<string> {
+  try {
+    return await realpath(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = path.dirname(directory);
+    if (parent === directory) throw error;
+    return path.join(await canonicalDirectory(parent), path.basename(directory));
+  }
 }
 
 export function authenticateDevice(

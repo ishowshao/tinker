@@ -6,14 +6,18 @@ import { render } from "ink";
 import { RemoteClient, loadRemoteClientConfig } from "../remote/client";
 import { RemoteApp } from "../tui/remote-app";
 import type { CliOutputWriter } from "./output";
+import { resolveConnectedWorkspace } from "./connect-workspace";
 
 export async function runConnect(input: {
   configPath: string;
   env: NodeJS.ProcessEnv;
   stdout: CliOutputWriter;
+  cwd?: string;
   tui?: boolean;
   workspaceId?: string;
   sessionId?: string;
+  profileName?: string;
+  serviceConfigPath?: string;
 }): Promise<number> {
   if (!process.stdin.isTTY)
     throw new Error("tinker connect requires an interactive terminal.");
@@ -36,14 +40,23 @@ export async function runConnect(input: {
 async function runFullTui(input: {
   configPath: string;
   env: NodeJS.ProcessEnv;
+  cwd?: string;
   workspaceId?: string;
   sessionId?: string;
+  profileName?: string;
+  serviceConfigPath?: string;
 }): Promise<number> {
-  if (!input.workspaceId) throw new Error("Full service TUI requires a workspace ID.");
+  const config = await loadRemoteClientConfig(input.configPath);
+  const workspaceId = await resolveConnectedWorkspace({
+    ...input,
+    config,
+    cwd: input.cwd ?? process.cwd(),
+  });
   const connection = await createRemoteTuiClient(
-    await loadRemoteClientConfig(input.configPath),
-    input.workspaceId,
+    config,
+    workspaceId,
     input.sessionId,
+    input.profileName,
   );
   let instance: ReturnType<typeof render> | undefined;
   try {
@@ -55,7 +68,6 @@ async function runFullTui(input: {
     instance = render(
       <App
         sessionController={connection.client}
-        initialNotice="Service TUI preview: /clear creates; /resume connects. Esc stops execution; input while running queues a follow-up."
         history={history}
         projectSlashCommands={projectSlashCommands}
         readGitBranch={connection.client.readGitBranch}

@@ -242,14 +242,21 @@ export class RemoteWorkspaceClient implements WorkspaceClient<TuiSessionView> {
   ) {
     this.transport = new RemoteClient(config, false);
   }
-  async initialize(sessionId?: string): Promise<void> {
+  async initialize(sessionId?: string, profileName?: string): Promise<void> {
     const workspaces = await this.transport.workspaces();
     if (!workspaces.workspaces.some((w) => w.id === this.workspaceId))
       throw new Error("Workspace is not configured on the service.");
     // Check the additive full-TUI endpoint before creating any session.
     await this.listSessions();
     if (sessionId) await this.resume(parseSessionId(sessionId));
-    else await this.clear();
+    else
+      await this.replace(async () =>
+        this.operation({
+          kind: "create",
+          workspaceId: this.workspaceId,
+          ...(profileName ? { profileName } : {}),
+        }),
+      );
   }
   readonly getBinding = (): SessionClient<TuiSessionView> => {
     if (!this.current) throw new Error("Service session is not connected.");
@@ -290,10 +297,13 @@ export class RemoteWorkspaceClient implements WorkspaceClient<TuiSessionView> {
     return this.replace(async () => {
       if (sessionId === this.current?.binding.sessionId)
         throw new Error(`Session ${sessionId} is already current.`);
-      const session = (await this.listSessions()).find(
-        (entry) => entry.sessionId === sessionId,
+      const { session } = await this.transport.request<{
+        session: ClientSessionSummary;
+      }>(
+        `/v1/workspaces/${this.workspaceId}/tui-sessions/${sessionId}`,
+        undefined,
+        this.abort.signal,
       );
-      if (!session) throw new Error("Session does not belong to this workspace.");
       if (session.canConnect) return sessionId;
       if (session.status !== "resumable" && session.status !== "interrupted")
         throw new Error("Exit the local session before connecting it to the service.");
@@ -482,10 +492,11 @@ export async function createRemoteTuiClient(
   config: RemoteClientConfig,
   workspaceId: string,
   sessionId?: string,
+  profileName?: string,
 ): Promise<ClientConnection<TuiSessionView> & { client: RemoteWorkspaceClient }> {
   const client = new RemoteWorkspaceClient(config, workspaceId);
   try {
-    await client.initialize(sessionId);
+    await client.initialize(sessionId, profileName);
     return { client, close: () => client.close() };
   } catch (error) {
     await client.close();

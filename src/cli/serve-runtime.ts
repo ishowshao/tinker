@@ -9,12 +9,15 @@ import { createInteractiveRuntimeSession } from "./interactive-runtime";
 
 /** Service composition reuses the existing configuration/provider/runtime contracts. */
 export function createHostedRuntimeFactory(
-  workspaces: readonly RemoteWorkspaceConfig[],
+  workspaces:
+    | readonly RemoteWorkspaceConfig[]
+    | (() => readonly RemoteWorkspaceConfig[]),
   env: NodeJS.ProcessEnv,
   homeRoot?: string,
 ): HostedRuntimeFactory {
+  const entries = () => (typeof workspaces === "function" ? workspaces() : workspaces);
   const factory: HostedRuntimeFactory = async ({ record, sink }) => {
-    const workspace = workspaces.find((entry) => entry.id === record.workspaceId);
+    const workspace = entries().find((entry) => entry.id === record.workspaceId);
     if (!workspace || workspace.path !== record.workspacePath)
       throw new Error("Managed workspace configuration changed.");
     const sessionId = parseSessionId(record.id);
@@ -65,7 +68,7 @@ export function createHostedRuntimeFactory(
     }
   };
   const readConfig = async (workspaceId: string) => {
-    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    const workspace = entries().find((entry) => entry.id === workspaceId);
     if (!workspace) throw new Error("Workspace is not configured.");
     return resolvePublicConfig({
       env: { ...env, TINKER_WORKSPACE: workspace.path },

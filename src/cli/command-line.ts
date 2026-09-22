@@ -4,15 +4,21 @@ import type { PromptSource } from "./prompt-source";
 import { CliUsageError, type CliCommandScope } from "./output";
 
 export type CliCommand =
-  | { readonly type: "tui"; readonly profileName?: string }
+  | { readonly type: "tui"; readonly profileName?: string; readonly local?: boolean }
   | { readonly type: "update" }
-  | { readonly type: "serve"; readonly configPath: string }
+  | {
+      readonly type: "serve";
+      readonly configPath?: string;
+      readonly background?: boolean;
+      readonly status?: boolean;
+    }
   | {
       readonly type: "connect";
       readonly configPath: string;
       readonly tui?: boolean;
       readonly workspaceId?: string;
       readonly sessionId?: string;
+      readonly serviceConfigPath?: string;
     }
   | {
       readonly type: "run";
@@ -51,6 +57,7 @@ export async function parseCommandLine(
     .helpOption(contract.helpFlags)
     .version(packageVersion, contract.versionFlags)
     .option(contract.tui.profileOption.flags, contract.tui.profileOption.description)
+    .option(contract.tui.localOption.flags, contract.tui.localOption.description)
     .helpCommand(contract.helpCommand.command, contract.helpCommand.description)
     .showHelpAfterError('Run "tinker --help" for usage.')
     .showSuggestionAfterError(false)
@@ -67,9 +74,10 @@ export async function parseCommandLine(
     });
 
   program.action(() => {
-    const { profile } = program.opts<{ profile?: string }>();
+    const { profile, local } = program.opts<{ profile?: string; local?: boolean }>();
     selectedCommand = Object.freeze({
       type: "tui",
+      ...(local ? { local: true } : {}),
       ...(profile === undefined
         ? {}
         : { profileName: validateProfile(profile, "root") }),
@@ -143,38 +151,83 @@ export async function parseCommandLine(
     const subcommand = program
       .command(command.command)
       .description(command.description)
-      .requiredOption(command.configOption.flags, command.configOption.description)
       .allowExcessArguments(false)
       .exitOverride();
+    if (type === "serve") {
+      subcommand.option(command.configOption.flags, command.configOption.description);
+      subcommand.option(
+        contract.serve.backgroundOption.flags,
+        contract.serve.backgroundOption.description,
+      );
+      subcommand.option(
+        contract.serve.statusOption.flags,
+        contract.serve.statusOption.description,
+      );
+    } else
+      subcommand.requiredOption(
+        command.configOption.flags,
+        command.configOption.description,
+      );
     if (type === "connect") {
       for (const option of [
         contract.connect.tuiOption,
         contract.connect.workspaceOption,
         contract.connect.sessionOption,
+        contract.connect.serviceConfigOption,
       ])
         subcommand.option(option.flags, option.description);
     }
     subcommand.action(
       (options: {
-        config: string;
+        config?: string;
+        background?: boolean;
+        status?: boolean;
         tui?: boolean;
         workspace?: string;
         session?: string;
+        serviceConfig?: string;
       }) => {
-        if (!options.config.trim())
+        if (options.config !== undefined && !options.config.trim())
           throw new CliUsageError("--config requires a non-empty path.", type);
-        if (
-          type === "connect" &&
-          (options.tui ||
-            options.workspace !== undefined ||
-            options.session !== undefined)
-        ) {
-          if (!options.tui || !options.workspace?.trim())
+        if (type === "serve") {
+          if (options.background && options.status)
             throw new CliUsageError(
-              "--tui requires --workspace <id>; --workspace and --session require --tui.",
+              "--background and --status are mutually exclusive.",
               type,
             );
-          if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(options.workspace))
+          selectedCommand = Object.freeze({
+            type,
+            ...(options.config === undefined ? {} : { configPath: options.config }),
+            ...(options.background ? { background: true } : {}),
+            ...(options.status ? { status: true } : {}),
+          });
+          return;
+        }
+        if (options.config === undefined)
+          throw new CliUsageError("--config is required.", type);
+        if (
+          options.tui ||
+          options.workspace !== undefined ||
+          options.session !== undefined ||
+          options.serviceConfig !== undefined
+        ) {
+          if (
+            !options.tui ||
+            (options.workspace !== undefined && !options.workspace.trim())
+          )
+            throw new CliUsageError(
+              "--workspace, --session and --service-config require --tui; workspace ID must be non-empty.",
+              type,
+            );
+          if (options.serviceConfig !== undefined && !options.serviceConfig.trim())
+            throw new CliUsageError(
+              "--service-config requires a non-empty path.",
+              type,
+            );
+          if (
+            options.workspace !== undefined &&
+            !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(options.workspace)
+          )
             throw new CliUsageError("Invalid workspace ID.", type);
           if (
             options.session !== undefined &&
@@ -187,8 +240,13 @@ export async function parseCommandLine(
             type,
             configPath: options.config,
             tui: true,
-            workspaceId: options.workspace,
+            ...(options.workspace === undefined
+              ? {}
+              : { workspaceId: options.workspace }),
             ...(options.session ? { sessionId: options.session } : {}),
+            ...(options.serviceConfig === undefined
+              ? {}
+              : { serviceConfigPath: options.serviceConfig }),
           });
         } else selectedCommand = Object.freeze({ type, configPath: options.config });
       },
@@ -224,6 +282,11 @@ export async function parseCommandLine(
   if (selectedCommand === undefined) {
     throw new Error("Commander completed without selecting a command.");
   }
+  if (selectedCommand.type !== "tui" && program.opts<{ local?: boolean }>().local)
+    throw new CliUsageError(
+      "--local only applies to the default TUI.",
+      selectedCommand.type,
+    );
   const topLevelProfile = program.opts<{ profile?: string }>().profile;
   if (selectedCommand.type === "run" && topLevelProfile !== undefined) {
     throw new CliUsageError(
@@ -280,6 +343,7 @@ function preflightArgv(args: readonly string[]): CliCommandScope {
         index += profile.consumedNext ? 1 : 0;
         continue;
       }
+      if (token === "--local") continue;
       if (token.startsWith("-")) {
         rootBlocked = true;
         continue;

@@ -1,4 +1,5 @@
 import { sessionPost, sessionRead } from "./session-reads";
+import { resolveServiceWorkspace } from "./workspace-resolution";
 import { IMAGE_INPUT_POLICY } from "../image/image-input-policy";
 import type { ServerWebSocket } from "bun";
 import { authenticateDevice, type RemoteServiceConfig } from "./config";
@@ -58,6 +59,24 @@ export function startRemoteHttpServer(
         const parts = url.pathname.split("/").filter(Boolean);
         if (parts[0] !== "v1")
           throw new RemoteError(404, "NOT_FOUND", "Unknown API version or route.");
+        if (request.method === "GET" && url.pathname === "/v1/service")
+          return json({ version: 1, instanceId: service.epoch });
+        if (request.method === "GET" && url.pathname === "/v1/workspaces/resolve") {
+          const directory = url.searchParams.get("directory");
+          if (!directory || directory.length > 4096)
+            throw new RemoteError(
+              400,
+              "INVALID_DIRECTORY",
+              "Provide a workspace directory of at most 4096 characters.",
+            );
+          const workspace = await resolveServiceWorkspace(
+            service.workspaces,
+            directory,
+          );
+          return json({
+            workspace: { id: workspace.id, name: workspace.name, path: workspace.path },
+          });
+        }
         if (request.method === "GET" && url.pathname === "/v1/workspaces") {
           return json({
             version: 1,
@@ -65,6 +84,19 @@ export function startRemoteHttpServer(
               id,
               name,
             })),
+          });
+        }
+        if (
+          request.method === "GET" &&
+          parts.length === 5 &&
+          parts[1] === "workspaces" &&
+          parts[3] === "tui-sessions"
+        ) {
+          return json({
+            session: await service.getTuiSession(
+              requireId(parts[2], "workspaceId"),
+              requireId(parts[4], "sessionId", true),
+            ),
           });
         }
         if (

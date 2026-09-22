@@ -5,7 +5,10 @@ import { randomUUID } from "node:crypto";
 import { createRuntimeSession } from "../../agent/runtime-session";
 import { parseSessionId } from "../../ids/runtime-id";
 import { resolveSessionDatabasePath } from "../../session/session-store";
-import { RemoteServiceStore } from "../../remote/service-store";
+import {
+  RemoteServiceStore,
+  type ManagedSessionRecord,
+} from "../../remote/service-store";
 import { RemoteService } from "../../remote/service";
 import type { RemoteOperationInput, OperationReceipt } from "../../remote/protocol";
 import type { HostedRuntimeFactory } from "../../agent/runtime-hosted-session";
@@ -25,6 +28,7 @@ import {
 export async function remoteFixture(
   model: ModelClient,
   catalog?: import("../../client/model-catalog").ClientModelCatalog,
+  beforeOpen?: (record: ManagedSessionRecord) => Promise<void>,
 ) {
   const root = await realpath(
     await mkdtemp(path.join(os.tmpdir(), "tinker-remote-test-")),
@@ -35,6 +39,7 @@ export async function remoteFixture(
   let factoryCalls = 0;
   const factory: HostedRuntimeFactory = async ({ record, sink }) => {
     factoryCalls += 1;
+    await beforeOpen?.(record);
     const sessionId = parseSessionId(record.id);
     const runtime = await createRuntimeSession(
       {

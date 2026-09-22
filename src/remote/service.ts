@@ -9,6 +9,13 @@ import { randomUUID } from "node:crypto";
 import { createUuidV7 } from "../ids/uuid-v7";
 import { parseSessionId } from "../ids/runtime-id";
 import { SessionCatalog } from "../session/session-catalog";
+import { realpath, stat } from "node:fs/promises";
+import path from "node:path";
+import {
+  findContainingWorkspace,
+  localWorkspaceRecord,
+  mergeWorkspaces,
+} from "./workspace-resolution";
 import {
   HostedSession,
   type HostedRuntimeFactory,
@@ -23,16 +30,39 @@ import {
 } from "./protocol";
 
 export class RemoteService {
+  private readonly workspaceEntries: RemoteWorkspaceConfig[];
+  get workspaces(): readonly RemoteWorkspaceConfig[] {
+    return this.workspaceEntries;
+  }
   readonly epoch = randomUUID();
   private readonly hosted = new Map<string, HostedSession>();
   private submitting: Promise<void> = Promise.resolve();
   private stopping = false;
   constructor(
     readonly store: RemoteServiceStore,
-    readonly workspaces: readonly RemoteWorkspaceConfig[],
+    workspaces: readonly RemoteWorkspaceConfig[],
     private readonly factory: HostedRuntimeFactory,
     readonly homeRoot?: string,
-  ) {}
+  ) {
+    this.workspaceEntries = mergeWorkspaces(workspaces, store.workspaces());
+  }
+
+  /** Local Unix-socket entry only; never exposed through the paired-device HTTP API. */
+  async registerLocalWorkspace(directory: string): Promise<RemoteWorkspaceConfig> {
+    if (!path.isAbsolute(directory) || directory.length > 4096)
+      throw new Error("Local workspace requires an absolute directory path.");
+    const canonical = await realpath(directory);
+    if (!(await stat(canonical)).isDirectory())
+      throw new Error("Workspace must be a directory.");
+    if (this.stopping) throw new Error("Service is stopping.");
+    const existing = findContainingWorkspace(this.workspaces, canonical);
+    if (existing) return existing;
+    const record = localWorkspaceRecord(canonical);
+    // No await between checking identity, the durable insert and publishing the list.
+    this.store.registerWorkspace(record);
+    this.workspaceEntries.push(record);
+    return record;
+  }
 
   async initialize(): Promise<void> {
     // Reacquire every managed canonical lease; no prompt is resubmitted on boot.
@@ -140,6 +170,30 @@ export class RemoteService {
     });
   }
 
+  async getTuiSession(workspaceId: string, id: string): Promise<ClientSessionSummary> {
+    const workspace = this.workspace(workspaceId);
+    const summary = await new SessionCatalog({
+      workspaceRoot: workspace.path,
+      homeRoot: this.homeRoot,
+    })
+      .get(parseSessionId(id))
+      .catch(() => {
+        throw new RemoteError(
+          404,
+          "SESSION_NOT_FOUND",
+          "Session does not belong to this workspace.",
+        );
+      });
+    const managed = this.store.session(id);
+    return {
+      ...summary,
+      ...(managed?.workspaceId === workspaceId &&
+      managed.workspacePath === workspace.path
+        ? { canConnect: true }
+        : {}),
+    };
+  }
+
   submit(input: RemoteOperationInput, device: string): Promise<OperationReceipt> {
     // Serializes acceptance, catalog lookup and deletion; never model execution.
     const result = this.submitting.then(() => this.accept(input, device));
@@ -157,58 +211,28 @@ export class RemoteService {
     if (existing) return existing;
     if (this.stopping)
       throw new RemoteError(503, "SERVICE_STOPPING", "The local service is stopping.");
-    if (input.kind === "create" || input.kind === "adopt") {
+    if (input.kind === "adopt") return this.adopt(input, device);
+    if (input.kind === "create") {
       const workspace = this.workspace(input.workspaceId);
-      const id = input.kind === "create" ? createUuidV7() : input.sessionId;
+      const id = createUuidV7();
       if (this.store.sessions().length >= 128)
         throw new RemoteError(
           409,
           "SESSION_LIMIT",
           "The service has reached its 128 managed session limit.",
         );
-      let record: ManagedSessionRecord;
-      if (input.kind === "adopt") {
-        if (this.store.session(id))
-          throw new RemoteError(
-            409,
-            "ALREADY_MANAGED",
-            "This session is already owned by the service.",
-          );
-        const summary = await new SessionCatalog({
-          workspaceRoot: workspace.path,
-          homeRoot: this.homeRoot,
-        }).get(parseSessionId(id));
-        if (summary.status !== "resumable" && summary.status !== "interrupted")
-          throw new RemoteError(
-            409,
-            "SESSION_UNAVAILABLE",
-            "Exit its local TUI before attaching this session; it must be resumable.",
-          );
-        record = {
-          id,
-          workspaceId: workspace.id,
-          workspacePath: workspace.path,
-          title: summary.firstUserPromptPreview ?? "Empty session",
-          modelName: summary.modelName,
-          owner: "service",
-          status: "accepted",
-          updatedAt: new Date().toISOString(),
-          initialized: true,
-        };
-      } else {
-        record = {
-          id,
-          workspaceId: workspace.id,
-          workspacePath: workspace.path,
-          title: input.title ?? "New session",
-          modelName: "",
-          owner: "service",
-          status: "accepted",
-          updatedAt: new Date().toISOString(),
-          initialized: false,
-          profileName: input.profileName,
-        };
-      }
+      const record: ManagedSessionRecord = {
+        id,
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        title: input.title ?? "New session",
+        modelName: "",
+        owner: "service",
+        status: "accepted",
+        updatedAt: new Date().toISOString(),
+        initialized: false,
+        profileName: input.profileName,
+      };
       const receipt = this.store.accept(input, device, id, record);
       const hosted = this.session(id);
       void hosted.open().then(
@@ -237,6 +261,88 @@ export class RemoteService {
     else if (input.kind === "prompt") session.enqueue(receipt);
     else session.control(input, receipt);
     return receipt;
+  }
+
+  private async adopt(
+    input: Extract<RemoteOperationInput, { kind: "adopt" }>,
+    device: string,
+  ): Promise<OperationReceipt> {
+    const workspace = this.workspace(input.workspaceId);
+    const id = input.sessionId;
+    const managed = this.store.session(id);
+    if (managed) {
+      if (
+        managed.workspaceId !== workspace.id ||
+        managed.workspacePath !== workspace.path
+      )
+        throw new RemoteError(
+          409,
+          "WORKSPACE_MISMATCH",
+          "Session belongs to another workspace.",
+        );
+      await this.session(id).open();
+      const receipt = this.store.accept(input, device, id);
+      const completed = this.store.update({ ...receipt, status: "completed" });
+      this.session(id).receiptChanged();
+      return completed;
+    }
+    if (this.store.sessions().length >= 128)
+      throw new RemoteError(
+        409,
+        "SESSION_LIMIT",
+        "The service has reached its 128 managed session limit.",
+      );
+    const summary = await new SessionCatalog({
+      workspaceRoot: workspace.path,
+      homeRoot: this.homeRoot,
+    })
+      .get(parseSessionId(id))
+      .catch(() => {
+        throw new RemoteError(
+          404,
+          "SESSION_NOT_FOUND",
+          "Session is not in this workspace.",
+        );
+      });
+    if (summary.status !== "resumable" && summary.status !== "interrupted")
+      throw new RemoteError(
+        409,
+        "SESSION_UNAVAILABLE",
+        "Exit its local TUI before attaching this session; it must be resumable.",
+      );
+    const record: ManagedSessionRecord = {
+      id,
+      workspaceId: workspace.id,
+      workspacePath: workspace.path,
+      title: summary.firstUserPromptPreview ?? "Empty session",
+      modelName: summary.modelName,
+      profileName: summary.profileName,
+      owner: "service",
+      status: "accepted",
+      updatedAt: new Date().toISOString(),
+      initialized: true,
+    };
+    // A receipt records intent, not ownership. HostedSession publishes the managed
+    // record only after the runtime has acquired the canonical session lease.
+    const receipt = this.store.accept(input, device, id);
+    const hosted = new HostedSession(record, this.store, this.epoch, this.factory);
+    this.hosted.set(id, hosted);
+    try {
+      await hosted.open();
+      const completed = this.store.update({ ...receipt, status: "completed" });
+      hosted.receiptChanged();
+      return completed;
+    } catch (error) {
+      await hosted.close().catch(() => undefined);
+      this.hosted.delete(id);
+      this.store.releaseSession(id);
+      const failed = {
+        ...receipt,
+        status: "failed" as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      return this.store.update(failed);
+    }
   }
 
   private async deleteSession(

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { chmod, mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { RemoteWorkspaceConfig } from "./config";
 import { stableJsonStringify, sha256 } from "../model/model-request-preflight";
 import { parseSessionId } from "../ids/runtime-id";
 import { SessionLease } from "../session/session-lock";
@@ -22,7 +23,7 @@ type ReceiptRow = {
   receipt: string;
   input: string;
 };
-const SERVICE_LEASE_ID = parseSessionId("00000000-0000-7000-8000-000000000001");
+export const SERVICE_LEASE_ID = parseSessionId("00000000-0000-7000-8000-000000000001");
 
 /** Durable acceptance receipts, separate from the canonical conversation databases. */
 export class RemoteServiceStore {
@@ -49,12 +50,13 @@ export class RemoteServiceStore {
       const version = (
         db.query("PRAGMA user_version").get() as { user_version: number }
       ).user_version;
-      if (version !== 0 && version !== 1)
+      if (version !== 0 && version !== 1 && version !== 2)
         throw new Error("Unsupported remote state schema.");
       db.exec(`CREATE TABLE IF NOT EXISTS managed_sessions (id TEXT PRIMARY KEY, record TEXT NOT NULL) STRICT;
         CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, device TEXT NOT NULL, fingerprint TEXT NOT NULL, input TEXT NOT NULL, receipt TEXT NOT NULL) STRICT;
         CREATE INDEX IF NOT EXISTS operations_session ON operations(session_id);
-        PRAGMA user_version=1;`);
+        CREATE TABLE IF NOT EXISTS registered_workspaces (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, record TEXT NOT NULL) STRICT;
+        PRAGMA user_version=2;`);
       const store = new RemoteServiceStore(db, lease);
       for (const row of db.query("SELECT receipt FROM operations").all() as {
         receipt: string;
@@ -81,6 +83,18 @@ export class RemoteServiceStore {
     return (
       this.db.query("SELECT record FROM managed_sessions").all() as { record: string }[]
     ).map((row) => JSON.parse(row.record) as ManagedSessionRecord);
+  }
+  workspaces(): RemoteWorkspaceConfig[] {
+    return (
+      this.db.query("SELECT record FROM registered_workspaces ORDER BY id").all() as {
+        record: string;
+      }[]
+    ).map((row) => JSON.parse(row.record) as RemoteWorkspaceConfig);
+  }
+  registerWorkspace(workspace: RemoteWorkspaceConfig): void {
+    this.db
+      .query("INSERT INTO registered_workspaces (id, path, record) VALUES (?, ?, ?)")
+      .run(workspace.id, workspace.path, JSON.stringify(workspace));
   }
   session(id: string): ManagedSessionRecord | undefined {
     const row = this.db

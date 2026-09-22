@@ -44,7 +44,12 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     description: "display help for command",
   }),
   tui: Object.freeze({
-    description: "Start the interactive terminal interface.",
+    description:
+      "Start the full TUI through the shared local service; exiting detaches only.",
+    localOption: Object.freeze({
+      flags: "--local",
+      description: "Run the TUI independently without a service (explicit fallback).",
+    } satisfies PublicCliOption),
     profileOption: PROFILE_OPTION,
   }),
   serve: Object.freeze({
@@ -52,8 +57,19 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     description: "Run the local daemon for paired remote clients.",
     configOption: Object.freeze({
       flags: "--config <path>",
-      description: "Read the service JSON configuration.",
+      description:
+        "Read service JSON (default: <home>/.tinker/service/service.json; home follows TINKER_HOME).",
       valueName: "path",
+    } satisfies PublicCliOption),
+    backgroundOption: Object.freeze({
+      flags: "--background",
+      description:
+        "Discover or start one detached service for this state directory, and print its address as JSON.",
+    } satisfies PublicCliOption),
+    statusOption: Object.freeze({
+      flags: "--status",
+      description:
+        "Probe the local service without starting it; print JSON and exit 1 when offline.",
     } satisfies PublicCliOption),
   }),
   connect: Object.freeze({
@@ -61,13 +77,19 @@ export const PUBLIC_CLI_CONTRACT = Object.freeze({
     description: "Attach a terminal client to a service; exiting detaches only.",
     tuiOption: Object.freeze({
       flags: "--tui",
-      description:
-        "Use the full TUI for service sessions and task execution (preview).",
+      description: "Use the full TUI for service sessions and task execution.",
     } satisfies PublicCliOption),
     workspaceOption: Object.freeze({
       flags: "--workspace <id>",
-      description: "Select a service workspace for --tui.",
+      description:
+        "Select a service workspace for --tui; otherwise resolve the current directory on the service host.",
       valueName: "id",
+    } satisfies PublicCliOption),
+    serviceConfigOption: Object.freeze({
+      flags: "--service-config <path>",
+      description:
+        "With --tui, discover/start this local service and register the current directory if needed.",
+      valueName: "path",
     } satisfies PublicCliOption),
     sessionOption: Object.freeze({
       flags: "--session <id>",

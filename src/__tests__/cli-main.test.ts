@@ -50,10 +50,10 @@ describe("CLI main boundary", () => {
       expect(await main(state.input, dependencies)).toBe(0);
       expect(order).toEqual([`${mode}:${state.input.cwd}/pairing.json`]);
       const missing = testInput([mode]);
-      expect(await main(missing.input, dependencies)).toBe(2);
-      expect(missing.stderr.output).toContain("--config");
+      expect(await main(missing.input, dependencies)).toBe(mode === "serve" ? 0 : 2);
+      if (mode === "connect") expect(missing.stderr.output).toContain("--config");
     }
-    const state = testInput([]);
+    const state = testInput(["--local"]);
     const dependencies = successfulDependencies();
     dependencies.loadServeRunner = async () => {
       throw new Error("Unexpected service load");
@@ -62,6 +62,32 @@ describe("CLI main boundary", () => {
       throw new Error("Unexpected remote TUI load");
     };
     expect(await main(state.input, dependencies)).toBe(0);
+  });
+
+  test("default TUI delegates profile and workspace to the service, without local runtime or silent fallback", async () => {
+    const state = testInput(["--profile", "large"]);
+    const order: string[] = [];
+    const dependencies = successfulDependencies(order);
+    let received: unknown;
+    dependencies.loadDefaultTuiRunner = async () => ({
+      runDefaultTui: async (input) => {
+        received = input;
+        return 0;
+      },
+    });
+    dependencies.loadTuiRunner = async () => {
+      throw new Error("Must not load independent TUI");
+    };
+    expect(await main(state.input, dependencies)).toBe(0);
+    expect(order).toEqual([]);
+    expect(received).toMatchObject({ cwd: state.input.cwd, profileName: "large" });
+    dependencies.loadDefaultTuiRunner = async () => {
+      throw new Error("Service unavailable");
+    };
+    expect(await main(state.input, dependencies)).toBe(1);
+    expect(state.stderr.output).toContain("Service unavailable");
+    expect(state.stderr.output).toContain("--local");
+    expect(order).toEqual([]);
   });
 
   test("handles help, version, and usage before loading config or runners", async () => {
@@ -190,8 +216,8 @@ describe("CLI main boundary", () => {
     }
   });
 
-  test("loads only the TUI runner for the default command", async () => {
-    const state = testInput([]);
+  test("loads only the independent TUI runner for --local", async () => {
+    const state = testInput(["--local"]);
     let tuiRuns = 0;
     let oneShotLoads = 0;
     const dependencies = successfulDependencies();
@@ -405,6 +431,7 @@ function successfulDependencies(order: string[] = []): MutableDependencies {
       return { text: source.value, byteLength: Buffer.byteLength(source.value) };
     },
     loadTuiRunner: async () => ({ runTui: async () => undefined }),
+    loadDefaultTuiRunner: async () => ({ runDefaultTui: async () => 0 }),
     loadOneShotRunner: async () => ({ runOneShot: async () => 0 }),
     loadUpdateRunner: async () => ({ runUpdate: async () => 0 }),
     loadServeRunner: async () => ({ runServe: async () => 0 }),

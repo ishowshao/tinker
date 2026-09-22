@@ -56,6 +56,147 @@ sending SIGTERM and does not manage unrelated Tinker processes. `up` is a local
 process launcher, not a login/startup installation; it does not configure launchd.
 Use `status` and the component logs to diagnose a startup failure.
 
+## Default local service entry
+
+On macOS/Linux, `tinker` (or `bun run tinker` in this checkout) now discovers or
+starts the shared local service, registers the current workspace and opens the
+existing full TUI. `--profile <name>` selects the new session's model profile;
+`TINKER_WORKSPACE` still overrides the current directory. Each launch starts a new
+session; `/resume` connects existing sessions, including safely adopting an old
+independent session once its local process has exited. Exiting the TUI detaches
+without cancelling work accepted by the service.
+
+First launch creates `<home>/.tinker/service/`, with `service.json`, `client.json`,
+`server.crt` and `server.key`; `<home>` follows `TINKER_HOME`. OpenSSL is needed for
+this one-time certificate generation. The complete bundle is published atomically
+so concurrent first launches share one identity. The directory is private (0700)
+and configuration/credential files are 0600. The self-signed local certificate is
+trusted only through that client configuration, not installed into system trust.
+It expires after 365 days; certificate renewal/system supervision belong to the
+resident-operation phase and are not automatic yet.
+
+Auto-created service configuration binds to loopback with a dynamically selected
+port and starts with an empty workspace list. Local registration fills the durable
+registry. After startup/restart, the auto-created local client URL is updated to
+the actual listening address without rotating its credentials. A pre-existing
+service config is respected and requires a matching sibling `client.json`;
+missing, invalid or revoked credentials fail visibly rather than being replaced.
+Existing project `.data` files are not auto-selected or overwritten: use the
+explicit `connect --config ... --tui --service-config ...` command to keep using
+that separate service and its paired devices.
+
+All directories using the same home share this default service. The service keeps
+the environment of its initial launcher; model/provider environment changes in a
+later terminal are not applied to an already running daemon. Restart the service
+to change its environment. Workspace instructions, Skills and configuration files
+continue to resolve in the selected workspace. Inspect the default instance with
+`tinker serve --status`; the JSON includes its PID and the state/log paths.
+
+Connection/startup failures exit with an error, without silently starting a second
+independent runtime. `tinker --local [--profile <name>]` explicitly retains the
+independent TUI, including on Windows where local background startup is not yet
+supported. `tinker run` remains the independent one-shot path. Help/version and
+non-interactive default invocation do not initialize configuration or start a
+service. The TUI layout and interaction controls remain unchanged.
+
+## Local discovery and background startup
+
+For an already configured service on macOS/Linux:
+
+```sh
+bun run tinker serve --config .data/service.json --background
+bun run tinker serve --config .data/service.json --status
+bun run tinker connect --config .data/client.json --tui --workspace tinker
+```
+
+`--background` returns JSON only after the service is ready, or reuses a ready
+service with matching configuration. Multiple concurrent launchers converge on
+the same instance. The detached process survives launcher and terminal exit;
+it is not yet a login service or a crash-restarting supervisor. Without either
+flag, `serve` continues running in the foreground. `--status` does not start or
+repair anything; it returns exit 0 for online, exit 1 when not ready or on error.
+The two flags are mutually exclusive. Plain `bun run tinker` now opens the full
+TUI through the shared local service; `bun run tinker --local` runs independently.
+
+| Setting or artifact | Location / rule |
+| --- | --- |
+| Service config | Explicit `--config`, otherwise `<home>/.tinker/service/service.json`; `<home>` is `TINKER_HOME` or the OS home |
+| State directory | Config `stateDirectory`, otherwise `./state` beside the configuration file; canonicalized before locking |
+| HTTPS address | Loopback `hostname` and `port` from config; defaults `127.0.0.1:9443`; explicit port `0` requests an available port |
+| Instance metadata | `<stateDirectory>/service-instance.json`, includes actual HTTPS URL, PID, boot identity and configuration fingerprint; no pairing credentials |
+| Startup diagnostics | `<stateDirectory>/service.log`, private append-only stdout/stderr for the detached process |
+| Ownership | `<stateDirectory>/startup/active.lock` serializes launchers; `<stateDirectory>/active.lock` excludes competing runtime owners |
+| Local control | Private per-user Unix socket under `/tmp/tinker-service-<uid>/`, keyed by canonical state directory; instance discovery and local workspace registration |
+
+The state directory is private (0700); metadata, socket and logs are private
+(0600). Discovery requires a live socket response, not just a PID or metadata
+file. It does not expose an unauthenticated HTTPS endpoint or change TLS/device
+authentication for clients. Relative configuration paths resolve beside the
+configuration file, independently of the terminal's working directory. The
+explicit `serve` command requires prepared configuration; automatic local setup
+is performed by the default TUI entry described above.
+
+Changed service configuration, TLS material or `TINKER_HOME` is not silently
+applied to a running service. Stop the old process explicitly before restarting
+with the new configuration. A pre-discovery version of the foreground service
+also needs an explicit restart once. A live but unresponsive owner is left alone;
+startup fails after a bounded wait and identifies the diagnostic paths. Stale
+leases from dead processes can be reclaimed. Occupied ports and early child
+exits fail visibly without selecting another service. Different explicit state
+directories are separate service instances; use the shared default for normal
+single-service operation.
+
+Port `0` is useful for isolated services, but existing client pairing files still
+need the actual URL returned by startup and can change after restart. Keep a
+fixed port for manually paired clients. The default entry updates its auto-created
+local client URL after each startup. Log rotation and system supervision remain
+part of resident operation.
+
+## Current directory and existing sessions
+
+A local terminal can start/reuse the service, register its current directory and
+open the full TUI with one command:
+
+```sh
+bun run tinker connect --config .data/client.json --tui --service-config .data/service.json
+# Resume an existing local session after exiting its local TUI:
+bun run tinker connect --config .data/client.json --tui --service-config .data/service.json --session SESSION_UUID
+# Subsequent connections can resolve an already registered directory:
+bun run tinker connect --config .data/client.json --tui
+```
+
+Relative config paths resolve from the terminal's current directory. The service
+and client configurations must refer to the same running instance; the terminal
+checks the authenticated HTTPS instance identity before registering anything.
+`--workspace <id>` still explicitly selects a workspace and bypasses directory
+registration. For a terminal on another machine, use this explicit ID.
+
+Directory matching uses canonical paths, including symlink resolution, and picks
+the nearest registered ancestor. A subdirectory uses that workspace's root for
+execution. If no ancestor exists, `--service-config` authorizes registration of
+the current directory through the private local socket. Remote HTTPS clients can
+resolve registered roots but cannot register arbitrary host directories.
+Concurrent registrations of the same canonical path reuse one stable ID.
+
+Registrations live in the service's SQLite workspace registry, survive restarts,
+and become available without restarting the service. `service.json` is not
+rewritten. Its configured workspaces and the registry are combined at startup;
+conflicting IDs or paths fail visibly. Preserve a registered ID and canonical
+path when adding its configuration, for example to select a model profile.
+Registered roots become accessible to the service's paired devices under the
+same personal-agent trust boundary as configured roots.
+
+Old sessions are opened in place from canonical SQLite history under the same
+workspace root and `TINKER_HOME`; this does not move history between roots or
+homes. Explicit `--session` also supports an empty resumable session. The service
+must acquire the canonical session lease before recording ownership. A local
+process still holding that lease blocks adoption, including a race after the
+catalog lookup. Normal exit releases the lease; a dead process's stale lease can
+be reclaimed. Multiple clients adopting the same session share one runtime.
+Failed adoption leaves no managed ownership, and retrying a new request after
+release can succeed. Previous tasks are never replayed automatically. Exiting
+the connected TUI detaches the client and leaves the service owning the session.
+
 ## iPhone pairing and operation
 
 Build the existing `Tinker` scheme. On the same Wi-Fi, allow Local Network access.
@@ -112,7 +253,10 @@ the same filesystem/process privileges and guard policy as local Tinker.
 
 | Method/path | Result |
 | --- | --- |
+| `GET /v1/service` | Authenticated service instance identity |
 | `GET /v1/workspaces` | Human-readable workspace catalog |
+| `GET /v1/workspaces/resolve?directory=...` | Resolve an absolute host directory within registered roots |
+| `GET /v1/workspaces/{id}/tui-sessions/{sessionId}` | Exact full-TUI session lookup, including empty sessions |
 | `GET /v1/workspaces/{id}/sessions` | Local/service ownership and session catalog |
 | `POST /v1/operations` | HTTP 202 durable operation receipt |
 | `GET /v1/operations/{requestId}` | Latest receipt |
@@ -270,7 +414,7 @@ formal hostname/chain/expiry rejection, wrong/revoked device credentials, tunnel
 mTLS failures, relay restart, prolonged offline completion, device background and
 lock outside a debugger, lost-receipt retry, pending questions/confirmations, and
 local process-crash recovery without tool replay. Inspect canonical turn/message
-counts as well as the phone view. Keep a rollback route to default local `tinker`.
+counts as well as the phone view. Keep `tinker --local` as an explicit independent execution route.
 
 See [recorded acceptance](remote-access-acceptance.md) for what actually ran and
 which device/public scenarios remain unverified.

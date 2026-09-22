@@ -88,6 +88,10 @@ export function renderPublicCliCommands(): string {
   const helpCommand = firstCommandWord(contract.helpCommand.command);
   const rows = [
     ["`tinker`", contract.tui.description],
+    [
+      `\`tinker ${contract.tui.localOption.flags}\``,
+      contract.tui.localOption.description,
+    ],
     [`\`tinker ${profile}\``, "Start the TUI with a selected model profile."],
     [
       `\`tinker ${runCommand} [${runProfile}] [${runYolo}] ${contract.run.promptSources[0].syntax}\``,
@@ -102,13 +106,29 @@ export function renderPublicCliCommands(): string {
       contract.run.promptSources[2].description,
     ],
     [`\`tinker ${updateCommand}\``, contract.update.description],
-    ...(["serve", "connect"] as const).map((name) => [
-      `\`tinker ${contract[name].command} ${contract[name].configOption.flags}\``,
-      contract[name].description,
-    ]),
     [
-      `\`tinker connect ${contract.connect.configOption.flags} ${contract.connect.tuiOption.flags} ${contract.connect.workspaceOption.flags} [${contract.connect.sessionOption.flags}]\``,
+      `\`tinker serve [${contract.serve.configOption.flags}]\``,
+      contract.serve.description,
+    ],
+    [
+      `\`tinker serve [${contract.serve.configOption.flags}] ${contract.serve.backgroundOption.flags}\``,
+      contract.serve.backgroundOption.description,
+    ],
+    [
+      `\`tinker serve [${contract.serve.configOption.flags}] ${contract.serve.statusOption.flags}\``,
+      contract.serve.statusOption.description,
+    ],
+    [
+      `\`tinker connect ${contract.connect.configOption.flags}\``,
+      contract.connect.description,
+    ],
+    [
+      `\`tinker connect ${contract.connect.configOption.flags} ${contract.connect.tuiOption.flags} [${contract.connect.workspaceOption.flags}] [${contract.connect.sessionOption.flags}]\``,
       contract.connect.tuiOption.description,
+    ],
+    [
+      `\`tinker connect ${contract.connect.configOption.flags} ${contract.connect.tuiOption.flags} ${contract.connect.serviceConfigOption.flags} [${contract.connect.sessionOption.flags}]\``,
+      contract.connect.serviceConfigOption.description,
     ],
     [`\`tinker ${help}\``, "Show top-level CLI help."],
     [`\`tinker ${helpCommand} ${runCommand}\``, "Show one-shot command help."],

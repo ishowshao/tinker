@@ -605,7 +605,7 @@ function optionalRawString(value: string | undefined): string | undefined {
   return normalized === undefined || normalized === "" ? undefined : normalized;
 }
 
-function resolveUserPath(cwd: string, value: string): string {
+export function resolveUserPath(cwd: string, value: string): string {
   let expanded = value;
   if (value === "~") {
     expanded = os.homedir();

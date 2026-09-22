@@ -145,6 +145,14 @@ export class RemoteClient {
   workspaces(): Promise<{ workspaces: { id: string; name: string }[] }> {
     return this.request("/v1/workspaces");
   }
+  async resolveWorkspace(
+    directory: string,
+  ): Promise<{ id: string; name: string; path: string }> {
+    const result = await this.request<{
+      workspace: { id: string; name: string; path: string };
+    }>(`/v1/workspaces/resolve?${new URLSearchParams({ directory })}`);
+    return result.workspace;
+  }
   sessions(workspaceId: string): Promise<{ sessions: RemoteSessionInfo[] }> {
     return this.request(`/v1/workspaces/${workspaceId}/sessions`);
   }

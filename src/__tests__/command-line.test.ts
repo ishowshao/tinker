@@ -9,7 +9,42 @@ import { CliUsageError, renderUsageError } from "../cli/output";
 const VERSION = "9.8.7";
 
 describe("CLI command line", () => {
-  test("full service TUI requires explicit workspace selection and keeps legacy connect", async () => {
+  test("independent TUI is explicit and cannot change one-shot or remote commands", async () => {
+    expect(await parseCommand(["--local", "--profile", "large"])).toEqual({
+      type: "tui",
+      local: true,
+      profileName: "large",
+    });
+    for (const args of [
+      ["--local", "run", "hi"],
+      ["--local", "serve"],
+      ["--local", "update"],
+    ])
+      expect(
+        await parseCommandLine(args, VERSION).catch((error: unknown) => error),
+      ).toBeInstanceOf(CliUsageError);
+  });
+  test("service startup modes keep foreground default and reject conflicting modes", async () => {
+    expect(await parseCommand(["serve"])).toEqual({ type: "serve" });
+    expect(
+      await parseCommand(["serve", "--background", "--config", "service.json"]),
+    ).toEqual({ type: "serve", background: true, configPath: "service.json" });
+    expect(await parseCommand(["serve", "--status"])).toEqual({
+      type: "serve",
+      status: true,
+    });
+    expect(
+      await parseCommandLine(["serve", "--background", "--status"], VERSION).catch(
+        (error: unknown) => error,
+      ),
+    ).toBeInstanceOf(CliUsageError);
+    expect(
+      await parseCommandLine(["serve", "--config", " "], VERSION).catch(
+        (error: unknown) => error,
+      ),
+    ).toBeInstanceOf(CliUsageError);
+  });
+  test("full service TUI supports current-directory resolution and explicit local registration", async () => {
     expect(await parseCommand(["connect", "--config", "client.json"])).toEqual({
       type: "connect",
       configPath: "client.json",
@@ -29,9 +64,27 @@ describe("CLI command line", () => {
       tui: true,
       workspaceId: "project",
     });
+    expect(await parseCommand(["connect", "--config", "client.json", "--tui"])).toEqual(
+      { type: "connect", configPath: "client.json", tui: true },
+    );
+    expect(
+      await parseCommand([
+        "connect",
+        "--config",
+        "client.json",
+        "--tui",
+        "--service-config",
+        "service.json",
+      ]),
+    ).toEqual({
+      type: "connect",
+      configPath: "client.json",
+      tui: true,
+      serviceConfigPath: "service.json",
+    });
     await expectUsage(
-      ["connect", "--config", "client.json", "--tui"],
-      "requires --workspace",
+      ["connect", "--config", "client.json", "--service-config", "service.json"],
+      "require --tui",
       "connect",
     );
     await expectUsage(

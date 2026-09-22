@@ -44,8 +44,8 @@ adds no conversation message and applies only to the current running process.
 Retryable failures include HTTP 429/500/502/503/504, structured `server_error`
 and `rate_limit_exceeded` errors inside provider streams or failed Responses,
 and transient connection failures, including socket resets during streaming.
-Tool failures and non-retryable errors keep their existing behavior. One-shot
-and remote service runs do not wait for this TUI selection.
+Tool failures and non-retryable errors keep their existing behavior. One-shot runs do not wait for this TUI selection; service sessions expose it to
+connected clients.
 
 ### PTY screen size
 
@@ -157,6 +157,15 @@ tinker --version
 The npm package includes its own Bun runtime. To run Tinker from a source checkout,
 install Bun 1.3.14 or later, then use `bun install` followed by `bun run tinker`.
 
+On macOS/Linux, the default TUI starts or reuses a shared local service. First
+launch uses OpenSSL to prepare private local credentials under
+`<home>/.tinker/service/` (`TINKER_HOME` or the OS home), and automatically registers
+the current workspace. Exiting the TUI leaves accepted tasks running; use
+`/resume` to reconnect. `tinker --local` explicitly runs the independent TUI;
+`run` remains independent. Existing `.data` service configurations remain available
+through explicit `connect`. See [local startup and configuration](docs/remote-access.md#default-local-service-entry)
+for configuration, environment changes and current lifecycle limits.
+
 `run` accepts exactly one Prompt source: one shell-quoted argument, explicit stdin,
 or a UTF-8 text file. Use stdin for multiline code, private patches, or Prompt text
 containing secrets so it does not become a command-line argument:
@@ -179,15 +188,19 @@ The installed package exposes this public CLI:
 <!-- BEGIN GENERATED: PUBLIC CLI COMMANDS -->
 | Command | Description |
 | --- | --- |
-| `tinker` | Start the interactive terminal interface. |
+| `tinker` | Start the full TUI through the shared local service; exiting detaches only. |
+| `tinker --local` | Run the TUI independently without a service (explicit fallback). |
 | `tinker --profile <profile-name>` | Start the TUI with a selected model profile. |
 | `tinker run [--profile <profile-name>] [--yolo] <prompt>` | Submit one shell-quoted prompt argument. |
 | `tinker run [--profile <profile-name>] [--yolo] --stdin` | Read the prompt from standard input until EOF. |
 | `tinker run [--profile <profile-name>] [--yolo] --file <path>` | Read the prompt from a UTF-8 text file. |
 | `tinker update` | Update the global npm installation from the official npm registry. |
-| `tinker serve --config <path>` | Run the local daemon for paired remote clients. |
+| `tinker serve [--config <path>]` | Run the local daemon for paired remote clients. |
+| `tinker serve [--config <path>] --background` | Discover or start one detached service for this state directory, and print its address as JSON. |
+| `tinker serve [--config <path>] --status` | Probe the local service without starting it; print JSON and exit 1 when offline. |
 | `tinker connect --config <path>` | Attach a terminal client to a service; exiting detaches only. |
-| `tinker connect --config <path> --tui --workspace <id> [--session <id>]` | Use the full TUI for service sessions and task execution (preview). |
+| `tinker connect --config <path> --tui [--workspace <id>] [--session <id>]` | Use the full TUI for service sessions and task execution. |
+| `tinker connect --config <path> --tui --service-config <path> [--session <id>]` | With --tui, discover/start this local service and register the current directory if needed. |
 | `tinker --help` | Show top-level CLI help. |
 | `tinker help run` | Show one-shot command help. |
 | `tinker help update` | Show update command help. |

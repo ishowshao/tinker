@@ -90,6 +90,7 @@ export type MainDependencies = {
     input: { readonly stdin: PromptReadable; readonly cwd: string },
   ) => Promise<ResolvedPrompt>;
   readonly loadTuiRunner: () => Promise<TuiRunner>;
+  readonly loadDefaultTuiRunner: () => Promise<typeof import("./default-tui-runner")>;
   readonly loadOneShotRunner: () => Promise<OneShotRunner>;
   readonly loadUpdateRunner: () => Promise<UpdateRunner>;
   readonly loadServeRunner: () => Promise<typeof import("./serve-runner")>;
@@ -103,6 +104,7 @@ const DEFAULT_DEPENDENCIES: MainDependencies = {
   createSessionId: () => createUuidV7() as SessionId,
   resolvePromptSource,
   loadTuiRunner: () => import("./tui-runner"),
+  loadDefaultTuiRunner: () => import("./default-tui-runner"),
   loadOneShotRunner: () => import("./run-runner"),
   loadUpdateRunner: () => import("./update-runner"),
   loadServeRunner: () => import("./serve-runner"),
@@ -167,23 +169,61 @@ export async function main(
 
     if (parsed.command.type === "serve" || parsed.command.type === "connect") {
       const options = {
-        configPath: path.resolve(cwd, parsed.command.configPath),
+        ...(parsed.command.configPath === undefined
+          ? {}
+          : { configPath: path.resolve(cwd, parsed.command.configPath) }),
         env,
         stdout: input.stdout,
       };
       try {
         const exitCode =
           parsed.command.type === "serve"
-            ? await (await dependencies.loadServeRunner()).runServe(options)
+            ? await (await dependencies.loadServeRunner()).runServe({
+                ...parsed.command,
+                ...options,
+              })
             : await (await dependencies.loadConnectRunner()).runConnect({
                 ...parsed.command,
                 ...options,
+                configPath: path.resolve(cwd, parsed.command.configPath),
+                cwd,
+                ...(parsed.command.serviceConfigPath === undefined
+                  ? {}
+                  : {
+                      serviceConfigPath: path.resolve(
+                        cwd,
+                        parsed.command.serviceConfigPath,
+                      ),
+                    }),
               });
         return finish(exitCode);
       } catch (error) {
         await writeCliOutput(
           input.stderr,
           renderCliFailure("Remote operation failed", error),
+        );
+        return finish(1);
+      }
+    }
+
+    if (parsed.command.type === "tui" && !parsed.command.local) {
+      try {
+        const runner = await dependencies.loadDefaultTuiRunner();
+        return finish(
+          await runner.runDefaultTui({
+            cwd,
+            env,
+            stdout: input.stdout,
+            profileName: parsed.command.profileName,
+          }),
+        );
+      } catch (error) {
+        await writeCliOutput(
+          input.stderr,
+          renderCliFailure(
+            "Local service connection failed (use --local for independent execution)",
+            error,
+          ),
         );
         return finish(1);
       }
