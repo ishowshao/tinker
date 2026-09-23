@@ -9,8 +9,9 @@ import {
 export async function stopLocalService(
   target: LocalServiceTarget,
   force = false,
+  idleOnly = false,
 ): Promise<void> {
-  await shutdownLocalService(target, force);
+  await shutdownLocalService(target, force, idleOnly);
   const deadline =
     Date.now() + (target.config.resident?.shutdownGraceMs ?? 30000) + 15000;
   while (Date.now() < deadline) {

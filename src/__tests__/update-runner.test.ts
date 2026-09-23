@@ -19,6 +19,97 @@ const GLOBAL_ROOT = `${PREFIX}/lib/node_modules`;
 const PACKAGE_ROOT = `${GLOBAL_ROOT}/tinker-agent`;
 
 describe("CLI update runner", () => {
+  test("prepares before installation and verifies restart only after package verification", async () => {
+    const harness = updateHarness("1.8.0");
+    const events: string[] = [];
+    const npm = harness.dependencies.runNpm;
+    harness.dependencies.runNpm = async (input) => {
+      if (input.args[0] === "install") events.push("install");
+      return npm(input);
+    };
+    harness.dependencies.readPackageMetadata = async () => {
+      events.push("verify");
+      return { name: "tinker-agent", version: "1.8.0" };
+    };
+    harness.dependencies.prepareServiceUpgrade = async () => {
+      events.push("prepare");
+      return {
+        restartInstructions: "tinker serve --restart",
+        restart: async (version) => {
+          events.push(`restart ${version}`);
+        },
+        release: async () => {
+          events.push("release");
+        },
+      };
+    };
+    const stdout = new MemoryWriter();
+    await runUpdate(
+      { metadata: { name: "tinker-agent", version: "1.7.0" }, stdout, env: {} },
+      harness.dependencies,
+    );
+    expect(events).toEqual([
+      "prepare",
+      "install",
+      "verify",
+      "restart 1.8.0",
+      "release",
+    ]);
+    expect(stdout.output).toContain("Service restart verified");
+  });
+
+  test("busy service postpones installation", async () => {
+    const harness = updateHarness("1.8.0");
+    harness.dependencies.prepareServiceUpgrade = async () => {
+      throw new Error("Service is busy; update postponed");
+    };
+    expect(
+      String(
+        await runUpdate(
+          {
+            metadata: { name: "tinker-agent", version: "1.7.0" },
+            stdout: new MemoryWriter(),
+            env: {},
+          },
+          harness.dependencies,
+        ).catch((error: unknown) => error),
+      ),
+    ).toContain("update postponed");
+    expect(harness.calls.some((args) => args[0] === "install")).toBe(false);
+  });
+
+  test("installation and restart failures report distinct recovery states and release ownership", async () => {
+    for (const installFails of [true, false]) {
+      const harness = updateHarness("1.8.0", installFails ? "install" : undefined);
+      let released = false;
+      let restarted = false;
+      harness.dependencies.prepareServiceUpgrade = async () => ({
+        restartInstructions: "tinker serve --config '/custom/service.json' --restart",
+        restart: async () => {
+          restarted = true;
+          throw new Error("startup failed");
+        },
+        release: async () => {
+          released = true;
+        },
+      });
+      const stdout = new MemoryWriter();
+      const result = await runUpdate(
+        { metadata: { name: "tinker-agent", version: "1.7.0" }, stdout, env: {} },
+        harness.dependencies,
+      ).catch((error: unknown) => error);
+      expect(String(result)).toContain(
+        installFails
+          ? "services stopped for this update remain stopped"
+          : "Software updated to 1.8.0, but service restart failed",
+      );
+      expect(String(result)).toContain("--config '/custom/service.json' --restart");
+      expect(released).toBe(true);
+      expect(restarted).toBe(!installFails);
+      expect(stdout.output).not.toContain("Service restart verified");
+    }
+  });
+
   test("refuses to replace package files while a service is still using the installation", async () => {
     const harness = updateHarness("1.8.0");
     harness.dependencies.assertServiceUpgradeSafe = async () => {
@@ -223,6 +314,11 @@ describe("CLI update runner", () => {
 function updateHarness(latestVersion: string, failAt?: "view" | "install") {
   const calls: string[][] = [];
   const dependencies: Mutable<UpdateRunnerDependencies> = {
+    prepareServiceUpgrade: async () => ({
+      restartInstructions: "",
+      restart: async () => undefined,
+      release: async () => undefined,
+    }),
     assertServiceUpgradeSafe: async () => undefined,
     packageRoot: PACKAGE_ROOT,
     npmCwd: "/tmp",

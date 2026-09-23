@@ -1,3 +1,4 @@
+import { prepareServiceUpgrade, type ServiceUpgradePlan } from "./update-services";
 import { assertServiceUpgradeSafe } from "./service-upgrade";
 import { spawn } from "node:child_process";
 import { lstat, realpath } from "node:fs/promises";
@@ -26,6 +27,10 @@ type NpmCommandInput = {
 };
 
 export type UpdateRunnerDependencies = {
+  readonly prepareServiceUpgrade: (
+    packageRoot: string,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<ServiceUpgradePlan>;
   readonly packageRoot: string;
   readonly assertServiceUpgradeSafe: (packageRoot: string) => Promise<void>;
   readonly npmCwd: string;
@@ -44,6 +49,7 @@ type UpdateInput = {
 
 const DEFAULT_DEPENDENCIES: UpdateRunnerDependencies = {
   assertServiceUpgradeSafe,
+  prepareServiceUpgrade,
   packageRoot: path.resolve(fileURLToPath(new URL("../../", import.meta.url))),
   npmCwd: tmpdir(),
   runNpm,
@@ -119,52 +125,83 @@ export async function runUpdate(
     return 0;
   }
 
-  await dependencies.assertServiceUpgradeSafe(dependencies.packageRoot);
-  await writeCliOutput(input.stdout, `Updating to ${latestVersion}...\n`);
-  await runNpmChecked(
-    dependencies,
-    {
-      args: [
-        "install",
-        "--global",
-        "--prefix",
-        globalPrefix,
-        `${input.metadata.name}@${latestVersion}`,
-        "--registry",
-        OFFICIAL_NPM_REGISTRY,
-        "--prefer-online",
-        "--no-audit",
-        "--no-fund",
-        "--loglevel",
-        "error",
-      ],
-      cwd: dependencies.npmCwd,
-      env: input.env,
-    },
-    `npm could not install ${input.metadata.name}@${latestVersion}`,
+  const services = await dependencies.prepareServiceUpgrade(
+    dependencies.packageRoot,
+    input.env,
   );
-
-  let installedMetadata: PackageMetadata;
+  let installed = false;
   try {
-    installedMetadata = await dependencies.readPackageMetadata(
-      path.join(installedRoot, "package.json"),
+    await dependencies.assertServiceUpgradeSafe(dependencies.packageRoot);
+    await writeCliOutput(input.stdout, `Updating to ${latestVersion}...\n`);
+    await runNpmChecked(
+      dependencies,
+      {
+        args: [
+          "install",
+          "--global",
+          "--prefix",
+          globalPrefix,
+          `${input.metadata.name}@${latestVersion}`,
+          "--registry",
+          OFFICIAL_NPM_REGISTRY,
+          "--prefer-online",
+          "--no-audit",
+          "--no-fund",
+          "--loglevel",
+          "error",
+        ],
+        cwd: dependencies.npmCwd,
+        env: input.env,
+      },
+      `npm could not install ${input.metadata.name}@${latestVersion}`,
     );
-  } catch {
-    throw new Error("The updated package metadata could not be verified.");
-  }
-  if (
-    installedMetadata.name !== input.metadata.name ||
-    installedMetadata.version !== latestVersion
-  ) {
-    throw new Error(
-      `npm completed, but the active global installation is not version ${latestVersion}.`,
+
+    let installedMetadata: PackageMetadata;
+    try {
+      installedMetadata = await dependencies.readPackageMetadata(
+        path.join(installedRoot, "package.json"),
+      );
+    } catch {
+      throw new Error("The updated package metadata could not be verified.");
+    }
+    if (
+      installedMetadata.name !== input.metadata.name ||
+      installedMetadata.version !== latestVersion
+    ) {
+      throw new Error(
+        `npm completed, but the active global installation is not version ${latestVersion}.`,
+      );
+    }
+
+    await writeCliOutput(
+      input.stdout,
+      `Successfully updated from ${input.metadata.version} to version ${latestVersion}\n`,
     );
+    installed = true;
+    try {
+      await services.restart(latestVersion);
+    } catch (error) {
+      throw new Error(
+        `Software updated to ${latestVersion}, but service restart failed: ${String(error)}\nRetry manually:\n${services.restartInstructions}`,
+        { cause: error },
+      );
+    }
+    if (services.restartInstructions)
+      await writeCliOutput(
+        input.stdout,
+        `Service restart verified: version ${latestVersion} is ready.\n`,
+      );
+  } catch (error) {
+    if (!installed && services.restartInstructions)
+      throw new Error(
+        `${String(error)}\nUpdate did not complete; services stopped for this update remain stopped. Repair or retry the installation, then restart manually:\n${services.restartInstructions}`,
+        { cause: error },
+      );
+    throw error;
+  } finally {
+    await services.release();
   }
 
-  await writeCliOutput(
-    input.stdout,
-    `Successfully updated from ${input.metadata.version} to version ${latestVersion}\n`,
-  );
   return 0;
 }
 

@@ -217,6 +217,13 @@ The installed package exposes this public CLI:
 `tinker update` is available only to direct npm global installations. It checks
 the `latest` stable version on the official npm registry, updates that same global
 prefix, and exits without loading model configuration or starting a session.
+Idle services using that installation are safely stopped before installation and
+restarted with the new version afterward. If any affected service is busy, the
+update is postponed without interrupting its work; retry `tinker update` after it
+finishes. Older services without idle-only shutdown support must be stopped
+manually first. Installation or restart failures include manual recovery commands.
+Services started from a different installation, including a source checkout, are
+not restarted by the global updater.
 
 Repository development commands are separate from the installed CLI:
 

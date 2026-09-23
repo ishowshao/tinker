@@ -207,6 +207,36 @@ test("global execution slots queue fairly, reject overflow before acceptance and
   }
 });
 
+test("idle-only shutdown rejects active and queued work without closing admission", async () => {
+  const model = new RemoteTestModel();
+  const f = await remoteFixture(model, undefined, undefined, policy);
+  try {
+    const first = await f.prompt();
+    await until(() => model.requests === 1);
+    expect(
+      String(await f.service.drain(false, true).catch((error: unknown) => error)),
+    ).toContain("update postponed");
+    expect(f.service.residentStatus().phase).toBe("ready");
+    const second = await f.prompt("still accepted");
+    expect(f.service.residentStatus().busy).toBe(true);
+    expect(
+      String(await f.service.drain(false, true).catch((error: unknown) => error)),
+    ).toContain("update postponed");
+    model.release();
+    await f.terminal(first);
+    await f.terminal(second);
+    await until(() => !f.service.residentStatus().busy);
+    await f.service.drain(false, true);
+    expect(f.service.residentStatus().phase).toBe("draining");
+    expect(
+      String(await f.prompt("too late").catch((error: unknown) => error)),
+    ).toContain("draining");
+  } finally {
+    model.release();
+    await f.cleanup();
+  }
+});
+
 test("drain rejects new work, restores admission after a non-forced timeout, and forced shutdown records interruption", async () => {
   const model = new RemoteTestModel();
   const f = await remoteFixture(model, undefined, undefined, policy);
@@ -284,6 +314,9 @@ test("background tools and pending interactions prevent idle reclaim after clien
     await f.service.sweepIdle(Date.now() + 1000000);
     expect(f.service.session(f.sessionId).initialized).toBe(true);
     expect(f.service.session(f.sessionId).busy).toBe(true);
+    expect(
+      String(await f.service.drain(false, true).catch((error: unknown) => error)),
+    ).toContain("update postponed");
     expect(() => process.kill(pid!, 0)).not.toThrow();
   } finally {
     await f.cleanup();
@@ -310,6 +343,11 @@ test("background tools and pending interactions prevent idle reclaim after clien
       interaction.id,
     );
     expect(question.service.session(question.sessionId).initialized).toBe(true);
+    expect(
+      String(
+        await question.service.drain(false, true).catch((error: unknown) => error),
+      ),
+    ).toContain("update postponed");
   } finally {
     await question.cleanup();
   }

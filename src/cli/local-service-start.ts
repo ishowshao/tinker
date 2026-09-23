@@ -16,7 +16,7 @@ import {
   type LocalServiceTarget,
 } from "../remote/local-service-discovery";
 
-const STARTUP_LEASE_ID = parseSessionId("00000000-0000-7000-8000-000000000002");
+export const STARTUP_LEASE_ID = parseSessionId("00000000-0000-7000-8000-000000000002");
 
 /** Shared by the explicit background command and the default client entry. */
 export async function ensureLocalService(

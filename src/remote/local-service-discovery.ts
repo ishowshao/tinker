@@ -24,6 +24,9 @@ export type LocalServiceInstance = {
   version: 1;
   appVersion?: string;
   packageRoot?: string;
+  homeRoot?: string;
+  idleShutdownSupported?: boolean;
+  busy?: boolean;
   instanceId: string;
   pid: number;
   startedAt: string;
@@ -82,8 +85,9 @@ export async function discoverLocalService(
 export async function shutdownLocalService(
   target: LocalServiceTarget,
   force: boolean,
+  idleOnly = false,
 ): Promise<LocalServiceInstance | undefined> {
-  return (await requestLocalService(target, undefined, { force }))?.instance;
+  return (await requestLocalService(target, undefined, { force, idleOnly }))?.instance;
 }
 
 export async function registerLocalWorkspace(
@@ -105,7 +109,7 @@ type LocalServiceReply = {
 async function requestLocalService(
   target: LocalServiceTarget,
   directory?: string,
-  shutdown?: { force: boolean },
+  shutdown?: { force: boolean; idleOnly: boolean },
   allowDifferentConfig = false,
 ): Promise<LocalServiceReply | undefined> {
   if (process.platform === "win32")
@@ -155,7 +159,7 @@ async function requestLocalService(
       });
       socket.once("connect", () =>
         socket.write(
-          `${shutdown ? JSON.stringify({ nonce, command: "shutdown", force: shutdown.force }) : directory === undefined ? nonce : JSON.stringify({ nonce, command: "register-workspace", directory, fingerprint: target.fingerprint })}\n`,
+          `${shutdown ? JSON.stringify({ nonce, command: "shutdown", force: shutdown.force, ...(shutdown.idleOnly ? { idleOnly: true } : {}) }) : directory === undefined ? nonce : JSON.stringify({ nonce, command: "register-workspace", directory, fingerprint: target.fingerprint })}\n`,
         ),
       );
       socket.on("data", (chunk: string) => {
@@ -218,7 +222,7 @@ export async function publishLocalService(
   administration?: {
     appVersion: string;
     status(): Record<string, unknown>;
-    shutdown(force: boolean): Promise<() => void>;
+    shutdown(force: boolean, idleOnly?: boolean): Promise<() => void>;
   },
 ): Promise<() => Promise<void>> {
   const files = localServicePaths(target.config.stateDirectory);
@@ -237,6 +241,8 @@ export async function publishLocalService(
   const instance: LocalServiceInstance = {
     version: 1,
     appVersion: administration?.appVersion,
+    homeRoot: target.homeRoot,
+    idleShutdownSupported: !!administration,
     packageRoot: await realpath(new URL("../../", import.meta.url)),
     instanceId,
     pid: process.pid,
@@ -281,6 +287,7 @@ export async function publishLocalService(
             directory: string;
             fingerprint: string;
             force?: boolean;
+            idleOnly?: boolean;
           };
           nonce = command.nonce;
           if (
@@ -290,7 +297,10 @@ export async function publishLocalService(
             nonce.length <= 100 &&
             typeof command.force === "boolean"
           ) {
-            const stop = await administration.shutdown(command.force);
+            const stop = await administration.shutdown(
+              command.force,
+              command.idleOnly === true,
+            );
             socket.end(`${JSON.stringify({ nonce, instance })}\n`);
             setTimeout(stop, 100);
             return;

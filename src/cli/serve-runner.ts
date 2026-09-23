@@ -147,8 +147,8 @@ export async function runServe(input: {
         {
           appVersion: (await loadPackageMetadata()).version,
           status: () => service.residentStatus(),
-          shutdown: async (force) => {
-            await service.drain(force);
+          shutdown: async (force, idleOnly) => {
+            await service.drain(force, idleOnly);
             return stop;
           },
         },

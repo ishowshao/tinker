@@ -132,9 +132,15 @@ export class RemoteService {
     this.loadTail = reservation.catch(() => undefined);
     return reservation;
   }
+  private get busy(): boolean {
+    return (
+      this.admissions > 0 || [...this.hosted.values()].some((session) => session.busy)
+    );
+  }
   residentStatus() {
     return {
       phase: this.stopping ? "stopping" : this.draining ? "draining" : "ready",
+      busy: this.busy,
       loadedSessions: this.loaded.size,
       managedSessions: this.store.sessions().length,
       runningTurns: this.slots.running,
@@ -146,12 +152,19 @@ export class RemoteService {
       policy: this.policy,
     };
   }
-  async drain(force = false): Promise<void> {
+  async drain(force = false, idleOnly = false): Promise<void> {
     if (this.draining || this.stopping)
       throw new RemoteError(
         409,
         "SERVICE_DRAINING",
         "Service shutdown is already in progress.",
+      );
+    // Check and close admission without yielding: a status probe alone can race a new turn.
+    if (idleOnly && this.busy)
+      throw new RemoteError(
+        409,
+        "SERVICE_BUSY",
+        "Service is busy; update postponed. Wait for work to finish, then retry tinker update.",
       );
     this.draining = true;
     const deadline = Date.now() + this.policy.shutdownGraceMs;
