@@ -1,12 +1,15 @@
 import { expect, test } from "bun:test";
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import {
   defaultServiceConfigPath,
   discoverLocalService,
   loadLocalServiceTarget,
 } from "../remote/local-service-discovery";
 import { SessionCatalog } from "../session/session-catalog";
+import { parseSessionId } from "../ids/runtime-id";
+import type { ManagedSessionRecord } from "../remote/service-store";
 import { createPtyTuiFixture, type PtyTuiHarness } from "./helpers/pty-tui-harness";
 import { submitPrompt, quitTui } from "./helpers/pty-product-test-support";
 
@@ -110,5 +113,86 @@ test("PTY: default entry boots a shared service, preserves profile selection and
     }
     await other.dispose();
     await f.dispose();
+  }
+}, 35000);
+
+test("PTY: default entry registers the exact launch directory inside an existing workspace", async () => {
+  const f = await createPtyTuiFixture();
+  const home = await realpath(f.homeRoot);
+  const parent = await realpath(f.workspaceRoot);
+  const child = path.join(parent, "nested");
+  await mkdir(child);
+  const env = { TINKER_HOME: home };
+  const configPath = defaultServiceConfigPath(env);
+  const terminals: PtyTuiHarness[] = [];
+  try {
+    for (const workspaceRoot of [parent, child, child]) {
+      const terminal = await f.start({
+        cliArgs: [],
+        fakeModel: "pty-echo-history",
+        workspaceRoot,
+        useCwdAsWorkspace: true,
+        environment: env,
+      });
+      terminals.push(terminal);
+      await quitTui(terminal);
+      await terminal.dispose();
+    }
+    const target = await loadLocalServiceTarget(configPath, env);
+    const instance = await discoverLocalService(target);
+    expect(instance).toBeDefined();
+    const database = new Database(
+      path.join(target.config.stateDirectory, "remote.sqlite"),
+      { readonly: true },
+    );
+    try {
+      const workspaces = database
+        .query("SELECT id, path FROM registered_workspaces ORDER BY path")
+        .all() as { id: string; path: string }[];
+      expect(workspaces.map(({ path }) => path)).toEqual([parent, child]);
+      const childWorkspace = workspaces.find((workspace) => workspace.path === child)!;
+      const sessions = database
+        .query("SELECT record FROM managed_sessions ORDER BY id")
+        .all() as { record: string }[];
+      expect(sessions).toHaveLength(3);
+      const managed = sessions.map(
+        ({ record }) => JSON.parse(record) as ManagedSessionRecord,
+      );
+      const childSessions = managed.filter(
+        (session) => session.workspaceId === childWorkspace.id,
+      );
+      expect(childSessions).toHaveLength(2);
+      expect(childSessions.map(({ workspacePath }) => workspacePath)).toEqual([
+        child,
+        child,
+      ]);
+      const catalog = new SessionCatalog({ workspaceRoot: child, homeRoot: home });
+      for (const session of childSessions)
+        expect(await catalog.get(parseSessionId(session.id))).toMatchObject({
+          sessionId: session.id,
+        });
+    } finally {
+      database.close();
+    }
+  } finally {
+    try {
+      for (const terminal of terminals) await terminal.dispose();
+      if (await Bun.file(configPath).exists()) {
+        const target = await loadLocalServiceTarget(configPath, env);
+        const instance = await discoverLocalService(target);
+        if (instance) process.kill(instance.pid, "SIGTERM");
+        const deadline = Date.now() + 5000;
+        while (
+          await Bun.file(
+            path.join(target.config.stateDirectory, "active.lock"),
+          ).exists()
+        ) {
+          expect(Date.now()).toBeLessThan(deadline);
+          await Bun.sleep(25);
+        }
+      }
+    } finally {
+      await f.dispose();
+    }
   }
 }, 35000);

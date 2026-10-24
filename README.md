@@ -160,7 +160,9 @@ install Bun 1.3.14 or later, then use `bun install` followed by `bun run tinker`
 On macOS/Linux, the default TUI starts or reuses a shared local service. First
 launch uses OpenSSL to prepare private local credentials under
 `<home>/.tinker/service/` (`TINKER_HOME` or the OS home), and automatically registers
-the current workspace. Exiting the TUI leaves accepted tasks running; use
+the current directory as the workspace. Launching inside an already registered parent
+still uses the exact launch directory, so different subdirectories have independent
+workspaces; `TINKER_WORKSPACE` explicitly overrides this default. Exiting the TUI leaves accepted tasks running; use
 `/resume` to reconnect. `tinker --local` explicitly runs the independent TUI;
 `run` remains independent. Existing `.data` service configurations remain available
 through explicit `connect`. See [local startup and configuration](docs/remote-access.md#default-local-service-entry)

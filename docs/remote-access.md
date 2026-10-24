@@ -59,9 +59,12 @@ Use `status` and the component logs to diagnose a startup failure.
 ## Default local service entry
 
 On macOS/Linux, `tinker` (or `bun run tinker` in this checkout) now discovers or
-starts the shared local service, registers the current workspace and opens the
-existing full TUI. `--profile <name>` selects the new session's model profile;
-`TINKER_WORKSPACE` still overrides the current directory. Each launch starts a new
+starts the shared local service, registers the current directory as the workspace
+and opens the existing full TUI. Registration uses the exact canonical launch
+directory, even when its parent is already a workspace; launching from a
+subdirectory therefore creates or reuses that subdirectory's own workspace.
+`--profile <name>` selects the new session's model profile; `TINKER_WORKSPACE`
+still overrides the current directory. Each launch starts a new
 session; `/resume` connects existing sessions, including safely adopting an old
 independent session once its local process has exited. Exiting the TUI detaches
 without cancelling work accepted by the service.
@@ -289,12 +292,15 @@ checks the authenticated HTTPS instance identity before registering anything.
 `--workspace <id>` still explicitly selects a workspace and bypasses directory
 registration. For a terminal on another machine, use this explicit ID.
 
-Directory matching uses canonical paths, including symlink resolution, and picks
-the nearest registered ancestor. A subdirectory uses that workspace's root for
-execution. If no ancestor exists, `--service-config` authorizes registration of
-the current directory through the private local socket. Remote HTTPS clients can
-resolve registered roots but cannot register arbitrary host directories.
+Local registration through `--service-config` uses the exact canonical current
+directory, including symlink resolution. It does not reuse a registered ancestor:
+launching from a subdirectory creates or reuses that subdirectory's own workspace.
 Concurrent registrations of the same canonical path reuse one stable ID.
+
+Remote directory resolution without local registration instead picks the nearest
+registered ancestor. A remote client in a subdirectory uses that workspace's root
+for execution and fails if no ancestor exists. Remote HTTPS clients can resolve
+registered roots but cannot register arbitrary host directories.
 
 Registrations live in the service's SQLite workspace registry, survive restarts,
 and become available without restarting the service. `service.json` is not

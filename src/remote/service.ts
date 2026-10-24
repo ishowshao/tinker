@@ -16,11 +16,7 @@ import { parseSessionId } from "../ids/runtime-id";
 import { SessionCatalog } from "../session/session-catalog";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import {
-  findContainingWorkspace,
-  localWorkspaceRecord,
-  mergeWorkspaces,
-} from "./workspace-resolution";
+import { localWorkspaceRecord, mergeWorkspaces } from "./workspace-resolution";
 import {
   HostedSession,
   type HostedRuntimeFactory,
@@ -69,7 +65,7 @@ export class RemoteService {
       throw new Error("Workspace must be a directory.");
     if (this.stopping || this.draining)
       throw new Error("Service is stopping or draining.");
-    const existing = findContainingWorkspace(this.workspaces, canonical);
+    const existing = this.workspaces.find((workspace) => workspace.path === canonical);
     if (existing) return existing;
     const record = localWorkspaceRecord(canonical);
     // No await between checking identity, the durable insert and publishing the list.

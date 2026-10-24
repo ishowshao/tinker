@@ -395,7 +395,18 @@ test("local workspace registration is canonical, concurrent, persistent and unav
     expect(JSON.parse(await readFile(f.configPath, "utf8"))).toEqual(f.config);
     const nested = path.join(unknown, "nested");
     await mkdir(nested);
-    expect((await registerLocalWorkspace(f.target, nested)).id).toBe(ids[0]);
+    const nestedWorkspace = await registerLocalWorkspace(f.target, nested);
+    expect(nestedWorkspace).toMatchObject({
+      name: "nested",
+      path: nested,
+    });
+    expect(nestedWorkspace.id).not.toBe(ids[0]);
+    expect(await registerLocalWorkspace(f.target, nested)).toEqual(nestedWorkspace);
+    expect((await remote.workspaces()).workspaces).toHaveLength(3);
+    // Local registration is exact; remote resolution still selects the nearest ancestor.
+    const descendant = path.join(nested, "src");
+    await mkdir(descendant);
+    expect((await remote.resolveWorkspace(descendant)).id).toBe(nestedWorkspace.id);
     await f.kill(started.pid);
     const next = JSON.parse(
       (await f.cli(["serve", "--background"])).stdout,
@@ -403,7 +414,11 @@ test("local workspace registration is canonical, concurrent, persistent and unav
     await remote.close();
     remote = new RemoteClient({ ...config, url: next.url }, false);
     expect((await remote.resolveWorkspace(unknown)).id).toBe(ids[0]);
-    expect((await remote.workspaces()).workspaces).toHaveLength(2);
+    expect((await remote.resolveWorkspace(descendant)).id).toBe(nestedWorkspace.id);
+    expect(await registerLocalWorkspace(f.target, unknown)).toMatchObject({
+      id: ids[0],
+    });
+    expect((await remote.workspaces()).workspaces).toHaveLength(3);
     // The public config does not widen; durable local registrations are merged on boot.
     expect(f.target.config.workspaces).toHaveLength(1);
   } finally {

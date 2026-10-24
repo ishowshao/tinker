@@ -5,6 +5,21 @@ All notable user-facing changes to Tinker are documented here. The project follo
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-24
+
+### Changed
+
+- Use the exact launch directory as the default local TUI workspace, even when
+  a parent directory is already registered. Starting `tinker` in a subdirectory
+  now creates or reuses that directory's own workspace, sessions, project
+  instructions, Skills, and configuration instead of inheriting the parent's
+  execution scope. Repeated launches from the same directory retain its stable
+  workspace identity and existing history.
+- Preserve explicit `TINKER_WORKSPACE` overrides and remote workspace resolution.
+  Existing registered workspaces and their sessions remain available without
+  data migration. Update the installed package and restart its running service
+  to apply the new local launch behavior.
+
 ## [3.0.0] - 2026-09-23
 
 ### Changed
@@ -544,7 +559,8 @@ All notable user-facing changes to Tinker are documented here. The project follo
 - First formal npm release under the `tinker-agent` package name with the `tinker`
   executable.
 
-[Unreleased]: https://github.com/ishowshao/tinker/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/ishowshao/tinker/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/ishowshao/tinker/releases/tag/v3.1.0
 [3.0.0]: https://github.com/ishowshao/tinker/releases/tag/v3.0.0
 [2.13.0]: https://github.com/ishowshao/tinker/releases/tag/v2.13.0
 [2.12.0]: https://github.com/ishowshao/tinker/releases/tag/v2.12.0

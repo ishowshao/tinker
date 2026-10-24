@@ -30,6 +30,9 @@ export type StartPtyTuiInput = {
   readonly rows?: number;
   readonly columns?: number;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly workspaceRoot?: string;
+  /** Exercise process.cwd() instead of the harness's usual workspace override. */
+  readonly useCwdAsWorkspace?: boolean;
   readonly workspaceFiles?: Readonly<Record<string, string | Uint8Array>>;
   readonly homeFiles?: Readonly<Record<string, string | Uint8Array>>;
 };
@@ -46,7 +49,14 @@ export interface PtyTuiFixture {
   start(
     input: Pick<
       StartPtyTuiInput,
-      "fakeModel" | "rows" | "columns" | "environment" | "cliArgs" | "initialScreen"
+      | "fakeModel"
+      | "rows"
+      | "columns"
+      | "environment"
+      | "cliArgs"
+      | "initialScreen"
+      | "workspaceRoot"
+      | "useCwdAsWorkspace"
     >,
   ): Promise<PtyTuiHarness>;
   dispose(): Promise<void>;
@@ -251,8 +261,12 @@ export async function createPtyTuiFixture(
         columns,
         temporaryRoot,
         homeRoot,
-        workspaceRoot,
-        environment: isolatedTuiEnvironment(startInput, homeRoot, workspaceRoot),
+        workspaceRoot: startInput.workspaceRoot ?? workspaceRoot,
+        environment: isolatedTuiEnvironment(
+          startInput,
+          homeRoot,
+          startInput.workspaceRoot ?? workspaceRoot,
+        ),
         removeTemporaryRootOnDispose: false,
       });
       try {
@@ -1027,6 +1041,7 @@ function isolatedTuiEnvironment(
     TINKER_TEST_FAKE_MODEL: input.fakeModel,
     TINKER_WORKSPACE: workspaceRoot,
   });
+  if (input.useCwdAsWorkspace) delete environment.TINKER_WORKSPACE;
   delete environment.CI;
   delete environment.EXA_API_KEY;
   return environment;
